@@ -1,0 +1,15 @@
+.git
+.gitignore
+.amp/
+.hegel/
+README.md
+server
+*.log
+.DS_Store
+node_modules
+**/node_modules
+client/dist
+.env
+.env.*
+docker-compose.yml
+Dockerfile

@@ -1,0 +1,990 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&family=IBM+Plex+Mono:wght@400;500;700&display=swap");
+
+/* Shared typography and theme tokens */
+:root {
+    /* === TYPOGRAPHY === */
+    --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+    /* === COMPLETE COLOR SCHEME === */
+
+    /* Backgrounds */
+    --bg-primary: #fafafa;
+    --bg-secondary: #eeeeee;
+    --surface-1: var(--bg-primary);
+    --surface-2: var(--bg-secondary);
+    --bg-hover: #f5f5f5;
+    --bg-zebra: #f2f2f2; /* Alternating row band for dense list views */
+    --bg-header: var(--bg-primary);
+    --surface-priority-subtle: #fff9e6;
+    --surface-info-subtle: #e6f2ff;
+    --surface-success-subtle: #e6ffe6;
+    --surface-zebra-subtle: rgba(0, 0, 0, 0.02);
+    --surface-hover-subtle: rgba(0, 0, 0, 0.03);
+    --drop-target-bg: rgba(0, 174, 239, 0.05);
+    --bg-disabled: #cccccc;
+
+    /* Borders */
+    --border-primary: #6d6e71;
+    --border-light: #bfbfbf;
+    --border-subtle: #dddddd;
+    --border-list: var(--border-subtle);
+    --border-strong: #111111;
+
+    /* Line roles: workspaces, section breaks, and raised actions. */
+    --workspace-divider: 3px double var(--border-strong);
+    --section-pattern: radial-gradient(circle, var(--border-primary) 0.5px, transparent 0.75px);
+    --button-shadow: 1px 1px 0 var(--border-primary);
+
+    /* Surfaces and geometry */
+    --surface-panel: color-mix(in srgb, var(--bg-primary) 96%, var(--text-primary));
+    --surface-content: color-mix(in srgb, var(--bg-primary) 99%, var(--text-primary));
+    --surface-control: color-mix(in srgb, var(--bg-primary) 92%, var(--text-primary));
+    --surface-header: var(--surface-panel);
+    --frame-border: 1px solid var(--border-primary);
+    --panel-border: 1px solid var(--border-light);
+    --content-border: 1px solid var(--border-subtle);
+    --control-border: 1px solid var(--border-primary);
+    --input-border: 1px solid var(--border-light);
+    --panel-radius: 0;
+    --content-radius: 0;
+    --control-radius: 0;
+    --overlay-radius: 0;
+    --panel-shadow: none;
+    --content-shadow: none;
+    --control-shadow: none;
+    --input-shadow: none;
+    --input-surface: var(--surface-content);
+    --layout-gap: 0.375rem;
+    /* Total height, including the top border, of chat/resource/comment footers. */
+    --record-footer-height: 1.75rem;
+    --header-row-height: 1.6rem;
+    --header-filter-row-height: 1.8rem;
+    --header-control-height: 0.8rem;
+    --detail-label-height: 0.6875rem;
+    --detail-control-height: 1.25rem;
+
+    /* Text */
+    --text-primary: #000000;
+    --text-dim: #6d6e71;
+    --text-muted: #666666;
+    --text-header: #000000; /* Same as primary in light mode */
+    --link-text: #0076a2;
+    --link-hover-bg: #00aeef;
+    --link-hover-text: #111111;
+    --markdown-link: var(--link-text);
+    --markdown-link-hover: var(--link-hover-text);
+    --note-columns: 0px 48px 260px 130px 170px 110px 72px 72px;
+
+    /* Accents - purpose-based naming */
+    --accent-interactive: #111111; /* Focus and interactive hints */
+    --accent-current: #f04e30; /* Current navigation position */
+    --accent-selected: #ffb700; /* Strong selected/focused state */
+    --accent-highlight: var(--accent-interactive); /* Legacy alias for existing interactive accents */
+    --accent-danger: #f04e30; /* Errors, blocked, muted */
+    --accent-success: #00a651; /* Online, connected, done */
+    --accent-priority: var(--accent-selected); /* Legacy alias for priority/important accents */
+    --identity-scope: #0076a2;
+    --identity-actor: #613393;
+    --identity-reference: var(--accent-interactive);
+    --identity-artifact: #bc4c27;
+    --room-color-0: var(--identity-scope);
+    --room-color-1: var(--identity-actor);
+    --room-color-2: var(--identity-artifact);
+    --room-color-3: var(--accent-success);
+    --room-color-4: var(--accent-current);
+    --room-color-5: var(--accent-selected);
+    --on-danger: #111111;
+    --on-priority: #111111;
+    --current-dot-border: var(--text-primary);
+    --focus-interactive: var(--accent-interactive);
+    --chat-own-accent: var(--link-text);
+    --chat-own-bg: var(--surface-info-subtle);
+
+    /* Buttons */
+    --btn-bg: var(--surface-1);
+    --btn-text: var(--text-primary);
+    --btn-border: var(--border-strong);
+    --btn-hover-bg: var(--accent-interactive);
+    --btn-hover-text: var(--selection-text);
+    --btn-hover-border: var(--focus-interactive);
+    --btn-primary-bg: var(--btn-bg);
+    --btn-primary-text: var(--accent-interactive);
+    --btn-primary-border: var(--accent-interactive);
+    --btn-primary-hover-bg: var(--accent-selected);
+    --btn-primary-hover-border: var(--accent-selected);
+    --btn-primary-hover-text: var(--text-primary);
+
+    /* Creation is the raised theme action: light defaults to NRC cyan, while
+       dark and Omarchy themes override these semantic tokens below. */
+    --action-create-bg: var(--link-hover-bg);
+    --action-create-text: var(--link-hover-text);
+    --action-create-border: var(--border-strong);
+    --action-create-hover-bg: var(--selection-bg);
+    --action-create-hover-border: var(--selection-bg);
+    --action-create-hover-text: var(--selection-text);
+
+    /* Status colors */
+    --status-online: #00a651;
+    /* Task status ramp. This is the single source of truth for what a task's
+       status looks like as a mark or a badge, so a status reads the same in a
+       slice strip, a task row and a detail panel. It is deliberately NOT an
+       alias of --accent-*: several themes remap the accent names onto a
+       decorative palette (lupine renders omarchy "green" as violet and "red" as
+       magenta), which would make the strip meaningless. Text badges survive
+       that because the word carries the meaning; a color ramp does not. */
+    --status-backlog: #939598;
+    --status-todo: #c98a00;
+    --status-inprogress: #0076a2;
+    --status-done: #00a651;
+    --status-blocked: #f04e30;
+
+    /* Selection and selected rows */
+    --selection-bg: #000000;
+    --selection-text: #ffffff;
+    --selected-row-accent: var(--accent-selected);
+    --selected-row-bg: #ffe9a8;
+    --selected-row-text: #1f2538;
+
+    /* Shadows */
+    --shadow: transparent;
+    --shadow-light: #dddddd;
+    --overlay-backdrop: rgba(17, 17, 17, 0.32);
+    --overlay-shadow: 0 0.5rem 1.625rem rgba(0, 0, 0, 0.16);
+    --floating-shadow: 0 0.125rem 0.5rem rgba(0, 0, 0, 0.15);
+    --floating-shadow-upward: 0 -0.25rem 0.5rem rgba(0, 0, 0, 0.3);
+    --media-overlay-bg: rgba(0, 0, 0, 0.9);
+    --media-overlay-backdrop: rgba(0, 0, 0, 0.85);
+
+    /* Blocking-chain depth */
+    --blocking-depth-0-border: #ed1c24;
+    --blocking-depth-0-bg: rgba(237, 28, 36, 0.08);
+    --blocking-depth-1-border: #2e3192;
+    --blocking-depth-1-bg: rgba(46, 49, 146, 0.06);
+    --blocking-depth-2-border: var(--accent-interactive);
+    --blocking-depth-2-bg: rgba(0, 174, 239, 0.06);
+    --blocking-depth-3-border: #bc4c27;
+    --blocking-depth-3-bg: rgba(188, 76, 39, 0.05);
+    --blocking-depth-4-border: #613393;
+    --blocking-depth-4-bg: rgba(97, 51, 147, 0.05);
+    --blocking-depth-5-border: #007a61;
+    --blocking-depth-5-bg: rgba(0, 122, 97, 0.04);
+    --blocking-depth-overflow-border: #658d3c;
+    --blocking-depth-overflow-bg: rgba(101, 141, 60, 0.04);
+    --danger-subtle-bg: rgba(237, 28, 36, 0.08);
+    --task-status-todo-border: #bc4c27;
+
+    /* Semantic relationship colors */
+    --graph-edge-reference: var(--identity-reference);
+    --graph-edge-related: #007a61;
+    --graph-edge-dependency: #c22032;
+    --graph-edge-blocking: var(--identity-artifact);
+    --graph-edge-derived: var(--identity-actor);
+    --graph-edge-superseding: #2e3192;
+
+    /* Typography scale - strict 3-tier system */
+    --font-xxs: 0.5rem; /* 0.5rem - icons, tiny labels */;
+    --font-xs: 0.5625rem; /* 0.5625rem - metadata, secondary values */;
+    --font-sm: 0.6875rem; /* 0.6875rem - labels, panel titles */;
+    --font-base: 0.75rem; /* 0.75rem - primary content */;
+    --font-lg: 0.875rem; /* 0.875rem - headings, emphasis */;
+
+    /* Shared phone scale: independent of the desktop root-size/DPR multiplier.
+       Inputs use lg (16px) to avoid focus zoom on mobile Safari. */
+    --mobile-font-xs: 10px;
+    --mobile-font-sm: 11px;
+    --mobile-font-base: 14px;
+    --mobile-font-lg: 16px;
+}
+
+::selection {
+    background: var(--selection-bg);
+    color: var(--selection-text);
+}
+
+::-moz-selection {
+    background: var(--selection-bg);
+    color: var(--selection-text);
+}
+
+.identity-scope {
+    color: var(--identity-scope);
+}
+
+.identity-actor {
+    color: var(--identity-actor);
+}
+
+.identity-reference {
+    color: var(--identity-reference);
+}
+
+.identity-artifact {
+    color: var(--identity-artifact);
+}
+
+/* Global scrollbar styling */
+*::-webkit-scrollbar {
+    width: 0.375rem;
+    height: 0.375rem;
+    cursor: auto;
+}
+
+*::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+    cursor: auto;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: var(--border-primary);
+    cursor: auto;
+}
+
+/* Dark mode - warm ember palette for night use (C4D-inspired) */
+[data-theme="dark"] {
+    /* Backgrounds - near-black */
+    --bg-primary: #0d0b08;
+    --bg-secondary: #15110c;
+    --surface-1: var(--bg-primary);
+    --surface-2: var(--bg-secondary);
+    --bg-hover: #201408;
+    --bg-zebra: #140d07; /* Faint ember tint over near-black for list striping */
+    --bg-header: var(--bg-primary);
+    --surface-priority-subtle: #1a0f08;
+    --surface-info-subtle: #1a0f08;
+    --surface-success-subtle: #1a0f08;
+    --surface-zebra-subtle: rgba(0, 0, 0, 0.02);
+    --surface-hover-subtle: rgba(0, 0, 0, 0.03);
+    --drop-target-bg: rgba(0, 174, 239, 0.05);
+    --bg-disabled: #24180f;
+
+    /* Borders - muted ember */
+    --border-primary: #5a2810;
+    --border-light: #4a220d;
+    --border-subtle: #2f1809;
+    --border-list: var(--border-subtle);
+    --border-strong: #7a3514;
+
+    /* Text - bright amber (matches Clay client) */
+    --text-primary: #fcb300;
+    --text-dim: #ca8f00;
+    --text-muted: #8a6a24;
+    --text-header: #fcb300;
+    --link-text: #00aeef;
+    --link-hover-bg: #00aeef;
+    --link-hover-text: #111111;
+    --markdown-link: var(--link-text);
+    --markdown-link-hover: var(--link-hover-text);
+
+    /* Accents - purpose-based naming */
+    --accent-interactive: #ca7d0c; /* Focus and interactive hints */
+    --accent-current: #e84040; /* Current navigation position */
+    --accent-selected: #ffb700; /* Strong selected/focused state */
+    --accent-highlight: var(--accent-interactive); /* Legacy alias for existing interactive accents */
+    --accent-danger: #e84040; /* Errors, blocked, muted */
+    --accent-success: #40c870; /* Online, connected, done */
+    --accent-priority: var(--accent-selected); /* Legacy alias for priority/important accents */
+    --identity-scope: #3ca5a7;
+    --identity-actor: #c68b92;
+    --identity-reference: var(--accent-interactive);
+    --identity-artifact: #e3a85b;
+    --on-danger: #0d0b08;
+    --on-priority: #0d0b08;
+    --current-dot-border: var(--border-primary);
+    --focus-interactive: var(--accent-interactive);
+    --chat-own-accent: var(--accent-interactive);
+    --chat-own-bg: var(--surface-info-subtle);
+
+    /* Buttons */
+    --btn-bg: var(--surface-1);
+    --btn-text: var(--text-primary);
+    --btn-border: var(--border-strong);
+    --btn-hover-bg: var(--accent-interactive);
+    --btn-hover-text: var(--selection-text);
+    --btn-hover-border: var(--focus-interactive);
+    --btn-primary-bg: var(--btn-bg);
+    --btn-primary-text: var(--accent-priority);
+    --btn-primary-border: var(--accent-priority);
+    --btn-primary-hover-bg: var(--accent-priority);
+    --btn-primary-hover-border: var(--accent-priority);
+    --btn-primary-hover-text: var(--selection-text);
+
+    --action-create-bg: var(--accent-interactive);
+    --action-create-text: var(--bg-primary);
+    --action-create-border: var(--border-strong);
+    --action-create-hover-bg: var(--accent-selected);
+    --action-create-hover-border: var(--accent-selected);
+    --action-create-hover-text: var(--bg-primary);
+
+    /* Status colors */
+    --status-online: #40c870;
+    /* Ember status ramp. Same five signals as the light ramp, re-tuned for a
+       near-black background. */
+    --status-backlog: #705820;
+    --status-todo: #ffb700;
+    --status-inprogress: #00aeef;
+    --status-done: #40c870;
+    --status-blocked: #e84040;
+
+    /* Selection and selected rows */
+    --selection-bg: #fcb300;
+    --selection-text: #0a0a0a;
+    --selected-row-accent: var(--accent-selected);
+    --selected-row-bg: #3a220a;
+    --selected-row-text: var(--text-primary);
+
+    /* Shadows */
+    --shadow: rgba(0, 0, 0, 0.8);
+    --shadow-light: #000000;
+    --overlay-backdrop: rgba(0, 0, 0, 0.58);
+    --overlay-shadow: 0 0.5rem 1.625rem rgba(0, 0, 0, 0.45);
+    --floating-shadow: 0 0.125rem 0.5rem rgba(0, 0, 0, 0.45);
+    --floating-shadow-upward: 0 -0.25rem 0.5rem rgba(0, 0, 0, 0.55);
+    --media-overlay-bg: rgba(0, 0, 0, 0.9);
+    --media-overlay-backdrop: rgba(0, 0, 0, 0.85);
+
+    /* Blocking-chain depth */
+    --blocking-depth-0-border: #c22032;
+    --blocking-depth-0-bg: rgba(194, 32, 50, 0.2);
+    --blocking-depth-1-border: #2e3192;
+    --blocking-depth-1-bg: rgba(46, 49, 146, 0.15);
+    --blocking-depth-2-border: var(--accent-interactive);
+    --blocking-depth-2-bg: rgba(24, 72, 152, 0.15);
+    --blocking-depth-3-border: #bc4c27;
+    --blocking-depth-3-bg: rgba(188, 76, 39, 0.15);
+    --blocking-depth-4-border: #613393;
+    --blocking-depth-4-bg: rgba(97, 51, 147, 0.12);
+    --blocking-depth-5-border: #007a61;
+    --blocking-depth-5-bg: rgba(0, 122, 97, 0.12);
+    --blocking-depth-overflow-border: #658d3c;
+    --blocking-depth-overflow-bg: rgba(101, 141, 60, 0.1);
+    --danger-subtle-bg: rgba(194, 32, 50, 0.2);
+    --task-status-todo-border: #bc4c27;
+
+    /* Semantic relationship colors - ember palette */
+    --graph-edge-reference: var(--identity-reference);
+    --graph-edge-related: var(--identity-scope);
+    --graph-edge-dependency: var(--accent-danger);
+    --graph-edge-blocking: var(--identity-artifact);
+    --graph-edge-derived: var(--identity-actor);
+    --graph-edge-superseding: #7e9cd8;
+}
+
+/* Omarchy palettes are adapted from the official colors.toml theme sources. */
+[data-theme="ayu"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #10141c;
+    --omarchy-foreground: #bfbdb6;
+    --omarchy-bright-foreground: #ffffff;
+    --omarchy-selection: #19315f;
+    --omarchy-muted: #1b1f29;
+    --omarchy-accent: #e6b450;
+    --omarchy-red: #e95662;
+    --omarchy-green: #91c323;
+    --omarchy-yellow: #f7a500;
+    --omarchy-blue: #46b4f0;
+    --omarchy-magenta: #bd93ed;
+    --omarchy-cyan: #78d3ba;
+}
+
+[data-theme="modus-vivendi"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #0d0e1c;
+    --omarchy-foreground: #ffffff;
+    --omarchy-bright-foreground: #c6daff;
+    --omarchy-selection: #4a4f69;
+    --omarchy-muted: #2b3045;
+    --omarchy-accent: #2fafff;
+    --omarchy-red: #ff5f59;
+    --omarchy-green: #44bc44;
+    --omarchy-yellow: #d0bc00;
+    --omarchy-blue: #2fafff;
+    --omarchy-magenta: #feacd0;
+    --omarchy-cyan: #00d3d0;
+}
+
+[data-theme="tokyo-night"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #1a1b26;
+    --omarchy-foreground: #a9b1d6;
+    --omarchy-bright-foreground: #c0caf5;
+    --omarchy-selection: #292e42;
+    --omarchy-muted: #414868;
+    --omarchy-accent: #7aa2f7;
+    --omarchy-red: #f7768e;
+    --omarchy-green: #9ece6a;
+    --omarchy-yellow: #e0af68;
+    --omarchy-blue: #7aa2f7;
+    --omarchy-magenta: #ad8ee6;
+    --omarchy-cyan: #449dab;
+}
+
+[data-theme="catppuccin"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #1e1e2e;
+    --omarchy-foreground: #cdd6f4;
+    --omarchy-selection: #45475a;
+    --omarchy-muted: #585b70;
+    --omarchy-accent: #89b4fa;
+    --omarchy-red: #f38ba8;
+    --omarchy-green: #a6e3a1;
+    --omarchy-yellow: #f9e2af;
+    --omarchy-blue: #89b4fa;
+    --omarchy-magenta: #f5c2e7;
+    --omarchy-cyan: #94e2d5;
+}
+
+[data-theme="catppuccin-latte"] {
+    --omarchy-mode: light;
+    --omarchy-background: #eff1f5;
+    --omarchy-foreground: #4c4f69;
+    --omarchy-selection: #ccd0da;
+    --omarchy-muted: #acb0be;
+    --omarchy-accent: #1e66f5;
+    --omarchy-red: #d20f39;
+    --omarchy-green: #40a02b;
+    --omarchy-yellow: #df8e1d;
+    --omarchy-blue: #1e66f5;
+    --omarchy-magenta: #ea76cb;
+    --omarchy-cyan: #179299;
+}
+
+[data-theme="ethereal"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #060b1e;
+    --omarchy-foreground: #ffcead;
+    --omarchy-selection: #252e56;
+    --omarchy-muted: #6d7db6;
+    --omarchy-accent: #7d82d9;
+    --omarchy-red: #ed5b5a;
+    --omarchy-green: #92a593;
+    --omarchy-yellow: #e9bb4f;
+    --omarchy-blue: #7d82d9;
+    --omarchy-magenta: #c89dc1;
+    --omarchy-cyan: #a3bfd1;
+}
+
+[data-theme="everforest"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #2d353b;
+    --omarchy-foreground: #d3c6aa;
+    --omarchy-selection: #3d484d;
+    --omarchy-muted: #475258;
+    --omarchy-accent: #7fbbb3;
+    --omarchy-red: #e67e80;
+    --omarchy-green: #a7c080;
+    --omarchy-yellow: #dbbc7f;
+    --omarchy-blue: #7fbbb3;
+    --omarchy-magenta: #d699b6;
+    --omarchy-cyan: #83c092;
+}
+
+[data-theme="flexoki-light"] {
+    --omarchy-mode: light;
+    --omarchy-background: #fffcf0;
+    --omarchy-foreground: #100f0f;
+    --omarchy-selection: #CECDC3;
+    --omarchy-muted: #b7b5ac;
+    --omarchy-accent: #205ea6;
+    --omarchy-red: #d14d41;
+    --omarchy-green: #879a39;
+    --omarchy-yellow: #d0a215;
+    --omarchy-blue: #205ea6;
+    --omarchy-magenta: #ce5d97;
+    --omarchy-cyan: #3aa99f;
+}
+
+[data-theme="forest-night"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #1a2125;
+    --omarchy-foreground: #c9d1d9;
+    --omarchy-bright-foreground: #ffffff;
+    --omarchy-selection: #3a4a55;
+    --omarchy-muted: #4a5568;
+    --omarchy-accent: #8fbc8f;
+    --omarchy-red: #e91e63;
+    --omarchy-green: #8fbc8f;
+    --omarchy-yellow: #f39c12;
+    --omarchy-blue: #4ecdc4;
+    --omarchy-magenta: #9b59b6;
+    --omarchy-cyan: #4ecdc4;
+}
+
+[data-theme="gruvbox"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #282828;
+    --omarchy-foreground: #d4be98;
+    --omarchy-selection: #504945;
+    --omarchy-muted: #665c54;
+    --omarchy-accent: #7daea3;
+    --omarchy-red: #ea6962;
+    --omarchy-green: #a9b665;
+    --omarchy-yellow: #d8a657;
+    --omarchy-blue: #7daea3;
+    --omarchy-magenta: #d3869b;
+    --omarchy-cyan: #89b482;
+}
+
+[data-theme="hackerman"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #0b0c16;
+    --omarchy-foreground: #ddf7ff;
+    --omarchy-selection: #1f253a;
+    --omarchy-muted: #2d3450;
+    --omarchy-accent: #82fb9c;
+    --omarchy-red: #50f872;
+    --omarchy-green: #4fe88f;
+    --omarchy-yellow: #50f7d4;
+    --omarchy-blue: #829dd4;
+    --omarchy-magenta: #86a7df;
+    --omarchy-cyan: #7cf8f7;
+}
+
+[data-theme="kanagawa"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #1f1f28;
+    --omarchy-foreground: #dcd7ba;
+    --omarchy-selection: #363646;
+    --omarchy-muted: #54546d;
+    --omarchy-accent: #dcd7ba;
+    --omarchy-red: #c34043;
+    --omarchy-green: #76946a;
+    --omarchy-yellow: #c0a36e;
+    --omarchy-blue: #7e9cd8;
+    --omarchy-magenta: #957fb8;
+    --omarchy-cyan: #6a9589;
+}
+
+[data-theme="last-horizon"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #0c0b0c;
+    --omarchy-foreground: #fafcfb;
+    --omarchy-bright-foreground: #e2dddc;
+    --omarchy-selection: #584e51;
+    --omarchy-muted: #584e51;
+    --omarchy-accent: #b59790;
+    --omarchy-red: #c38b7b;
+    --omarchy-green: #87a9b0;
+    --omarchy-yellow: #6b5e73;
+    --omarchy-blue: #b59790;
+    --omarchy-magenta: #c4d8e2;
+    --omarchy-cyan: #a5a0b6;
+}
+
+[data-theme="lumon"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #16242d;
+    --omarchy-foreground: #d6e2ee;
+    --omarchy-bright-foreground: #f2fcff;
+    --omarchy-selection: #243d56;
+    --omarchy-muted: #304860;
+    --omarchy-accent: #8bc9eb;
+    --omarchy-red: #4d86b0;
+    --omarchy-green: #5e95bc;
+    --omarchy-yellow: #6fa4c9;
+    --omarchy-blue: #6fb8e3;
+    --omarchy-magenta: #8bc9eb;
+    --omarchy-cyan: #b4e4f6;
+}
+
+[data-theme="nord"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #2e3440;
+    --omarchy-foreground: #d8dee9;
+    --omarchy-selection: #434c5e;
+    --omarchy-muted: #4c566a;
+    --omarchy-accent: #81a1c1;
+    --omarchy-red: #bf616a;
+    --omarchy-green: #a3be8c;
+    --omarchy-yellow: #ebcb8b;
+    --omarchy-blue: #81a1c1;
+    --omarchy-magenta: #b48ead;
+    --omarchy-cyan: #88c0d0;
+}
+
+[data-theme="matte-black"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #121212;
+    --omarchy-foreground: #bebebe;
+    --omarchy-selection: #2a2a2a;
+    --omarchy-muted: #333333;
+    --omarchy-accent: #e68e0d;
+    --omarchy-red: #d35f5f;
+    --omarchy-green: #ffc107;
+    --omarchy-yellow: #b91c1c;
+    --omarchy-blue: #e68e0d;
+    --omarchy-magenta: #d35f5f;
+    --omarchy-cyan: #bebebe;
+}
+
+[data-theme="miasma"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #222222;
+    --omarchy-foreground: #c2c2b0;
+    --omarchy-selection: #383838;
+    --omarchy-muted: #666666;
+    --omarchy-accent: #78824b;
+    --omarchy-red: #685742;
+    --omarchy-green: #5f875f;
+    --omarchy-yellow: #b36d43;
+    --omarchy-blue: #78824b;
+    --omarchy-magenta: #bb7744;
+    --omarchy-cyan: #c9a554;
+}
+
+[data-theme="osaka-jade"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #111c18;
+    --omarchy-foreground: #c1c497;
+    --omarchy-bright-foreground: #f7e8b2;
+    --omarchy-selection: #32473B;
+    --omarchy-muted: #53685b;
+    --omarchy-accent: #509475;
+    --omarchy-red: #ff5345;
+    --omarchy-green: #549e6a;
+    --omarchy-yellow: #459451;
+    --omarchy-blue: #509475;
+    --omarchy-magenta: #d2689c;
+    --omarchy-cyan: #2dd5b7;
+}
+
+[data-theme="retro-82"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #05182e;
+    --omarchy-foreground: #f6dcac;
+    --omarchy-selection: #134e5a;
+    --omarchy-muted: #2a6b78;
+    --omarchy-accent: #faa968;
+    --omarchy-red: #f85525;
+    --omarchy-green: #028391;
+    --omarchy-yellow: #e97b3c;
+    --omarchy-blue: #3f8f8a;
+    --omarchy-magenta: #3f8f8a;
+    --omarchy-cyan: #8cbfb8;
+}
+
+[data-theme="ristretto"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #2c2525;
+    --omarchy-foreground: #e6d9db;
+    --omarchy-selection: #403e41;
+    --omarchy-muted: #72696a;
+    --omarchy-accent: #f38d70;
+    --omarchy-red: #fd6883;
+    --omarchy-green: #adda78;
+    --omarchy-yellow: #f9cc6c;
+    --omarchy-blue: #f38d70;
+    --omarchy-magenta: #a8a9eb;
+    --omarchy-cyan: #85dacc;
+}
+
+[data-theme="solitude"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #101315;
+    --omarchy-foreground: #cacccc;
+    --omarchy-bright-foreground: #a5aeb4;
+    --omarchy-selection: #343d41;
+    --omarchy-muted: #4b4e55;
+    --omarchy-accent: #798186;
+    --omarchy-red: #565d60;
+    --omarchy-green: #9fa5a9;
+    --omarchy-yellow: #d9dbdc;
+    --omarchy-blue: #798186;
+    --omarchy-magenta: #aeaeae;
+    --omarchy-cyan: #707070;
+}
+
+[data-theme="lupine"] {
+    --omarchy-mode: light;
+    --omarchy-background: #fafafa;
+    --omarchy-foreground: #212121;
+    --omarchy-bright-foreground: #000000;
+    --omarchy-selection: #d0d0d0;
+    --omarchy-muted: #9e9e9e;
+    --omarchy-accent: #3264eb;
+    --omarchy-red: #c900c4;
+    --omarchy-green: #4a2fd0;
+    --omarchy-yellow: #026fde;
+    --omarchy-blue: #3264eb;
+    --omarchy-magenta: #8a4ad7;
+    --omarchy-cyan: #0c67de;
+}
+
+[data-theme="rose-pine"] {
+    --omarchy-mode: light;
+    --omarchy-background: #faf4ed;
+    --omarchy-foreground: #575279;
+    --omarchy-selection: #dfdad9;
+    --omarchy-muted: #cecacd;
+    --omarchy-accent: #56949f;
+    --omarchy-red: #b4637a;
+    --omarchy-green: #286983;
+    --omarchy-yellow: #ea9d34;
+    --omarchy-blue: #56949f;
+    --omarchy-magenta: #907aa9;
+    --omarchy-cyan: #d7827e;
+}
+
+[data-theme="vantablack"] {
+    --omarchy-mode: dark;
+    --omarchy-background: #000000;
+    --omarchy-foreground: #ffffff;
+    --omarchy-selection: #1a1a1a;
+    --omarchy-muted: #7a7a7a;
+    --omarchy-accent: #8d8d8d;
+    --omarchy-red: #a4a4a4;
+    --omarchy-green: #b6b6b6;
+    --omarchy-yellow: #cecece;
+    --omarchy-blue: #8d8d8d;
+    --omarchy-magenta: #9b9b9b;
+    --omarchy-cyan: #b0b0b0;
+}
+
+[data-theme="white"] {
+    --omarchy-mode: light;
+    --omarchy-background: #ffffff;
+    --omarchy-foreground: #000000;
+    --omarchy-selection: #c0c0c0;
+    --omarchy-muted: #808080;
+    --omarchy-accent: #6e6e6e;
+    --omarchy-red: #2a2a2a;
+    --omarchy-green: #3a3a3a;
+    --omarchy-yellow: #4a4a4a;
+    --omarchy-blue: #1a1a1a;
+    --omarchy-magenta: #2e2e2e;
+    --omarchy-cyan: #3e3e3e;
+}
+
+:is(
+    [data-theme="ayu"],
+    [data-theme="modus-vivendi"],
+    [data-theme="tokyo-night"],
+    [data-theme="catppuccin"],
+    [data-theme="catppuccin-latte"],
+    [data-theme="ethereal"],
+    [data-theme="everforest"],
+    [data-theme="flexoki-light"],
+    [data-theme="forest-night"],
+    [data-theme="gruvbox"],
+    [data-theme="hackerman"],
+    [data-theme="kanagawa"],
+    [data-theme="last-horizon"],
+    [data-theme="lumon"],
+    [data-theme="nord"],
+    [data-theme="matte-black"],
+    [data-theme="miasma"],
+    [data-theme="osaka-jade"],
+    [data-theme="retro-82"],
+    [data-theme="ristretto"],
+    [data-theme="solitude"],
+    [data-theme="lupine"],
+    [data-theme="rose-pine"],
+    [data-theme="vantablack"],
+    [data-theme="white"]
+) {
+    color-scheme: var(--omarchy-mode);
+
+    --bg-primary: var(--omarchy-background);
+    --bg-secondary: color-mix(in srgb, var(--omarchy-background) 92%, var(--omarchy-foreground));
+    --surface-1: var(--bg-primary);
+    --surface-2: var(--bg-secondary);
+    --bg-hover: color-mix(in srgb, var(--omarchy-background) 86%, var(--omarchy-foreground));
+    --bg-zebra: color-mix(in srgb, var(--omarchy-background) 96%, var(--omarchy-foreground));
+    --bg-header: var(--bg-primary);
+    --surface-priority-subtle: color-mix(in srgb, var(--omarchy-background) 88%, var(--omarchy-yellow));
+    --surface-info-subtle: color-mix(in srgb, var(--omarchy-background) 88%, var(--omarchy-blue));
+    --surface-success-subtle: color-mix(in srgb, var(--omarchy-background) 88%, var(--omarchy-green));
+    --surface-zebra-subtle: color-mix(in srgb, transparent 98%, var(--omarchy-foreground));
+    --surface-hover-subtle: color-mix(in srgb, transparent 97%, var(--omarchy-foreground));
+    --drop-target-bg: color-mix(in srgb, transparent 92%, var(--omarchy-accent));
+    --bg-disabled: color-mix(in srgb, var(--omarchy-background) 82%, var(--omarchy-foreground));
+
+    --border-primary: color-mix(in srgb, var(--omarchy-background) 48%, var(--omarchy-foreground));
+    --border-light: color-mix(in srgb, var(--omarchy-background) 68%, var(--omarchy-foreground));
+    --border-subtle: color-mix(in srgb, var(--omarchy-background) 82%, var(--omarchy-foreground));
+    --border-list: var(--border-subtle);
+    --border-strong: color-mix(in srgb, var(--omarchy-background) 24%, var(--omarchy-foreground));
+
+    --text-primary: var(--omarchy-foreground);
+    --text-dim: color-mix(in srgb, var(--omarchy-foreground) 82%, var(--omarchy-background));
+    --text-muted: color-mix(in srgb, var(--omarchy-muted) 22%, var(--omarchy-foreground));
+    --text-header: var(--omarchy-foreground);
+    --link-text: var(--omarchy-accent);
+    --link-hover-bg: var(--omarchy-accent);
+    --link-hover-text: var(--omarchy-background);
+    --markdown-link: var(--link-text);
+    --markdown-link-hover: var(--link-hover-text);
+
+    --accent-interactive: var(--omarchy-accent);
+    --accent-current: var(--omarchy-red);
+    --accent-selected: var(--omarchy-yellow);
+    --accent-highlight: var(--accent-interactive);
+    --accent-danger: var(--omarchy-red);
+    --accent-success: var(--omarchy-green);
+    --accent-priority: var(--accent-selected);
+    --identity-scope: var(--omarchy-cyan);
+    --identity-actor: var(--omarchy-magenta);
+    --identity-reference: var(--omarchy-accent);
+    --identity-artifact: var(--omarchy-yellow);
+    --on-danger: var(--omarchy-background);
+    --on-priority: var(--omarchy-background);
+    --current-dot-border: var(--border-primary);
+    --focus-interactive: var(--accent-interactive);
+    --chat-own-accent: var(--omarchy-accent);
+    --chat-own-bg: var(--surface-info-subtle);
+
+    --btn-bg: var(--surface-1);
+    --btn-text: var(--text-primary);
+    --btn-border: var(--border-strong);
+    --btn-hover-bg: var(--accent-interactive);
+    --btn-hover-text: var(--omarchy-background);
+    --btn-hover-border: var(--focus-interactive);
+    --btn-primary-bg: var(--btn-bg);
+    --btn-primary-text: var(--accent-interactive);
+    --btn-primary-border: var(--accent-interactive);
+    --btn-primary-hover-bg: var(--accent-selected);
+    --btn-primary-hover-border: var(--accent-selected);
+    --btn-primary-hover-text: var(--omarchy-background);
+
+    --action-create-bg: var(--accent-interactive);
+    --action-create-text: var(--omarchy-background);
+    --action-create-border: var(--border-strong);
+    --action-create-hover-bg: var(--accent-selected);
+    --action-create-hover-border: var(--accent-selected);
+    --action-create-hover-text: var(--omarchy-background);
+
+    --status-online: var(--omarchy-green);
+    /* Omarchy themes supply their own decorative palette, so the status ramp is
+       stated here rather than aliased from --omarchy-* names. Twenty of these
+       themes are dark; the five light ones override this immediately below. */
+    --status-backlog: #705820;
+    --status-todo: #ffb700;
+    --status-inprogress: #00aeef;
+    --status-done: #40c870;
+    --status-blocked: #e84040;
+    --selection-bg: var(--omarchy-selection);
+    --selection-text: var(--omarchy-bright-foreground, var(--omarchy-foreground));
+    --selected-row-accent: var(--omarchy-accent);
+    --selected-row-bg: color-mix(in srgb, var(--omarchy-background) 96%, var(--selected-row-accent));
+    --selected-row-text: var(--omarchy-foreground);
+
+    --shadow: color-mix(in srgb, var(--omarchy-background) 80%, #000000);
+    --shadow-light: var(--omarchy-muted);
+    --overlay-backdrop: color-mix(in srgb, transparent 40%, #000000);
+    --overlay-shadow: 0 0.5rem 1.625rem color-mix(in srgb, transparent 45%, #000000);
+    --floating-shadow: 0 0.125rem 0.5rem color-mix(in srgb, transparent 55%, #000000);
+    --floating-shadow-upward: 0 -0.25rem 0.5rem color-mix(in srgb, transparent 45%, #000000);
+    --media-overlay-bg: color-mix(in srgb, transparent 10%, #000000);
+    --media-overlay-backdrop: color-mix(in srgb, transparent 15%, #000000);
+
+    --blocking-depth-0-border: var(--omarchy-red);
+    --blocking-depth-0-bg: color-mix(in srgb, transparent 84%, var(--omarchy-red));
+    --blocking-depth-1-border: var(--omarchy-blue);
+    --blocking-depth-1-bg: color-mix(in srgb, transparent 88%, var(--omarchy-blue));
+    --blocking-depth-2-border: var(--omarchy-cyan);
+    --blocking-depth-2-bg: color-mix(in srgb, transparent 88%, var(--omarchy-cyan));
+    --blocking-depth-3-border: var(--omarchy-yellow);
+    --blocking-depth-3-bg: color-mix(in srgb, transparent 88%, var(--omarchy-yellow));
+    --blocking-depth-4-border: var(--omarchy-magenta);
+    --blocking-depth-4-bg: color-mix(in srgb, transparent 90%, var(--omarchy-magenta));
+    --blocking-depth-5-border: var(--omarchy-cyan);
+    --blocking-depth-5-bg: color-mix(in srgb, transparent 90%, var(--omarchy-cyan));
+    --blocking-depth-overflow-border: var(--omarchy-green);
+    --blocking-depth-overflow-bg: color-mix(in srgb, transparent 90%, var(--omarchy-green));
+    --danger-subtle-bg: color-mix(in srgb, transparent 84%, var(--omarchy-red));
+    --task-status-todo-border: var(--omarchy-yellow);
+
+    --graph-edge-reference: var(--identity-scope);
+    --graph-edge-related: var(--identity-scope);
+    --graph-edge-dependency: var(--omarchy-red);
+    --graph-edge-blocking: var(--identity-artifact);
+    --graph-edge-derived: var(--identity-actor);
+    --graph-edge-superseding: var(--omarchy-blue);
+}
+
+/* Light Omarchy themes need the light status ramp: the same five signals on a
+   light background. Listed explicitly so a new theme must choose a side rather
+   than inherit one by accident. */
+:is(
+    [data-theme="catppuccin-latte"],
+    [data-theme="flexoki-light"],
+    [data-theme="lupine"],
+    [data-theme="rose-pine"],
+    [data-theme="white"]
+) {
+    --status-backlog: #939598;
+    --status-todo: #c98a00;
+    --status-inprogress: #0076a2;
+    --status-done: #00a651;
+    --status-blocked: #f04e30;
+}
+
+[data-theme="rose-pine"] {
+    --text-dim: #625d80;
+    --text-muted: #696483;
+    --btn-hover-text: #111111;
+    --btn-primary-hover-text: #111111;
+    --action-create-hover-text: #111111;
+    --identity-scope: color-mix(in srgb, var(--omarchy-cyan) 40%, var(--omarchy-foreground));
+    --identity-actor: color-mix(in srgb, var(--omarchy-magenta) 50%, var(--omarchy-foreground));
+    --identity-reference: color-mix(in srgb, var(--omarchy-accent) 50%, var(--omarchy-foreground));
+    --identity-artifact: color-mix(in srgb, var(--omarchy-yellow) 30%, var(--omarchy-foreground));
+    --graph-edge-reference: var(--identity-scope);
+    --graph-edge-related: var(--identity-scope);
+    --graph-edge-dependency: color-mix(in srgb, var(--omarchy-red) 70%, var(--omarchy-foreground));
+    --graph-edge-blocking: var(--identity-artifact);
+    --graph-edge-derived: var(--identity-actor);
+    --graph-edge-superseding: var(--identity-reference);
+    --on-danger: #111111;
+    --on-priority: #111111;
+}
+
+[data-theme="kanagawa"] {
+    --graph-edge-dependency: color-mix(in srgb, var(--omarchy-red) 65%, var(--omarchy-foreground));
+    --on-danger: var(--omarchy-background);
+}
+
+[data-theme="nord"] {
+    --identity-actor: color-mix(in srgb, var(--omarchy-magenta) 90%, var(--omarchy-foreground));
+    --graph-edge-dependency: color-mix(in srgb, var(--omarchy-red) 65%, var(--omarchy-foreground));
+    --on-danger: #111111;
+}
+
+[data-theme="matte-black"] {
+    --btn-primary-hover-text: #ffffff;
+    --action-create-hover-text: #ffffff;
+    --identity-artifact: var(--omarchy-green);
+    --on-priority: #ffffff;
+}
+
+/* Hover text sits on the selected/priority fill, which light Omarchy palettes
+   render as a light gold. The generic mapping uses the theme background there,
+   so these four themes state the readable foreground explicitly. */
+[data-theme="catppuccin-latte"] {
+    --btn-primary-hover-text: #111111;
+    --action-create-hover-text: #111111;
+}
+
+[data-theme="flexoki-light"] {
+    --btn-primary-hover-text: #111111;
+    --action-create-hover-text: #111111;
+}
+
+/* Danger is read as text on the record surface as well as used as a fill, so a
+   palette whose red sits too close to its own background states a readable red.
+   Each value is the smallest foreground mix that reaches 4.5:1 as text and keeps
+   the hover fill legible under --on-danger. */
+[data-theme="lupine"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 90%, var(--omarchy-foreground)); }
+[data-theme="matte-black"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 90%, var(--omarchy-foreground)); }
+[data-theme="catppuccin-latte"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 90%, var(--omarchy-foreground)); }
+[data-theme="ristretto"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 95%, var(--omarchy-foreground)); }
+[data-theme="flexoki-light"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 85%, var(--omarchy-foreground)); }
+[data-theme="gruvbox"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 70%, var(--omarchy-foreground)); }
+[data-theme="lumon"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 70%, var(--omarchy-foreground)); }
+[data-theme="everforest"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 60%, var(--omarchy-foreground)); }
+[data-theme="solitude"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 60%, var(--omarchy-foreground)); }
+[data-theme="kanagawa"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 55%, var(--omarchy-foreground)); }
+[data-theme="forest-night"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 50%, var(--omarchy-foreground)); }
+[data-theme="rose-pine"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 50%, var(--omarchy-foreground)); }
+[data-theme="nord"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 45%, var(--omarchy-foreground)); }
+[data-theme="miasma"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 40%, var(--omarchy-foreground)); }

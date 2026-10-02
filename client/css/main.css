@@ -1,0 +1,233 @@
+@import url("foundation.css?v=20261002docs1");
+@import url("workspace.css?v=20260926calendar1");
+@import url("entities.css?v=20261001picker1");
+@import url("ledger.css?v=20260926nesting2");
+@import url("mobile-tasks.css?v=20260928slice1");
+@import url("mobile.css?v=20260926nesting2");
+
+.chat-attachment {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.375rem;
+    min-width: 0;
+
+    & > :is(audio, video, img) {
+        max-width: 100%;
+        width: 100%;
+        max-height: 24rem;
+        object-fit: contain;
+    }
+
+    & > .btn {
+        align-self: flex-start;
+    }
+}
+
+body.sullivan-workbench #chatAttach {
+    display: none;
+}
+
+.task-row-open {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+/* The opener inside a row is the keyboard's control, but the row carries the
+   focus outline, so the control itself does not draw a second one. */
+.task-row-open:focus-visible,
+.slice-member-open:focus-visible,
+.task-row-status:focus-visible {
+    outline: none;
+}
+
+/* Shared list states. Selection wins over hover; keyboard focus outlines the
+   whole row, including lists whose accessible opener is a child button. */
+:is(.note-card, .reminder-row, .attention-row, .task-table tbody tr, .system-log-table tbody tr, .customer-row, .customer-contact, .customer-event, .slice-row, .slice-member):hover {
+    background: var(--bg-hover);
+}
+
+:is(.note-card.note-selected, .reminder-row.reminder-row-selected, .task-table tbody tr.task-row-selected, .system-log-table tbody tr.system-log-row-selected, .customer-row[aria-pressed="true"], .customer-contact[aria-pressed="true"], .slice-row[aria-pressed="true"], .slice-member.slice-member-selected) {
+    background: var(--selected-row-bg);
+    color: var(--selected-row-text);
+    box-shadow: inset 3px 0 var(--selected-row-accent);
+}
+
+:is(.note-card, .reminder-row, .attention-row, .task-table tbody tr, .system-log-table tbody tr, .customer-row, .customer-contact, .customer-event, .slice-row, .slice-member):is(:focus-visible, :has(.task-row-open:focus-visible, .slice-member-open:focus-visible, .task-row-status:focus-visible)) {
+    outline: 1px solid var(--focus-interactive);
+    outline-offset: -1px;
+}
+
+/* Registers use the full workspace until a record is opened in the inspector. */
+#inspector.inspector-entity-only:has(#inspectorEntityHost[hidden]) { display: none !important; }
+
+/* Customer workspace composes the shared register, panel and form controls. */
+.customers-panel { flex: 1; min-height: 0; flex-direction: column; overflow: hidden; background: var(--surface-content); }
+#customersBtn[hidden], .customer-event[hidden], .customer-status[hidden] { display: none; }
+.customers-layout { display: grid; grid-template-columns: 15rem minmax(0, 1fr); flex: 1; min-height: 0; }
+.customers-register { border-right: var(--frame-border); overflow: auto; }
+.customer-row { display: block; width: 100%; min-height: 2.5rem; padding: 0; border: 0; background: var(--surface-content); color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; }
+.customer-row-copy { display: grid; align-content: center; gap: 0.1875rem; min-width: 0; padding: 0.4375rem 0.625rem; }
+.customer-row-title, .customer-row-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.customer-row-title { font-family: var(--font-sans); font-size: var(--font-base); line-height: 1.15; }
+.customer-row-meta { line-height: 1.15; }
+.customer-row-state { color: var(--accent-danger); }
+.customer-event { display: flex; flex-direction: column; gap: 0.375rem; width: 100%; padding: 0.75rem; border: 0; background: var(--surface-content); color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.customer-meta { font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-dim); }
+.customer-record { overflow: auto; padding: 1rem; min-width: 0; container-type: inline-size; }
+.customer-identity, .customer-actions { display: flex; gap: 0.5rem; justify-content: space-between; align-items: center; }
+.customer-identity { align-items: flex-start; flex-wrap: wrap; }
+.customer-identity h2 { font-family: var(--font-sans); font-size: 1.4rem; margin: 0.375rem 0; overflow-wrap: anywhere; }
+.customer-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 1.5rem; margin: 1rem 0; }
+.customer-facts > div { padding: 0; }
+.customer-facts dt { color: var(--text-dim); font-size: var(--font-xs); }
+.customer-facts dd { margin: 0.25rem 0 0; overflow-wrap: anywhere; }
+.customer-section { margin-top: 1rem; min-width: 0; }
+/* Quiet group bands distinguish record sections without enclosing their bodies. */
+:is(.customer-section, .slice-section) > .panel-header,
+.customer-record .file-assets-section > .panel-header {
+    background: var(--surface-panel);
+    color: var(--text-primary);
+    border-block: var(--content-border);
+    padding: 0.375rem 0.625rem;
+    height: auto;
+    min-height: 2rem;
+    margin-bottom: 0.375rem;
+}
+.customer-record .file-assets-section .file-assets-title {
+    font: inherit;
+    color: inherit;
+    letter-spacing: inherit;
+}
+.customer-section > .panel-header > div { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.customer-contacts { display: grid; container-type: inline-size; }
+.customer-contact, .customer-contact-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 0.8fr); align-items: center; gap: 0.75rem; padding: 0.5rem 0.375rem; }
+.customer-contact-head { font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-dim); }
+.customer-contact { width: 100%; border: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: var(--font-base); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.customer-contact > span:first-child { display: grid; gap: 0.25rem; }
+.customer-columns { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 1rem; }
+.customer-history-filter { display: flex; gap: 0.5rem; align-items: center; padding: 0.375rem 0; }
+.customer-footnote, .customer-empty { padding: 0.5rem 0; margin: 0; color: var(--text-dim); }
+/* The register's empty state is the register's own line, so it carries the same
+   inset the record pane gives its empty state instead of sitting on the border. */
+#customersList > .customer-empty { padding: 1rem; }
+.customer-empty { font-size: var(--font-base); }
+#customerRelationshipsSentinel { height: 1px; }
+.customer-status { color: var(--accent-danger); padding: 0.5rem; overflow-wrap: anywhere; }
+.customer-dialog { margin: auto; color: var(--text-primary); max-height: calc(100dvh - 2rem); overflow: auto; }
+.customer-dialog:not([open]) { display: none; }
+.customer-dialog::backdrop { background: var(--overlay-backdrop); }
+.customer-fields { display: grid; gap: 0.625rem; margin: 1rem 0; }
+.customer-fields textarea { resize: vertical; }
+.customer-inspector { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.customer-inspector-body { flex: 1; min-height: 0; overflow: auto; padding: 0.625rem; overflow-wrap: anywhere; }
+.customer-inspector .customer-fields { margin: 0.625rem 0; }
+.customer-field-section { display: grid; gap: 0.375rem; min-width: 0; }
+.customer-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.375rem; min-width: 0; }
+.customer-field-grid--single { grid-template-columns: minmax(0, 1fr); }
+.customer-fact-sections { display: grid; gap: 0.375rem; }
+.customer-fact-sections .contact-facts { margin-top: 0; }
+.customer-fact-sections .contact-facts > div { padding-block: 0.5rem; }
+.customer-activity-body { white-space: pre-wrap; margin: 0.75rem 0; }
+.contact-facts { margin: 0.5rem 0 0; font-size: var(--font-base); }
+.contact-facts > div { display: grid; grid-template-columns: 4rem minmax(0, 1fr) auto; align-items: center; gap: 0.5rem; padding: 0.625rem; border-bottom: 1px solid var(--border-list); }
+.contact-facts dt { font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-dim); }
+.contact-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.contact-facts a { color: var(--accent-interactive); }
+.contact-facts.company-facts > div { grid-template-columns: 6.5rem minmax(0, 1fr) auto; }
+.contact-facts.company-facts dd { overflow: hidden; }
+.contact-facts.company-facts dd a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contact-company-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--font-base); }
+.contact-company-table th, .contact-company-table td { padding: 0.625rem; border-bottom: 1px solid var(--border-list); text-align: left; overflow-wrap: anywhere; }
+.contact-company-table th { font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-dim); font-weight: normal; background: transparent; }
+.contact-company-table tbody tr:last-child td { border-bottom: 0; }
+.contact-company-table th:last-child { width: 9rem; }
+.contact-company-table .customer-actions { justify-content: flex-start; flex-wrap: wrap; gap: 0.375rem; }
+.contact-provenance { margin-top: 1.5rem; }
+.contact-provenance .detail-object-register { border: 0; background: transparent; }
+.contact-provenance .detail-object-register > div { border: 0; padding-inline: 0; }
+#contactCompanyPicker { padding: 0.5rem; border-top: var(--content-border); font-size: var(--font-base); }
+#contactCompanyPicker .filter-label { flex-shrink: 0; white-space: nowrap; }
+#contactCompanyPicker[hidden], #contactCompanyMore[hidden] { display: none; }
+#contactCompanySearch { min-width: 0; width: 100%; }
+@media (max-width: 768px) {
+    #contactCompanySearch { font-size: 16px; }
+    .contact-facts, .contact-company-table, #contactCompanyPicker, .customer-contact, .customer-empty { font-size: var(--mobile-font-base); }
+    .contact-facts > div { grid-template-columns: 3.25rem minmax(0, 1fr) auto; padding-inline: 0.375rem; }
+    .contact-facts.company-facts > div { grid-template-columns: 6rem minmax(0, 1fr) auto; }
+    .contact-company-table th:last-child { width: 7rem; }
+    .contact-company-table th, .contact-company-table td { padding: 0.375rem; }
+    .customer-field-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 640px) {
+    .customer-columns { grid-template-columns: 1fr; }
+    .customer-contact-head { display: none; }
+    .customer-contact { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 0.375rem 0.75rem; }
+    .customer-contact > span:first-child { grid-row: span 2; }
+    .customer-contact > span:last-child { grid-column: 2; }
+}
+@media (max-width: 1200px) { .customer-columns { grid-template-columns: 1fr; } .customers-layout { grid-template-columns: 12rem minmax(0, 1fr); } }
+@media (max-width: 768px) {
+    .customers-panel { overflow: auto; }
+    /* Query and creation share the first line; the secondary filters take the
+       second. The header grows to hold both rows instead of clipping them
+       behind the register. */
+    .customers-panel > .panel-header.header-register { height: auto; min-height: 0; }
+    .customers-panel > .header-register > .header-register-control-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-auto-rows: auto;
+        height: auto;
+        min-height: 0;
+        max-height: none;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 12px;
+        overflow: visible;
+
+        & > .header-filter-cell:first-child { grid-area: 1 / 1; }
+        & > .header-filter-toggle { grid-area: 2 / 1; justify-content: flex-start; }
+        & > .header-operation { grid-area: 2 / 2; }
+        & > .header-operation.header-create-action { grid-area: 1 / 2; }
+    }
+    .customers-panel .header-filter-cell > .filter-input { width: 100%; }
+    .customers-layout { display: block; overflow: visible; }
+    .customers-register { border-right: 0; border-bottom: var(--frame-border); overflow: visible; }
+    #customersList { display: flex; overflow-x: auto; }
+    .customer-row { min-width: 13rem; }
+    .customer-record { overflow: visible; padding: 0.625rem; }
+    .customer-facts { grid-template-columns: 1fr; }
+    .customers-panel > .panel-header { flex-shrink: 0; }
+    .customer-identity .customer-actions { width: 100%; justify-content: flex-end; }
+}
+
+/* Shared register dividers, after entity border resets. Layout rules own row
+   geometry, not divider appearance. Task rows own their edge in both native
+   table and compact grid layouts; virtual spacers never receive a divider. */
+.note-card,
+.reminder-row,
+.attention-row,
+.task-table tbody tr:not([aria-hidden="true"]),
+.customer-row,
+.customer-event,
+.slice-row,
+.file-assets-row,
+.file-assets-picker-row {
+    border-bottom: 1px solid var(--border-list);
+}
+
+/* These lists separate the header from the first member with a leading edge. */
+.customer-contact,
+.slice-member {
+    border-top: 1px solid var(--border-list);
+}

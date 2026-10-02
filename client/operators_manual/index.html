@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NRC OPERATORS MANUAL</title>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Serif:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- COVER PAGE -->
+<div class="page cover-page">
+    <div class="cover-spacer"></div>
+    <div class="cover-content">
+        <h1 class="cover-title">NRC OPERATORS MANUAL</h1>
+        <p class="cover-subtitle">NO RELAY CHAT</p>
+        <p class="cover-subtitle">SYSTEM REFERENCE & PROCEDURES</p>
+        <div class="cover-spacer"></div>
+        <p class="cover-spec">REVISION 1.0</p>
+        <p class="cover-spec">DECEMBER 2025</p>
+        <p class="cover-spec">ODIN COMPILER DEV-2025-09</p>
+        <div class="cover-spacer"></div>
+        <p class="cover-copyright">© 2025 NRC SYSTEMS</p>
+        <p class="cover-copyright">ALL RIGHTS RESERVED</p>
+    </div>
+</div>
+
+<!-- TABLE OF CONTENTS -->
+<div class="page">
+    <h2 class="section-title">TABLE OF CONTENTS</h2>
+    <div class="toc">
+        <div class="toc-entry">
+            <span class="toc-number">1</span>
+            <span class="toc-text">INTRODUCTION</span>
+        </div>
+        <div class="toc-entry">
+            <span class="toc-number">2</span>
+            <span class="toc-text">SYSTEM ARCHITECTURE</span>
+        </div>
+        <div class="toc-entry">
+            <span class="toc-number">3</span>
+            <span class="toc-text">PROTOCOL SPECIFICATION</span>
+        </div>
+        <div class="toc-entry">
+            <span class="toc-number">4</span>
+            <span class="toc-text">PERSISTENCE LAYER</span>
+        </div>
+        <div class="toc-entry">
+            <span class="toc-number">5</span>
+            <span class="toc-text">CORE OPERATIONS</span>
+        </div>
+        <div class="toc-entry">
+            <span class="toc-number">6</span>
+            <span class="toc-text">COMMAND REFERENCE</span>
+        </div>
+        <div class="toc-entry">
+            <span class="toc-number">7</span>
+            <span class="toc-text">CONFIGURATION & TUNING</span>
+        </div>
+        <div class="toc-entry">
+            <span class="toc-number">8</span>
+            <span class="toc-text">OPERATIONAL PROCEDURES</span>
+        </div>
+        <div class="toc-entry">
+            <span class="toc-number">9</span>
+            <span class="toc-text">TROUBLESHOOTING</span>
+        </div>
+        <div class="toc-entry">
+            <span class="toc-number">10</span>
+            <span class="toc-text">PERFORMANCE DATA</span>
+        </div>
+        <div class="toc-entry">
+            <span class="toc-number">11</span>
+            <span class="toc-text">APPENDICES</span>
+        </div>
+    </div>
+</div>
+
+<!-- SECTION 1: INTRODUCTION -->
+<div class="page">
+    <h2 class="section-title">1. INTRODUCTION</h2>
+    
+    <h3 class="subsection-title">1.1 SYSTEM OVERVIEW</h3>
+    <p>NRC (No Relay Chat) is a high-performance WebSocket server designed for real-time team coordination. The system eliminates the persistence layer and message relay overhead of traditional chat systems, achieving sub-100ms latency for mission-critical operations.</p>
+    <p>The NRC-300 terminal interface provides operators with complete visibility into system state: live metrics, thread allocation, connection counts, and message flow. This manual describes operation, configuration, and troubleshooting of the complete system.</p>
+
+    <h3 class="subsection-title">1.2 KEY SPECIFICATIONS</h3>
+    <table class="spec-table">
+        <tr>
+            <td class="spec-label">LATENCY:</td>
+            <td class="spec-value">&lt;100ms round-trip</td>
+        </tr>
+        <tr>
+            <td class="spec-label">CONCURRENCY:</td>
+            <td class="spec-value">65K connections per thread</td>
+        </tr>
+        <tr>
+            <td class="spec-label">MEMORY MODEL:</td>
+            <td class="spec-value">Thread-per-core sharding</td>
+        </tr>
+        <tr>
+            <td class="spec-label">PROTOCOL:</td>
+            <td class="spec-value">Binary custom frame</td>
+        </tr>
+        <tr>
+            <td class="spec-label">ARCHITECTURE:</td>
+            <td class="spec-value">Non-blocking I/O, io_uring</td>
+        </tr>
+        <tr>
+            <td class="spec-label">LANGUAGE:</td>
+            <td class="spec-value">Odin (dev-2025-09)</td>
+        </tr>
+    </table>
+
+    <h3 class="subsection-title">1.3 HARDWARE REQUIREMENTS</h3>
+    <p><strong>MINIMUM:</strong> 2-core CPU, 256MB RAM, Linux kernel 5.1+</p>
+    <p><strong>RECOMMENDED:</strong> 8+ core CPU, 2GB+ RAM, Linux kernel 6.0+</p>
+    <p><strong>NETWORK:</strong> Gigabit Ethernet or equivalent, stable sub-100ms RTT</p>
+
+</div>
+
+<!-- SECTION 2: SYSTEM ARCHITECTURE -->
+<div class="page">
+    <h2 class="section-title">2. SYSTEM ARCHITECTURE</h2>
+    
+    <h3 class="subsection-title">2.1 BLOCK DIAGRAM</h3>
+    <pre class="diagram">
+    ┌──────────────────────────────────────────────────────────┐
+    │               WebSocket Clients (TLS)                    │
+    │         Multiple connections → Worker Threads            │
+    └────────────────────┬─────────────────────────────────────┘
+                         │ (Accept → Pending Queue)
+    ┌────────────────────┴─────────────────────────────────────┐
+    │           Acceptor Thread (main thread)                  │
+    │     open_and_listen_tcp() → Channel Dispatch             │
+    └────────────────────┬─────────────────────────────────────┘
+                         │ (Per-thread queues)
+    ┌────────────────────┴─────────────────────────────────────┐
+    │  WORKER THREAD POOL (thread-per-core, N=CPU count)      │
+    │                                                          │
+    │  ┌──────────────┬──────────────┬──────────────┐         │
+    │  │   THREAD 0   │   THREAD 1   │   THREAD N   │         │
+    │  │              │              │              │         │
+    │  │ ┌──────────┐ │ ┌──────────┐ │ ┌──────────┐ │         │
+    │  │ │NBIO (IO) │ │ │NBIO (IO) │ │ │NBIO (IO) │ │         │
+    │  │ │io_uring  │ │ │io_uring  │ │ │io_uring  │ │         │
+    │  │ │SIMD mask │ │ │SIMD mask │ │ │SIMD mask │ │         │
+    │  │ └──────────┘ │ └──────────┘ │ └──────────┘ │         │
+    │  │              │              │              │         │
+    │  │ Connections  │ Connections  │ Connections  │         │
+    │  │ TLS buffers  │ TLS buffers  │ TLS buffers  │         │
+    │  │ (65K max)    │ (65K max)    │ (65K max)    │         │
+    │  │              │              │              │         │
+    │  │ Workspaces   │ Workspaces   │ Workspaces   │         │
+    │  │ └─Convs      │ └─Convs      │ └─Convs      │         │
+    │  │   ├─Subs     │   ├─Subs     │   ├─Subs     │         │
+    │  │   ├─Tasks    │   ├─Tasks    │   ├─Tasks    │         │
+    │  │   └─Agenda   │   └─Agenda   │   └─Agenda   │         │
+    │  │              │              │              │         │
+    │  │ BytePool     │ BytePool     │ BytePool     │         │
+    │  │ WAL Log      │ WAL Log      │ WAL Log      │         │
+    │  │ (Tasks)      │ (Tasks)      │ (Tasks)      │         │
+    │  │ (Agenda)     │ (Agenda)     │ (Agenda)     │         │
+    │  └──────────────┴──────────────┴──────────────┘         │
+    └────────────────────┬─────────────────────────────────────┘
+                         │
+    ┌────────────────────┴─────────────────────────────────────┐
+    │         PERSISTENCE LAYER (per-thread WAL)              │
+    │   Task WAL + Compaction | Agenda WAL + Compaction       │
+    │   (ULID-based filenames, append-only, fsync)            │
+    └──────────────────────────────────────────────────────────┘
+    </pre>
+
+    <h3 class="subsection-title">2.2 THREAD MODEL</h3>
+    <p>NRC uses a thread-per-core architecture with explicit per-thread queuing:</p>
+    <ul class="procedure-list">
+        <li><strong>Main Thread (Acceptor):</strong> Accepts incoming TCP connections, enqueues pending connections to worker thread channels</li>
+        <li><strong>Worker Threads (N = CPU count):</strong> Each processes connections from its dedicated queue, handles I/O events via io_uring</li>
+        <li><strong>Workspace Isolation:</strong> Each thread maintains per-workspace state (conversations, subscriptions, nicknames, tasks, agendas)</li>
+        <li><strong>Conversation Routing:</strong> Conversations are identified by 64-bit ID; hash(conversation_id) % thread_count determines assignment</li>
+        <li><strong>Thread-Local State:</strong> Buffers, message sequence counters, byte pools, WAL logs - no atomic operations in hot path</li>
+        <li><strong>io_uring Per-Thread:</strong> Each worker has its own io_uring ring for efficient kernel I/O batching</li>
+        <li><strong>No Global Locks:</strong> Connections never migrate between threads; subscriptions/messaging handled locally within assigned thread</li>
+    </ul>
+
+    <h3 class="subsection-title">2.3 MEMORY LAYOUT</h3>
+    <table class="spec-table">
+        <tr>
+            <td class="spec-label">THREAD STACK:</td>
+            <td class="spec-value">2MB default per worker thread</td>
+        </tr>
+        <tr>
+            <td class="spec-label">TLS BUFFERS:</td>
+            <td class="spec-value">8KB receive buffers per connection (provided by kernel io_uring)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">BYTE POOL (per thread):</td>
+            <td class="spec-value">Thread-local send buffer pool, reusable allocations</td>
+        </tr>
+        <tr>
+            <td class="spec-label">PENDING QUEUE CAPACITY:</td>
+            <td class="spec-value">16384 pending connections per thread channel</td>
+        </tr>
+        <tr>
+            <td class="spec-label">CONNECTIONS PER THREAD:</td>
+            <td class="spec-value">65535 maximum (file descriptor limit)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">WORKSPACE STATE:</td>
+            <td class="spec-value">Per-thread map of workspace ID → conversations/subscriptions/tasks</td>
+        </tr>
+        <tr>
+            <td class="spec-label">WAL LOG:</td>
+            <td class="spec-value">Task WAL + Agenda WAL per thread (ULID-named append-only files)</td>
+        </tr>
+    </table>
+
+</div>
+
+<!-- SECTION 3: PROTOCOL SPECIFICATION -->
+<div class="page">
+    <h2 class="section-title">3. PROTOCOL SPECIFICATION</h2>
+    
+    <h3 class="subsection-title">3.1 PROTOCOL OVERVIEW</h3>
+    <p>NRC uses a binary WebSocket protocol designed for zero-allocation parsing and minimal wire overhead. All messages use big-endian byte order.</p>
+    
+    <h3 class="subsection-title">3.2 MESSAGE FRAME FORMAT</h3>
+    <p>All messages follow this basic structure:</p>
+    <pre class="code-block">
+    ┌─────────────────────────────────────────────────────────┐
+    │ OPCODE (2 bytes, big-endian)                            │
+    ├─────────────────────────────────────────────────────────┤
+    │ PAYLOAD (variable length)                               │
+    └─────────────────────────────────────────────────────────┘
+    </pre>
+
+    <h3 class="subsection-title">3.3 DATA TYPES</h3>
+    <table class="spec-table">
+        <tr>
+            <td class="spec-label">ConversationID</td>
+            <td class="spec-value">u64 (8 bytes) - unified identifier for channels and DMs</td>
+        </tr>
+        <tr>
+            <td class="spec-label">MessageSeq</td>
+            <td class="spec-value">u64 (8 bytes) - monotonically increasing per conversation</td>
+        </tr>
+        <tr>
+            <td class="spec-label">TaskID</td>
+            <td class="spec-value">u64 (8 bytes) - task identifier</td>
+        </tr>
+        <tr>
+            <td class="spec-label">ContentType</td>
+            <td class="spec-value">u8 - PlainText (0), Markdown (1)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">PresenceEventType</td>
+            <td class="spec-value">u8 - UserJoined (0), UserLeft (1), UserListSync (2), UserRenamed (3)</td>
+        </tr>
+    </table>
+
+    <h3 class="subsection-title">3.4 OPCODES</h3>
+    <p><strong>CLIENT TO SERVER (0-24):</strong></p>
+    <table class="spec-table">
+        <tr>
+            <td class="spec-label">0</td>
+            <td class="spec-value">C_SetNickname</td>
+        </tr>
+        <tr>
+            <td class="spec-label">1</td>
+            <td class="spec-value">C_SendMessage</td>
+        </tr>
+        <tr>
+            <td class="spec-label">2</td>
+            <td class="spec-value">C_SubscribeConvs</td>
+        </tr>
+        <tr>
+            <td class="spec-label">3</td>
+            <td class="spec-value">C_UnsubscribeConvs</td>
+        </tr>
+        <tr>
+            <td class="spec-label">4</td>
+            <td class="spec-value">C_SetAgenda</td>
+        </tr>
+        <tr>
+            <td class="spec-label">5</td>
+            <td class="spec-value">C_GetAgenda</td>
+        </tr>
+        <tr>
+            <td class="spec-label">8</td>
+            <td class="spec-value">C_Stats</td>
+        </tr>
+        <tr>
+            <td class="spec-label">9</td>
+            <td class="spec-value">C_Authenticate</td>
+        </tr>
+        <tr>
+            <td class="spec-label">19</td>
+            <td class="spec-value">C_Ping (lightweight)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">20-26</td>
+            <td class="spec-value">Tasks (create, update, delete, move, legacy list, paged list, direct get)</td>
+        </tr>
+    </table>
+
+    <p><strong>SERVER TO CLIENT (100+):</strong></p>
+    <table class="spec-table">
+        <tr>
+            <td class="spec-label">100</td>
+            <td class="spec-value">S_ServerReady</td>
+        </tr>
+        <tr>
+            <td class="spec-label">101</td>
+            <td class="spec-value">S_NicknameResponse</td>
+        </tr>
+        <tr>
+            <td class="spec-label">102</td>
+            <td class="spec-value">S_NewMessage</td>
+        </tr>
+        <tr>
+            <td class="spec-label">103</td>
+            <td class="spec-value">S_AckSendMessage</td>
+        </tr>
+        <tr>
+            <td class="spec-label">104</td>
+            <td class="spec-value">S_ErrorResponse</td>
+        </tr>
+        <tr>
+            <td class="spec-label">105-106</td>
+            <td class="spec-value">Agenda (S_AgendaResponse, S_AgendaUpdated)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">109</td>
+            <td class="spec-value">S_RoomPresenceUpdate</td>
+        </tr>
+        <tr>
+            <td class="spec-label">110</td>
+            <td class="spec-value">S_StatsResponse (with metrics)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">111</td>
+            <td class="spec-value">S_AuthResponse</td>
+        </tr>
+        <tr>
+            <td class="spec-label">126</td>
+            <td class="spec-value">S_Pong (lightweight)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">127</td>
+            <td class="spec-value">S_AckUnsubscribeConvs</td>
+        </tr>
+        <tr>
+            <td class="spec-label">130-136</td>
+            <td class="spec-value">Tasks (mutation events, legacy list, paged list, direct response)</td>
+        </tr>
+    </table>
+
+</div>
+
+<!-- SECTION 3B: MESSAGE PAYLOADS -->
+<div class="page">
+    <h2 class="section-title">3. PROTOCOL SPECIFICATION (continued)</h2>
+
+    <h3 class="subsection-title">3.5 MESSAGE PAYLOADS</h3>
+
+    <div class="command-block">
+        <h4 class="command-name">C_AUTHENTICATE</h4>
+        <pre class="command-format">TokenLength (2) | Token (variable)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">S_AUTHRESPONSE</h4>
+        <pre class="command-format">Success (1) | UserIDLength (2) | UserID (var) | NicknameLength (2) | Nickname (var) | ErrorMsgLength (2) | ErrorMsg (var)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">C_SENDMESSAGE</h4>
+        <pre class="command-format">ConversationID (8) | ClientRequestID (4) | ContentType (1) | ContentLength (2) | Content (var)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">S_NEWMESSAGE (broadcast)</h4>
+        <pre class="command-format">ConversationID (8) | Seq (8) | UsernameLength (2) | Username (var) | Timestamp (8) | ContentType (1) | ContentLength (2) | Content (var)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">S_ACKSENDMESSAGE</h4>
+        <pre class="command-format">ClientRequestID (4) | AssignedSeq (8) | Timestamp (8)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">C_SUBSCRIBECONVS</h4>
+        <pre class="command-format">Count (2) | ConversationID (8) × Count</pre>
+        <p class="command-note">MAX: 64 subscriptions per request</p>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">C_UNSUBSCRIBECONVS</h4>
+        <pre class="command-format">Count (2) | ConversationID (8) × Count | CorrelationID (4, optional)</pre>
+        <p class="command-note">Legacy requests may omit CorrelationID; the server reports correlation 0.</p>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">S_ACKUNSUBSCRIBECONVS</h4>
+        <pre class="command-format">CorrelationID (4)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">C_STATS</h4>
+        <pre class="command-format">Timestamp (8, i64)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">S_STATSRESPONSE (with metrics)</h4>
+        <pre class="command-format">ClientTimestamp (8) | ServerTimestamp (8) | ThreadID (4) | TotalThreads (4) | Connections (4) | MemoryTotalMB (4) | BufferPoolPercent (4) | IOPending (4) | IORingDepth (4) | IORingAvailable (4) | IOSQOverflow (4) | IOTotalCompletions (8) | IOTotalLatencyNS (8) | IOLatencyCount (8) | SendQueueDepth (4) | SendQueueLimit (4) | SendBackpressure (1) | SendDropped (4) | WALFileSize (8) | WALPendingBytes (8) | WALRecordCount (8) | WALFsyncCount (8) | WALTotalFsyncNS (8) | WALTotalWriteNS (8) | WALWriteCount (8) | WALDetailsVersion (1) | WALDetailsCount (1) | WALDetail (104) × Count</pre>
+        <p class="command-note">Current server payload: 461 bytes (including 2-byte opcode) with 3 WALDetail entries (task, asset, edge)</p>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">C_PING</h4>
+        <pre class="command-format">Timestamp (8, i64)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">S_PONG (lightweight)</h4>
+        <pre class="command-format">ClientTimestamp (8) | ServerTimestamp (8)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">C_SETAGENDA</h4>
+        <pre class="command-format">ConversationID (8) | ContentLength (2) | Content (var)</pre>
+        <p class="command-note">MAX agenda: 65535 bytes</p>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">C_GETAGENDA</h4>
+        <pre class="command-format">ConversationID (8)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">S_AGENDARESPONSE</h4>
+        <pre class="command-format">ConversationID (8) | Success (1) | ContentLength (2) | Content (var) | ErrorMsgLength (2) | ErrorMsg (var)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">S_AGENDAUPDATED (broadcast)</h4>
+        <pre class="command-format">ConversationID (8) | ContentLength (2) | Content (var)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">C_CREATETASK</h4>
+        <pre class="command-format">ConversationID (8) | TitleLength (2) | Title (var) | DescriptionLength (2) | Description (var) | Priority (1) | Color (1) | ExternalRefLength (2) | ExternalRef (var) | DueAt (8, i64)</pre>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">S_ROOMPRESENCEUPDATE (broadcast)</h4>
+        <pre class="command-format">ConversationID (8) | EventType (1) | Sequence (8) | UsernameLength (2) | Username (var) | IsAuthenticated (1) | OldUsernameLength (2) | OldUsername (var) | UserListCount (2) | [UserList: UsernameLength (2) | Username (var) | AuthFlag (1)]×UserListCount</pre>
+    </div>
+
+    <h3 class="subsection-title">3.6 CONTENT LIMITS</h3>
+    <table class="spec-table">
+        <tr>
+            <td class="spec-label">Message content:</td>
+            <td class="spec-value">50KB max (51200 bytes)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">Nickname length:</td>
+            <td class="spec-value">32 bytes max</td>
+        </tr>
+        <tr>
+            <td class="spec-label">Username length:</td>
+            <td class="spec-value">255 bytes max</td>
+        </tr>
+        <tr>
+            <td class="spec-label">Agenda content:</td>
+            <td class="spec-value">65535 bytes max</td>
+        </tr>
+        <tr>
+            <td class="spec-label">Auth token:</td>
+            <td class="spec-value">4096 bytes max</td>
+        </tr>
+        <tr>
+            <td class="spec-label">Task title:</td>
+            <td class="spec-value">256 bytes max</td>
+        </tr>
+        <tr>
+            <td class="spec-label">Task description:</td>
+            <td class="spec-value">2048 bytes max</td>
+        </tr>
+        <tr>
+            <td class="spec-label">Task assignee:</td>
+            <td class="spec-value">32 bytes max</td>
+        </tr>
+        <tr>
+            <td class="spec-label">External reference:</td>
+            <td class="spec-value">512 bytes max</td>
+        </tr>
+        <tr>
+            <td class="spec-label">Subscribe conversations:</td>
+            <td class="spec-value">64 max per request</td>
+        </tr>
+        <tr>
+            <td class="spec-label">Tasks per conversation:</td>
+            <td class="spec-value">1000 active / 10000 retained max</td>
+        </tr>
+    </table>
+
+    <h3 class="subsection-title">3.7 ERROR CODES</h3>
+    <table class="spec-table">
+        <tr>
+            <td class="spec-label">TooShort</td>
+            <td class="spec-value">Input data shorter than required</td>
+        </tr>
+        <tr>
+            <td class="spec-label">InvalidContentType</td>
+            <td class="spec-value">Invalid content type enum value</td>
+        </tr>
+        <tr>
+            <td class="spec-label">ContentLengthExceedsMax</td>
+            <td class="spec-value">Content exceeds maximum allowed length</td>
+        </tr>
+        <tr>
+            <td class="spec-label">ContentLengthMismatch</td>
+            <td class="spec-value">Declared length doesn't match available data</td>
+        </tr>
+        <tr>
+            <td class="spec-label">TooMany</td>
+            <td class="spec-value">Too many items (e.g., conversation subscriptions)</td>
+        </tr>
+    </table>
+
+    <h3 class="subsection-title">3.8 CONVERSATION ROUTING</h3>
+    <p>Conversations are identified by 64-bit unsigned integers. The server routes messages using a hash function to assign conversations to worker threads:</p>
+    <pre class="code-block">
+    thread_id = hash(conversation_id) % thread_count
+    </pre>
+    <p>This ensures all messages for a conversation are processed by the same thread, eliminating inter-thread synchronization overhead for conversation state. No distributed locks needed.</p>
+
+    <h3 class="subsection-title">3.9 PARSING STRATEGY</h3>
+    <p>Protocol parsing is designed for zero-allocation performance:</p>
+    <ul class="procedure-list">
+        <li>Fixed-size headers with known offset calculations</li>
+        <li>Length-prefixed variable data (u16 or u32)</li>
+        <li>Direct byte slice access to content (no copying)</li>
+        <li>Thread-local stack buffers for collection parsing</li>
+        <li>Big-endian for network portability</li>
+    </ul>
+
+    </div>
+
+    <!-- SECTION 4: PERSISTENCE LAYER -->
+    <div class="page">
+    <h2 class="section-title">4. PERSISTENCE LAYER</h2>
+    
+    <h3 class="subsection-title">4.1 OVERVIEW</h3>
+    <p>NRC implements a Write-Ahead Log (WAL) strategy for durable storage of tasks and agendas. Unlike traditional systems with global log files, NRC uses per-thread WAL with no distributed consensus overhead. Each worker thread maintains its own append-only log files, ensuring data durability without inter-thread coordination.</p>
+    
+    <p><strong>Design Principle:</strong> Tasks and agendas persist to disk before acknowledgment; ephemeral messages (conversations) do not. This guarantees that structured work state survives server restarts while preserving the real-time, ephemeral nature of chat.</p>
+
+    <h3 class="subsection-title">4.2 PER-THREAD WAL MODEL</h3>
+    <p>Each worker thread owns its WAL files:</p>
+    <pre class="code-block">
+    Thread 0 → data/tasks_thread_0.log
+           → data/agenda_thread_0.log
+    Thread 1 → data/tasks_thread_1.log
+           → data/agenda_thread_1.log
+    Thread N → data/tasks_thread_N.log
+           → data/agenda_thread_N.log
+    </pre>
+    
+    <p>No cross-thread coordination. Task routing via hash(conversation_id) % thread_count guarantees that a conversation's tasks always go to the same thread, so each thread writes only its own data. Recovery on startup replays each thread's logs independently.</p>
+
+    <h3 class="subsection-title">4.3 RECORD FORMAT</h3>
+    <p>All WAL records use a uniform 48-byte header followed by variable-length payload:</p>
+    <pre class="code-block">
+    ┌──────────────────────────────────────────────────────┐
+    │ RECORD HEADER (48 bytes)                             │
+    ├──────────────────────────────────────────────────────┤
+    │ Offset  Size  Field        Description               │
+    │ ------  ----  -----------  ----------------------    │
+    │ 0       4     magic        Entity magic (0x4E524354)  │
+    │ 4       2     version      Format version (1)         │
+    │ 6       1     op           Operation (1=Create,etc)   │
+    │ 7       1     flags        Reserved                   │
+    │ 8       4     length       Payload size (bytes)       │
+    │ 12      32    prev_hash    SHA-256 chain hash        │
+    │ 44      4     record_hash  XXH32 CRC checksum        │
+    ├──────────────────────────────────────────────────────┤
+    │ PAYLOAD (variable, length bytes)                     │
+    │ ┌──────────────────────────────────────────────────┐ │
+    │ │ 2     ws_len     Workspace ID string length      │ │
+    │ │ var   workspace  Workspace ID string             │ │
+    │ │ var   entity     Entity-specific data            │ │
+    │ └──────────────────────────────────────────────────┘ │
+    └──────────────────────────────────────────────────────┘
+    </pre>
+
+    <h3 class="subsection-title">4.4 HASH CHAIN (TAMPER EVIDENCE)</h3>
+    <p>Each record chains to the previous via SHA-256 hash. The prev_hash field contains the SHA-256 hash of the previous record (header + payload). If any earlier record is corrupted or modified, the chain breaks and replay detects tampering:</p>
+    <pre class="code-block">
+    Record 1: SHA256(header₁ + payload₁) → hash₁
+    Record 2: prev_hash = hash₁, SHA256(header₂ + payload₂) → hash₂
+    Record 3: prev_hash = hash₂, SHA256(header₃ + payload₃) → hash₃
+    ...
+    On replay: Verify each prev_hash matches previous record's hash
+    </pre>
+    
+    <p>If verification fails at any point, replay stops and truncates the log at the last valid record. This prevents loading corrupted or maliciously modified state.</p>
+
+    <h3 class="subsection-title">4.5 TASK PERSISTENCE</h3>
+    <p>Task operations use tagged-field format for forward/backward compatibility:</p>
+    <table class="spec-table">
+       <tr>
+           <td class="spec-label">Operation</td>
+           <td class="spec-value">Description</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Create (op=1)</td>
+           <td class="spec-value">New task with full state (title, status, assignee, dates, etc.)</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Update (op=2)</td>
+           <td class="spec-value">Task state changed (complete snapshot, not delta)</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Move (op=3)</td>
+           <td class="spec-value">Task reordered (complete snapshot)</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Delete (op=4)</td>
+           <td class="spec-value">Task removed (tombstone: workspace_id, conv_id, task_id)</td>
+       </tr>
+    </table>
+
+    <p><strong>Critical Invariant:</strong> Every non-Delete record contains the COMPLETE entity state. Create, Update, and Move all serialize all 16 task fields (title, description, status, priority, timestamps, assignee, etc.). This is essential for compaction correctness—when the log is compacted, only the last record per task survives, so it must be self-contained.</p>
+
+    <h3 class="subsection-title">4.6 AGENDA PERSISTENCE</h3>
+    <p>Agendas are simpler: a conversation has a single mutable agenda string.</p>
+    <table class="spec-table">
+       <tr>
+           <td class="spec-label">Operation</td>
+           <td class="spec-value">Description</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Set (op=1)</td>
+                       <td class="spec-value">Agenda content (max 65535 bytes)</td>
+       </tr>
+    </table>
+
+    <h3 class="subsection-title">4.7 WRITE PATH & BATCHING</h3>
+    <p>Write operations are batched for performance:</p>
+    <ol class="procedure-list">
+       <li>Thread-local buffer accumulates records (up to 128KB)</li>
+       <li>When batch fills, single write() syscall flushes all pending records</li>
+       <li>After write completes, check fsync thresholds</li>
+       <li>fsync triggered if: (a) 100MB+ pending bytes, OR (b) 1+ second since last fsync</li>
+       <li>Shutdown performs final flush and fsync</li>
+    </ol>
+
+    <p>This batching reduces system calls while maintaining sub-second durability guarantees.</p>
+
+    <h3 class="subsection-title">4.8 FSYNC STRATEGY & DURABILITY</h3>
+    <table class="spec-table">
+       <tr>
+           <td class="spec-label">Byte Threshold</td>
+           <td class="spec-value">100MB of pending unfsynced data</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Time Threshold</td>
+           <td class="spec-value">1 second since last fsync</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Shutdown</td>
+           <td class="spec-value">Flush batch, then force fsync before exit</td>
+       </tr>
+    </table>
+
+    <p>fsync is called via posix.fsync(), ensuring kernel writeback to persistent storage. Latency is tracked; fsync operations never block the hot path (writes occur in batches before fsync check).</p>
+
+    <h3 class="subsection-title">4.9 RECOVERY ON STARTUP</h3>
+    <ol class="procedure-list">
+       <li>Each thread's worker_thread() calls init_task_persistence() and init_asset_persistence()</li>
+       <li>If WAL file exists, replay_wal() scans it via mmap (zero-copy)</li>
+       <li>For each record: verify magic, validate hash chain, check CRC</li>
+       <li>Apply each valid operation to in-memory state (tasks map, agenda strings)</li>
+       <li>If corruption detected (broken chain, CRC mismatch): truncate log at last valid record and stop</li>
+       <li>WAL state (last_hash, record_count) is restored from replay result</li>
+       <li>If no log file exists, thread starts with empty state (creates new file on first write)</li>
+    </ol>
+
+    <p>Recovery is single-threaded per thread (no cross-thread coordination). Total startup time scales linearly with total log size, typically &lt;1 second for logs &lt;1GB.</p>
+
+    <h3 class="subsection-title">4.10 LOG COMPACTION</h3>
+    <p>Logs grow unbounded with repeated updates. Compaction removes outdated records via a two-pass algorithm:</p>
+
+    <p><strong>Pass 1: Build Key Map (mmap scan)</strong></p>
+    <pre class="code-block">
+    Scan entire log sequentially. For each record:
+    - Extract entity key (workspace_id, conv_id, task_id for tasks)
+    - Store (offset, record_size, is_tombstone) in map
+    - Later records overwrite earlier ones
+    
+    Result: key_map contains only LATEST state per entity
+    </pre>
+
+    <p><strong>Pass 2: Write Survivors (fresh hash chain)</strong></p>
+    <pre class="code-block">
+    For each entry in key_map:
+    - If Delete (tombstone), skip entirely
+    - Otherwise, read from source, validate CRC
+    - Rewrite to temp .compact file with FRESH hash chain
+     (prev_hash and record_hash recomputed for chain continuity)
+    - On CRC error: skip record, continue with rest
+    </pre>
+
+    <p><strong>Finalize (atomic swap)</strong></p>
+    <pre class="code-block">
+    - fsync temp file
+    - atomically rename .compact over original log
+    - reopen WAL handle
+    - update WAL state (last_hash, record_count)
+    </pre>
+
+    <table class="spec-table">
+       <tr>
+           <td class="spec-label">Trigger</td>
+           <td class="spec-value">Hourly check; compact if log &gt; 500MB</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Blocking</td>
+           <td class="spec-value">Yes - compaction pauses writes (typically &lt;1 sec for 500MB)</td>
+       </tr>
+       <tr>
+           <td class="spec-label">CRC Validation</td>
+           <td class="spec-value">Yes - catches corruption during compaction</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Hash Chain Validation</td>
+           <td class="spec-value">No - already validated by replay_wal() on startup</td>
+       </tr>
+       <tr>
+           <td class="spec-label">On CRC Error</td>
+           <td class="spec-value">Record skipped, compaction continues (maximizes recovery)</td>
+       </tr>
+    </table>
+
+    <p><strong>Tombstone Handling:</strong> Delete operations are marked as tombstones in the key map. During Pass 2, tombstoned keys are excluded entirely from compacted output. This is safe because the key map stores only the FINAL state per key.</p>
+    <pre class="code-block">
+    Example sequences:
+    Create(K) → Update(K) → Delete(K)           → K excluded
+    Create(K) → Delete(K) → Create(K)           → K survives (resurrected)
+    Create(K) → Update(K) → Update(K)           → K survives (latest)
+    </pre>
+
+    <h3 class="subsection-title">4.11 CORRUPTION HANDLING</h3>
+    <table class="spec-table">
+       <tr>
+           <td class="spec-label">Invalid Magic</td>
+           <td class="spec-value">Log truncated at first invalid byte; recovery stops</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Hash Chain Broken</td>
+           <td class="spec-value">Log truncated; possible tampering detected</td>
+       </tr>
+       <tr>
+           <td class="spec-label">CRC Mismatch (Replay)</td>
+           <td class="spec-value">Log truncated at mismatch</td>
+       </tr>
+       <tr>
+           <td class="spec-label">CRC Mismatch (Compaction)</td>
+           <td class="spec-value">Record skipped, compaction continues</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Incomplete Record</td>
+           <td class="spec-value">Log truncated at incomplete boundary</td>
+       </tr>
+    </table>
+
+    <h3 class="subsection-title">4.12 CONFIGURATION & LIMITS</h3>
+    <table class="spec-table">
+       <tr>
+           <td class="spec-label">Data Directory</td>
+           <td class="spec-value">data/ (created automatically if missing)</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Task Log Magic</td>
+           <td class="spec-value">0x4E524354 ("NRCT")</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Agenda Log Magic</td>
+           <td class="spec-value">0x4E524341 ("NRCA")</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Format Version</td>
+           <td class="spec-value">1</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Max Task Record Size</td>
+           <td class="spec-value">4096 bytes (includes all task fields)</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Max Agenda Content</td>
+                       <td class="spec-value">65535 bytes</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Write Batch Size</td>
+           <td class="spec-value">128KB (flush when full or by timer)</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Compaction Threshold</td>
+           <td class="spec-value">500MB per log file</td>
+       </tr>
+       <tr>
+           <td class="spec-label">Compaction Interval</td>
+           <td class="spec-value">1 hour check</td>
+       </tr>
+    </table>
+
+    </div>
+
+    <!-- SECTION 5: CORE OPERATIONS -->
+<div class="page">
+    <h2 class="section-title">5. CORE OPERATIONS</h2>
+    
+    <h3 class="subsection-title">5.1 CONNECTION ESTABLISHMENT</h3>
+    <ol class="procedure-list">
+        <li>Client initiates WebSocket upgrade request to port 8080</li>
+        <li>Server accepts connection, assigns to worker thread</li>
+        <li>Client sends AUTH frame with JWT token</li>
+        <li>Server validates token, returns AUTH_ACK</li>
+        <li>Connection ready for subscription</li>
+    </ol>
+
+    <h3 class="subsection-title">5.2 MESSAGE TRANSMISSION</h3>
+    <ol class="procedure-list">
+        <li>Client sends MESSAGE frame with room ID and payload</li>
+        <li>Server routes to room's assigned thread</li>
+        <li>Thread queues message to all subscribers in room</li>
+        <li>Subscribers receive message in real-time</li>
+        <li>Message discarded after delivery (ephemeral)</li>
+    </ol>
+
+    <h3 class="subsection-title">5.3 ROOM SUBSCRIPTION</h3>
+    <ol class="procedure-list">
+        <li>Client sends SUBSCRIBE frame with room ID</li>
+        <li>Server adds connection to room's subscriber list</li>
+        <li>Client begins receiving messages from room</li>
+        <li>To unsubscribe, send UNSUBSCRIBE frame</li>
+    </ol>
+
+</div>
+
+<!-- SECTION 6: COMMAND REFERENCE -->
+<div class="page">
+    <h2 class="section-title">6. COMMAND REFERENCE</h2>
+    
+    <h3 class="subsection-title">6.1 CLIENT COMMANDS</h3>
+    
+    <div class="command-block">
+        <h4 class="command-name">SUBSCRIBE</h4>
+        <p class="command-desc">Subscribe to room messages</p>
+        <pre class="command-format">FRAME: 0x02
+PAYLOAD: room_id (u64)</pre>
+        <p class="command-note">RESPONSE: SUBSCRIBE_ACK or ERROR</p>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">UNSUBSCRIBE</h4>
+        <p class="command-desc">Unsubscribe from room</p>
+        <pre class="command-format">FRAME: 0x03
+PAYLOAD: room_id (u64)</pre>
+        <p class="command-note">RESPONSE: UNSUBSCRIBE_ACK or ERROR</p>
+    </div>
+
+    <div class="command-block">
+        <h4 class="command-name">MESSAGE</h4>
+        <p class="command-desc">Broadcast message to room</p>
+        <pre class="command-format">FRAME: 0x01
+PAYLOAD: room_id (u64) + text</pre>
+        <p class="command-note">Distributed to all subscribers in real-time</p>
+    </div>
+
+</div>
+
+<!-- SECTION 7: CONFIGURATION & TUNING -->
+<div class="page">
+    <h2 class="section-title">7. CONFIGURATION & TUNING</h2>
+    
+    <h3 class="subsection-title">7.1 BUILD OPTIONS</h3>
+    <pre class="code-block">
+    # Standard build
+    odin build . -out:server
+
+    # Debug build (memory tracking, assertions)
+    odin build . -out:server -debug
+
+    # Release build (optimizations)
+    odin build . -out:server -o:speed
+    </pre>
+
+    <h3 class="subsection-title">7.2 RUNTIME PARAMETERS</h3>
+    <table class="spec-table">
+        <tr>
+            <td class="spec-label">PORT:</td>
+            <td class="spec-value">8080 (configurable in server.odin)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">THREAD COUNT:</td>
+            <td class="spec-value">Auto-detected (CPU core count)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">QUEUE CAPACITY:</td>
+            <td class="spec-value">1024 per thread</td>
+        </tr>
+        <tr>
+            <td class="spec-label">BUFFER SIZE:</td>
+            <td class="spec-value">8KB (provided by io_uring)</td>
+        </tr>
+    </table>
+
+</div>
+
+<!-- SECTION 8: OPERATIONAL PROCEDURES -->
+<div class="page">
+    <h2 class="section-title">8. OPERATIONAL PROCEDURES</h2>
+    
+    <h3 class="subsection-title">8.1 STARTUP SEQUENCE</h3>
+    <ol class="procedure-list">
+        <li>Verify kernel version: <code>uname -r</code> (minimum 5.1)</li>
+        <li>Verify io_uring support: <code>cat /proc/sys/kernel/io_uring_max_files</code></li>
+        <li>Build server: <code>odin build . -out:server</code></li>
+        <li>Execute: <code>./server</code></li>
+        <li>Wait for "NRC-300 READY" message on stdout</li>
+        <li>Verify metrics endpoint responds</li>
+    </ol>
+
+    <h3 class="subsection-title">8.2 SHUTDOWN PROCEDURE</h3>
+    <ol class="procedure-list">
+        <li>Send SIGINT to process (Ctrl+C)</li>
+        <li>Server closes new connections</li>
+        <li>Waits 500ms for graceful client shutdown</li>
+        <li>Persists outstanding task state</li>
+        <li>Exit with code 0</li>
+    </ol>
+
+    <h3 class="subsection-title">8.3 HEALTH MONITORING</h3>
+    <p><strong>Real-time metrics visible in NRC-300 UI:</strong></p>
+    <ul class="procedure-list">
+        <li>Active connections per thread</li>
+        <li>Message throughput (msgs/sec)</li>
+        <li>Memory usage (resident set size)</li>
+        <li>CPU utilization per core</li>
+        <li>Latency percentiles (p50, p95, p99)</li>
+    </ul>
+
+</div>
+
+<!-- SECTION 9: TROUBLESHOOTING -->
+<div class="page">
+    <h2 class="section-title">9. TROUBLESHOOTING</h2>
+    
+    <h3 class="subsection-title">9.1 CONNECTION FAILURES</h3>
+    <p><strong>SYMPTOM:</strong> Clients unable to connect to server</p>
+    <ol class="troubleshoot-steps">
+        <li>Verify server is running: <code>ps aux | grep server</code></li>
+        <li>Check port binding: <code>netstat -tlnp | grep 8080</code></li>
+        <li>Verify firewall rules: <code>sudo iptables -L</code></li>
+        <li>Check system logs: <code>journalctl -u nrc</code></li>
+    </ol>
+
+    <h3 class="subsection-title">9.2 HIGH LATENCY</h3>
+    <p><strong>SYMPTOM:</strong> Messages taking >100ms to deliver</p>
+    <ol class="troubleshoot-steps">
+        <li>Monitor thread load: check metrics in NRC-300</li>
+        <li>Verify io_uring rings are not saturated</li>
+        <li>Check CPU thermal throttling</li>
+        <li>Reduce connection density or scale horizontally</li>
+    </ol>
+
+    <h3 class="subsection-title">9.3 MEMORY LEAKS</h3>
+    <p><strong>SYMPTOM:</strong> Memory usage grows unbounded</p>
+    <ol class="troubleshoot-steps">
+        <li>Build with debug: <code>odin build . -out:server -debug</code></li>
+        <li>Run memory checker: output shows leak summary on shutdown</li>
+        <li>Check for unclosed message buffers</li>
+        <li>Verify all subscriptions cleaned up properly</li>
+    </ol>
+
+</div>
+
+<!-- SECTION 10: PERFORMANCE DATA -->
+<div class="page">
+    <h2 class="section-title">10. PERFORMANCE DATA</h2>
+    
+    <h3 class="subsection-title">10.1 BENCHMARK RESULTS</h3>
+    <table class="spec-table">
+        <tr>
+            <td class="spec-label">THROUGHPUT:</td>
+            <td class="spec-value">100K+ msgs/sec (single thread)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">LATENCY (p50):</td>
+            <td class="spec-value">2-5ms</td>
+        </tr>
+        <tr>
+            <td class="spec-label">LATENCY (p99):</td>
+            <td class="spec-value">15-25ms</td>
+        </tr>
+        <tr>
+            <td class="spec-label">CONNECTION SETUP:</td>
+            <td class="spec-value">&lt;10ms</td>
+        </tr>
+        <tr>
+            <td class="spec-label">MEMORY/CONNECTION:</td>
+            <td class="spec-value">~32KB (including buffers)</td>
+        </tr>
+    </table>
+
+    <h3 class="subsection-title">9.2 SCALING CHARACTERISTICS</h3>
+    <p>Linear scaling with thread count. On 8-core system with 8 threads, throughput approaches 800K msgs/sec with sub-100ms latency maintained across 500K concurrent connections.</p>
+
+</div>
+
+<!-- SECTION 11: APPENDICES -->
+<div class="page">
+    <h2 class="section-title">11. APPENDICES</h2>
+    
+    <h3 class="subsection-title">10.1 BINARY PROTOCOL REFERENCE</h3>
+    <pre class="code-block">
+    FRAME TYPE VALUES:
+    0x00 - RESERVED
+    0x01 - MESSAGE
+    0x02 - SUBSCRIBE
+    0x03 - UNSUBSCRIBE
+    0x04 - AUTH
+    0x05 - HEARTBEAT
+    0x06 - IMAGE_CHUNK
+    0x07 - AGENDA_UPDATE
+    0x08 - TASK_CREATE
+    0x09 - TASK_UPDATE
+    0x0A - TASK_DELETE
+    0xFF - ERROR
+    </pre>
+
+    <h3 class="subsection-title">10.2 ERROR CODE TABLE</h3>
+    <table class="spec-table">
+        <tr>
+            <td class="spec-label">0x01:</td>
+            <td class="spec-value">AUTH_FAILED</td>
+        </tr>
+        <tr>
+            <td class="spec-label">0x02:</td>
+            <td class="spec-value">ROOM_NOT_FOUND</td>
+        </tr>
+        <tr>
+            <td class="spec-label">0x03:</td>
+            <td class="spec-value">PAYLOAD_INVALID</td>
+        </tr>
+        <tr>
+            <td class="spec-label">0x04:</td>
+            <td class="spec-value">QUEUE_FULL</td>
+        </tr>
+        <tr>
+            <td class="spec-label">0x05:</td>
+            <td class="spec-value">PERMISSION_DENIED</td>
+        </tr>
+    </table>
+
+    <h3 class="subsection-title">10.3 SYSTEM LIMITS</h3>
+    <table class="spec-table">
+        <tr>
+            <td class="spec-label">MAX CONNECTIONS:</td>
+            <td class="spec-value">65K per thread (file descriptor limit dependent)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">MAX ROOMS:</td>
+            <td class="spec-value">2^64 (limited by u64 room ID)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">MAX MESSAGE SIZE:</td>
+            <td class="spec-value">48KB (configurable)</td>
+        </tr>
+        <tr>
+            <td class="spec-label">MAX SUBSCRIBERS/ROOM:</td>
+            <td class="spec-value">Limited by memory (no hard cap)</td>
+        </tr>
+    </table>
+
+</div>
+
+<!-- END PAGE -->
+<div class="page end-page">
+    <div class="end-spacer"></div>
+    <h2 class="end-title">END OF MANUAL</h2>
+    <p class="end-revision">REVISION 1.0</p>
+    <p class="end-date">DECEMBER 2025</p>
+    <div class="end-spacer"></div>
+</div>
+
+</body>
+</html>

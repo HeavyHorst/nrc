@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="lupine">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta name="theme-color" content="#fafafa">
+    <meta name="application-name" content="NRC Terminal">
+    <meta name="description" content="NRC Terminal brings real-time chat, persistent tasks, and shared notes into one workspace.">
+    <meta name="apple-mobile-web-app-title" content="NRC">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>NRC TERMINAL</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="shortcut icon" type="image/x-icon" href="favicon.ico">
+    <link rel="stylesheet" href="css/main.css?v=20261002docs1">
+    <link rel="stylesheet" href="css/custom-select.css?v=20260926nesting1">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+</head>
+<body class="mobile-chat-view">
+    <div class="retro-container">
+        <div id="pwaTitlebar" class="pwa-titlebar" aria-hidden="true">
+            <span id="pwaTitlebarTitle" class="pwa-titlebar-title">NRC TERMINAL</span>
+        </div>
+        <div class="app-shell">
+            <header class="mobile-mast mobile-only">
+                <button id="mobileRoomSwitch" class="mobile-room" type="button" aria-controls="primaryNavigation" aria-expanded="false"><strong id="mobileRoomName">GENERAL</strong><span aria-hidden="true">⌄</span></button>
+                <span id="mobileConnection" class="mobile-connection" role="status">OFFLINE</span>
+            </header>
+            <aside class="app-sidebar" id="primaryNavigation" aria-label="Primary navigation">
+                <div class="mobile-navigation-header mobile-only"><span id="mobileNavigationTitle">CHATS & DMS</span><button id="mobileNavigationClose" class="btn" type="button">← BACK</button></div>
+                <nav class="sidebar-section sidebar-section--rooms" aria-label="Chats">
+                    <div class="sidebar-section-label">CHATS</div>
+                    <div id="roomList">
+                        <!-- Rooms will be populated by JavaScript -->
+                    </div>
+                </nav>
+                <div class="sidebar-section dm-section">
+                    <div class="dm-section-header">
+                        <span class="sidebar-section-label">DMS</span>
+                        <div class="dm-picker-wrapper">
+                            <button id="startDMBtn" class="btn btn--icon dm-start-btn" type="button" title="Start DM" aria-label="Start direct message">+</button>
+                            <div id="dmUserPicker" class="dm-user-picker hidden">
+                                <input type="text" id="dmUserSearch" class="dm-user-search" placeholder="USER..." autocomplete="off">
+                                <div id="dmUserDropdown" class="dm-user-dropdown"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="dmList" class="dm-list">
+                        <!-- DMs will be populated by JavaScript -->
+                    </div>
+                </div>
+                <nav class="sidebar-section" aria-label="Workspace views">
+                    <div class="sidebar-section-label">VIEWS / <span id="sidebarViewRoomName" class="identity-scope">WORKSPACE</span></div>
+                    <div class="sidebar-nav view-tabs">
+                        <div class="sidebar-nav" role="group" aria-labelledby="workViewsLabel">
+                            <div id="workViewsLabel" class="sidebar-section-label">WORK</div>
+                            <button id="attentionBtn" class="btn nav-tab sidebar-nav-item" title="Toggle Attention" type="button">ATTENTION<span id="attentionViewCount" class="sidebar-unread-count" hidden></span></button>
+                            <button id="calendarBtn" class="btn nav-tab sidebar-nav-item" title="Workspace deadlines by date" type="button">CALENDAR</button>
+                            <button id="tasksBtn" class="btn nav-tab sidebar-nav-item" title="Toggle Tasks (Ctrl+K)">TASKS</button>
+                            <button id="remindersBtn" class="btn nav-tab sidebar-nav-item" title="Toggle Reminders">REMINDERS</button>
+                        </div>
+                        <div class="sidebar-nav" role="group" aria-labelledby="knowledgeViewsLabel">
+                            <div id="knowledgeViewsLabel" class="sidebar-section-label">KNOWLEDGE</div>
+                            <button id="notesBtn" class="btn nav-tab sidebar-nav-item" title="Toggle Notes (Ctrl+;)">NOTES</button>
+                            <button id="customersBtn" class="btn nav-tab sidebar-nav-item" hidden>CUSTOMERS</button>
+                        </div>
+                        <div class="sidebar-nav" role="group" aria-labelledby="toolsViewsLabel">
+                            <div id="toolsViewsLabel" class="sidebar-section-label">TOOLS</div>
+                            <button id="sullivanBtn" class="btn nav-tab sidebar-nav-item" title="Sullivan AI Workbench">
+                                <span>SULLIVAN</span>
+                                <span id="sullivanViewUnread" class="dm-unread-badge" title="Unread Sullivan activity" hidden></span>
+                            </button>
+                            <button id="systemLogBtn" class="btn nav-tab sidebar-nav-item" title="Toggle System Log">SYSTEM LOG</button>
+                            <button id="mobileCommands" class="btn sidebar-nav-item mobile-only" type="button">COMMANDS…</button>
+                        </div>
+                    </div>
+                </nav>
+            </aside>
+            <div class="content-shell">
+                <div class="users-bar">
+                    <div id="usersList">
+                        <div class="no-users">Connecting...</div>
+                    </div>
+                </div>
+                <div class="workspace-grid">
+                    <div class="main-area">
+                        <section id="customersPanel" class="customers-panel" style="display:none" aria-label="Customer workspace">
+                            <div class="panel-header header-register filter-register">
+                                <div class="header-register-identity-row"><span class="header-register-title">CUSTOMERS</span><span id="customersState" class="header-register-state" role="status">NOT LOADED</span></div>
+                                <div class="header-register-control-row">
+                                    <label class="header-filter-cell"><span class="filter-label">COMPANY / CONTACT</span><input id="customersSearch" type="search" class="filter-input" placeholder="NAME, CUSTOMER NO., CONTACT…"></label>
+                                    <div class="header-filter-cell header-filter-toggle"><label class="filter-checkbox-label"><input id="customersArchived" class="filter-checkbox" type="checkbox"><span>INCLUDE ARCHIVED</span></label></div>
+                                    <button id="customersRefresh" class="btn header-operation header-register-control">REFRESH</button><button id="customerNew" class="btn btn--primary header-operation header-register-control header-create-action" disabled>+ COMPANY</button>
+                                </div>
+                            </div>
+                            <p id="customersStatus" class="customer-status" role="status" hidden></p>
+                            <div class="customers-layout">
+                                <aside class="customers-register" aria-label="Customer register">
+                                    <div id="customersList"></div>
+                                    <nrc-page-loader id="customersPager" hidden><button id="customersMore" class="btn">LOAD MORE CUSTOMERS</button></nrc-page-loader>
+                                </aside>
+                                <div id="customerRecord" class="customer-record"></div>
+                            </div>
+                        </section>
+                        <div id="chatDialog">
+                            <div class="chat-header panel-header header-register metadata-header-register">
+                                <div class="header-register-identity-row">
+                                    <span id="chatHeaderTitle" class="chat-header-title header-register-title">MESSAGES</span>
+                                    <button id="mobileChatTools" class="btn header-operation mobile-only" type="button" aria-controls="chatTools" aria-expanded="false">TOOLS</button>
+                                    <span id="chatSearchCount" class="header-register-state" role="status" hidden></span>
+                                    <span class="chat-header-right">
+                                        <span class="chat-keyboard-readout">↑/↓ NAV · HOME/END · ESC CHAT</span>
+                                        <span class="chat-meta header-register-readout"><small id="chatStatsLabel">MSG / LAST</small><span><span id="chatMsgCount" class="status-value-mono">0</span> / <span id="chatLastTime" class="status-value-mono">--:--:--</span></span></span>
+                                    </span>
+                                </div>
+                                <div id="chatHeaderAIControls" class="chat-header-ai header-register-control-row" style="display:none"></div>
+                                <div class="header-register-control-row system-log-register" id="systemLogHeaderControls" style="display:none">
+                                    <div class="header-filter-cell system-log-search-cell"><label for="systemLogSearch">QUERY</label><input id="systemLogSearch" class="filter-input" type="search" placeholder="SEARCH..." autocomplete="off" spellcheck="false"></div>
+                                    <div class="header-filter-cell"><label for="systemLogLevelFilter">LEVEL</label><select id="systemLogLevelFilter" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-search data-custom-select-search-placeholder="FILTER LEVEL..."><option value="ALL">ALL</option></select></div>
+                                    <div class="header-filter-cell"><label for="systemLogSourceFilter">SOURCE</label><select id="systemLogSourceFilter" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-search data-custom-select-search-placeholder="FILTER SOURCE..."><option value="ALL">ALL</option></select></div>
+                                    <button id="systemLogFollow" class="btn header-operation header-register-control active" type="button" aria-pressed="true">FOLLOW</button>
+                                    <button id="systemLogResetFilters" class="btn header-operation header-register-control">RESET</button>
+                                </div>
+                                <div id="chatTools" class="header-register-control-row">
+                                    <div class="header-filter-cell chat-search-cell"><label for="chatSearch">QUERY</label><input id="chatSearch" class="filter-input" type="search" placeholder="SEARCH LOADED CHAT..." aria-label="Search locally loaded chat"><button id="chatSearchClear" class="btn header-operation btn--icon" type="button" aria-label="Clear chat search" title="Clear search" hidden>×</button></div>
+                                    <div class="header-filter-cell"><label for="chatNotifications">NOTIFY</label><select id="chatNotifications" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area" aria-label="Notifications for current room"><option value="all">ALL</option><option value="mentions">@ ONLY</option><option value="off">OFF</option></select></div>
+                                </div>
+                            </div>
+                            <div id="logOutput" class="log-body"></div>
+                            <button id="chatNewMessages" class="btn" type="button" hidden>↓ NEW MESSAGES</button>
+                        </div>
+                <div id="attentionPanel" class="attention-panel" style="display: none;">
+                    <div class="panel-header header-register filter-register">
+                        <div class="header-register-identity-row">
+                            <span class="header-text header-register-title">ATTENTION</span>
+                            <span class="header-count header-register-state" id="attentionCount" aria-live="polite">0 ITEMS · BY REASON</span>
+                            <span class="header-register-alerts">
+                                <span class="header-register-alert">MINE <b id="attentionMineCount">0</b></span>
+                                <span class="header-register-alert">BLOCKED <b id="attentionBlockedCount">0</b></span>
+                                <span class="header-register-alert header-register-alert--danger">OVERDUE <b id="attentionOverdueCount">0</b></span>
+                                <span class="header-register-alert">MESSAGES <b id="attentionMessageCount">0</b></span>
+                            </span>
+                        </div>
+                        <div class="header-register-control-row">
+                            <div class="header-filter-cell">
+                                <span class="filter-label">SHOW</span>
+                                <div class="tab-group" role="group" aria-label="Attention kind filter">
+                                    <button class="btn nav-tab active" type="button" data-attention-filter="all" aria-pressed="true"><span>ALL</span><b class="tab-count">0</b></button>
+                                    <button class="btn nav-tab" type="button" data-attention-filter="task" aria-pressed="false"><span>TASKS</span><b class="tab-count">0</b></button>
+                                    <button class="btn nav-tab" type="button" data-attention-filter="reminder" aria-pressed="false"><span>REMINDERS</span><b class="tab-count">0</b></button>
+                                    <button class="btn nav-tab" type="button" data-attention-filter="message" aria-pressed="false"><span>MESSAGES</span><b class="tab-count">0</b></button>
+                                </div>
+                            </div>
+                            <div class="header-filter-cell">
+                                <label class="filter-label" for="reminderNotifications">NOTIFY</label>
+                                <select id="reminderNotifications" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area" aria-label="Desktop notifications for reminder deadlines"><option value="all">ALL</option><option value="off">OFF</option></select>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="attentionDependencyStatus" class="attention-dependency-status" role="status" hidden></div>
+                    <div id="attentionBody" class="attention-body"></div>
+                </div>
+                <div id="calendarPanel" class="calendar-panel" style="display: none;">
+                    <div class="panel-header header-register filter-register">
+                        <div class="header-register-identity-row">
+                            <span class="header-register-title">CALENDAR</span>
+                            <span class="header-register-state" id="calendarRange"></span>
+                            <span class="header-count header-register-state" id="calendarCount"></span>
+                        </div>
+                        <div class="header-register-control-row" id="calendarControls">
+                            <div class="header-filter-cell calendar-navigation">
+                                <button class="btn" type="button" id="calendarPrev" aria-label="Previous month">←</button>
+                                <button class="btn" type="button" id="calendarToday">TODAY</button>
+                                <button class="btn" type="button" id="calendarNext" aria-label="Next month">→</button>
+                            </div>
+                            <div class="header-filter-cell"><div class="tab-group" role="group" aria-label="Calendar layout">
+                                <button class="btn nav-tab active" type="button" data-calendar-mode="agenda" aria-pressed="true">AGENDA</button>
+                                <button class="btn nav-tab" type="button" data-calendar-mode="month" aria-pressed="false">MONTH</button>
+                            </div></div>
+                            <div class="header-filter-cell"><label class="filter-label" for="calendarPerson">ASSIGNEE</label><select id="calendarPerson" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-search data-custom-select-boundary=".main-area"><option value="">ALL</option></select></div>
+                            <div class="header-filter-cell"><label class="filter-label" for="calendarProject">PROJECT</label><select id="calendarProject" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-search data-custom-select-boundary=".main-area"><option value="">ALL</option></select></div>
+                            <button class="btn header-operation" id="calendarRefresh" type="button">REFRESH</button>
+                            <button class="btn btn--primary header-operation header-create-action" id="calendarAddAppointment" type="button">+ APPOINTMENT</button>
+                        </div>
+                    </div>
+                    <div class="calendar-context" id="calendarContext"></div>
+                    <div class="calendar-context" id="calendarStatus" role="status" hidden></div>
+                    <div class="calendar-body" id="calendarBody"></div>
+                </div>
+                <div id="remindersPanel" class="reminders-panel" style="display: none;">
+                    <div id="reminderQueue" class="reminder-queue">
+                        <div class="panel-header reminder-queue-header header-register filter-register">
+                            <div class="header-register-identity-row">
+                                <span class="header-text header-register-title">REMINDERS</span>
+                                <span class="header-count header-register-state" id="reminderQueueCount" aria-live="polite">0 RESULTS</span>
+                                <span id="notificationStatus" class="header-register-state" role="status" title="Browser notification permission" hidden></span>
+                            </div>
+                            <div class="reminder-header-controls header-register-control-row">
+                                <div class="header-filter-cell">
+                                    <span class="filter-label">SHOW</span>
+                                    <div class="tab-group" role="group" aria-label="Reminder deadline filter">
+                                        <button class="btn nav-tab active" type="button" data-reminder-filter="all" aria-pressed="true"><span>ALL</span><b class="tab-count">0</b></button>
+                                        <button class="btn nav-tab" type="button" data-reminder-filter="today" aria-pressed="false"><span>TODAY</span><b class="tab-count">0</b></button>
+                                        <button class="btn nav-tab" type="button" data-reminder-filter="upcoming" aria-pressed="false"><span>UPCOMING</span><b class="tab-count">0</b></button>
+                                        <button class="btn nav-tab" type="button" data-reminder-filter="overdue" aria-pressed="false"><span>OVERDUE</span><b class="tab-count">0</b></button>
+                                    </div>
+                                </div>
+                                <div class="header-filter-cell header-filter-toggle">
+                                    <label class="filter-checkbox-label">
+                                        <input type="checkbox" id="filterHideLockedReminders" class="filter-checkbox">
+                                        <span>HIDE LOCKED</span>
+                                    </label>
+                                </div>
+                                <button id="createReminderBtn" class="btn btn--primary header-operation reminder-create-btn header-register-control header-create-action" title="Create reminder">+ REMINDER</button>
+                            </div>
+                        </div>
+                        <div id="reminderQueueBody" class="reminder-queue-body">
+                            <div class="reminder-empty">NO ACTIVE REMINDERS</div>
+                        </div>
+                    </div>
+                </div>
+                <div id="kanbanPanel" class="kanban-panel" style="display: none;">
+                    <!-- Task Filter Bar -->
+                    <div id="taskFilterBar" class="task-filter-bar panel-header header-register filter-register">
+                        <div class="header-register-identity-row">
+                            <span class="header-text header-register-title">TASKS</span>
+                            <span class="filter-result-count header-register-state" id="taskResultsCount" aria-live="polite">0 RESULTS</span>
+                            <span class="filter-result-count header-register-state" id="sliceResultsCount" aria-live="polite" hidden>0 SLICES</span>
+                            <button class="btn header-operation mobile-only" type="button" data-mobile-filters aria-expanded="false" aria-controls="taskFilters">FILTERS</button>
+                            <span class="header-register-alerts"><span class="header-register-alert">BLOCKED <b id="blockedCount" class="task-filter-count">0</b></span><span class="header-register-alert header-register-alert--danger">OVERDUE <b id="overdueCount" class="task-filter-count">0</b></span></span>
+                        </div>
+                        <div id="taskFilters" class="task-filter-group header-register-control-row">
+                            <div class="header-control-scroll">
+                                <div class="header-filter-cell task-grouping-cell">
+                                    <span class="filter-label">GROUP</span>
+                                    <div class="tab-group" role="group" aria-label="Task grouping">
+                                        <button class="btn nav-tab" type="button" data-task-grouping="slices" aria-pressed="false">SLICES</button>
+                                        <button class="btn nav-tab" type="button" data-task-grouping="flat" aria-pressed="false">FLAT LIST</button>
+                                    </div>
+                                </div>
+                                <div id="sliceQueryCell" class="filter-group filter-group-search header-filter-cell" data-slice-filter hidden>
+                                    <label class="filter-label" for="sliceQuery">QUERY</label>
+                                    <input type="text" id="sliceQuery" class="filter-input" placeholder="SEARCH...">
+                                </div>
+                                <div id="sliceOwnerCell" class="header-filter-cell" data-slice-filter hidden>
+                                    <label class="filter-label" for="sliceOwnerFilter">OWNER</label>
+                                    <select id="sliceOwnerFilter" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area" data-custom-select-search data-custom-select-search-placeholder="FILTER OWNER...">
+                                        <option value="">ALL</option>
+                                        <option value="me">MY SLICES</option>
+                                        <option value="unassigned">UNASSIGNED</option>
+                                    </select>
+                                </div>
+                                <div id="sliceClosedCell" class="header-filter-cell header-filter-toggle" data-slice-filter hidden>
+                                    <label class="filter-checkbox-label">
+                                        <input type="checkbox" id="sliceIncludeClosed" class="filter-checkbox">
+                                        <span>INCLUDE CLOSED</span>
+                                    </label>
+                                </div>
+                                <label class="header-filter-cell task-flat-only mobile-only"><span class="filter-label">SORT</span><select id="mobileTaskSort" aria-label="Sort tasks"><option value="priority">PRIORITY</option><option value="title">TITLE</option><option value="status">STATUS</option><option value="assignee">ASSIGNEE</option><option value="project">PROJECT</option><option value="dueAt">DUE</option><option value="createdAt">AGE</option><option value="color">CATEGORY</option></select></label>
+                                <button id="mobileTaskSortDirection" class="btn header-operation task-flat-only mobile-only" type="button">DESCENDING ↓</button>
+                                <div class="filter-group filter-group-search header-filter-cell task-flat-only">
+                                    <label class="filter-label" for="taskSearch">QUERY</label>
+                                    <input type="text" id="taskSearch" class="filter-input" placeholder="SEARCH...">
+                                </div>
+                                <div class="filter-group header-filter-cell task-flat-only">
+                                    <label class="filter-label" for="filterStatus">STATUS</label>
+                                    <select id="filterStatus" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area" data-custom-select-search data-custom-select-search-placeholder="FILTER STATUS...">
+                                        <option value="">ALL</option>
+                                        <option value="open" selected>OPEN</option>
+                                        <option value="0">BACKLOG</option>
+                                        <option value="1">TODO</option>
+                                        <option value="2">IN PROGRESS</option>
+                                        <option value="3">DONE</option>
+                                    </select>
+                                </div>
+                                <div class="filter-group header-filter-cell task-flat-only">
+                                    <label class="filter-label" for="filterAssignee">ASSIGNEE</label>
+                                    <select id="filterAssignee" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area" data-custom-select-search data-custom-select-search-placeholder="FILTER ASSIGNEE...">
+                                        <option value="">ALL</option>
+                                        <option value="me">MY TASKS</option>
+                                    </select>
+                                </div>
+                                <div class="filter-group header-filter-cell task-flat-only">
+                                    <label class="filter-label" for="filterColor">CATEGORY</label>
+                                    <select id="filterColor" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area" data-custom-select-search data-custom-select-search-placeholder="FILTER CATEGORY...">
+                                        <option value="">ALL</option>
+                                        <option value="1">ACTIVE</option>
+                                        <option value="2">BLOCKED</option>
+                                        <option value="3">READY</option>
+                                        <option value="4">DEFERRED</option>
+                                        <option value="5">TEST</option>
+                                    </select>
+                                </div>
+                                <div class="filter-group header-filter-cell task-flat-only">
+                                    <label class="filter-label" for="filterProject">PROJECT</label>
+                                    <select id="filterProject" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area" data-custom-select-search data-custom-select-search-placeholder="FILTER PROJECT...">
+                                        <option value="">ALL</option>
+                                    </select>
+                                </div>
+                                <div class="filter-group header-filter-cell task-flat-only task-flags-filter">
+                                    <label class="filter-label" for="filterFlags">FLAGS</label>
+                                    <select id="filterFlags" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area">
+                                        <option value="">ALL</option>
+                                        <option value="blocked">BLOCKED</option>
+                                        <option value="overdue">OVERDUE</option>
+                                        <option value="both">BLOCKED + OVERDUE</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <button id="filterReset" class="btn header-operation header-register-control" title="Reset filters">RESET</button>
+                            <button id="createTaskHeaderBtn" class="btn btn--primary header-operation header-register-control header-create-action" type="button" title="Create task">+ TASK</button>
+                        </div>
+                    </div>
+                    <!-- Slice View -->
+                    <div id="sliceView" class="slice-view" style="display: none;">
+                        <p id="sliceStatus" class="slice-status-line" role="status" hidden></p>
+                        <div class="slice-layout">
+                            <aside class="slice-register" aria-label="Slice register">
+                                <div class="slice-register-head">
+                                    <span class="slice-register-title">SLICES</span>
+                                    <button id="sliceCreateBtn" class="btn btn--primary header-operation header-create-action" type="button" data-slice-action="new" aria-expanded="false" aria-controls="sliceCreateRow">+ SLICE</button>
+                                </div>
+                                <div id="sliceCreateRow" class="slice-create-row" hidden>
+                                    <input id="sliceCreateName" class="filter-input" type="text" maxlength="128" placeholder="SLICE NAME" aria-label="Slice name">
+                                    <button class="btn btn--primary" type="button" data-slice-action="create">CREATE</button>
+                                    <button class="btn btn--ghost" type="button" data-slice-action="cancel-create">CANCEL</button>
+                                </div>
+                                <div class="slice-register-list" id="sliceRegisterList"></div>
+                                <p class="slice-register-footnote">MEMBERS ARE ASSIGNED / ONE TASK CAN BELONG TO SEVERAL SLICES</p>
+                            </aside>
+                            <div class="slice-record" id="sliceRecord" tabindex="-1"></div>
+                        </div>
+                    </div>
+                    <!-- Task List View -->
+                    <div id="taskListView" class="task-list-view" style="display: none;">
+                        <table class="task-table">
+                            <thead>
+                                <tr>
+                                    <th class="col-marker"></th>
+                                    <th class="col-id">ID</th>
+                                    <th data-sort="priority" class="col-priority">PRI</th>
+                                    <th data-sort="title" class="col-title">TITLE</th>
+                                    <th data-sort="status" class="col-status">STATUS</th>
+                                    <th data-sort="assignee" class="col-assignee">ASN</th>
+                                    <th data-sort="project" class="col-project">PROJ</th>
+                                    <th data-sort="dueAt" class="col-due">DUE</th>
+                                    <th class="col-blk">BLK</th>
+                                    <th class="col-ref">REF</th>
+                                    <th class="col-att">ATT</th>
+                                    <th class="col-cmt">CMT</th>
+                                    <th data-sort="color" class="col-color">CAT</th>
+                                    <th data-sort="createdAt" class="col-age">AGE</th>
+                                </tr>
+                            </thead>
+                            <tbody id="taskListBody"></tbody>
+                        </table>
+                    </div>
+
+                </div>
+                <div id="notesPanel" class="notes-panel" style="display: none;">
+                    <div class="notes-header panel-header header-register filter-register">
+                        <div class="header-register-identity-row">
+                            <span class="header-text header-register-title">NOTES</span>
+                            <span class="header-count header-register-state" id="notesCount" aria-live="polite">0 RESULTS</span>
+                            <button class="btn header-operation mobile-only" type="button" data-mobile-filters aria-expanded="false" aria-controls="noteFilters">FILTERS</button>
+                        </div>
+                        <div id="noteFilters" class="notes-header-filters header-register-control-row">
+                            <div class="header-control-scroll">
+                                <label class="header-filter-cell notes-query-cell"><span class="filter-label">QUERY</span><input type="text" id="notesSearch" class="filter-input notes-search-input" placeholder="SEARCH..."></label>
+                                <div class="header-filter-cell"><label class="filter-label" for="notesProjectFilter">PROJECT</label>
+                                <select id="notesProjectFilter" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-search data-custom-select-search-placeholder="FILTER PROJECT...">
+                                    <option value="">ALL</option>
+                                </select></div>
+                                <div class="header-filter-cell"><label class="filter-label" for="notesTagFilter">TAG</label>
+                                <select id="notesTagFilter" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-search data-custom-select-search-placeholder="FILTER TAG...">
+                                    <option value="">ALL TAGS</option>
+                                </select></div>
+                            </div>
+                            <button id="createNoteHeaderBtn" class="btn btn--primary header-operation header-register-control header-create-action" type="button" title="Create note">+ NOTE</button>
+                        </div>
+                    </div>
+                    <div class="notes-container">
+                        <div class="notes-list-header">
+                            <div class="note-marker"></div>
+                            <div>ID</div>
+                            <div>TITLE</div>
+                            <div>PROJ</div>
+                            <div>TAGS</div>
+                            <div>CREATED BY</div>
+                            <div>AGE</div>
+                            <div>MOD</div>
+                        </div>
+                        <div class="notes-list" id="notesList"></div>
+                    </div>
+                </div>
+                <div id="noteSharePanel" class="note-share-panel" style="display: none;">
+                    <div class="panel-header note-share-header header-register compact-header-register">
+                        <div class="header-register-identity-row">
+                            <span class="header-text identity-reference header-register-title" id="noteShareHeaderTitle">NOTE SHARE</span>
+                            <span class="header-register-cell-label">STATE</span>
+                            <span class="header-count identity-scope header-register-state" id="noteShareHeaderMeta">READ ONLY</span>
+                            <button class="btn header-operation header-register-control" id="noteShareOpenPdf" title="Open this note as PDF">OPEN PDF</button>
+                            <button class="btn header-operation header-register-control" id="noteShareDownloadDocx" title="Download this note as DOCX">DOWNLOAD DOCX</button>
+                            <button class="btn header-operation header-register-control" id="noteShareOpenNrc" title="Open this note in normal NRC">OPEN IN NRC</button>
+                        </div>
+                    </div>
+                    <div class="note-share-content" id="noteShareContent">
+                        <div class="note-share-status">LOADING NOTE…</div>
+                    </div>
+                </div>
+                <div class="input-panel">
+                    <div id="chatReply" class="chat-tools" hidden><span id="chatReplyText" class="filter-label chat-reply-preview"></span><button id="chatCancelReply" class="btn btn--danger" type="button" aria-label="Cancel quote reply">CANCEL · ESC</button></div>
+                    <div id="sullivanComposerBar" class="sullivan-composer-bar" hidden>
+                        <span id="sullivanComposerContext" class="sullivan-composer-context">CONTEXT —</span>
+                    </div>
+                    <div class="input-controls">
+                        <label class="input-container" for="messageInput">
+                            <textarea id="messageInput" class="composer-input" rows="2" aria-label="Message current room"></textarea>
+                            <input type="file" id="imageInput" multiple style="display: none;">
+                        </label>
+                        <div class="composer-meta" aria-live="polite">
+                            <button id="chatAttach" class="btn" type="button" title="Send files (up to 100 MB each)">+ FILE</button>
+                            <span><b>ENTER</b> SEND</span>
+                            <span><b>SHIFT+ENTER</b> NEW LINE</span>
+                            <span id="messageByteCount" class="composer-byte-count">0 B / 51,200 B</span>
+                        </div>
+                        <button id="chatSend" class="btn chat-send-btn composer-send" type="button">SEND ↵</button>
+                        <div class="sullivan-submit-controls">
+                            <button id="sullivanStop" class="btn btn--danger" type="button" hidden><small>OP ×</small><span>STOP</span></button>
+                            <button id="sullivanSend" class="btn btn--primary" type="button"><small>OP ↵</small><span>SEND</span></button>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <aside class="ledger-context agenda-panel inspector" id="inspector" aria-label="Inspector">
+                <div class="mobile-inspector-navigation mobile-only"><button id="mobileInspectorBack" class="btn" type="button">← BACK</button><span>INSPECTOR</span></div>
+                <div class="agenda-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize Inspector" tabindex="0"></div>
+                <div class="panel-header ledger-context-header inspector-matrix-header" id="inspectorHeader">
+                    <div class="inspector-identity-row">
+                        <span class="header-text">INSPECTOR</span>
+                        <span class="inspector-cell-label">STATE</span>
+                        <span class="status-value-mono inspector-state-value" id="inspectorContextLabel">CHAT CONTEXT</span>
+                    </div>
+                    <div class="inspector-mode-row inspector-context-scope"><span class="status-value-mono">ROOM — · VIEW CHAT</span></div>
+                </div>
+                <div class="inspector-body">
+                    <div class="inspector-context-host" id="inspectorChatContextHost">
+                        <section class="ledger-context-section">
+                            <div class="ledger-context-label">CONVERSATION</div>
+                            <dl class="ledger-context-values">
+                                <div><dt>Room / DM</dt><dd id="inspectorChatRoom">—</dd></div>
+                                <div><dt>Participants</dt><dd id="inspectorChatParticipants">—</dd></div>
+                                <div><dt>Messages</dt><dd>EPHEMERAL / NOT STORED</dd></div>
+                            </dl>
+                        </section>
+                        <div id="inspectorAiContextHost" hidden>
+                            <section class="ledger-context-section">
+                                <div class="ledger-context-label">ACTIVE QUERY</div>
+                                <div id="ledgerQuery" class="ledger-query-empty">NO ACTIVE AI QUERY</div>
+                                <dl class="ledger-context-values">
+                                    <div><dt>Mode</dt><dd id="ledgerMode">—</dd></div>
+                                    <div><dt>Scope</dt><dd id="ledgerScope">—</dd></div>
+                                </dl>
+                            </section>
+                            <section class="ledger-context-section">
+                                <div class="ledger-context-label">AI RUN</div>
+                                <dl class="ledger-context-values">
+                                    <div><dt>Status</dt><dd id="ledgerRunStatus">IDLE</dd></div>
+                                    <div><dt>Phase</dt><dd id="ledgerRunPhase">—</dd></div>
+                                </dl>
+                            </section>
+                            <section class="ledger-context-section ledger-sources-section">
+                                <div class="ledger-context-label">SOURCES / <span id="ledgerSourceCount">00</span></div>
+                                <div id="ledgerSources" class="ledger-source-list">
+                                    <div class="ledger-context-empty">NO SOURCES IN ACTIVE RESPONSE</div>
+                                </div>
+                            </section>
+                            <section class="ledger-context-section">
+                                <div class="ledger-context-label">RESPONSE</div>
+                                <dl class="ledger-context-values">
+                                    <div><dt>Agent</dt><dd id="ledgerAgent">—</dd></div>
+                                    <div><dt>Generated</dt><dd id="ledgerGenerated">—</dd></div>
+                                </dl>
+                            </section>
+                        </div>
+                    </div>
+                    <div class="inspector-context-host" id="inspectorViewContextHost" hidden></div>
+                    <div class="agenda-content inspector-entity-host" id="inspectorEntityHost" hidden></div>
+                </div>
+                <div class="inspector-actions" id="inspectorActions">
+                    <button class="btn header-operation inspector-back inspector-matrix-control" id="inspectorBack" type="button" aria-label="Return to previous inspected object" title="Return to previous inspected object">
+                        <small>NAV ←</small><span>BACK</span>
+                    </button>
+                </div>
+                <div id="agendaActions" hidden></div>
+            </aside>
+        </div>
+            </div>
+            <nav class="mobile-bottom mobile-only" aria-label="Mobile workspace views">
+                <button type="button" data-mobile-view="chat" data-mobile-target="chat" aria-current="page">CHAT <span id="mobileChatUnread" hidden></span></button>
+                <button type="button" data-mobile-view="kanban" data-mobile-target="tasksBtn">TASKS</button>
+                <button type="button" data-mobile-view="notes" data-mobile-target="notesBtn">NOTES</button>
+                <button id="mobileMore" type="button" aria-controls="primaryNavigation" aria-expanded="false">MORE <span id="mobileMoreUnread" hidden>●</span></button>
+            </nav>
+            <div class="status-footer">
+                <div class="status-footer-left">
+                    <span id="connectionStatus" class="status-footer-connection" aria-live="polite">OFFLINE</span>
+                    <span class="status-footer-separator">|</span>
+                    <span class="status-footer-network" aria-label="Connection statistics">
+                        <span class="status-footer-metric status-footer-metric--latency" title="Current WebSocket round-trip time"><span class="status-footer-label">RTT</span> <span id="currentLatency" class="status-footer-value">—</span></span>
+                        <span class="status-footer-metric status-footer-metric--rate" title="WebSocket receive and transmit rates"><span class="status-footer-label">↓</span> <span id="statsRxRate" class="status-footer-value">—</span> <span class="status-footer-label">↑</span> <span id="statsTxRate" class="status-footer-value">—</span></span>
+                        <span class="status-footer-metric status-footer-metric--uptime" title="Current connection uptime"><span class="status-footer-label">UP</span> <span id="statsUptime" class="status-footer-value">00:00:00</span></span>
+                    </span>
+                </div>
+                <div class="status-footer-right">
+                    <span class="status-footer-label">THEME</span>
+                    <span id="themeStatus" class="status-footer-value">LUPINE</span>
+                    <span class="status-footer-separator">|</span>
+                    <span class="status-footer-label">BUILD</span>
+                    <span id="statsBuild" class="status-footer-value">---</span>
+                    <span class="status-footer-separator">|</span>
+                    <span class="status-footer-label">PROTOCOL</span>
+                    <span id="statsProto" class="status-footer-value">---</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Command Palette -->
+    <div id="commandPalette" class="palette-overlay hidden">
+        <div class="palette-dialog">
+            <div class="palette-header">
+                <span class="palette-prompt">&gt;</span>
+                <input type="text" id="paletteInput" class="palette-input" placeholder="FILTER COMMANDS..." autocomplete="off" spellcheck="false">
+                <button id="mobileCommandsClose" class="btn mobile-only" type="button">CLOSE</button>
+            </div>
+            <div id="paletteResults" class="palette-results"></div>
+            <div id="paletteArgBar" class="palette-arg-bar hidden">
+                <span class="palette-prompt">&gt;</span>
+                <input type="text" id="paletteArgField" class="palette-input" placeholder="" autocomplete="off" spellcheck="false">
+                <button id="paletteArgSubmit" class="btn palette-arg-submit">EXECUTE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Image Modal -->
+    <div id="imageModal" class="image-modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="imageModalTitle">
+        <div class="image-modal-backdrop"></div>
+        <div class="image-modal-container">
+            <div class="image-modal-header">
+                <div class="image-modal-title" id="imageModalTitle">IMAGE.JPG</div>
+                <button class="btn btn--danger image-modal-close" id="imageModalClose" aria-label="Close full-width image">X</button>
+            </div>
+            <div class="image-modal-content">
+                <img id="imageModalImage" class="image-modal-img" src="" alt="">
+            </div>
+        </div>
+    </div>
+
+    <script src="dialog.js?v=20260925document17"></script>
+    <script src="portal.js?v=20260803a"></script>
+    <script src="custom-picker.js?v=20260927appointment2"></script>
+    <script src="custom-select.js?v=20260924select1"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@16.1.1/lib/marked.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@oneidentity/zstd-js@1.0.3/asm/index.umd.js"></script>
+    <script src="attachments.js?v=20260924attachment1"></script>
+    <script src="assets.js?v=20260927appointment1"></script>
+    <script src="transactions.js?v=20260925inline1"></script>
+    <script src="edges.js?v=20260924slicelive1"></script>
+    <script src="files.js?v=20260926resources2"></script>
+    <script src="links-ui.js?v=20260929prefetch1"></script>
+    <script src="inspector.js?v=20260929parallel1"></script>
+    <script src="view-manager.js?v=20260926calendar1"></script>
+    <script src="list-navigation.js?v=20260805b"></script>
+    <script src="virtual-list.js?v=20260908a"></script>
+    <script src="page-loader.js?v=20260924pager1"></script>
+    <script src="task-state.js?v=20260926calendar7"></script>
+    <script src="query-controller.js?v=20260914workspace1"></script>
+    <script src="task-search.js?v=20260917taskscroll1"></script>
+    <script src="detail-ui.js?v=20260927appointment2"></script>
+    <script src="column-resize.js?v=20260913tables2"></script>
+    <script src="tasks.js?v=20261001messages1"></script>
+    <script src="attention.js?v=20260926why4"></script>
+    <script src="calendar.js?v=20260928atomic1"></script>
+    <script src="appointments.js?v=20260928appointment8"></script>
+    <script src="appointment-notify.js?v=20260927appointment2"></script>
+    <script src="reminder-notify.js?v=20260923attention7"></script>
+    <script src="task-query.js?v=20260927calendar8"></script>
+    <script src="slices.js?v=20260928slice2"></script>
+    <script src="note-html.js?v=20260901a"></script>
+    <script src="notes.js?v=20261001messages1"></script>
+    <script src="task-references.js?v=20260914workspace1"></script>
+    <script src="ai.js?v=20260924select1"></script>
+    <script src="retained-messages.js?v=20260902a"></script>
+    <script src="chat.js?v=20260923attention7"></script>
+    <script src="app.js?v=20260927appointment2"></script>
+    <script src="customers.js?v=20260926direction1"></script>
+    <script src="mobile-shell.js?v=20260914chats1"></script>
+    <script>
+        if ("serviceWorker" in navigator) {
+            window.addEventListener("load", () => navigator.serviceWorker.register("service-worker.js"));
+        }
+    </script>
+</body>
+</html>

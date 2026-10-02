@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+local_bin="$HOME/.local/bin"
+toolchains="$HOME/.local/toolchains"
+mkdir -p "$local_bin" "$toolchains" "$repo_root/data"
+
+step() {
+	printf '\n==> %s\n' "$1"
+}
+
+step "Installing missing system packages"
+packages=(build-essential ca-certificates clang containerd.io curl docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin git jq libopus-dev libzstd-dev libnginx-mod-http-brotli-static linux-perf llvm nginx procps psmisc python3 strace unzip)
+missing=()
+for package in "${packages[@]}"; do
+	if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq 'install ok installed'; then
+		missing+=("$package")
+	fi
+done
+if ((${#missing[@]})); then
+	if [[ "$(id -u)" -eq 0 ]]; then
+		apt-get update -qq
+		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
+	else
+		sudo apt-get update -qq
+		sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
+	fi
+else
+	echo "System packages already installed"
+fi
+
+if [[ "$(dpkg --print-architecture)" != "amd64" ]]; then
+	echo "Unsupported orb architecture: $(dpkg --print-architecture)" >&2
+	exit 1
+fi
+
+step "Installing Odin"
+if [[ ! -x "$HOME/odin/odin" ]]; then
+	tmp_dir="$(mktemp -d)"
+	trap 'rm -rf "$tmp_dir"' EXIT
+	release_json="$(curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL https://api.github.com/repos/odin-lang/Odin/releases/latest)"
+	odin_url="$(python3 -c 'import json, sys; release=json.load(sys.stdin); print(next(asset["browser_download_url"] for asset in release["assets"] if asset["name"].startswith("odin-linux-amd64-") and asset["name"].endswith(".tar.gz")))' <<< "$release_json")"
+	mkdir -p "$HOME/odin"
+	curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL "$odin_url" | tar -xz --strip-components=1 -C "$HOME/odin"
+	rm -rf "$tmp_dir"
+	trap - EXIT
+else
+	echo "Odin already installed"
+fi
+ln -sfn "$HOME/odin/odin" "$local_bin/odin"
+
+step "Installing Go 1.26"
+go_bin="$toolchains/go/bin/go"
+if [[ ! -x "$go_bin" ]] || [[ "$($go_bin version 2>/dev/null || true)" != *' go1.26.'* ]]; then
+	tmp_dir="$(mktemp -d)"
+	trap 'rm -rf "$tmp_dir"' EXIT
+	go_archive="$(curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL 'https://go.dev/dl/?mode=json' | python3 -c 'import json, sys; releases=json.load(sys.stdin); print(next(f["filename"] for release in releases if release["version"].startswith("go1.26.") for f in release["files"] if f["os"] == "linux" and f["arch"] == "amd64" and f["kind"] == "archive"))')"
+	curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL "https://go.dev/dl/$go_archive" -o "$tmp_dir/go.tar.gz"
+	rm -rf "$toolchains/go"
+	tar -xzf "$tmp_dir/go.tar.gz" -C "$toolchains"
+	rm -rf "$tmp_dir"
+	trap - EXIT
+else
+	echo "Go 1.26 already installed"
+fi
+ln -sfn "$toolchains/go/bin/go" "$local_bin/go"
+ln -sfn "$toolchains/go/bin/gofmt" "$local_bin/gofmt"
+
+# Optional external baseline; keep the normal server-development setup fast.
+if [[ "${NRC_SETUP_REDIS:-0}" == "1" ]]; then
+	step "Installing Redis 8.10.1 benchmark baseline (core only)"
+	redis_home="$toolchains/redis-8.10.1"
+	if [[ ! -x "$redis_home/bin/redis-server" ]]; then
+		tmp_dir="$(mktemp -d)"
+		trap 'rm -rf "$tmp_dir"' EXIT
+		curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL \
+			https://download.redis.io/releases/redis-8.10.1.tar.gz -o "$tmp_dir/redis.tar.gz"
+		echo "60166c95ab7aedaa9dfe516de685be0a4dd87be95ded59ba429df14c13f1b663  $tmp_dir/redis.tar.gz" | sha256sum -c -
+		tar -xzf "$tmp_dir/redis.tar.gz" -C "$tmp_dir"
+		# The top-level default also builds optional modules; SET/MSET need only core.
+		make -j2 -C "$tmp_dir/redis-8.10.1/src"
+		make -C "$tmp_dir/redis-8.10.1/src" PREFIX="$redis_home" install
+		rm -rf "$tmp_dir"
+		trap - EXIT
+	fi
+	ln -sfn "$redis_home/bin/redis-server" "$local_bin/redis-server"
+	ln -sfn "$redis_home/bin/redis-cli" "$local_bin/redis-cli"
+	"$local_bin/redis-server" --version
+fi
+
+step "Installing Node.js 24"
+node_bin="$toolchains/node/bin/node"
+if [[ ! -x "$node_bin" ]] || [[ "$($node_bin --version 2>/dev/null || true)" != v24.* ]]; then
+	tmp_dir="$(mktemp -d)"
+	trap 'rm -rf "$tmp_dir"' EXIT
+	node_version="$(curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL https://nodejs.org/dist/index.json | python3 -c 'import json, sys; print(next(release["version"] for release in json.load(sys.stdin) if release["version"].startswith("v24.")))')"
+	curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL "https://nodejs.org/dist/$node_version/node-$node_version-linux-x64.tar.gz" -o "$tmp_dir/node.tar.gz"
+	rm -rf "$toolchains/node"
+	mkdir -p "$toolchains/node"
+	tar -xzf "$tmp_dir/node.tar.gz" --strip-components=1 -C "$toolchains/node"
+	rm -rf "$tmp_dir"
+	trap - EXIT
+else
+	echo "Node.js 24 already installed"
+fi
+for executable in node npm npx corepack; do
+	ln -sfn "$toolchains/node/bin/$executable" "$local_bin/$executable"
+done
+
+step "Installing Odin editor tools"
+if [[ ! -x "$local_bin/odinfmt" ]]; then
+	tmp_dir="$(mktemp -d)"
+	trap 'rm -rf "$tmp_dir"' EXIT
+	ols_json="$(curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL https://api.github.com/repos/DanielGavin/ols/releases/latest)"
+	ols_url="$(python3 -c 'import json, sys; release=json.load(sys.stdin); print(next(asset["browser_download_url"] for asset in release["assets"] if asset["name"] == "ols-x86_64-unknown-linux-gnu.zip"))' <<< "$ols_json")"
+	rm -rf "$HOME/.local/lib/ols"
+	mkdir -p "$HOME/.local/lib/ols"
+	curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL "$ols_url" -o "$tmp_dir/ols.zip"
+	unzip -q "$tmp_dir/ols.zip" -d "$HOME/.local/lib/ols"
+	chmod +x "$HOME/.local/lib/ols/ols-x86_64-unknown-linux-gnu" "$HOME/.local/lib/ols/odinfmt-x86_64-unknown-linux-gnu"
+	ln -sfn "$HOME/.local/lib/ols/ols-x86_64-unknown-linux-gnu" "$local_bin/ols"
+	ln -sfn "$HOME/.local/lib/ols/odinfmt-x86_64-unknown-linux-gnu" "$local_bin/odinfmt"
+	rm -rf "$tmp_dir"
+	trap - EXIT
+else
+	echo "odinfmt already installed"
+fi
+
+profile_marker="# NRC orb toolchains"
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+	cat >> "$HOME/.bash_profile" <<'EOF'
+
+# NRC orb toolchains
+export PATH="$HOME/.local/bin:$HOME/odin:$PATH"
+EOF
+fi
+
+export PATH="$local_bin:$HOME/odin:$PATH"
+
+step "Prefetching Go module dependencies"
+while IFS= read -r module; do
+	( cd "$(dirname "$module")" && go mod download )
+done < <(find "$repo_root" -name go.mod -not -path '*/.git/*' -print | sort)
+
+step "Installing benchmark Node dependencies"
+npm ci --prefix "$repo_root/benchmark/socketjs" --no-audit --no-fund
+
+step "Installing browser test dependencies"
+(
+	cd "$repo_root"
+	npm install --no-save --no-package-lock --no-audit --no-fund playwright
+	npx playwright install --with-deps chromium
+)
+
+step "Verifying toolchains and fetching the test library"
+odin version
+go version
+node --version
+odinfmt -h >/dev/null
+"$repo_root/test/fetch_libhegel.sh"
+
+echo "Orb setup complete"

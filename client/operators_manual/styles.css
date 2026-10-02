@@ -1,0 +1,348 @@
+/* =============================================================================
+   NRC OPERATORS MANUAL - PDP-11 STYLE
+   Austere, reference-focused, high contrast, minimal decoration
+   ============================================================================= */
+
+:root {
+    --color-white: #ffffff;
+    --color-black: #000000;
+    --color-gray: #333333;
+    
+    --font-serif: 'IBM Plex Serif', 'Times New Roman', Times, serif;
+    --font-mono: 'IBM Plex Mono', 'Courier New', Courier, monospace;
+    
+    --page-width: 850px;
+    --page-height: 11in;
+    --margin: 0.75in;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    font-family: var(--font-serif);
+    background-color: var(--color-gray);
+    color: var(--color-black);
+    line-height: 1.5;
+    font-size: 11pt;
+}
+
+/* =============================================================================
+   PAGE STRUCTURE
+   ============================================================================= */
+
+.page {
+    width: var(--page-width);
+    min-height: var(--page-height);
+    margin: 20px auto;
+    padding: var(--margin);
+    background-color: var(--color-white);
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.3);
+    page-break-after: always;
+}
+
+/* =============================================================================
+   COVER PAGE
+   ============================================================================= */
+
+.cover-page {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    border: 3px solid var(--color-black);
+}
+
+.cover-spacer {
+    flex: 1;
+}
+
+.cover-content {
+    flex: 2;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.cover-title {
+    font-size: 48pt;
+    font-weight: 700;
+    letter-spacing: 2px;
+    margin-bottom: 20px;
+    font-family: var(--font-mono);
+}
+
+.cover-subtitle {
+    font-size: 18pt;
+    font-weight: 600;
+    margin-bottom: 10px;
+    font-family: var(--font-mono);
+}
+
+.cover-spec {
+    font-size: 12pt;
+    font-family: var(--font-mono);
+    margin-top: 20px;
+    letter-spacing: 1px;
+}
+
+.cover-copyright {
+    font-size: 10pt;
+    margin-top: 10px;
+}
+
+/* =============================================================================
+   TYPOGRAPHY
+   ============================================================================= */
+
+h2.section-title {
+    font-size: 18pt;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    margin-bottom: 30px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--color-black);
+    letter-spacing: 1px;
+}
+
+h3.subsection-title {
+    font-size: 13pt;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    margin-top: 25px;
+    margin-bottom: 12px;
+    letter-spacing: 0.5px;
+}
+
+h4.command-name {
+    font-size: 12pt;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+p {
+    margin-bottom: 12px;
+    text-align: justify;
+    line-height: 1.6;
+}
+
+/* =============================================================================
+   TABLE OF CONTENTS
+   ============================================================================= */
+
+.toc {
+    margin-top: 30px;
+}
+
+.toc-entry {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px dotted var(--color-black);
+    font-size: 11pt;
+}
+
+.toc-number {
+    font-weight: 700;
+    min-width: 40px;
+}
+
+.toc-text {
+    flex: 1;
+    text-transform: uppercase;
+    font-family: var(--font-mono);
+    letter-spacing: 0.5px;
+}
+
+/* =============================================================================
+   TABLES
+   ============================================================================= */
+
+.spec-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 15px 0;
+    font-family: var(--font-mono);
+    font-size: 10pt;
+}
+
+.spec-table tr {
+    border-bottom: 1px solid var(--color-black);
+}
+
+.spec-table tr:last-child {
+    border-bottom: 2px solid var(--color-black);
+}
+
+.spec-table td {
+    padding: 6px 0;
+}
+
+.spec-label {
+    font-weight: 700;
+    width: 35%;
+    vertical-align: top;
+}
+
+.spec-value {
+    padding-left: 20px;
+}
+
+/* =============================================================================
+   LISTS
+   ============================================================================= */
+
+.procedure-list {
+    list-style: decimal;
+    margin-left: 30px;
+    margin-bottom: 12px;
+}
+
+.procedure-list li {
+    margin-bottom: 6px;
+    text-align: justify;
+}
+
+.troubleshoot-steps {
+    list-style: decimal;
+    margin-left: 30px;
+    margin-bottom: 12px;
+}
+
+.troubleshoot-steps li {
+    margin-bottom: 6px;
+    text-align: justify;
+}
+
+/* =============================================================================
+   CODE BLOCKS & DIAGRAMS
+   ============================================================================= */
+
+.code-block,
+.diagram {
+    background-color: var(--color-white);
+    border: 1px solid var(--color-black);
+    padding: 12px;
+    margin: 12px 0;
+    font-family: var(--font-mono);
+    font-size: 9pt;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.4;
+}
+
+code {
+    font-family: var(--font-mono);
+    font-size: 10pt;
+}
+
+/* =============================================================================
+   COMMAND BLOCKS
+   ============================================================================= */
+
+.command-block {
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--color-black);
+}
+
+.command-desc {
+    font-size: 10pt;
+    margin-bottom: 6px;
+    font-style: italic;
+}
+
+.command-format {
+    background-color: #f5f5f5;
+    border: 1px solid var(--color-black);
+    padding: 10px;
+    margin: 6px 0;
+    font-family: var(--font-mono);
+    font-size: 9pt;
+}
+
+.command-note {
+    font-size: 9pt;
+    margin-top: 6px;
+    font-family: var(--font-mono);
+}
+
+/* =============================================================================
+   END PAGE
+   ============================================================================= */
+
+.end-page {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+}
+
+.end-spacer {
+    flex: 1;
+}
+
+.end-title {
+    font-size: 24pt;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    letter-spacing: 2px;
+    margin: 20px 0;
+}
+
+.end-revision {
+    font-size: 12pt;
+    font-family: var(--font-mono);
+    margin-bottom: 10px;
+}
+
+.end-date {
+    font-size: 12pt;
+    font-family: var(--font-mono);
+}
+
+/* =============================================================================
+   PRINT STYLES
+   ============================================================================= */
+
+@media print {
+    body {
+        background-color: var(--color-white);
+    }
+    
+    .page {
+        margin: 0;
+        box-shadow: none;
+        page-break-after: always;
+    }
+}
+
+/* =============================================================================
+   RESPONSIVE (Screen viewing)
+   ============================================================================= */
+
+@media (max-width: 900px) {
+    .page {
+        width: 100%;
+        margin: 10px 0;
+        min-height: auto;
+    }
+    
+    .cover-title {
+        font-size: 36pt;
+    }
+    
+    h2.section-title {
+        font-size: 16pt;
+    }
+}

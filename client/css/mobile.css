@@ -1,0 +1,273 @@
+/* One working surface on phones. Desktop and tablet keep their existing shell. */
+.mobile-only { display: none; }
+@media (min-width: 769px) {
+    .mobile-only { display: none !important; }
+}
+
+@media (max-width: 768px) {
+    body { padding: 0; }
+    .retro-container {
+        position: fixed;
+        inset: var(--mobile-viewport-top, 0px) 0 auto;
+        height: var(--mobile-viewport-height, 100dvh);
+        min-height: 0;
+        width: 100%;
+        border: 0;
+    }
+    .app-shell { grid-template: auto minmax(0, 1fr) auto / minmax(0, 1fr); padding: 0; gap: 0; }
+    .mobile-only { display: flex; }
+    .btn.mobile-only:not(.sidebar-nav-item) { align-items: center; justify-content: center; }
+    .app-sidebar #mobileCommands::before { content: ">_"; background: none; mask: none; -webkit-mask: none; font: 700 var(--mobile-font-xs) var(--font-mono); }
+    .mobile-mast {
+        grid-area: 1 / 1;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: env(safe-area-inset-top) max(0.75rem, env(safe-area-inset-right)) 0 max(0.75rem, env(safe-area-inset-left));
+        border-bottom: var(--frame-border);
+        background: var(--surface-panel);
+    }
+    .mobile-room { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; text-align: left; min-width: 0; min-height: 44px; flex: 1; padding: 0; color: var(--text-primary); background: none; border: 0; cursor: pointer; }
+    .mobile-room strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 700 var(--mobile-font-lg) var(--font-sans); }
+    .mobile-connection { font: var(--mobile-font-xs) var(--font-mono); color: var(--text-dim); }
+    .mobile-room:focus-visible, .mobile-bottom button:focus-visible { outline: 2px solid var(--focus-interactive); outline-offset: -2px; }
+    .content-shell { grid-area: 2 / 1; }
+    .status-footer, .users-bar { display: none; }
+    .app-sidebar { display: none; }
+    body.mobile-navigation-open .app-sidebar {
+        display: flex;
+        position: absolute;
+        inset: 0;
+        z-index: 90;
+        width: 100%;
+        max-height: none;
+        height: 100%;
+        overflow-y: auto;
+        padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
+        border: 0;
+    }
+    .mobile-navigation-header, .mobile-inspector-navigation { align-items: center; justify-content: space-between; flex-shrink: 0; padding: 0.5rem 0.875rem; border-bottom: var(--frame-border); font: var(--mobile-font-sm) var(--font-mono); }
+    .mobile-navigation-header { position: sticky; top: 0; z-index: 1; background: var(--surface-panel); }
+    .app-sidebar .sidebar-section { flex-shrink: 0; }
+    .app-sidebar .sidebar-section--rooms, .app-sidebar .dm-list { max-height: none; overflow: visible; }
+    .app-sidebar #roomList { display: flex; flex-direction: column; flex-wrap: nowrap; }
+    .app-sidebar .room-item, .app-sidebar .sidebar-nav-item, .app-sidebar .dm-item { width: 100%; min-height: 48px; font-size: var(--mobile-font-base); padding: 12px; }
+    body.mobile-navigation-open:not(.mobile-navigation-more) .sidebar-section:has(.view-tabs) { display: none; }
+    body.mobile-navigation-more .sidebar-section:not(:has(.view-tabs)) { display: none; }
+    .mobile-bottom { grid-area: 3 / 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--surface-panel); border-top: var(--frame-border); padding-bottom: env(safe-area-inset-bottom); }
+    .mobile-bottom button { min-width: 0; min-height: 56px; padding: 8px 4px; font: var(--mobile-font-sm) var(--font-mono); color: var(--text-dim); background: none; border: 0; border-right: var(--content-border); border-top: 3px solid transparent; cursor: pointer; }
+    .mobile-bottom button[aria-current="page"] { font-weight: 700; color: var(--text-primary); border-top-color: var(--accent-current); background: var(--surface-control); }
+    .mobile-bottom span { font: var(--mobile-font-xs) var(--font-mono); color: var(--accent-current); }
+    #mobileChatTools { margin-left: auto; }
+    body:not(.mobile-chat-view) #mobileChatTools { display: none; }
+    body.mobile-chat-view:not(.mobile-chat-tools-open) #chatTools { display: none; }
+    .chat-header-right { display: none; }
+    .chat-header.panel-header.header-register:has(#mobileChatTools) > .header-register-identity-row { min-height: 48px; height: auto; align-items: center; }
+    .chat-header:has(#mobileChatTools) .header-register-identity-row .btn { min-height: 40px; }
+    .chat-header:has(#mobileChatTools) .header-register-control-row { min-height: 52px; }
+    #chatTools .filter-input { font-size: var(--mobile-font-lg); }
+    #logOutput.log-body { padding: 1rem 0.875rem; }
+    #logOutput .col-message { font-size: 15px; line-height: 1.5; }
+    .input-panel { padding-bottom: 0; }
+    .input-controls { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 0; padding: 0; align-items: end; }
+    .input-container { grid-column: 1 / -1; grid-row: 1; padding: 16px 8px; min-height: 60px; }
+    #messageInput.composer-input { field-sizing: content; font-size: var(--mobile-font-lg); min-height: 28px; max-height: 25dvh; }
+    .composer-meta { display: contents; }
+    .composer-meta > span { display: none; }
+    #chatAttach { grid-column: 1; grid-row: 2; margin: 0; }
+    .composer-send, .sullivan-submit-controls { grid-column: 3; grid-row: 2; align-self: stretch; margin: 0; }
+    .task-comment-input-area { grid-template-rows: auto minmax(44px, auto); }
+    .task-comment-send { min-height: 44px; min-width: 44px; }
+    .composer-send small, .sullivan-submit-controls small { display: none; }
+    .input-panel .btn { min-height: 44px; min-width: 44px; }
+    /* A row action is a tap target on a phone, not a footnote in a table. */
+    .btn--row { min-height: 44px; }
+    body.inspector-open .inspector.ledger-context.agenda-panel { position: fixed; inset: var(--mobile-viewport-top, 0px) 0 auto; z-index: 100; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); width: 100%; height: var(--mobile-viewport-height, 100dvh); max-height: none; }
+    .mobile-inspector-navigation .btn, .mobile-navigation-header .btn { min-height: 44px; }
+    .mobile-inspector-navigation span { color: var(--text-dim); }
+    .inspector .detail-edit-field :is(input, textarea, select):not(.custom-select--hidden) { font-size: var(--mobile-font-lg); min-height: 44px; }
+    .inspector .detail-edit-field .custom-select__trigger { min-height: 44px; }
+    .inspector .task-modal-btn { min-height: 44px; }
+    .inspector :is(.task-detail-actions:has(#taskDetailDelete), .note-detail-actions) {
+        display: flex;
+        justify-content: flex-end;
+        align-items: stretch;
+        flex: 0 0 auto;
+        height: auto;
+        gap: 8px;
+        padding: 8px;
+        background: var(--surface-panel);
+        border-top: var(--frame-border);
+    }
+    .inspector :is(.task-detail-actions:has(#taskDetailDelete), .note-detail-actions) .task-modal-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 0;
+        min-height: 48px;
+        padding: 8px 4px;
+        margin: 0;
+        box-shadow: none;
+        font-size: var(--mobile-font-sm);
+    }
+    .inspector .task-detail-handoff-picker { grid-column: 1 / -1; order: -1; min-width: 0; padding: 8px; }
+    .inspector .task-detail-handoff-picker .custom-select { flex: 1; min-width: 0; }
+    .inspector .task-detail-handoff-picker :is(.custom-select__trigger, .task-detail-handoff-go) { min-height: 44px; }
+    .inspector .detail-edit-form > * { flex-shrink: 0; }
+    .inspector .detail-edit-field { flex-wrap: nowrap; flex-shrink: 0; }
+    .inspector .detail-edit-field--content { flex: 0 0 auto; min-height: 140px; }
+    .inspector .detail-edit-label-row { min-height: 16px; height: auto; }
+    .inspector .detail-edit-grid--task-meta { grid-template-columns: minmax(0, 1fr); }
+    .panel-header:has([data-mobile-filters]) > .header-register-identity-row { min-height: 48px; height: auto; padding-right: 12px; align-items: center; box-sizing: border-box; }
+    /* The phone register keeps identity, state and the filter toggle on one row:
+       long result counts truncate instead of pushing the toggle off-screen. The
+       state token is a text block here so the ellipsis can render. */
+    .panel-header:has([data-mobile-filters]) > .header-register-identity-row > .header-register-state {
+        display: block;
+        align-self: center;
+        flex: 0 1 auto;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    /* The register swaps one result count for the other when the grouping
+       changes, and this rule's block display outranks the UA `[hidden]` rule the
+       swap relies on: a swapped-out count must not read beside the live one. */
+    .panel-header:has([data-mobile-filters]) > .header-register-identity-row > .header-register-state[hidden] {
+        display: none;
+    }
+    .panel-header:has([data-mobile-filters]) > .header-register-identity-row > .btn[data-mobile-filters] {
+        flex: 0 0 auto;
+        min-height: 44px;
+        border-color: var(--border-strong);
+        background: var(--surface-control);
+        color: var(--text-primary);
+    }
+    .panel-header:has([data-mobile-filters]) > .header-register-identity-row > .btn[data-mobile-filters][aria-expanded="true"] {
+        background: var(--btn-hover-bg);
+        color: var(--btn-hover-text);
+    }
+    #taskFilterBar .header-register-alerts { display: none; }
+    .panel-header:has([data-mobile-filters]):not(.mobile-filters-open) > .header-register-control-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; height: auto; min-height: 0; max-height: none; padding: 4px 12px; }
+    /* Query and the explicit creation action survive collapsed filters; the
+       parameter cells scroll inside the register's control group. */
+    .panel-header:has([data-mobile-filters]):not(.mobile-filters-open) > .header-register-control-row > :not(.header-control-scroll, .header-create-action, .filter-group-search, .notes-query-cell) { display: none; }
+    .panel-header:has([data-mobile-filters]):not(.mobile-filters-open) > .header-register-control-row > .header-control-scroll > :not(.filter-group-search, .notes-query-cell) { display: none; }
+    .panel-header:has([data-mobile-filters]):not(.mobile-filters-open) > .header-register-control-row > .header-create-action { height: 44px; min-height: 44px; margin: 0; align-self: center; }
+    .panel-header.mobile-filters-open > .header-register-control-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); height: auto; max-height: 40dvh; overflow-y: auto; overflow-x: hidden; }
+    /* Expanded filters lay every parameter cell into the row's grid, so the
+       desktop scroll group must not add a nesting level on phones. */
+    .panel-header.mobile-filters-open > .header-register-control-row > .header-control-scroll { display: contents; }
+    .panel-header.mobile-filters-open > .header-register-control-row > *,
+    .panel-header.mobile-filters-open > .header-register-control-row > .header-control-scroll > * { width: auto; min-width: 0; min-height: 56px; }
+    .panel-header:has([data-mobile-filters]) :is(.filter-input, select):not(.custom-select--hidden) { width: 100%; font-size: var(--mobile-font-lg); min-height: 36px; color: var(--text-primary); background: var(--surface-control); }
+    .panel-header:has([data-mobile-filters]) .custom-select__trigger { min-height: 36px; }
+    .task-filter-bar.mobile-filters-open > .task-filter-group.header-register-control-row {
+        gap: 12px;
+        padding: 12px;
+        align-items: end;
+        align-content: start;
+        grid-auto-rows: max-content;
+        background: var(--surface-panel);
+        overscroll-behavior: contain;
+        scrollbar-gutter: stable;
+    }
+    .task-filter-bar.mobile-filters-open .header-filter-cell { padding: 0; border: 0; gap: 4px; height: auto; min-height: 0; max-width: none; }
+    .panel-header.mobile-filters-open > .header-register-control-row > .header-control-scroll > .header-filter-cell { border-right: 0; }
+    .task-filter-bar.mobile-filters-open .filter-label { font-size: var(--mobile-font-xs); line-height: 14px; }
+    /* A stacked phone cell gives its label the top and the mode group the rest,
+       at the same touch height as the select cells beside it. */
+    .task-filter-bar.mobile-filters-open .header-filter-cell > :is(.tab-group, .task-detail-tabs, .note-link-picker-types) {
+        min-height: 44px;
+    }
+    .task-filter-bar.mobile-filters-open :is(.filter-input, select):not(.custom-select--hidden),
+    .task-filter-bar.mobile-filters-open .custom-select__trigger { min-height: 44px; height: 44px; padding-inline: 8px; font-size: var(--mobile-font-base); }
+    .task-filter-bar.mobile-filters-open .filter-input { font-size: var(--mobile-font-lg); }
+    .task-filter-bar.mobile-filters-open .header-filter-toggle { justify-content: center; }
+    .task-filter-bar.mobile-filters-open .header-filter-toggle > small { display: none; }
+    .task-filter-bar.mobile-filters-open .header-filter-toggle .filter-checkbox-label { height: 44px; margin: 0; padding: 8px; gap: 8px; font-size: 12px; }
+    .task-filter-bar.mobile-filters-open .header-filter-toggle .filter-checkbox { position: relative; width: 18px; height: 18px; clip-path: none; flex: 0 0 auto; accent-color: var(--accent-current); }
+    .panel-header.mobile-filters-open .header-register-control { order: -1; }
+    .panel-header.mobile-filters-open > .header-register-control-row:not(:has(.header-control-scroll > .header-register-control)) > .header-create-action { grid-column: 2; }
+    .panel-header:has([data-mobile-filters]) .header-operation {
+        min-height: 44px;
+        padding-inline: 8px;
+    }
+    .task-filter-bar.mobile-filters-open .header-operation { min-height: 44px; height: 44px; margin: 0; padding: 8px; font-size: var(--mobile-font-sm); }
+    /* Query is a component role, not a particular app element ID. It remains
+       visible when filters collapse, including in catalogue examples. */
+    .panel-header:has([data-mobile-filters]) .header-filter-cell:is(.filter-group-search, .notes-query-cell) { grid-column: 1 / -1; order: -2; position: sticky; top: 0; z-index: 2; height: auto; min-height: 0; min-width: 0; max-width: none; padding: 0; gap: 4px; border: 0; background: var(--surface-panel); }
+    .panel-header:has([data-mobile-filters]) .header-filter-cell:is(.filter-group-search, .notes-query-cell) .filter-label { display: none; }
+    .panel-header:has([data-mobile-filters]) :is(.filter-group-search, .notes-query-cell) .filter-input { min-height: 32px; height: 32px; padding-inline: 8px; font-size: var(--mobile-font-lg); }
+    .mobile-detail-document:not(.task-detail-tab-content), .mobile-detail-document.active { display: flex; flex-direction: column; }
+    .mobile-detail-document > * { order: 3; flex-shrink: 0; }
+    .mobile-detail-document > :is(.note-preview-title, .task-detail-doc-title) { order: 0; }
+    .mobile-detail-document > .mobile-metadata-toggle { order: 1; min-height: 44px; justify-content: space-between; margin: 0; border-inline: 0; box-shadow: none; }
+    .mobile-metadata-toggle::after { content: "+"; }
+    .mobile-metadata-toggle[aria-expanded="true"]::after { content: "−"; }
+    .mobile-detail-document > .detail-metadata-ledger { order: 2; }
+    .mobile-detail-document:has(> .mobile-metadata-toggle[aria-expanded="false"]) > .detail-metadata-ledger { display: none; }
+    /* The note body keeps growing and shrinking inside the phone column: the
+       registers stay at the bottom of the panel, the way they do under a task
+       document, instead of scrolling past it. */
+    .mobile-detail-document > .note-preview-body { flex-shrink: 1; }
+    body:is(.note-share-focused, .sullivan-share-focused) :is(.mobile-mast, .mobile-bottom) { display: none; }
+    body:is(.note-share-focused, .sullivan-share-focused) .retro-container { height: var(--mobile-viewport-height, 100dvh); }
+    #mobileCommandsClose { min-height: 44px; }
+    .palette-input { font-size: var(--mobile-font-lg); min-width: 0; }
+    .palette-option, .palette-arg-submit { min-height: 44px; }
+    /* Reserve the title's 0.75rem overhang as well as the viewport inset. */
+    .palette-overlay { padding: calc(8px + 0.75rem) 8px 8px; height: var(--mobile-viewport-height, 100dvh); top: var(--mobile-viewport-top, 0px); }
+    .palette-dialog { width: 100%; max-height: 100%; min-height: 0; }
+    .palette-results { min-height: 0; max-height: none; overflow-y: auto; }
+    .palette-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 10px 4px; border-bottom: var(--content-border); }
+    .palette-option .palette-option-group { grid-column: 1 / -1; width: auto; text-align: left; font-size: var(--mobile-font-xs); }
+    .palette-option .palette-option-cmd { min-width: 0; white-space: normal; font-size: 13px; }
+    .palette-option .palette-option-desc { grid-column: 1 / -1; white-space: normal; }
+    .palette-option .palette-option-arg { font-size: var(--mobile-font-xs); }
+    /* ATTENTION keeps the desktop column template intact and composes the row
+       for a phone instead: the title owns the first line with the state beside
+       it, and the kind, detail and age share the second. */
+    #attentionPanel .attention-list-header,
+    #attentionPanel .header-register-alerts {
+        display: none;
+    }
+
+    .attention-row {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        grid-template-areas:
+            "title title   state"
+            "kind  context age";
+        gap: 0.25rem 0.5rem;
+        min-height: 3.5rem;
+        padding: 0.5rem 0.625rem;
+        align-items: center;
+
+        & > .attention-marker {
+            display: none;
+        }
+
+        & > .attention-title {
+            grid-area: title;
+            font-size: var(--font-base);
+            font-weight: 700;
+        }
+
+        & > .note-link-kind {
+            grid-area: kind;
+        }
+
+        & > .attention-context {
+            grid-area: context;
+        }
+
+        & > .attention-state {
+            grid-area: state;
+        }
+
+        & > .attention-age {
+            grid-area: age;
+            text-align: right;
+        }
+    }
+}

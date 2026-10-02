@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$HOME/.local/bin:$HOME/odin:$PATH"
+
+mkdir -p "$repo_root/data"
+
+for command in odin go node odinfmt; do
+	if ! command -v "$command" >/dev/null 2>&1; then
+		echo "Missing required tool after orb resume: $command (rerun .agents/setup)" >&2
+		exit 1
+	fi
+done
+
+echo "NRC orb environment ready"

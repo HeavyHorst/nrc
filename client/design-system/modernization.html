@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="osaka-jade">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NRC Interface Modernization Study</title>
+    <link rel="icon" type="image/png" href="../favicon.png">
+    <link rel="stylesheet" href="../css/main.css?v=20260902f">
+    <link rel="stylesheet" href="modernization.css?v=20260901e">
+</head>
+<body>
+    <header class="study-masthead">
+        <div>
+            <span class="study-kicker">NRC-300 / INTERFACE STUDY / 2026-09-01</span>
+            <h1>MODERN WITHOUT LOSING THE GRID</h1>
+        </div>
+        <div class="study-actions">
+            <label for="studyTheme">COLOR THEME / 24</label>
+            <select id="studyTheme">
+                <option value="lupine">LUPINE</option>
+                <option value="matte-black">MATTE BLACK</option>
+                <option value="tokyo-night">TOKYO NIGHT</option>
+                <option value="ayu">AYU</option>
+                <option value="modus-vivendi">MODUS VIVENDI</option>
+                <option value="catppuccin">CATPPUCCIN</option>
+                <option value="catppuccin-latte">CATPPUCCIN LATTE</option>
+                <option value="ethereal">ETHEREAL</option>
+                <option value="everforest">EVERFOREST</option>
+                <option value="flexoki-light">FLEXOKI LIGHT</option>
+                <option value="gruvbox">GRUVBOX</option>
+                <option value="hackerman">HACKERMAN</option>
+                <option value="kanagawa">KANAGAWA</option>
+                <option value="last-horizon">LAST HORIZON</option>
+                <option value="lumon">LUMON</option>
+                <option value="miasma">MIASMA</option>
+                <option value="nord">NORD</option>
+                <option value="osaka-jade" selected>OSAKA JADE</option>
+                <option value="retro-82">RETRO 82</option>
+                <option value="ristretto">RISTRETTO</option>
+                <option value="solitude">SOLITUDE</option>
+                <option value="rose-pine">ROSE PINE</option>
+                <option value="vantablack">VANTABLACK</option>
+                <option value="white">WHITE</option>
+            </select>
+            <a href="index.html">DESIGN SYSTEM ↗</a>
+        </div>
+    </header>
+
+    <main>
+        <section class="study-intro">
+            <p class="study-lead">All 24 color themes stay. These treatments change only border hierarchy, surface depth, spacing, typography, and emphasis while structure, density, square geometry, and explicit state remain fixed.</p>
+            <dl class="study-findings">
+                <div><dt><a href="https://ampcode.com/news/agents-everywhere" target="_blank" rel="noreferrer">AMP ↗</a></dt><dd>Low-contrast panel rules, layered charcoal surfaces, compact metadata, and stronger emphasis only on active controls.</dd></div>
+                <div><dt>ORIGINAL REFERENCES</dt><dd>One clear outer frame, translucent surfaces, regular gutters, muted internal borders, and a single theme-derived selection accent.</dd></div>
+                <div><dt>NRC CONSTRAINT</dt><dd>Every existing color theme remains compatible. No pills, decorative rounding, lost density, or hidden operational state.</dd></div>
+            </dl>
+        </section>
+
+        <section class="proposal proposal--quiet">
+            <header class="proposal-header">
+                <div><span>01 / RECOMMENDED</span><h2>QUIET GRID</h2></div>
+                <p>Keep the frame. Replace most internal outlines with surface transitions and very faint rules. Interactive controls remain visibly bordered.</p>
+            </header>
+            <div class="proposal-shell-host"></div>
+            <ul class="proposal-notes">
+                <li>Panel borders at medium contrast; row separators at roughly half that strength.</li>
+                <li>Headers use a distinct surface instead of a louder line.</li>
+                <li>Active state combines a shallow fill with one 2px accent edge.</li>
+            </ul>
+        </section>
+
+        <section class="proposal proposal--layered">
+            <header class="proposal-header">
+                <div><span>02 / AMP-INFLUENCED</span><h2>LAYERED OPERATIONS</h2></div>
+                <p>Use Amp-like layered surfaces derived from the selected NRC theme. Preserve NRC labels and matrices, but let spacing and elevation carry more hierarchy than borders.</p>
+            </header>
+            <div class="proposal-shell-host"></div>
+            <ul class="proposal-notes">
+                <li>Surface separation is derived from every color theme rather than replacing its palette.</li>
+                <li>Sans-serif values and titles; mono remains for labels, IDs, and status.</li>
+                <li>Tool-like rows become quiet blocks with one boundary, not boxed cells.</li>
+            </ul>
+        </section>
+
+        <section class="proposal proposal--atmospheric">
+            <header class="proposal-header">
+                <div><span>03 / ORIGINAL-REFERENCE</span><h2>ATMOSPHERIC FRAME</h2></div>
+                <p>Retain the strongest cues from the source screenshots: a visible outer frame, translucent themed surfaces, and a focused selection glow.</p>
+            </header>
+            <div class="proposal-shell-host"></div>
+            <ul class="proposal-notes">
+                <li>The outer frame is the strongest line; internal structure is deliberately quiet.</li>
+                <li>Subtle background illumination adds depth without gradients on controls.</li>
+                <li>Accent is reserved for selection, focus, and the primary operation.</li>
+            </ul>
+        </section>
+
+        <section class="study-recommendation">
+            <span>RECOMMENDED PRODUCTION DIRECTION</span>
+            <h2>START WITH QUIET GRID, BORROW AMP'S TYPOGRAPHY SPLIT.</h2>
+            <p>This is the smallest change with the largest effect: soften content separators, increase surface distinction by 2–4%, retain stronger borders only for controls, and use proportional text for readable values while keeping NRC's monospaced operational labels.</p>
+        </section>
+    </main>
+
+    <template id="workspaceTemplate">
+        <div class="nrc-study-shell">
+            <div class="nrc-study-topbar">
+                <strong>NRC / ENGINEERING</strong>
+                <span>ROOM 01 · ONLINE · 18 MS</span>
+            </div>
+            <div class="nrc-study-workspace">
+                <aside class="nrc-study-sidebar">
+                    <section><small>ROOMS</small><button class="is-current"><i></i>ENGINEERING <b>12</b></button><button><i></i>OPERATIONS</button></section>
+                    <section><div class="nrc-study-section-title"><small>DMS</small><button class="nrc-study-icon" aria-label="Start direct message">+</button></div><button><i></i>RENE <em>4m</em></button></section>
+                    <section><small>VIEWS / ENGINEERING</small><button>CHAT</button><button>NOTES</button><button class="is-active">TASKS</button><button>SYSTEM LOG</button></section>
+                </aside>
+
+                <section class="nrc-study-main">
+                    <header class="nrc-study-view-header">
+                        <div><small>VIEW</small><strong>TASKS</strong><span>128 RESULTS</span><em>BLOCKED 03 · OVERDUE 01</em></div>
+                        <nav><label>QUERY <input value="" placeholder="SEARCH..."></label><button>STATUS <b>OPEN</b></button><button>ASSIGNEE <b>ALL</b></button><button>PROJECT <b>NRC</b></button><button class="is-toggle">BLOCKED</button><button>RESET</button></nav>
+                    </header>
+                    <div class="nrc-study-table-head"><span>ID</span><span>PRI</span><span>TITLE</span><span>STATUS</span><span>ASN</span><span>DUE</span></div>
+                    <div class="nrc-study-task is-selected"><span>184</span><span class="priority">180</span><strong>Unify task header controls</strong><span>IN PROGRESS</span><span>RENE</span><span>04 SEP</span></div>
+                    <div class="nrc-study-task"><span>179</span><span>160</span><strong>Normalize overlay behavior</strong><span>TODO</span><span>OPERATOR</span><span class="overdue">01 SEP</span></div>
+                    <div class="nrc-study-task"><span>171</span><span>120</span><strong>Document persistence metrics</strong><span>BACKLOG</span><span>—</span><span>12 SEP</span></div>
+                    <div class="nrc-study-empty">3 OF 128 TASKS · SORT PRIORITY DESC</div>
+                </section>
+
+                <aside class="nrc-study-inspector">
+                    <header><small>OBJECT</small><strong>TASK 184</strong><span>IN PROGRESS</span></header>
+                    <div class="nrc-study-inspector-tabs"><button class="is-active">DETAIL</button><button>COMMENTS 04</button><button>LINKS 02</button><button class="nrc-study-icon" aria-label="Close">×</button></div>
+                    <dl><div><dt>PROJECT</dt><dd>NRC CLIENT</dd></div><div><dt>ASSIGNEE</dt><dd>RENE</dd></div><div><dt>PRIORITY</dt><dd>180</dd></div><div><dt>DUE</dt><dd>04 SEP 2026</dd></div></dl>
+                    <label>TITLE<input value="Unify task header controls"></label>
+                    <label>DESCRIPTION<textarea>Reduce border noise while preserving the operational matrix and keyboard-first interaction.</textarea></label>
+                    <button class="nrc-study-primary">SAVE TASK</button>
+                </aside>
+            </div>
+            <footer><span>ONLINE · RTT 18 MS</span><span>OSAKA JADE · BUILD A5A4087 · PROTOCOL 4</span></footer>
+        </div>
+    </template>
+
+    <script>
+        const template = document.getElementById("workspaceTemplate");
+        document.querySelectorAll(".proposal-shell-host").forEach((host) => {
+            host.append(template.content.cloneNode(true));
+        });
+        document.getElementById("studyTheme").addEventListener("change", (event) => {
+            document.documentElement.dataset.theme = event.target.value;
+        });
+    </script>
+</body>
+</html>

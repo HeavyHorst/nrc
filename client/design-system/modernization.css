@@ -1,0 +1,692 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap");
+
+:root {
+    color-scheme: light dark;
+    font-family: Inter, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 16px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    min-width: 20rem;
+    margin: 0;
+    padding: 0;
+    overflow: auto;
+    background: var(--bg-primary);
+}
+
+button,
+input,
+textarea {
+    font: inherit;
+}
+
+button {
+    cursor: pointer;
+}
+
+.study-masthead {
+    min-height: 8rem;
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 2rem;
+    padding: 1.5rem clamp(1rem, 4vw, 4rem);
+    border-bottom: 1px solid var(--border-light);
+    background: var(--surface-panel);
+}
+
+.study-kicker,
+.proposal-header span,
+.study-recommendation > span {
+    color: var(--accent-interactive);
+    font: 700 0.68rem/1.2 "IBM Plex Mono", monospace;
+    letter-spacing: 0.09em;
+}
+
+.study-masthead h1 {
+    max-width: 56rem;
+    margin: 0.5rem 0 0;
+    font-size: clamp(1.8rem, 5vw, 4.75rem);
+    line-height: 0.92;
+    letter-spacing: -0.055em;
+}
+
+.study-masthead a,
+.study-actions select {
+    flex: 0 0 auto;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--border-primary);
+    color: var(--text-primary);
+    font: 700 0.68rem "IBM Plex Mono", monospace;
+    text-decoration: none;
+}
+
+.study-actions {
+    display: flex;
+    align-items: end;
+    gap: 0.5rem;
+}
+
+.study-actions label {
+    align-self: center;
+    color: var(--accent-interactive);
+    font: 700 0.62rem "IBM Plex Mono", monospace;
+    letter-spacing: 0.06em;
+}
+
+.study-actions select {
+    min-width: 10rem;
+    border-radius: 0;
+    background: var(--surface-control);
+    color: var(--text-primary);
+}
+
+main {
+    padding: 0 clamp(1rem, 4vw, 4rem) 5rem;
+}
+
+.study-intro {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: clamp(2rem, 4vw, 4rem);
+    padding: clamp(2rem, 6vw, 5rem) 0;
+}
+
+.study-lead {
+    max-width: 54rem;
+    margin: 0;
+    font-size: clamp(1.15rem, 2.3vw, 2.1rem);
+    line-height: 1.2;
+    letter-spacing: -0.03em;
+}
+
+.study-findings {
+    margin: 0;
+    border-top: 1px solid var(--border-light);
+}
+
+.study-findings div {
+    display: grid;
+    grid-template-columns: 8rem 1fr;
+    gap: 1rem;
+    padding: 0.8rem 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.study-findings dt,
+.study-findings dd {
+    margin: 0;
+}
+
+.study-findings dt {
+    color: var(--accent-interactive);
+    font: 700 0.68rem "IBM Plex Mono", monospace;
+}
+
+.study-findings dt a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.study-findings dd {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+.proposal {
+    --study-bg: var(--bg-secondary);
+    --study-frame: var(--border-primary);
+    --study-panel: var(--surface-panel);
+    --study-panel-2: var(--surface-content);
+    --study-control: var(--surface-control);
+    --study-line: var(--border-light);
+    --study-line-soft: var(--border-subtle);
+    --study-text: var(--text-primary);
+    --study-muted: var(--text-dim);
+    --study-accent: var(--accent-interactive);
+    --study-accent-soft: color-mix(in srgb, var(--bg-primary) 88%, var(--accent-interactive));
+    margin: 0 0 clamp(3rem, 8vw, 7rem);
+}
+
+.proposal-header {
+    display: grid;
+    grid-template-columns: minmax(16rem, 0.75fr) minmax(22rem, 1fr);
+    gap: 2rem;
+    align-items: end;
+    padding: 0 0 1rem;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.proposal-header h2 {
+    margin: 0.25rem 0 0;
+    font-size: clamp(1.5rem, 3vw, 2.75rem);
+    letter-spacing: -0.04em;
+}
+
+.proposal-header p {
+    max-width: 45rem;
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.proposal-shell-host {
+    padding: clamp(0.75rem, 2vw, 1.5rem);
+    background: var(--surface-panel);
+}
+
+.nrc-study-shell {
+    min-width: 54rem;
+    height: 38rem;
+    display: grid;
+    grid-template-rows: 2rem minmax(0, 1fr) 1.65rem;
+    overflow: hidden;
+    border: 1px solid var(--study-frame);
+    background: var(--study-bg);
+    color: var(--study-text);
+    box-shadow: 0 1.25rem 3rem rgb(0 0 0 / 28%);
+}
+
+.nrc-study-topbar,
+.nrc-study-shell footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0 0.65rem;
+    border-bottom: 1px solid var(--study-line);
+    background: var(--study-panel);
+    font: 500 0.62rem "IBM Plex Mono", monospace;
+    letter-spacing: 0.035em;
+}
+
+.nrc-study-topbar span,
+.nrc-study-shell footer {
+    color: var(--study-muted);
+}
+
+.nrc-study-shell footer {
+    border-top: 1px solid var(--study-line);
+    border-bottom: 0;
+}
+
+.nrc-study-workspace {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 12rem minmax(26rem, 1fr) 20rem;
+    gap: 0.4rem;
+    padding: 0.4rem;
+}
+
+.nrc-study-sidebar,
+.nrc-study-main,
+.nrc-study-inspector {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--study-line);
+    background: var(--study-panel);
+}
+
+.nrc-study-sidebar {
+    padding: 0.55rem;
+}
+
+.nrc-study-sidebar section {
+    padding: 0 0 0.6rem;
+    margin: 0 0 0.6rem;
+    border-bottom: 1px solid var(--study-line-soft);
+}
+
+.nrc-study-sidebar section:last-child {
+    border: 0;
+}
+
+.nrc-study-sidebar small,
+.nrc-study-section-title small {
+    display: block;
+    margin: 0 0 0.35rem;
+    color: var(--study-muted);
+    font: 700 0.56rem "IBM Plex Mono", monospace;
+    letter-spacing: 0.06em;
+}
+
+.nrc-study-sidebar button,
+.nrc-study-inspector-tabs button {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.34rem 0.4rem;
+    border: 0;
+    border-left: 2px solid transparent;
+    background: transparent;
+    color: var(--study-muted);
+    font: 600 0.64rem "IBM Plex Mono", monospace;
+    text-align: left;
+}
+
+.nrc-study-sidebar button:hover,
+.nrc-study-sidebar button.is-current,
+.nrc-study-sidebar button.is-active,
+.nrc-study-inspector-tabs button.is-active {
+    border-left-color: var(--study-accent);
+    background: var(--study-accent-soft);
+    color: var(--study-text);
+}
+
+.nrc-study-sidebar button i {
+    width: 0.4rem;
+    height: 0.4rem;
+    border: 1px solid var(--study-muted);
+}
+
+.nrc-study-sidebar button b,
+.nrc-study-sidebar button em {
+    margin-left: auto;
+    color: var(--study-accent);
+    font-style: normal;
+}
+
+.nrc-study-section-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.nrc-study-section-title small {
+    margin: 0;
+}
+
+.nrc-study-icon,
+.nrc-study-sidebar .nrc-study-icon {
+    width: 1.3rem;
+    min-width: 1.3rem;
+    height: 1.3rem;
+    padding: 0;
+    justify-content: center;
+    border: 1px solid var(--study-line);
+    background: var(--study-control);
+    color: var(--study-text);
+    text-align: center;
+}
+
+.nrc-study-main,
+.nrc-study-inspector {
+    background: var(--study-panel-2);
+}
+
+.nrc-study-view-header,
+.nrc-study-inspector > header {
+    border-bottom: 1px solid var(--study-line);
+    background: var(--study-panel);
+}
+
+.nrc-study-view-header > div,
+.nrc-study-inspector > header {
+    min-height: 2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0 0.55rem;
+}
+
+.nrc-study-view-header small,
+.nrc-study-inspector small,
+.nrc-study-view-header span,
+.nrc-study-view-header em {
+    color: var(--study-muted);
+    font: 500 0.55rem "IBM Plex Mono", monospace;
+    font-style: normal;
+}
+
+.nrc-study-view-header strong,
+.nrc-study-inspector strong {
+    font-size: 0.72rem;
+}
+
+.nrc-study-view-header span {
+    color: var(--study-accent);
+}
+
+.nrc-study-view-header em {
+    margin-left: auto;
+}
+
+.nrc-study-view-header nav {
+    min-height: 2.45rem;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.3rem;
+    border-top: 1px solid var(--study-line-soft);
+    overflow: hidden;
+}
+
+.nrc-study-view-header nav button,
+.nrc-study-view-header nav label {
+    min-width: 4.6rem;
+    height: 1.55rem;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0 0.4rem;
+    border: 1px solid var(--study-line);
+    background: var(--study-control);
+    color: var(--study-muted);
+    font: 500 0.52rem "IBM Plex Mono", monospace;
+    white-space: nowrap;
+}
+
+.nrc-study-view-header nav button b {
+    color: var(--study-text);
+}
+
+.nrc-study-view-header nav label {
+    min-width: 7rem;
+    flex: 1;
+}
+
+.nrc-study-view-header input {
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--study-text);
+    font: 600 0.58rem "IBM Plex Mono", monospace;
+}
+
+.nrc-study-table-head,
+.nrc-study-task {
+    display: grid;
+    grid-template-columns: 2.2rem 2.2rem minmax(12rem, 1fr) 6rem 4.6rem 4.8rem;
+    align-items: center;
+}
+
+.nrc-study-table-head {
+    min-height: 1.7rem;
+    padding: 0 0.5rem;
+    border-bottom: 1px solid var(--study-line);
+    color: var(--study-muted);
+    background: var(--study-control);
+    font: 600 0.52rem "IBM Plex Mono", monospace;
+}
+
+.nrc-study-task {
+    min-height: 2.25rem;
+    padding: 0 0.5rem;
+    border-bottom: 1px solid var(--study-line-soft);
+    color: var(--study-muted);
+    font: 500 0.6rem "IBM Plex Mono", monospace;
+}
+
+.nrc-study-task strong {
+    overflow: hidden;
+    color: var(--study-text);
+    font-family: Inter, sans-serif;
+    font-size: 0.68rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nrc-study-task.is-selected {
+    background: var(--study-accent-soft);
+    box-shadow: inset 2px 0 var(--study-accent);
+}
+
+.nrc-study-task .priority,
+.nrc-study-task .overdue {
+    color: var(--study-accent);
+}
+
+.nrc-study-empty {
+    padding: 0.75rem;
+    color: var(--study-muted);
+    font: 500 0.54rem "IBM Plex Mono", monospace;
+    text-align: center;
+}
+
+.nrc-study-inspector > header {
+    justify-content: flex-start;
+}
+
+.nrc-study-inspector > header span {
+    margin-left: auto;
+    color: var(--study-accent);
+    font: 600 0.55rem "IBM Plex Mono", monospace;
+}
+
+.nrc-study-inspector-tabs {
+    display: flex;
+    gap: 0.2rem;
+    padding: 0.3rem;
+    border-bottom: 1px solid var(--study-line-soft);
+}
+
+.nrc-study-inspector-tabs button {
+    width: auto;
+    min-height: 1.5rem;
+    flex: 1;
+    justify-content: center;
+    border: 1px solid var(--study-line);
+    background: var(--study-control);
+    font-size: 0.52rem;
+    text-align: center;
+}
+
+.nrc-study-inspector-tabs .nrc-study-icon {
+    flex: 0 0 1.5rem;
+}
+
+.nrc-study-inspector dl {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    margin: 0;
+    padding: 0.55rem;
+    gap: 1px;
+    background: var(--study-line-soft);
+}
+
+.nrc-study-inspector dl div {
+    padding: 0.45rem;
+    background: var(--study-panel-2);
+}
+
+.nrc-study-inspector dt,
+.nrc-study-inspector label {
+    color: var(--study-muted);
+    font: 600 0.52rem "IBM Plex Mono", monospace;
+}
+
+.nrc-study-inspector dd {
+    margin: 0.2rem 0 0;
+    color: var(--study-text);
+    font-size: 0.68rem;
+}
+
+.nrc-study-inspector > label {
+    display: block;
+    margin: 0.6rem;
+}
+
+.nrc-study-inspector > label input,
+.nrc-study-inspector > label textarea {
+    width: 100%;
+    margin-top: 0.25rem;
+    padding: 0.45rem;
+    border: 1px solid var(--study-line);
+    border-radius: 0;
+    outline: 0;
+    background: var(--study-control);
+    color: var(--study-text);
+    font: 500 0.66rem/1.4 Inter, sans-serif;
+}
+
+.nrc-study-inspector > label textarea {
+    min-height: 5rem;
+    resize: none;
+}
+
+.nrc-study-primary {
+    margin: 0 0.6rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--study-accent);
+    border-radius: 0;
+    background: var(--study-accent-soft);
+    color: var(--study-text);
+    font: 700 0.58rem "IBM Plex Mono", monospace;
+}
+
+.proposal-notes {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1px;
+    margin: 0;
+    padding: 0;
+    background: var(--border-light);
+    list-style: none;
+}
+
+.proposal-notes li {
+    min-height: 4.5rem;
+    padding: 0.9rem;
+    background: var(--surface-panel);
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    line-height: 1.45;
+}
+
+.proposal--layered {
+    --study-bg: color-mix(in srgb, var(--bg-primary) 92%, var(--text-primary));
+    --study-panel: color-mix(in srgb, var(--bg-primary) 97%, var(--text-primary));
+    --study-panel-2: color-mix(in srgb, var(--bg-primary) 94%, var(--text-primary));
+    --study-control: color-mix(in srgb, var(--bg-primary) 89%, var(--text-primary));
+}
+
+.proposal--layered .proposal-shell-host {
+    background: color-mix(in srgb, var(--bg-primary) 90%, #000000);
+}
+
+.proposal--layered .nrc-study-shell {
+    border-color: var(--study-frame);
+    box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 42%);
+}
+
+.proposal--layered .nrc-study-workspace {
+    gap: 0.6rem;
+    padding: 0.6rem;
+}
+
+.proposal--layered :is(.nrc-study-sidebar, .nrc-study-main, .nrc-study-inspector) {
+    border-color: var(--study-line-soft);
+    box-shadow: 0 0.25rem 1rem rgb(0 0 0 / 16%);
+}
+
+.proposal--layered .nrc-study-task {
+    min-height: 2.45rem;
+}
+
+.proposal--atmospheric {
+    --study-bg: color-mix(in srgb, var(--bg-primary) 96%, var(--accent-interactive));
+    --study-frame: var(--accent-interactive);
+    --study-panel: color-mix(in srgb, var(--bg-primary) 96%, transparent);
+    --study-panel-2: color-mix(in srgb, var(--bg-primary) 92%, var(--accent-interactive));
+    --study-control: color-mix(in srgb, var(--bg-primary) 87%, var(--accent-interactive));
+}
+
+.proposal--atmospheric .proposal-shell-host {
+    background:
+        radial-gradient(circle at 78% 18%, color-mix(in srgb, transparent 80%, var(--accent-interactive)), transparent 30%),
+        var(--bg-secondary);
+}
+
+.proposal--atmospheric .nrc-study-shell {
+    box-shadow: 0 0 0 1px color-mix(in srgb, transparent 88%, var(--accent-interactive)), 0 1.5rem 4rem rgb(0 0 0 / 42%);
+}
+
+.proposal--atmospheric .nrc-study-task.is-selected {
+    outline: 1px solid var(--study-accent);
+    outline-offset: -1px;
+    box-shadow: inset 2px 0 var(--study-accent), 0 0 0.75rem color-mix(in srgb, transparent 90%, var(--accent-interactive));
+}
+
+.study-recommendation {
+    max-width: 70rem;
+    margin: 2rem 0 0;
+    padding: clamp(1.5rem, 4vw, 3rem);
+    border: 1px solid var(--border-primary);
+    background: var(--surface-panel);
+}
+
+.study-recommendation h2 {
+    max-width: 58rem;
+    margin: 0.75rem 0;
+    font-size: clamp(1.5rem, 3.5vw, 3.2rem);
+    line-height: 1;
+    letter-spacing: -0.045em;
+}
+
+.study-recommendation p {
+    max-width: 52rem;
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+
+@media (max-width: 72rem) {
+    .proposal-shell-host {
+        overflow-x: auto;
+    }
+
+    .proposal-shell-host::before {
+        content: "HORIZONTAL STUDY CANVAS / SCROLL →";
+        position: sticky;
+        left: 0;
+        display: block;
+        width: max-content;
+        margin: 0 0 0.5rem;
+        color: var(--accent-interactive);
+        font: 700 0.58rem "IBM Plex Mono", monospace;
+        letter-spacing: 0.06em;
+    }
+
+    .nrc-study-shell {
+        transform-origin: top left;
+    }
+}
+
+@media (max-width: 48rem) {
+    .study-masthead,
+    .proposal-header,
+    .study-intro {
+        grid-template-columns: 1fr;
+        align-items: start;
+    }
+
+    .study-masthead {
+        flex-direction: column;
+    }
+
+    .study-actions {
+        width: 100%;
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .study-findings div,
+    .proposal-notes {
+        grid-template-columns: 1fr;
+    }
+
+    .proposal-header {
+        display: grid;
+    }
+}

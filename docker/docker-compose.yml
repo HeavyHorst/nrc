@@ -1,0 +1,202 @@
+services:
+  registry:
+    image: registry:3
+    profiles: ["registry"]
+    environment:
+      - REGISTRY_LOG_LEVEL=info
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - registry-data:/var/lib/registry
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  tailscale-proxy:
+    image: ${NRC_TAILSCALE_PROXY_IMAGE:-docker-tailscale-proxy:latest}
+    build:
+      context: ../services/auth/tailscale-proxy
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    ports:
+      - "41642:41642/udp"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - attachments:/data/files
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - NRC_JWT_SECRET=${NRC_JWT_SECRET:?Set NRC_JWT_SECRET in .env}
+      - NRC_BOT_SECRET=${NRC_BOT_SECRET:?Set NRC_BOT_SECRET in .env}
+    depends_on:
+      - nginx
+    restart: unless-stopped
+    networks:
+      - orion-network
+
+  websocket-server:
+    image: ${NRC_WEBSOCKET_IMAGE:-docker-websocket-server:latest}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: server -debug
+    env_file:
+      - ../.env
+    environment:
+      - NRC_JWT_SECRET=${NRC_JWT_SECRET:?Set NRC_JWT_SECRET in .env}
+      - NRC_BOT_SECRET=${NRC_BOT_SECRET:?Set NRC_BOT_SECRET in .env}
+    restart: unless-stopped
+    privileged: true
+    ulimits:
+      memlock:
+        soft: 104857600 # 100MB for io_uring registered buffers
+        hard: 104857600
+      nofile:
+        soft: 65536
+        hard: 65536
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - task-data:/app/data
+    networks:
+      - orion-network
+
+  attachment-gc:
+    image: ${NRC_WEBSOCKET_IMAGE:-docker-websocket-server:latest}
+    profiles: ["maintenance"]
+    user: "0:0"
+    command: ["server", "attachment-gc", "--attachments-dir", "/data/files"]
+    restart: "no"
+    volumes:
+      - task-data:/app/data
+      - attachments:/data/files
+
+  nginx:
+    build:
+      context: ..
+      dockerfile: docker/nginx/Dockerfile
+    # No external ports - accessed only via Tailscale proxy
+    depends_on:
+      websocket-server:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - orion-network
+
+  search:
+    image: ${NRC_SEARCH_IMAGE:-docker-search:latest}
+    profiles: ["search", "ai"]
+    build:
+      context: ..
+      dockerfile: services/bots/nrc-search/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      - NRC_SERVER=ws://websocket-server:8080
+      - NRC_BOT_SECRET=${NRC_BOT_SECRET:?Set NRC_BOT_SECRET in .env}
+      - SEARCH_PORT=8090
+      - MODEL_PATH=/app/models/model.onnx
+      - TOKENIZER_PATH=/app/models/tokenizer.json
+      - EMBED_ASSET_TYPES=1,2,4,5
+      - EMBED_TASKS=true
+      - RECONCILE_INTERVAL=15m
+      - DATA_DIR=/app/data
+    volumes:
+      - search-data:/app/data
+    depends_on:
+      - websocket-server
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - orion-network
+
+  ai:
+    image: ${NRC_AI_IMAGE:-docker-ai:latest}
+    profiles: ["ai"]
+    build:
+      context: ..
+      dockerfile: services/bots/nrc-ai/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      - NRC_SERVER=ws://websocket-server:8080
+      - NRC_BOT_SECRET=${NRC_BOT_SECRET:?Set NRC_BOT_SECRET in .env}
+      - NRC_NICKNAME=sullivan-ai
+      - AI_PORT=8091
+      - SEARCH_URL=http://search:8090
+    depends_on:
+      - websocket-server
+      - search
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - orion-network
+
+  metrics-bot:
+    image: ${NRC_METRICS_IMAGE:-docker-metrics-bot:latest}
+    profiles: ["metrics"]
+    build:
+      context: ..
+      dockerfile: services/bots/nrc-metrics/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      - NRC_SERVER=ws://websocket-server:8080
+      - NRC_BOT_SECRET=${NRC_BOT_SECRET:?Set NRC_BOT_SECRET in .env}
+      - NRC_NICKNAME=nrc-metrics
+      - METRICS_PORT=8092
+      - PING_INTERVAL=5s
+      - READ_TIMEOUT=60s
+      # Thread-targeted mode bootstraps total_threads from S_StatsResponse and generates
+      # deterministic workspace IDs per target thread bucket (no room probing).
+      - NRC_METRICS_WORKSPACE_MODE=${NRC_METRICS_WORKSPACE_MODE:-thread-targeted}
+      - NRC_METRICS_WORKSPACE_PREFIX=${NRC_METRICS_WORKSPACE_PREFIX:-metrics-thread}
+      - NRC_METRICS_TARGET_THREADS=${NRC_METRICS_TARGET_THREADS:-all}
+      - NRC_METRICS_EXPECT_THREADS=${NRC_METRICS_EXPECT_THREADS:-all}
+      - NRC_METRICS_BOOTSTRAP_WORKSPACE=${NRC_METRICS_BOOTSTRAP_WORKSPACE:-metrics-bootstrap}
+      - NRC_METRICS_BOOTSTRAP_TIMEOUT=${NRC_METRICS_BOOTSTRAP_TIMEOUT:-20s}
+      # Static fallback mode (NRC_METRICS_WORKSPACE_MODE=static)
+      - NRC_WORKSPACES=${NRC_METRICS_WORKSPACES:-metrics-a,metrics-b,metrics-c,metrics-d}
+    depends_on:
+      - websocket-server
+    ports:
+      - "${NRC_METRICS_BIND_ADDRESS:-0.0.0.0}:${NRC_METRICS_HOST_PORT:-8092}:8092"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8092/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - orion-network
+
+volumes:
+  tailscale-state:
+  task-data:
+  attachments:
+  search-data:
+  registry-data:
+
+networks:
+  orion-network:
+    driver: bridge

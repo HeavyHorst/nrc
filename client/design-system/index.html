@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="lupine">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NRC Design System / UI-Katalog</title>
+    <link rel="icon" type="image/svg+xml" href="../favicon.svg">
+    <link rel="stylesheet" href="../css/main.css?v=20261002docs1">
+    <link rel="stylesheet" href="../css/custom-select.css?v=20260926nesting1">
+    <link rel="stylesheet" href="catalog.css?v=20260923attention1">
+</head>
+<body>
+    <header class="catalog-masthead">
+        <div class="catalog-kicker">NRC-300 / INTERFACE STANDARD</div>
+        <div class="catalog-title-row">
+            <div>
+                <h1>NRC DESIGN SYSTEM</h1>
+                <p>Produktive Tokens, UI-Elemente und Anwendungsmuster des Web-Clients.</p>
+            </div>
+            <div class="catalog-actions">
+                <span class="catalog-release">DS / 2026.08</span>
+                <button class="btn" id="themeToggle" type="button">NEXT: MATTE-BLACK</button>
+                <a class="btn" href="modernization.html">MODERNIZATION STUDY ↗</a>
+                <a class="btn" href="calendar.html">CALENDAR / ATTENTION STUDY ↗</a>
+                <a class="btn btn--primary" href="../index.html">OPEN TERMINAL ↗</a>
+            </div>
+        </div>
+        <dl class="catalog-metrics">
+            <div><dt>UI-FAMILIEN</dt><dd>33</dd></div>
+            <div><dt>THEMES</dt><dd>24</dd></div>
+            <div><dt>CORNER RADIUS</dt><dd>0</dd></div>
+            <div><dt>SOURCE OF TRUTH</dt><dd>css/main.css</dd></div>
+        </dl>
+    </header>
+
+    <div class="catalog-layout">
+        <nav class="catalog-nav" aria-label="Katalogbereiche">
+            <div class="catalog-nav-label">INDEX</div>
+            <a href="#principles">00 / PRINCIPLES</a>
+            <a href="#foundations">01 / FOUNDATIONS</a>
+            <a href="#actions">02 / ACTIONS</a>
+            <a href="#forms">03 / FORMS</a>
+            <a href="#navigation">04 / NAVIGATION</a>
+            <a href="#status">05 / STATUS</a>
+            <a href="#data">06 / DATA DISPLAY</a>
+            <a href="#feedback">07 / FEEDBACK</a>
+            <a href="#content">08 / CONTENT</a>
+            <a href="#inventory">09 / INVENTORY</a>
+            <div class="catalog-nav-note">Alle Muster verwenden die produktiven Klassen und Tokens. Katalog-spezifisches CSS ist mit <code>catalog-</code> präfixiert.</div>
+        </nav>
+
+        <main class="catalog-main">
+            <section class="catalog-section" id="principles">
+                <header class="catalog-section-header">
+                    <span>00</span><h2>PRINCIPLES</h2><span>FUNCTION BEFORE ORNAMENT</span>
+                </header>
+                <div class="catalog-principles">
+                    <article><b>01</b><h3>STATUS ANZEIGEN</h3><p>Verbindungsstatus, Filter und Anzahl stehen bei den zugehörigen Daten und Bedienelementen.</p></article>
+                    <article><b>02</b><h3>DATEN VERGLEICHEN</h3><p>Kompakte Tabellen und Listen halten zusammengehörige Werte nebeneinander.</p></article>
+                    <article><b>03</b><h3>ANSICHTEN GLIEDERN</h3><p>Rahmen und Abschnittsüberschriften trennen Listen, Detailansichten und Aktionen.</p></article>
+                    <article><b>04</b><h3>NATIVE CONTROLS</h3><p>Native HTML-Controls und Systemschrift-Fallbacks halten die Oberfläche ohne zusätzliche UI-Bibliothek nutzbar.</p></article>
+                </div>
+            </section>
+
+            <section class="catalog-section" id="foundations">
+                <header class="catalog-section-header">
+                    <span>01</span><h2>FOUNDATIONS</h2><span>TOKENS / NRC + OMARCHY</span>
+                </header>
+                <div class="catalog-subsection" id="border-roles">
+                    <div class="catalog-subhead"><h3>LINE ROLES</h3><code>structure / sections / actions / data</code></div>
+                    <div class="catalog-grid-2">
+                        <div>
+                            <div class="sidebar-section">
+                                <div class="sidebar-section-label">ACTIONS / SOLID + OFFSET</div>
+                                <div class="catalog-demo-row">
+                                    <button class="btn" type="button">SAVE</button>
+                                    <button class="btn btn--danger" type="button">DELETE</button>
+                                    <button class="btn" type="button" disabled>DISABLED</button>
+                                    <input class="filter-input" aria-label="Border example input" placeholder="FLAT INPUT">
+                                </div>
+                            </div>
+                            <div class="sidebar-section">
+                                <div class="sidebar-section-label">SECTION / DOT PATTERN</div>
+                                <p class="catalog-usage">Punktmuster trennen Gruppen in Sidebar und Inspector. Keine Muster zwischen einzelnen Datenzeilen.</p>
+                            </div>
+                        </div>
+                        <aside class="ledger-context inspector">
+                            <div class="ledger-context-section">
+                                <div class="ledger-context-label">WORKSPACE / DOUBLE LINE</div>
+                                <a class="note-share-attachment-row" href="#content"><span>PDF</span><span>Interface specification</span><span>24 KB</span></a>
+                                <a class="note-share-attachment-row" href="#content"><span>TXT</span><span>Review notes</span><span>2 KB</span></a>
+                            </div>
+                        </aside>
+                    </div>
+                    <hr>
+                    <p class="catalog-usage"><b>CONTRACT</b> Doppellinien sind für starke Arbeitsbereichsgrenzen verfügbar; der permanente Inspector verwendet eine dezente einfache Linie. Punktmuster und gestrichelte HR trennen Abschnitte. Listen verwenden leise horizontale Linien statt zusätzlicher Kästen. Aktionsbuttons haben eine harte 1px-Offset-Kante, die beim Drücken verschwindet; deaktivierte Buttons, Inputs und zusammenhängende Tabs bleiben flach. Tastaturfokus erhält eine separate Outline. Alle Farben folgen dem Theme.</p>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>SEMANTIC COLOR</h3><code>:root / [data-theme]</code></div>
+                    <div class="catalog-swatches" id="colorSwatches">
+                        <div data-token="--bg-primary"><i></i><b>BG PRIMARY</b><code></code></div>
+                        <div data-token="--bg-secondary"><i></i><b>BG SECONDARY</b><code></code></div>
+                        <div data-token="--text-primary"><i></i><b>TEXT PRIMARY</b><code></code></div>
+                        <div data-token="--text-dim"><i></i><b>TEXT DIM</b><code></code></div>
+                        <div data-token="--link-text"><i></i><b>LINK TEXT</b><code></code></div>
+                        <div data-token="--border-primary"><i></i><b>BORDER PRIMARY</b><code></code></div>
+                        <div data-token="--accent-interactive"><i></i><b>INTERACTIVE</b><code></code></div>
+                        <div data-token="--accent-current"><i></i><b>CURRENT / DANGER</b><code></code></div>
+                        <div data-token="--accent-selected"><i></i><b>SELECTED / PRIORITY</b><code></code></div>
+                        <div data-token="--accent-success"><i></i><b>SUCCESS</b><code></code></div>
+                        <div data-token="--identity-scope"><i></i><b>SCOPE IDENTITY</b><code></code></div>
+                        <div data-token="--identity-actor"><i></i><b>ACTOR IDENTITY</b><code></code></div>
+                        <div data-token="--identity-reference"><i></i><b>ENTITY REFERENCE</b><code></code></div>
+                        <div data-token="--identity-artifact"><i></i><b>ARTIFACT TYPE</b><code></code></div>
+                        <div data-token="--on-danger"><i></i><b>ON DANGER</b><code></code></div>
+                        <div data-token="--on-priority"><i></i><b>ON PRIORITY</b><code></code></div>
+                        <div data-token="--selected-row-accent"><i></i><b>SELECTED ROW ACCENT</b><code></code></div>
+                        <div data-token="--selected-row-bg"><i></i><b>SELECTED ROW</b><code></code></div>
+                    </div>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>IDENTITY SYNTAX</h3><code>content roles, never literal hues</code></div>
+                    <p class="catalog-usage"><b>CONTRACT</b> Identity color works like restrained syntax highlighting: it makes repeated metadata scannable without competing with titles, selection, status or actions. Components consume purpose-based tokens only. Each theme maps those roles onto its own Omarchy palette and may mix a palette color with the foreground when contrast requires it.</p>
+                    <div class="catalog-overflow">
+                        <table class="catalog-inventory-table">
+                            <thead><tr><th>ROLE</th><th>TOKEN</th><th>EXAMPLE</th><th>USE</th><th>PALETTE SOURCE</th></tr></thead>
+                            <tbody>
+                                <tr><td>SCOPE</td><td><code>--identity-scope</code></td><td><span class="identity-scope">NRC-300</span></td><td>Project, workspace and room identity</td><td>Theme cyan / blue role</td></tr>
+                                <tr><td>ACTOR</td><td><code>--identity-actor</code></td><td><span class="identity-actor">RENE</span></td><td>Creator, assignee, sender and provenance</td><td>Theme magenta / purple role</td></tr>
+                                <tr><td>REFERENCE</td><td><code>--identity-reference</code></td><td><span class="identity-reference">TASK #184</span></td><td>Task and note IDs, inline references and linked entity types</td><td>Theme interactive accent</td></tr>
+                                <tr><td>ARTIFACT</td><td><code>--identity-artifact</code></td><td><span class="note-share-attachment-type">PDF</span></td><td>Compact file-type labels; filenames stay primary and sizes stay dim</td><td>Theme yellow / artifact role</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="catalog-usage"><b>PRECEDENCE</b> These roles identify content; they do not communicate action, status, priority or danger. Never select a literal cyan, magenta or yellow in a component. Selected rows replace identity colors with <code>--selected-row-text</code> so selection remains the dominant state.</p>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>RELATIONSHIP SYNTAX</h3><code>linked entities share one contract</code></div>
+                    <div class="catalog-overflow">
+                        <table class="catalog-inventory-table">
+                            <thead><tr><th>RELATION</th><th>TOKEN</th><th>TEXT EXAMPLE</th><th>CONTRACT</th></tr></thead>
+                            <tbody>
+                                <tr><td>REFERENCES</td><td><code>--graph-edge-reference</code></td><td><span class="note-link-relation" data-relation="1">REFERENCES →</span></td><td>Reference relation and verb</td></tr>
+                                <tr><td>RELATED-TO</td><td><code>--graph-edge-related</code></td><td><span class="note-link-relation" data-relation="2">RELATED-TO →</span></td><td>Peer relationship and verb</td></tr>
+                                <tr><td>DEPENDS-ON</td><td><code>--graph-edge-dependency</code></td><td><span class="note-link-relation" data-relation="3">DEPENDS-ON →</span></td><td>Dependency relation and verb</td></tr>
+                                <tr><td>BLOCKS</td><td><code>--graph-edge-blocking</code></td><td><span class="note-link-relation" data-relation="4">BLOCKS →</span></td><td>Blocking relation and verb</td></tr>
+                                <tr><td>DERIVED-FROM</td><td><code>--graph-edge-derived</code></td><td><span class="note-link-relation" data-relation="5">DERIVED-FROM ←</span></td><td>Derivation relation and verb</td></tr>
+                                <tr><td>SUPERSEDES</td><td><code>--graph-edge-superseding</code></td><td><span class="note-link-relation" data-relation="6">SUPERSEDES →</span></td><td>Superseding relation and verb</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="catalog-usage"><b>RULE</b> A relation must use the same purpose token in note links, task links and shared-note links. Arrow direction remains dim structural metadata; the verb carries relationship identity.</p>
+                </div>
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>TYPE SCALE</h3><code>Inter</code></div>
+                        <div class="catalog-type-scale">
+                            <p style="font-size:var(--font-xxs)"><code>--font-xxs / 0.50rem</code> SYSTEM MICRO LABEL</p>
+                            <p style="font-size:var(--font-xs)"><code>--font-xs / 0.5625rem</code> METADATA AND CONTROL</p>
+                            <p style="font-size:var(--font-sm)"><code>--font-sm / 0.6875rem</code> PANEL TITLE AND LABEL</p>
+                            <p style="font-size:var(--font-base)"><code>--font-base / 0.75rem</code> PRIMARY CONTENT</p>
+                            <p style="font-size:var(--font-lg)"><code>--font-lg / 0.875rem</code> HEADING AND EMPHASIS</p>
+                        </div>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>MONOSPACE / MARKDOWN SOURCE</h3><code>pre &gt; code</code></div>
+                        <div class="agenda-preview"><pre class="catalog-mono-sample"><code><span>09:42:17</span> <b>SYSTEM</b> CONNECTION ESTABLISHED
+<span>ULID</span> 01K1T79T98X63KQFBZG3G83NQZ
+<span>ADDR</span> ws://localhost:8080
+<span>CODE</span> 0123456789 / ABCDEFGHIJKLMNOPQRSTUVWXYZ</code></pre></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="catalog-section" id="actions">
+                <header class="catalog-section-header"><span>02</span><h2>ACTIONS</h2><span>BUTTONS / TABS</span></header>
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>BUTTONS</h3><code>.btn</code></div>
+                        <div class="catalog-demo-row">
+                            <button class="btn" type="button">DEFAULT</button>
+                            <button class="btn btn--primary" type="button">PRIMARY</button>
+                            <button class="btn btn--secondary" type="button">SECONDARY</button>
+                            <button class="btn btn--ghost" type="button">GHOST</button>
+                            <button class="btn btn--danger" type="button">DANGER</button>
+                            <button class="btn btn--icon" type="button" aria-label="Add">+</button>
+                            <button class="btn btn--danger btn--icon" type="button" aria-label="Clear">×</button>
+                            <button class="btn active" type="button">ACTIVE</button>
+                            <button class="btn" type="button" disabled>DISABLED</button>
+                        </div>
+                        <div class="catalog-demo-row">
+                            <button class="btn btn--row" type="button">ROW</button>
+                            <button class="btn btn--row btn--danger" type="button">ROW DANGER</button>
+                            <button class="btn btn--row" type="button" disabled>ROW DISABLED</button>
+                        </div>
+                        <p class="catalog-usage"><b>RULE</b> Jede gewöhnliche Aktion verwendet <code>.btn</code> aus der zentralen Button-Familie. Modifier ändern nur die Semantik: eine Primäraktion pro Bereich, Secondary für nachrangige Aktionen, Ghost für sichere Ausstiege und Danger nur für destruktive oder abbrechende Aktionen. Die Rolle entscheidet über den Modifier: <b>Anlegen</b> einer neuen Entität trägt die eine Primäraktion des Registers (<code>header-create-action</code>, zum Beispiel <code>+ TASK</code>, <code>+ SLICE</code>, <code>+ NOTE</code>); <b>Zuordnen</b> einer bestehenden Entität ist eine gewöhnliche Aktion (<code>.btn</code>, zum Beispiel <code>+ ASSIGN TASK</code>, <code>+ ASSIGN NOTE</code>, <code>+ LINK</code>, <code>LINK COMPANY</code>, <code>+ LINK EXISTING</code>) — ebenso das <b>Lösen</b> einer Zuordnung, weil beide Entitäten bestehen bleiben (<code>UNASSIGN</code>, <code>UNLINK</code>); Danger bleibt Datenverlust, Abbrüchen und dem Abschluss eines Records vorbehalten (<code>DELETE</code>, <code>STOP</code>, <code>CLOSE SLICE</code>). <b>WIEDERHOLUNG</b> Eine <b>Zeilen-Aktion</b> (<code>btn--row</code>) ist die eine Ausnahme von der Fläche: sie steht einmal pro Tabellenzeile, wo ein Kasten pro Zeile zur Textur wird und der Datenspalte den Platz nimmt. Sie bleibt als Beschriftung in <code>--text-dim</code> sichtbar — nicht versteckt — und holt sich den Akzent erst bei eigenem Hover oder Tastaturfokus; die Zeile selbst behält ihren eigenen Hover-Zustand aus dem Listen-Vertrag; eine destruktive Zeilen-Aktion trägt zusätzlich <code>btn--danger</code> und zeigt ihre Bedeutung im Hover statt als roten Kasten in jeder Zeile. Sie erscheint in den Slice-Member-Tabellen, der Firmen-Tabelle eines Kontakts, den Anhang- und Link-Zeilen und in der Chat-Zeile. Feature-CSS darf Position und Größe, aber nicht Rahmen, Fläche, Schatten oder Interaktionszustände neu definieren.</p>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>SEGMENTED TABS</h3><code>.tab-group .nav-tab</code></div>
+                        <div class="catalog-tab-band">
+                            <div class="tab-group catalog-tabs" role="group" aria-label="Component example views">
+                                <button class="btn nav-tab active" type="button" aria-pressed="true"><span>OVERVIEW</span></button>
+                                <button class="btn nav-tab" type="button" aria-pressed="false"><span>COMMENTS</span></button>
+                                <button class="btn nav-tab" type="button" aria-pressed="false"><span>LINKS</span></button>
+                                <button class="btn nav-tab" type="button" aria-pressed="false"><span>FILES</span><b class="tab-count">3</b></button>
+                            </div>
+                        </div>
+                        <p class="catalog-usage"><b>RULE</b> Alle horizontalen Tabs (DEPTH, Reminder-Filter, DETAIL/COMMENTS und NOTE/TASK) verwenden denselben Produktionsstil: Die Gruppe füllt das Band, das sie hält — Segmente in voller Bandhöhe, ohne eigenes Zellenlabel im Inspector. Die Segmente stoßen ohne Abstand aneinander und ziehen eine gemeinsame 1px-Grundlinie unter der Gruppe; das gewählte Segment ersetzt sie durch eine 3px-Akzentlinie. Eine Zahl steht in einem eigenen <code>.tab-count</code>-Slot mit fester Mindestbreite, damit eine zweite Ziffer in reservierten Platz wächst statt die Gruppe und die folgenden Bedienelemente zu verschieben. Keine Segmentrahmen, transparente Grundfläche, gemeinsame Typografie, identischer Hover- (Fläche ohne Rahmen) und Fokuszustand (2px innen). Container dürfen nur die Breite verteilen. Die vertikale Sidebar-Navigation ist eine eigene Komponente.</p>
+                        <div class="note-link-picker-types" role="group" aria-label="Link target type">
+                            <button class="btn note-link-picker-type active" type="button" data-type="1">NOTE</button>
+                            <button class="btn note-link-picker-type" type="button" data-type="2">TASK</button>
+                        </div>
+                        <div class="note-link-picker">
+                            <div class="note-link-picker-header"><span class="note-link-picker-fixed-relation">references</span><span class="note-link-picker-fixed-type">NOTE</span></div>
+                            <input class="note-link-picker-search" type="text" placeholder="SEARCH..." aria-label="Link target search example">
+                            <div class="note-link-picker-list"><div class="note-link-picker-item highlighted"><span class="note-link-picker-item-id">#40</span><span class="note-link-picker-item-title">Interface specification</span></div><div class="note-link-picker-item"><span class="note-link-picker-item-id">#51</span><span class="note-link-picker-item-title">Architecture decision</span></div></div>
+                            <div class="note-link-picker-footer"><span role="status">50 / 84 LOADED</span><button class="btn note-link-picker-more" type="button">MORE</button></div>
+                        </div>
+                        <p class="catalog-usage"><b>LINK PICKER</b> NOTE, TASK und FILE verwenden dieselbe serverseitig paginierte Auswahl. Suche und Auswahl arbeiten auf den geladenen Seiten; MORE lädt die nächste Seite. Escape oder Klick außerhalb schließt den verankerten Picker. <b>COMPONENT</b> <code>&lt;nrc-link-picker&gt;</code> verwendet Light DOM und die Produktionsklassen dieses Beispiels. <code>picker.open({ anchor, sourceType, sourceEntity, kinds, relation, onSelect })</code> öffnet die Auswahl; <code>onSelect(item, relation, isCancelled)</code> führt die gewünschte Aktion aus und kann ein Promise liefern. Asynchrone Aktionen prüfen <code>isCancelled()</code> vor weiteren Requests und UI-Aktualisierungen; bereits gesendete Schreibzugriffe werden nicht zurückgenommen. Jede Instanz besitzt ihren Zustand. Nur ein Picker ist gleichzeitig offen; Entfernen des Hosts räumt auch seine Portale auf.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section class="catalog-section" id="forms">
+                <header class="catalog-section-header"><span>03</span><h2>FORMS</h2><span>INPUT / SELECT / CHECK</span></header>
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>FILTER CONTROLS</h3><code>.filter-*</code></div>
+                        <div class="catalog-form-grid">
+                            <label><span class="filter-label">SEARCH</span><input class="filter-input" type="search" placeholder="SEARCH TASKS..."></label>
+                            <label><span class="filter-label">STATUS</span><nrc-select><select class="filter-select"><option>ALL</option><option>IN PROGRESS</option><option>DONE</option></select></nrc-select></label>
+                            <label><span class="filter-label">FLAGS</span><nrc-select><select class="filter-select"><option>ALL</option><option>BLOCKED</option><option>OVERDUE</option><option>BLOCKED + OVERDUE</option></select></nrc-select></label>
+                            <span class="filter-result-count">18 / 401 RESULTS</span>
+                        </div>
+                        <p class="catalog-usage"><b>SELECT LIFECYCLE</b> <code>&lt;nrc-select&gt;&lt;select&gt;…&lt;/select&gt;&lt;/nrc-select&gt;</code> owns the existing picker and portal in Light DOM, with no extra wrapper. The native select keeps its id, name, options, value and change events. Value, selectedIndex, disabled, option mutations and form reset synchronize the trigger. Removing the host releases listeners, observers and portals; reinserting it mounts once with the current native value. Dynamic editors need no init/refresh/destroy calls. Existing static <code>data-custom-select</code> fields are wrapped on startup.</p>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>INSPECTOR EDIT FIELDS</h3><code>.detail-edit-*</code></div>
+                        <div class="task-detail-panel-editable catalog-detail-form">
+                            <div class="detail-edit-form task-detail-edit-form record-document">
+                                <div class="task-detail-doc-title">Catalogue all UI elements <nrc-inline-field><button class="inline-field-value" type="button">RENAME</button></nrc-inline-field></div>
+                                <div class="detail-read-register">
+                                    <nrc-inline-field><span class="inline-field-label">STATUS</span><button class="inline-field-value" type="button">IN PROGRESS</button></nrc-inline-field>
+                                    <nrc-inline-field><span class="inline-field-label">PRIORITY</span><button class="inline-field-value" type="button">129</button></nrc-inline-field>
+                                    <nrc-inline-field><span class="inline-field-label">PROJECT</span><button class="inline-field-value" type="button">nrc/client</button></nrc-inline-field>
+                                    <nrc-inline-field><span class="inline-field-label">ASSIGNEE</span><button class="inline-field-value" type="button">anna</button></nrc-inline-field>
+                                </div>
+                                <section class="detail-edit-section">
+                                    <div class="task-detail-row task-detail-row-desc detail-edit-field detail-edit-field--content"><div class="detail-edit-label-row"><span class="task-detail-field-stats">75 / 2,048 BYTES</span></div><div class="task-detail-desc-container"><textarea class="task-detail-textarea" aria-label="Description">Keep the inventory explicit, dense and connected to production CSS.</textarea></div></div>
+                                </section>
+                            </div>
+                        </div>
+                        <p class="catalog-usage"><b>STABLE DOCUMENT</b> Notes and Tasks keep title, compact property grid, content and resource registers in the same order in read and edit. The title preserves its casing. EDIT becomes SAVE / CANCEL in the fixed header; only content and note format belong to that draft. Metadata keeps its independent inline-save contract. Resources retain their disclosure state across modes, and links open by default. The document scrolls as one surface; short content does not push resources to the bottom. Property grids collapse to one column on phones. Customer editors retain their grouped field sections.</p>
+                    </div>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>COMMAND RAIL COMPOSER</h3><code>.input-controls / .task-comment-input-area</code></div>
+                    <div class="catalog-grid-2">
+                        <div class="input-panel">
+                            <div class="input-controls">
+                                <label class="input-container">
+                                    <textarea class="composer-input" rows="2" aria-label="Message composer example"></textarea>
+                                </label>
+                                <div class="composer-meta"><button class="btn" type="button" title="Send files (up to 100 MB each)">+ FILE</button><span><b>ENTER</b> SEND</span><span><b>SHIFT+ENTER</b> NEW LINE</span><span class="composer-byte-count">0 B / 51,200 B</span></div>
+                                <button class="btn composer-send" type="button">SEND ↵</button>
+                            </div>
+                        </div>
+                        <div class="task-comment-input-area">
+                            <label class="task-comment-input-container">
+                                <textarea class="task-comment-input" rows="2" aria-label="Comment composer example"></textarea>
+                            </label>
+                            <div class="task-comment-composer-meta"><span><b>ENTER</b> SEND</span><span class="task-comment-byte-count">0 B / 65,535 B</span></div>
+                            <button class="btn task-comment-send" type="button">SEND ↵</button>
+                        </div>
+                    </div>
+                    <p class="catalog-usage"><b>CONTRACT</b> Chat and comments use a full-width multiline field above a compact footer with keyboard hints, byte-limit state and a neutral SEND ↵ button at right. Touch controls retain a 44px target. Over-limit drafts remain visible and cannot be submitted.</p>
+                </div>
+            </section>
+
+            <section class="catalog-section" id="navigation">
+                <header class="catalog-section-header"><span>04</span><h2>NAVIGATION</h2><span>HEADER / LOCAL CONTEXT</span></header>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>MOBILE WORKSPACE</h3><code>.mobile-mast / .mobile-bottom</code></div>
+                    <p class="catalog-usage"><b>≤768PX</b> One surface at a time: room identity and connection state above, Chat / Tasks / Notes / More below. The existing room and DM lists become a full-screen, focus-contained switcher. More exposes all other views; it does not remove capabilities. These production examples appear at phone width.</p>
+                    <p class="catalog-usage"><b>PHONE TYPE</b> Shared sizes live in <code>css/foundation.css</code>: <code>--mobile-font-xs</code> (10px metadata), <code>--mobile-font-sm</code> (11px labels), <code>--mobile-font-base</code> (14px controls), <code>--mobile-font-lg</code> (16px inputs and room title). Fixed CSS pixels preserve the phone scale independently of desktop root-size scaling; inputs retain the 16px mobile Safari focus-zoom floor.</p>
+                    <header class="mobile-mast mobile-only"><button class="mobile-room" type="button" aria-label="Room switcher example"><strong>ENGINEERING</strong><span aria-hidden="true">⌄</span></button><span class="mobile-connection" role="status">ONLINE</span></header>
+                    <nav class="mobile-bottom mobile-only" aria-label="Mobile navigation example"><button type="button" aria-current="page">CHAT <span>3</span></button><button type="button">TASKS</button><button type="button">NOTES</button><button type="button">MORE</button></nav>
+                    <div class="mobile-inspector-navigation mobile-only"><button class="btn" type="button">← BACK</button><span>INSPECTOR</span></div>
+                    <div class="task-filter-bar panel-header header-register filter-register mobile-only" id="catalogMobileTaskHeader">
+                        <div class="header-register-identity-row"><span class="header-text header-register-title">TASKS</span><span class="filter-result-count header-register-state">3 RESULTS</span><button class="btn header-operation mobile-only" type="button" data-mobile-filters aria-expanded="false" aria-controls="catalogMobileFilters">FILTERS</button></div>
+                        <div class="task-filter-group header-register-control-row" id="catalogMobileFilters">
+                            <div class="header-control-scroll">
+                                <label class="header-filter-cell mobile-only"><span class="filter-label">SORT</span><select aria-label="Mobile task sort example"><option>PRIORITY</option><option>TITLE</option></select></label>
+                                <button class="btn header-operation mobile-only" type="button">DESCENDING ↓</button>
+                                <div class="filter-group filter-group-search header-filter-cell"><label class="filter-label" for="catalogMobileQuery">QUERY</label><input id="catalogMobileQuery" class="filter-input" type="text" placeholder="SEARCH..."></div>
+                                <div class="filter-group header-filter-cell task-flags-filter"><label class="filter-label" for="catalogMobileFlags">FLAGS</label><select id="catalogMobileFlags" class="filter-select" data-custom-select><option>ALL</option><option>BLOCKED</option><option>OVERDUE</option><option>BLOCKED + OVERDUE</option></select></div>
+                            </div>
+                            <button class="btn btn--primary header-operation header-register-control header-create-action" type="button">+ TASK</button>
+                        </div>
+                    </div>
+                    <p class="catalog-usage"><b>SECONDARY CONTROLS</b> Tools reveals chat search and notifications. Query and the explicit creation action stay visible when Filters is collapsed; Filters reveals the other task/note controls in a scrollable two-column grid. Query cells reuse <code>.filter-group-search</code> / <code>.notes-query-cell</code>, not app-specific IDs. Task sorting remains available without table headings. More → Commands exposes room/workspace actions and settings without keyboard shortcuts.</p>
+                    <p class="catalog-usage"><b>CONTRACT</b> Inspectors cover the viewport and retain the underlying view, draft, and scroll position. Back respects dirty-edit confirmation; Save retains authoritative SAVING / SAVED / FAILED states. Compact task rows show title, status, priority, and assignee; remaining metadata stays in details. Touch Enter inserts a newline; Send is explicit. Drafts and quote context are volatile and isolated by workspace, room, and chat/AI mode.</p>
+                </div>
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection catalog-panel-demo inspector">
+                        <div class="catalog-subhead"><h3>INSPECTOR HEADER</h3><code>identity row / mode row</code></div>
+                        <p class="catalog-usage"><b>VISIBILITY</b> Tasks (including slices), notes, customers, reminders, attention and calendar use the full workspace until a record is inspected. Closing the last record hides the rail again. Chat and Sullivan retain their context; the system log shows selected-event details.</p>
+                        <div class="catalog-resizable-panel">
+                            <div class="agenda-resize-handle" role="separator" aria-label="Resize Inspector" tabindex="0"></div>
+                            <div class="panel-header inspector-matrix-header">
+                                <div class="inspector-identity-row"><span class="header-text identity-reference">TASK #184</span><span class="inspector-cell-label">STATE</span><span class="detail-save-state" data-save-state="SAVING">SAVING</span></div>
+                                <div class="inspector-mode-row"><button class="btn header-operation inspector-back inspector-matrix-control" type="button" aria-label="Return to previous inspected object"><span>BACK</span></button><button class="btn header-operation inspector-matrix-control" data-inspector-command="v" type="button"><span>VIEW</span></button><button class="btn header-operation task-detail-close inspector-matrix-control" data-inspector-command="escape" type="button" aria-label="Close"><span>CLOSE</span><b aria-hidden="true">×</b></button></div>
+                            </div>
+                            <div class="catalog-panel-body">
+                                <p><b>ONE ROW</b> — Eine Verantwortungsebene: Scope beziehungsweise Identität und die direkt darauf wirkenden globalen Aktionen. Einfache Chat- und Ausgabeheader bleiben einzeilig.</p>
+                                <p><b>TWO ROWS</b> — Zwei unabhängige Ebenen: stabile Objektidentität plus Systemzustand im 20px-Band mit 10px-Schrift oben; lokale Modi, Navigation und Objektaktionen in unveränderter Höhe unten. Das schmale Metadatenband gilt auch für den Inspector.</p>
+                                <p><b>NO RESPONSIVE WRAP</b> — Platzmangel erzeugt nie semantisch eine zweite Zeile. Auf kleinen Viewports werden Controls kompakter oder die mobile Panel-Komposition verwendet.</p>
+                                <p><b>KEYS FOLLOW CELLS</b> — <code>E</code>, <code>V</code>, <code>S</code> und <code>G</code> lösen nur sichtbare Operationen aus; <code>M</code> öffnet den Nachrichtenblock eines Datensatzes und den Composer, <code>1</code>/<code>2</code> wählen Modi, wo es noch Modusgruppen gibt; <code>ESC</code> klappt den Nachrichtenblock ein, dann folgt Moduswechsel oder Schließen. Die Matrix greift nie mit Modifikatoren oder in editierbaren Feldern ein.</p>
+                                <p>Der linke Trenner ist verstellbar, die Desktop-Breite bleibt lokal persistent und der Inspector wird auf mobilen Viewports zur sicheren Vollbreite.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>SIDEBAR NAVIGATION</h3><code>.room-item / .sidebar-nav-item</code></div>
+                        <div class="catalog-sidebar-stage">
+                            <aside class="app-sidebar catalog-sidebar-demo" aria-label="View switcher example">
+                                <nav class="sidebar-section sidebar-section--rooms" aria-label="Chats">
+                                    <div class="sidebar-section-label">CHATS</div>
+                                    <div id="roomList">
+                                        <div class="btn nav-tab room-item" data-room="2" style="--room-accent: var(--room-color-0)">ENGINEERING</div>
+                                        <div class="btn nav-tab room-item has-activity" data-room="3" style="--room-accent: var(--room-color-1)">OPERATIONS<span class="sidebar-unread-count" aria-label="3 unread messages">03</span></div>
+                                        <div class="btn nav-tab room-item" data-room="4" style="--room-accent: var(--room-color-2)">RELEASE</div>
+                                    </div>
+                                </nav>
+                                <nav class="sidebar-section" aria-label="Workspace views">
+                                    <div class="sidebar-section-label">VIEWS / <span id="sidebarViewRoomName">WORKSPACE</span></div>
+                                    <div class="sidebar-nav view-tabs">
+                                        <div class="sidebar-nav" role="group" aria-labelledby="workViewsLabel">
+                                            <div id="workViewsLabel" class="sidebar-section-label">WORK</div>
+                                            <button id="tasksBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">TASKS</button>
+                                            <button id="remindersBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">REMINDERS</button>
+                                        </div>
+                                        <div class="sidebar-nav" role="group" aria-labelledby="knowledgeViewsLabel">
+                                            <div id="knowledgeViewsLabel" class="sidebar-section-label">KNOWLEDGE</div>
+                                            <button id="notesBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">NOTES</button>
+                                            <button id="customersBtn" class="btn nav-tab sidebar-nav-item active" type="button" aria-pressed="true">CUSTOMERS</button>
+                                        </div>
+                                        <div class="sidebar-nav" role="group" aria-labelledby="toolsViewsLabel">
+                                            <div id="toolsViewsLabel" class="sidebar-section-label">TOOLS</div>
+                                            <button id="sullivanBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">
+                                                <span>SULLIVAN</span>
+                                            </button>
+                                            <button id="systemLogBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">SYSTEM LOG</button>
+                                        </div>
+                                    </div>
+                                </nav>
+                            </aside>
+                        </div>
+                        <p class="catalog-usage"><b>ROOM IDENTITY</b> Each room receives a stable, theme-aware icon color derived from its numeric ID. Color identifies the room without replacing explicit names or the shared selected-state contract. <b>UNREAD</b> The current conversation exposes an exact, right-aligned message count on CHAT. Activity uses the priority accent, remains numeric rather than becoming a decorative bubble, and clears only when Chat is opened.</p>
+                    </div>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>HEADER REGISTER FAMILY</h3><code>.header-register / identity / control / filter cells</code></div>
+                    <div class="catalog-header-register-stack">
+                        <div class="panel-header header-register filter-register">
+                            <div class="header-register-identity-row"><span class="header-register-title">CUSTOMERS</span><span class="header-register-state" role="status">12 CUSTOMERS</span></div>
+                            <div class="header-register-control-row">
+                                <label class="header-filter-cell"><span class="filter-label">COMPANY / CONTACT</span><input type="search" class="filter-input" placeholder="NAME, CUSTOMER NO., CONTACT…"></label>
+                                <div class="header-filter-cell header-filter-toggle"><label class="filter-checkbox-label"><input class="filter-checkbox" type="checkbox"><span>INCLUDE ARCHIVED</span></label></div>
+                                <button class="btn header-operation header-register-control">REFRESH</button><button class="btn btn--primary header-operation header-register-control header-create-action">+ COMPANY</button>
+                            </div>
+                        </div>
+                        <div class="chat-header panel-header header-register metadata-header-register">
+                            <div class="header-register-identity-row"><span class="chat-header-title header-register-title">MESSAGES</span><button class="btn header-operation header-register-control" type="button">INSPECT</button><span class="chat-header-right"><span class="chat-keyboard-readout">↑/↓ NAV · HOME/END · ESC CHAT</span><span class="chat-meta header-register-readout"><small>MSG / LAST</small><span>002 / 22:00:17</span></span></span></div>
+                            <div class="header-register-control-row"><div class="header-filter-cell chat-search-cell"><label for="catalogChatSearch">QUERY</label><input id="catalogChatSearch" class="filter-input" type="search" placeholder="SEARCH LOADED CHAT..."><button class="btn header-operation btn--icon" type="button" aria-label="Clear chat search" title="Clear search">×</button></div><div class="header-filter-cell"><label for="catalogChatNotify">NOTIFY</label><select id="catalogChatNotify" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto"><option>ALL</option><option>@ ONLY</option><option>OFF</option></select></div></div>
+                        </div>
+                        <div class="chat-header panel-header header-register metadata-header-register">
+                            <div class="header-register-identity-row"><span class="chat-header-title header-register-title">SULLIVAN / AI WORKBENCH</span><button class="btn header-operation header-register-control" type="button">INSPECT</button><span class="chat-header-right"><span class="chat-keyboard-readout">↑/↓ NAV · HOME/END · ESC CHAT</span><span class="chat-meta header-register-readout"><small>MSG / LAST</small><span>000 / --:--:--</span></span></span></div>
+                            <div class="chat-header-ai header-register-control-row"><div class="header-filter-cell ask-context-chip"><label class="filter-label" for="catalogAskContext">CONTEXT</label><select id="catalogAskContext" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-search-placeholder="FILTER CONTEXT..."><option>ENGINEERING</option><option>GENERAL</option></select></div><button class="btn btn--primary header-operation header-register-control header-create-action" type="button">+ SESSION</button><button class="btn header-operation header-register-control" type="button">CLEAR VIEW</button><button class="btn header-operation header-register-control" type="button">SHARE</button></div>
+                        </div>
+                        <div class="chat-header panel-header header-register metadata-header-register">
+                            <div class="header-register-identity-row"><span class="chat-header-title header-register-title">SYSTEM</span><button class="btn header-operation header-register-control" type="button">INSPECT</button><span class="chat-header-right"><span class="chat-meta header-register-readout"><small>EVENTS / LAST</small><span>024 / 22:00:17</span></span></span></div>
+                            <div class="header-register-control-row system-log-register"><div class="header-filter-cell system-log-search-cell"><label for="catalogLogQuery">QUERY</label><input id="catalogLogQuery" class="filter-input" type="search" placeholder="SEARCH..."></div><div class="header-filter-cell"><label for="catalogLogLevel">LEVEL</label><select id="catalogLogLevel" class="filter-select" data-custom-select data-custom-select-portal><option>ALL</option></select></div><div class="header-filter-cell"><label for="catalogLogSource">SOURCE</label><select id="catalogLogSource" class="filter-select" data-custom-select data-custom-select-portal><option>ALL</option></select></div><button class="btn header-operation header-register-control" type="button">FOLLOW</button><button class="btn header-operation header-register-control" type="button">RESET</button></div>
+                        </div>
+                        <div class="notes-header panel-header header-register filter-register">
+                            <div class="header-register-identity-row"><span class="header-text header-register-title">NOTES</span><span class="header-count header-register-state">25 RESULTS</span></div>
+                            <div class="notes-header-filters header-register-control-row"><div class="header-control-scroll"><label class="header-filter-cell notes-query-cell"><span class="filter-label">QUERY</span><input class="filter-input notes-search-input" placeholder="SEARCH..."></label><div class="header-filter-cell"><label class="filter-label" for="catalogNotesProject">PROJECT</label><select id="catalogNotesProject" class="filter-select" data-custom-select data-custom-select-portal><option>ALL</option></select></div><div class="header-filter-cell"><label class="filter-label" for="catalogNotesTag">TAG</label><select id="catalogNotesTag" class="filter-select" data-custom-select data-custom-select-portal><option>ALL TAGS</option></select></div></div><button class="btn btn--primary header-operation header-register-control header-create-action" type="button">+ NOTE</button></div>
+                        </div>
+                        <div class="task-filter-bar panel-header header-register filter-register">
+                            <div class="header-register-identity-row"><span class="header-text header-register-title">TASKS</span><span class="filter-result-count header-register-state">128 RESULTS</span><span class="header-register-alerts"><span class="header-register-alert">BLOCKED <b>03</b></span><span class="header-register-alert header-register-alert--danger">OVERDUE <b>01</b></span></span></div>
+                            <div class="task-filter-group header-register-control-row"><div class="header-control-scroll"><div class="filter-group filter-group-search header-filter-cell"><label class="filter-label">QUERY</label><input class="filter-input" placeholder="SEARCH..."></div><div class="filter-group header-filter-cell"><label class="filter-label" for="catalogTaskStatus">STATUS</label><select id="catalogTaskStatus" class="filter-select" data-custom-select data-custom-select-portal><option>ALL</option><option selected>OPEN</option><option>DONE</option></select></div><div class="filter-group header-filter-cell"><label class="filter-label" for="catalogTaskAssignee">ASSIGNEE</label><select id="catalogTaskAssignee" class="filter-select" data-custom-select data-custom-select-portal><option>ALL</option></select></div><div class="filter-group header-filter-cell"><label class="filter-label" for="catalogTaskCategory">CATEGORY</label><select id="catalogTaskCategory" class="filter-select" data-custom-select data-custom-select-portal><option>ALL</option></select></div><div class="filter-group header-filter-cell"><label class="filter-label" for="catalogTaskProject">PROJECT</label><select id="catalogTaskProject" class="filter-select" data-custom-select data-custom-select-portal><option>ALL</option></select></div><div class="filter-group header-filter-cell task-flags-filter"><label class="filter-label" for="catalogTaskFlags">FLAGS</label><select id="catalogTaskFlags" class="filter-select" data-custom-select data-custom-select-portal><option>ALL</option><option>BLOCKED</option><option>OVERDUE</option><option>BLOCKED + OVERDUE</option></select></div></div><button class="btn header-operation header-register-control" type="button">RESET</button><button class="btn btn--primary header-operation header-register-control header-create-action" type="button">+ TASK</button></div>
+                        </div>
+                        <div class="task-filter-bar panel-header header-register filter-register task-grouping-slices">
+                            <div class="header-register-identity-row"><span class="header-text header-register-title">SLICES</span><span class="filter-result-count header-register-state">3 / 6 SLICES / 8 OPEN</span><span class="header-register-alerts"><span class="header-register-alert">BLOCKED <b>02</b></span><span class="header-register-alert header-register-alert--danger">OVERDUE <b>00</b></span></span></div>
+                            <div class="task-filter-group header-register-control-row"><div class="header-control-scroll"><div class="header-filter-cell task-grouping-cell"><span class="filter-label">GROUP</span><div class="tab-group" role="group" aria-label="Task grouping"><button class="btn nav-tab active" type="button" aria-pressed="true">SLICES</button><button class="btn nav-tab" type="button" aria-pressed="false">FLAT LIST</button></div></div><div class="filter-group filter-group-search header-filter-cell"><label class="filter-label" for="catalogSliceQuery">QUERY</label><input id="catalogSliceQuery" class="filter-input" placeholder="SEARCH..."></div><div class="filter-group header-filter-cell"><label class="filter-label" for="catalogSliceOwnerFilter">OWNER</label><select id="catalogSliceOwnerFilter" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area" data-custom-select-search data-custom-select-search-placeholder="FILTER OWNER..."><option>ALL</option><option selected>MY SLICES</option><option>UNASSIGNED</option><option>ANKE</option></select></div><div class="header-filter-cell header-filter-toggle"><label class="filter-checkbox-label"><input class="filter-checkbox" type="checkbox"><span>INCLUDE CLOSED</span></label></div></div><button class="btn header-operation header-register-control" type="button">RESET</button><button class="btn btn--primary header-operation header-register-control header-create-action" type="button">+ TASK</button></div>
+                        </div>
+                        <div class="panel-header header-register filter-register">
+                            <div class="header-register-identity-row"><span class="header-text header-register-title">ATTENTION</span><span class="header-count header-register-state">3 ITEMS · BY REASON</span><span class="header-register-alerts"><span class="header-register-alert">MINE <b>2</b></span><span class="header-register-alert">BLOCKED <b>0</b></span><span class="header-register-alert header-register-alert--danger">OVERDUE <b>1</b></span></span></div>
+                            <div class="header-register-control-row">
+                                <div class="header-filter-cell"><span class="filter-label">SHOW</span><div class="tab-group" role="group" aria-label="Attention kind filter"><button class="btn nav-tab active" type="button" aria-pressed="true"><span>ALL</span><b class="tab-count">3</b></button><button class="btn nav-tab" type="button" aria-pressed="false"><span>TASKS</span><b class="tab-count">2</b></button><button class="btn nav-tab" type="button" aria-pressed="false"><span>REMINDERS</span><b class="tab-count">1</b></button><button class="btn nav-tab" type="button" aria-pressed="false"><span>MESSAGES</span><b class="tab-count">0</b></button></div></div>
+                                <div class="header-filter-cell"><label class="filter-label" for="catalogReminderNotify">NOTIFY</label><select id="catalogReminderNotify" class="filter-select" data-custom-select data-custom-select-portal><option>ALL</option><option>OFF</option></select></div>
+                            </div>
+                        </div>
+                        <div class="attention-body catalog-attention-body">
+                            <div class="attention-list-header"><span class="attention-marker"></span><span>KIND</span><span>TITLE</span><span>DETAIL</span><span>STATE</span><span>AGE</span></div>
+                            <section class="attention-group" aria-labelledby="catalog-attention-overdue">
+                            <h3 class="attention-group-heading" id="catalog-attention-overdue">OVERDUE / MY WORK<span>1 ITEM</span></h3>
+                            <div class="attention-row" data-kind="task"><span class="attention-marker" aria-hidden="true">›</span><span class="note-link-kind">TASK</span><button type="button" class="task-row-open attention-title">Rotate S3 key (prod)</button><span class="attention-context">DUE 2026-09-19</span><span class="attention-state attention-state--danger">OVERDUE</span><span class="attention-age">3D</span></div>
+                            </section>
+                            <section class="attention-group" aria-labelledby="catalog-attention-unblocks">
+                            <h3 class="attention-group-heading" id="catalog-attention-unblocks">UNBLOCKS / MY WORK<span>1 ITEM</span></h3>
+                            <div class="attention-row" data-kind="task"><span class="attention-marker" aria-hidden="true">›</span><span class="note-link-kind">TASK</span><button type="button" class="task-row-open attention-title">Confirm rollout approval</button><span class="attention-context"><button type="button" class="task-row-open attention-context-text" aria-expanded="false" aria-controls="catalog-dependents" onclick="const list = document.getElementById('catalog-dependents'); list.hidden = !list.hidden; this.setAttribute('aria-expanded', String(!list.hidden)); this.textContent = (list.hidden ? '▸' : '▾') + ' UNBLOCKS 2 TASKS'">▸ UNBLOCKS 2 TASKS</button></span><span class="attention-state attention-state--priority">UNBLOCKS</span><span class="attention-age">2H</span></div>
+                            <div id="catalog-dependents" class="attention-dependents" hidden><div><button class="btn btn--row" type="button">#413 · Ship search index · rene</button><button class="btn btn--row" type="button">#414 · Publish rollout notice · alex</button></div></div>
+                            </section>
+                            <section class="attention-group" aria-labelledby="catalog-attention-reminder">
+                            <h3 class="attention-group-heading" id="catalog-attention-reminder">DUE REMINDERS / WORKSPACE<span>1 ITEM</span></h3>
+                            <div class="attention-row" data-kind="reminder"><span class="attention-marker" aria-hidden="true">›</span><span class="note-link-kind">REMINDER</span><button type="button" class="task-row-open attention-title">Rotate customer contract draft</button><span class="attention-context">DUE 2026-09-23</span><span class="attention-state attention-state--priority">DUE</span><span class="attention-age">2H</span></div>
+                            </section>
+                        </div>
+                        <div class="panel-header reminder-queue-header header-register filter-register">
+                            <div class="header-register-identity-row"><span class="header-text header-register-title">REMINDERS</span><span class="header-count header-register-state">7 RESULTS</span></div>
+                            <div class="reminder-header-controls header-register-control-row">
+                                <div class="header-filter-cell"><span class="filter-label">SHOW</span><div class="tab-group" role="group" aria-label="Reminder deadline filter"><button class="btn nav-tab active" type="button" aria-pressed="true"><span>ALL</span><b class="tab-count">7</b></button><button class="btn nav-tab" type="button" aria-pressed="false"><span>TODAY</span><b class="tab-count">2</b></button><button class="btn nav-tab" type="button" aria-pressed="false"><span>UPCOMING</span><b class="tab-count">4</b></button><button class="btn nav-tab" type="button" aria-pressed="false"><span>OVERDUE</span><b class="tab-count">3</b></button></div></div>
+                                <div class="header-filter-cell header-filter-toggle"><label class="filter-checkbox-label"><input class="filter-checkbox" type="checkbox"><span>HIDE LOCKED</span></label></div><button class="btn btn--primary header-operation reminder-create-btn header-register-control header-create-action" type="button">+ REMINDER</button>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="catalog-usage"><b>CONTRACT</b> Registers use a uniform 20px metadata band with 10px text above compact, flat controls. Filter and instrument registers apply this automatically; all chat views use <code>.metadata-header-register</code>. Chat keyboard hints and readouts remain in this compact band, with inline statistics. Output headers remain one full-height row; inspector identity rows use the same 20px band above mode/action rows. Creation-capable workspaces expose one explicit, right-aligned, filled <code>header-create-action</code>; chat and system output do not invent redundant creation operations. <b>ACTIONS</b> Ordinary operations use one-line verbs without synthetic OP numbers. <b>WIDTH</b> QUERY is first, presents its label beside a bounded input, and takes the flexible remaining width. Desktop dropdowns read as one-line <code>LABEL: VALUE</code> registers in every filter register, and every control keeps its own bounded surface: search its field, dropdowns their trigger, toggles and operations their button. Register cells draw no divider between one another, so the header never reads as a table of columns. Dropdowns have bounded widths; toggles, mode groups and actions fit their labels. <b>GROUPING</b> The task register's GROUP toggle swaps the flat-list parameter cells for the slice filters in the same row, and the cells stay direct children of the scrolling control row so one register contract covers both: QUERY narrows by slice name, OWNER by whose work stream a row is (<code>ALL</code> / <code>MY SLICES</code> / <code>UNASSIGNED</code> / one owner), and INCLUDE CLOSED decides whether closed slices are listed. Every slice filter is the server's, the way the task query filters tasks: the page that arrives is already the filtered one, and the register asks for the next page as the reader reaches the end of the drawn rows. A register that has drawn part of its listing reads <code>N / M SLICES</code> — like the task table's <code>N / M RESULTS</code> — and its matching count alone once all of it is drawn, and a filter that matches nothing says so instead of reading as an empty workspace. Without a search field, spare space separates left-aligned modes/context from right-aligned operations. Inspector BACK stays beside VIEW, with one flexible gap after the tabs. Desktop controls remain a single row and scroll horizontally rather than wrapping. Mobile task filters expand into a bounded, vertically scrolling two-column form: query plus creation remain available when collapsed; expanded filters use 44px controls, the combined FLAGS select, and plain action labels without OP/MODE annotations.</p>
+                </div>
+            </section>
+
+            <section class="catalog-section" id="status">
+                <header class="catalog-section-header"><span>05</span><h2>STATUS</h2><span>BADGES / SYSTEM STATE</span></header>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>CALENDAR / WHEN</h3><code>.calendar-row / .calendar-grid</code></div>
+                    <div class="calendar-context">WHEN · OPEN TASKS, APPOINTMENTS &amp; REMINDER DEADLINES · Europe/Berlin</div>
+                    <div class="calendar-row calendar-column-header"><span class="note-link-kind">KIND</span><span class="calendar-title">TITLE</span><span class="calendar-time">TIME</span><span class="calendar-owner">ASSIGNEE</span><span class="calendar-project">PROJECT</span><span class="calendar-state">STATE</span></div>
+                    <section class="calendar-day-list" aria-label="September 26, 2026">
+                        <h3 class="attention-group-heading">Sat, Sep 26, 2026 / TODAY<span>3 ITEMS</span></h3>
+                        <div class="calendar-row"><span class="note-link-kind">TASK</span><button type="button" class="task-row-open">Ship customer workspace</button><time datetime="2026-09-26T08:00:00Z">10:00</time><span class="calendar-owner">rene</span><span class="calendar-project">NRC</span><span class="calendar-state">BLOCKED</span></div>
+                        <div class="calendar-row"><span class="note-link-kind">REMINDER</span><button type="button" class="task-row-open">Contract renewal</button><time datetime="2026-09-26T12:30:00Z">14:30</time><span class="calendar-owner">—</span><span class="calendar-project">—</span><span class="calendar-state"></span></div>
+                        <div class="calendar-row"><span class="note-link-kind">APPOINTMENT</span><button type="button" class="task-row-open">Design review</button><time datetime="2026-09-26T13:00:00Z">15:00–16:00</time><span class="calendar-owner">rene</span><span class="calendar-project">NRC</span><span class="calendar-state"></span></div>
+                    </section>
+                    <div class="calendar-grid" aria-label="Date cell states">
+                        <button type="button" class="calendar-date calendar-outside" aria-pressed="false"><b>31</b><small>OUTSIDE</small></button>
+                        <button type="button" class="calendar-date" aria-pressed="true" aria-current="date"><b>26</b><span class="calendar-preview">Ship customer workspace</span><span class="calendar-preview">Contract renewal</span><small>2 ITEMS</small></button>
+                        <button type="button" class="calendar-date" aria-pressed="false"><b>27</b><small></small></button>
+                    </div>
+                    <p class="catalog-usage"><b>CONTRACT</b> Calendar answers WHEN, not WHY. Agenda and Monday-first month dates include blocked and other-assignee work, but exclude Done and undated tasks. Times use the viewer's named timezone. Shared searchable Assignee/project selects intersect and exclude reminders; MY TASKS resolves to the current identity. Selecting a date shows every record below the grid; the whole record row opens the shared inspector, with the title remaining a keyboard button. Mobile dates show counts rather than clipped titles. Calendar content and filters remain hidden until all range-summary pages and workspace-wide filter metadata finish loading. Agenda queries the local month; Month includes spillover days. The inspector fetches full records on demand. Offline and failed reads are explicit. Task-list assignee choices include all indexed assignees, even outside the current filter or chat presence.</p>
+                </div>
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>PRESENCE</h3><code>.dm-status</code></div>
+                        <div class="catalog-status-list">
+                            <span><i class="dm-status online"></i> ONLINE</span>
+                            <span><i class="dm-status connecting"></i> CONNECTING</span>
+                            <span><i class="dm-status offline"></i> OFFLINE</span>
+                        </div>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>TASK SEMANTICS</h3><code>.status-badge / .color-badge</code></div>
+                        <table class="task-table catalog-badge-table"><tbody><tr>
+                            <td><button type="button" class="status-badge task-row-status status-backlog" aria-haspopup="listbox" aria-expanded="false">BACKLOG</button></td>
+                            <td><button type="button" class="status-badge task-row-status status-todo" aria-haspopup="listbox" aria-expanded="false">TODO</button></td>
+                            <td><button type="button" class="status-badge task-row-status status-inprogress" aria-haspopup="listbox" aria-expanded="false">IN PROGRESS</button></td>
+                            <td><button type="button" class="status-badge task-row-status status-done" aria-haspopup="listbox" aria-expanded="false">DONE</button></td>
+                        </tr><tr>
+                            <td><span class="color-badge color-cyan">ACTIVE</span></td>
+                            <td><span class="color-badge color-red">BLOCKED</span></td>
+                            <td><span class="color-badge color-green">READY</span></td>
+                            <td><span class="color-badge color-gold">TEST</span></td>
+                        </tr></tbody></table>
+                    </div>
+                </div>
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>DETAIL SAVE LIFECYCLE</h3><code>.detail-save-state</code></div>
+                        <div class="catalog-save-states" aria-label="Authoritative save states">
+                            <span class="detail-save-state" data-save-state="UNSAVED">UNSAVED</span>
+                            <span class="detail-save-state" data-save-state="SAVING">SAVING</span>
+                            <span class="detail-save-state" data-save-state="SAVED">SAVED</span>
+                            <span class="detail-save-state" data-save-state="FAILED">FAILED</span>
+                        </div>
+                        <p class="catalog-usage"><b>FLOW</b> EDIT → UNSAVED → SAVING → SAVED / FAILED. Nur bestätigte Serverantworten setzen SAVED; Task-Statuswechsel warten auf UPDATE und MOVE. Neuere Entwürfe verwerfen alte Callbacks. Ausstehende/fehlgeschlagene Uploads blockieren SAVE, Offline- oder unbestätigte Requests enden in FAILED.</p>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>SEMANTIC SEPARATION</h3><code>selection / activity / presence / error</code></div>
+                        <div class="catalog-semantic-states">
+                            <span class="catalog-selected-state">● SELECTED</span>
+                            <span><i class="dm-unread-badge"></i> UNREAD / ACTIVITY</span>
+                            <span><i class="dm-status online"></i> ONLINE</span>
+                            <span><i class="dm-status offline"></i> OFFLINE</span>
+                            <span class="catalog-error-state">■ ERROR</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="catalog-subsection catalog-footer-contract">
+                    <div class="catalog-subhead"><h3>STATUS FOOTER</h3><code>connection + network health</code></div>
+                    <div class="status-footer">
+                        <div class="status-footer-left"><span class="status-footer-connection connected">ONLINE</span><span class="status-footer-separator">|</span><span class="status-footer-network" aria-label="Connection statistics"><span class="status-footer-metric status-footer-metric--latency" title="Current WebSocket round-trip time"><span class="status-footer-label">RTT</span> <span class="status-footer-value">24ms</span></span><span class="status-footer-metric status-footer-metric--rate" title="WebSocket receive and transmit rates"><span class="status-footer-label">↓</span> <span class="status-footer-value">1 KB/s</span> <span class="status-footer-label">↑</span> <span class="status-footer-value">320 B/s</span></span><span class="status-footer-metric status-footer-metric--uptime" title="Current connection uptime"><span class="status-footer-label">UP</span> <span class="status-footer-value">01:42:08</span></span></span></div>
+                        <div class="status-footer-right"><span class="status-footer-label">THEME</span><span class="status-footer-value" data-catalog-theme-status>LUPINE</span><span class="status-footer-separator">|</span><span class="status-footer-label">BUILD</span><span class="status-footer-value">DEV</span><span class="status-footer-separator">|</span><span class="status-footer-label">PROTOCOL</span><span class="status-footer-value">V4</span></div>
+                    </div>
+                    <p class="catalog-usage"><b>CONTRACT</b> The footer is read-only telemetry: connection state, current round-trip time, transport activity and connection uptime. RTT changes to priority above 100ms and danger above 250ms. Narrow layouts progressively retain only connection state and RTT. SYSTEM LOG is a peer application view in the sidebar; events, presence changes and participant lists remain there or in their owning surfaces.</p>
+                </div>
+            </section>
+
+            <section class="catalog-section" id="data">
+                <header class="catalog-section-header"><span>06</span><h2>DATA DISPLAY</h2><span>TABLE / LIST / LOG</span></header>
+                <div class="catalog-subsection" id="pageLoaders">
+                    <div class="catalog-subhead"><h3>PAGE LOADER</h3><code>&lt;nrc-page-loader&gt;</code></div>
+                    <nrc-page-loader data-example="ready"></nrc-page-loader>
+                    <nrc-page-loader data-example="loading"></nrc-page-loader>
+                    <nrc-page-loader data-example="error"></nrc-page-loader>
+                    <p class="catalog-usage"><b>CONTRACT</b> Light DOM, shared buttons and status. <code>setState({ hasMore, loading, error, disabled, active, root, label })</code> updates the paging UI. The component requests another page through <code>nrc:load-more</code> when the button approaches the scroll boundary or is activated. The owner immediately publishes loading state and later success or error. Errors stop automatic loading and expose RETRY; exhausted lists hide the control. Hidden, inactive and disconnected loaders do not request pages. Disconnecting releases the observer. Requests, cursors, filters, stale-response guards, rows and virtual scrolling remain with the owner. The examples display fixed states without a data source.</p>
+                </div>
+                <p class="catalog-usage"><b>ROW STATES</b> Tasks, notes, reminders, customers, contacts, slice members and system-log rows share the state rules in <code>css/main.css</code>. Selection uses a tinted background and a 3px left accent; hover never replaces selection. Keyboard focus adds a 1px inset outline around the whole row, including when its title button has focus. Customer activity rows share hover and focus but have no persistent selection.</p>
+                <p class="catalog-usage"><b>ROW DIVIDERS</b> Entity registers share the divider rules in <code>css/main.css</code>: 1px in <code>--border-list</code>, below rows or above contacts and slice members. Task rows own the divider in both table and compact grid layouts. Entity and responsive styles only set geometry; do not redeclare divider appearance there. Headers retain their stronger rules, file sections omit the final divider, and virtual spacers remain borderless. System-log rows remain unruled.</p>
+                <p class="catalog-usage"><b>LONG LISTS</b> Task and Note lists above 100 loaded results mount only the viewport plus overscan. Arrow navigation follows the complete filtered order, including offscreen rows. Note pagination remains at the loaded boundary. Measured row heights support wrapping and column resizing; focused controls and a dragged Task remain mounted until focus or drag ends. Task drag near the viewport edge auto-scrolls. The row appearance and selection contract below also apply to virtual rows.</p>
+                <p class="catalog-usage"><b>WORKSPACE DATA</b> Rooms organize chats only. Tasks, notes, customers, files and graph links use one workspace scope. Changing chat rooms preserves entity selection, edits, filters and loaded pages; opening an entity link preserves the active chat. Entity links need no room. Task and note activity appears in SYSTEM LOG, not a synthetic chat room.</p>
+                <p class="catalog-usage"><b>TASK QUERIES</b> Filters and sorting apply server-side before pagination. OPEN is the default and excludes DONE; ALL includes every task status. The result counter shows loaded / matching results, and scrolling near the loaded boundary extends the same ordered query automatically. Filter and sort changes restart paging; chat room changes do not. Live task changes refresh the query. QUERY FAILED exposes failures without implying an empty result. Text search retains its separate top-100 ranked results. Project choices include unloaded tasks.</p>
+                <div class="catalog-subsection catalog-overflow">
+                    <div class="catalog-subhead"><h3>TASK TABLE</h3><code>.task-table</code></div>
+                    <p class="catalog-usage"><b>ENTITY REGISTERS / A</b> Tasks, Notes und Reminder teilen Zeilenabstände, sichtbare Trennlinien und Hover. Auswahl wird wie bei Kunden und Kontakten durch Hintergrund und farbige linke Kante angezeigt, ohne Pfeil oder reservierte Auswahlspalte. Desktop-Zeilen sind mindestens 34px hoch. ID: standardmäßig 48px, linksbündig einschließlich Überschrift und vergrößerbar. Unter 700px verfügbarer Registerbreite wechseln Tasks und Notes in ein zweizeiliges Desktop-Register: ID und Titel oben, ausgerichtete operative Metadaten unten. Der Wechsel folgt der vom Inspector verbleibenden Breite, nicht der Viewportbreite. DELETE gehört ausschließlich in den Detailbereich. Mobile Task-/Note-Kompositionen bleiben erhalten.</p>
+                    <table class="task-table" data-column-resize-ready="true">
+                        <thead><tr><th class="col-marker"></th><th class="col-id">ID<span class="column-resize-handle" role="separator" aria-label="Resize ID column" title="Drag to resize. Double-click or press Home to reset all columns." tabindex="0"></span></th><th class="col-priority sorted-desc">PRI<span class="column-resize-handle" role="separator" aria-label="Resize priority column" title="Drag to resize. Double-click or press Home to reset all columns." tabindex="0"></span></th><th class="col-title">TITLE<span class="column-resize-handle" role="separator" aria-label="Resize title column" title="Drag to resize. Double-click or press Home to reset all columns." tabindex="0"></span></th><th>STATUS</th><th class="col-assignee">ASN</th><th class="col-project">PROJECT</th><th>DUE</th><th>CAT</th><th>AGE</th></tr></thead>
+                        <tbody>
+                            <tr class="task-row-selected"><td class="col-marker">›</td><td class="col-id">184</td><td class="col-priority priority-high">240</td><td class="col-title">Create canonical UI inventory</td><td><button type="button" class="status-badge task-row-status status-inprogress" aria-haspopup="listbox" aria-expanded="false" aria-label="Status IN PROGRESS — change status">IN PROGRESS</button></td><td class="col-assignee">RENE</td><td class="col-project">NRC-300</td><td>03 AUG</td><td><span class="color-badge color-cyan">ACTIVE</span></td><td class="col-age">2H</td></tr>
+                            <tr><td class="col-marker"></td><td class="col-id">179</td><td class="col-priority priority-medium">160</td><td class="col-title">Normalize overlay behavior</td><td><button type="button" class="status-badge task-row-status status-todo" aria-haspopup="listbox" aria-expanded="false" aria-label="Status TODO — change status">TODO</button></td><td class="col-assignee">OPERATOR</td><td class="col-project">CLIENT</td><td class="col-due overdue">01 AUG</td><td><span class="color-badge color-red">BLOCKED</span></td><td class="col-age">3D</td></tr>
+                            <tr><td class="col-marker"></td><td class="col-id">161</td><td class="col-priority priority-low">064</td><td class="col-title">Document keyboard navigation</td><td><button type="button" class="status-badge task-row-status status-done" aria-haspopup="listbox" aria-expanded="false" aria-label="Status DONE — change status">DONE</button></td><td class="col-assignee">MIRA</td><td class="col-project">DOCS</td><td>—</td><td><span class="color-badge color-green">READY</span></td><td class="col-age">12D</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p class="catalog-usage"><b>STATUS IN PLACE</b> The status a task register draws is the control that changes it: the token reads exactly as it always has, and pressing it opens the statuses in place, so a task is re-statused without opening it and without entering edit mode. The menu is the shared picker the detail panel's STATUS field opens, built when it is opened rather than with the row, so a register of a thousand tasks carries a thousand tokens and no dropdowns. The write is the board's own move rather than a second mutation path, and the register asks for the end of the column it enters instead of naming a position: a register holds one page of a column, so the server folds the position and answers with it, exactly as it derives completed_at and completed_by from the transition for a drag. A redraw takes the menu whose token it rebuilds with it, and a table redrawn elsewhere leaves it alone; an outside press and Escape close it, and Escape gives the token its focus back. The row carries the focus outline, like every other opener inside a row. The flat register and a slice's member table draw the same token and the same menu, so one task reads its status the same in both.</p>
+                <div class="catalog-subsection" id="reminder-table-example">
+                    <div class="catalog-subhead"><h3>REMINDER TABLE</h3><code>.reminder-row / .reminder-list-header</code></div>
+                    <div class="reminder-queue-body">
+                        <div class="reminder-list-header"><span class="reminder-marker"></span><span>ID<span class="column-resize-handle" role="separator" aria-label="Resize ID column" title="Drag to resize. Double-click or press Home to reset all columns." tabindex="0"></span></span><span>TITLE</span><span>STATE</span><span>WINDOW START</span><span>DEADLINE</span><span>LINKED NOTE</span></div>
+                        <div class="reminder-row reminder-row-selected"><span class="reminder-marker" aria-hidden="true">›</span><span class="reminder-id">37</span><button type="button" class="task-row-open reminder-title" aria-current="true">UI-Review vorbereiten</button><span class="reminder-state reminder-state-urgent">URGENT</span><span class="reminder-time">13 SEP 09:00</span><span class="reminder-time">13 SEP 17:00</span><span class="reminder-note">#91 · Interface principles</span></div>
+                        <div class="reminder-row"><span class="reminder-marker" aria-hidden="true"></span><span class="reminder-id">34</span><button type="button" class="task-row-open reminder-title">Dokumentation gegenlesen</button><span class="reminder-state reminder-state-open">OPEN</span><span class="reminder-time">13 SEP 08:00</span><span class="reminder-time">16 SEP 12:00</span><span class="reminder-note">—</span></div>
+                        <div class="reminder-row"><span class="reminder-marker" aria-hidden="true"></span><span class="reminder-id">29</span><button type="button" class="task-row-open reminder-title">Nächste Iteration planen</button><span class="reminder-state reminder-state-locked">LOCKED</span><span class="reminder-time">21 SEP 09:00</span><span class="reminder-time">22 SEP 17:00</span><span class="reminder-note">—</span></div>
+                    </div>
+                    <p class="catalog-usage"><b>OPEN</b> Zeile anklicken oder Titel per Tastatur öffnen. Spaltenkopf bleibt beim Scrollen sichtbar; Zeitfenster, Deadline und Notizbezug behalten ihre eigene Bedeutung. Löschen mit Bestätigung im Detailbereich.</p>
+                </div>
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection catalog-notes-demo">
+                        <div class="catalog-subhead"><h3>NOTE ROW</h3><code>.note-card</code></div>
+                        <div class="notes-list-header"><div class="note-marker"></div><div>ID<span class="column-resize-handle" role="separator" aria-label="Resize ID column" title="Drag to resize. Double-click or press Home to reset all columns." tabindex="0"></span></div><div>TITLE<span class="column-resize-handle" role="separator" aria-label="Resize title column" title="Drag to resize. Double-click or press Home to reset all columns." tabindex="0"></span></div><div>PROJ</div><div>TAGS</div><div>CREATED BY</div><div>AGE</div><div>MOD</div></div>
+                        <div class="note-card note-selected"><div class="note-marker">›</div><div class="note-id">91</div><div class="note-title">Interface principles and token policy</div><div class="note-project">DESIGN</div><div class="note-tags">SYSTEM / UI</div><div class="note-owner">OPERATOR</div><div class="note-body">4H</div><div class="note-updated">12M</div></div>
+                        <div class="note-card"><div class="note-marker"></div><div class="note-id">88</div><div class="note-title">Theme role mapping</div><div class="note-project">NRC-300</div><div class="note-tags">COLOR / TOKENS</div><div class="note-owner">RENE</div><div class="note-body">1D</div><div class="note-updated">3H</div></div>
+                        <p class="catalog-usage"><b>RESIZE</b> Subtle dividers mark resizable Task, Note and Reminder columns. Hover or focus highlights the affected boundary; drag or use arrow keys to resize. Double-click or press Home to reset all columns. Saved manual data-column widths remain; the legacy selection slot is hidden and takes no space.</p>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>EVENT LOG</h3><code>.log-row</code></div>
+                        <div class="chat-tools">
+                            <label class="chat-search"><span class="filter-label">QUERY</span><input class="filter-input" type="search" placeholder="SEARCH LOADED CHAT..." aria-label="Search loaded chat example"></label>
+                            <label><span class="filter-label">NOTIFY</span><select class="filter-select" aria-label="Room notification example"><option>ALL</option><option>@ ONLY</option><option>OFF</option></select></label>
+                        </div>
+                        <div class="catalog-log">
+                            <div class="log-row type-system"><span class="message-meta"><span class="col-tag">SYSTEM</span><time class="col-time" title="09:41:03.182">09:41</time></span><span class="col-message">Connected to workspace NRC</span></div>
+                            <div class="log-row type-sent message-own"><span class="message-meta"><span class="col-tag">YOU</span><time class="col-time" title="09:42:17.044">09:42</time></span><span class="col-message">Inventory updated: 27 families</span></div>
+                            <div class="log-row type-error"><span class="message-meta"><span class="col-tag">ERROR</span><time class="col-time" title="09:43:08.501">09:43</time></span><span class="col-message">Undefined token detected</span></div>
+                            <div class="chat-unread-divider">NEW MESSAGES</div>
+                            <div class="log-row type-message chat-mentioned"><div class="message-meta"><span class="col-tag">ANNA</span><time class="col-time">09:44</time><span class="chat-mention-label">@ YOU</span><button class="btn btn--row chat-reply-action" type="button">REPLY</button></div><div class="col-message message-content"><blockquote><p>BEN: Ready for testing?</p></blockquote><p>@ben The build is ready.</p></div></div>
+                        </div>
+                        <div class="chat-tools"><span class="filter-label chat-reply-preview">REPLY TO ANNA: The build is ready.</span><button class="btn btn--danger" type="button">CANCEL · ESC</button></div>
+                        <p class="message-content">See <span class="task-reference" role="link" tabindex="0">[task:123]</span> and <span class="task-reference" role="link" tabindex="0">[note:456]</span>.</p>
+                        <div class="portal-wrapper">
+                            <div class="autocomplete-dropdown entity-mode" role="listbox" aria-label="Task and note title selection example">
+                                <div class="autocomplete-option highlighted" role="option" aria-selected="true"><span class="autocomplete-option-command">Release checklist<span class="autocomplete-reference-id">[task:123]</span></span><span class="autocomplete-option-aliases">TASK</span></div>
+                                <div class="autocomplete-option" role="option" aria-selected="false"><span class="autocomplete-option-command">Release notes<span class="autocomplete-reference-id">[note:456]</span></span><span class="autocomplete-option-aliases">NOTE</span></div>
+                                <div class="autocomplete-option-description autocomplete-status" role="status">SEARCHING TASKS &amp; NOTES…</div>
+                            </div>
+                        </div>
+                        <p class="catalog-usage">Type # and a title or ID to select TASK or NOTE from the workspace. Titles are primary; IDs are secondary. Arrow keys + Enter/Tab or click insert a typed reference; Escape dismisses. Cached items appear immediately; both tasks and notes lazily search the server after a typing pause, including entries not loaded by pagination. Status rows report SEARCHING TASKS &amp; NOTES…, NO MATCHES, or SEARCH UNAVAILABLE · LOADED ITEMS ONLY. Legacy #123 task links remain supported.</p>
+                        <p class="catalog-usage">REPLY appears on message hover or keyboard focus; touch devices retain the quiet, borderless action. It inserts an editable Markdown quote; Escape cancels. @ completion uses room presence. Mentions in quotes, code and links do not notify. Search covers locally loaded messages only; the result count appears only while searching. Scrolling up holds position; NEW jumps to the latest messages. Notification preferences are browser-local and scoped to workspace and room.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section class="catalog-section" id="feedback">
+                <header class="catalog-section-header"><span>07</span><h2>FEEDBACK</h2><span>TOAST / DIALOG / EMPTY</span></header>
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>TOAST</h3><code>.toast</code></div>
+                        <div class="catalog-toast-stage"><div class="toast">TASK #184 UPDATED — OPEN ↗</div></div>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>CONFIRMATION DIALOG</h3><code>.nrc-dialog</code></div>
+                        <button class="btn" type="button" id="catalogOpenDialog">OPEN NATIVE DIALOG</button>
+                        <p>Shared <code>NRCModal</code> shell: native modal isolation and focus return; callers own content, results and cancellation guards.</p>
+                        <div class="nrc-dialog-backdrop catalog-dialog-stage">
+                            <div class="nrc-dialog" role="dialog" aria-labelledby="catalogDialogTitle">
+                                <div class="nrc-dialog-title" id="catalogDialogTitle">CONFIRM ACTION</div>
+                                <div class="nrc-dialog-message">Archive selected task? This changes persistent workspace state.</div>
+                                <div class="nrc-dialog-actions"><button class="btn" type="button">CANCEL</button><button class="btn btn--danger" type="button">ARCHIVE</button></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="catalog-empty-states">
+                    <div><b>EMPTY</b><span>NO ACTIVE REMINDERS</span></div>
+                    <div><b>LOADING</b><span>LOADING NOTES…</span></div>
+                    <div><b>ERROR</b><span>CONNECTION LOST / RETRYING</span></div>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>ATTACH CHOICE</h3><code>.file-attach-options</code></div>
+                    <div class="nrc-dialog file-assets-dialog file-attach-dialog">
+                        <div class="nrc-dialog-header"><div class="nrc-dialog-title">ATTACH</div><button class="btn btn--row nrc-dialog-close" type="button" aria-label="Close">×</button></div>
+                        <div class="file-attach-options">
+                            <button class="btn" type="button">DIRECT ATTACHMENT</button><p>For this record only. Add or manage attachments.</p>
+                            <button class="btn" type="button">FILE WITH METADATA</button><p>Reusable across records, with title, tags and description.</p>
+                        </div>
+                        <div class="nrc-dialog-actions"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="catalog-section" id="content">
+                <header class="catalog-section-header"><span>08</span><h2>CONTENT</h2><span>MESSAGE / DETAIL / SHARE</span></header>
+                <div class="catalog-grid-2" id="markdownQuotes">
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>CHAT QUOTE</h3><code>.message-content blockquote</code></div>
+                        <div class="message-content"><blockquote><p>Anna:<br>The build is ready for review.</p></blockquote><p>I'll run the smoke tests next.</p></div>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>DOCUMENT QUOTE</h3><code>.note-description blockquote</code></div>
+                        <div class="note-description"><blockquote><p>Keep the original context readable.</p><blockquote><p>Nested references use a lighter line, not another filled box.</p></blockquote><ul><li>Preserve <strong>emphasis</strong> and <a href="#inventory">links</a>.</li><li>Keep <code>inline code</code> distinct.</li></ul><pre><code>odin test .</code></pre></blockquote><p>Normal document text resumes here.</p></div>
+                    </div>
+                </div>
+                <p class="catalog-usage">Markdown quotes share a quiet surface and a 2px left rule across chat, notes, agenda, tasks and asset previews. Blocks are inset 8px on the left (4px on mobile), with no right inset. First/last child margins are trimmed; nested quotes use a lighter rule without stacked backgrounds or additional outer indentation. Typography and Markdown semantics remain intact.</p>
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>CHAT MESSAGE</h3><code>.message</code></div>
+                        <article class="message"><header class="message-header"><span class="message-sender">OPERATOR-01</span><time class="message-timestamp">09:42:17</time></header><p class="message-content">The design system is a map of production behavior, not a parallel component library.</p></article>
+                        <div class="message-content" id="catalogChatAttachments"></div>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>RECORD MESSAGE</h3><code>.record-message</code></div>
+                        <article class="record-message"><header class="record-message-header"><span class="record-message-author">RENE</span><time class="record-message-time">11:52</time><button class="btn btn--danger record-message-delete" type="button">×</button></header><div class="record-message-body message-content"><p>Keep source references next to every documented component family.</p><ul><li>Markdown renders through the shared chat renderer.</li><li>The card keeps prose apart from the next message.</li></ul></div></article>
+                    </div>
+                </div>
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>RECORD MESSAGES · CLOSED</h3><code>.record-messages</code></div>
+                        <div class="record-messages" data-messages-area data-messages-open="false">
+                            <button class="record-strip record-messages-strip" type="button" data-messages-toggle aria-expanded="false"><b class="record-strip-label">MESSAGES</b><span class="record-strip-count">3</span><span class="record-strip-preview">KIM: Shim liegt im Werkzeugkasten…</span><i class="record-strip-key">M</i></button>
+                            <div class="record-messages-body">
+                                <div class="record-stream"></div>
+                                <div class="record-composer" data-composer data-composer-open="false">
+                                    <button class="record-composer-bar" type="button" data-composer-toggle aria-expanded="false"><span>WRITE A MESSAGE…</span><b>M</b></button>
+                                    <div class="task-comment-input-area">
+                                        <label class="task-comment-input-container"><textarea class="task-comment-input" rows="3" aria-label="Write a message"></textarea></label>
+                                        <div class="task-comment-composer-meta" aria-live="polite"><span><b>ENTER</b> SEND</span><span><b>SHIFT+ENTER</b> NEW LINE</span><span class="task-comment-byte-count">0 B / 65,535 B</span></div>
+                                        <button class="btn task-comment-send" type="button">SEND ↵</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="catalog-usage">Geschlossen ist der Block eine Registerzeile: Zähler, letzte Nachricht, Tastenhinweis. Das Dokument darüber behält die Panelhöhe.</p>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>TASK / NOTE COMMENTS · COLLAPSIBLE</h3><code>data-messages-open</code></div>
+                        <div class="record-messages" data-messages-area data-messages-persistent="true" data-messages-open="true">
+                            <button type="button" class="record-strip record-messages-strip" aria-expanded="true" onclick="const open = this.getAttribute('aria-expanded') !== 'true'; this.setAttribute('aria-expanded', String(open)); this.parentElement.dataset.messagesOpen = String(open); this.querySelector('i').textContent = open ? '−' : '+';"><b class="record-strip-label">MESSAGES</b><span class="record-strip-count">2</span><span class="record-strip-preview"></span><i class="record-strip-key">−</i></button>
+                            <div class="record-messages-body">
+                                <div class="record-stream">
+                                    <article class="record-message"><header class="record-message-header"><span class="record-message-author">KIM</span><time class="record-message-time">09:11</time><button class="btn btn--danger record-message-delete" type="button">×</button></header><div class="record-message-body message-content"><p>Added the torque table from the last service.</p></div></article>
+                                    <article class="record-message"><header class="record-message-header"><span class="record-message-author">RENE</span><time class="record-message-time">08:31</time><button class="btn btn--danger record-message-delete" type="button">×</button></header><div class="record-message-body message-content"><p>Use the 4 mm shim from the maintenance kit.</p></div></article>
+                                </div>
+                                <div class="record-composer" data-composer data-composer-open="true">
+                                    <button class="record-composer-bar" type="button" data-composer-toggle aria-expanded="true"><span>WRITE A MESSAGE…</span><b>M</b></button>
+                                    <div class="task-comment-input-area">
+                                        <label class="task-comment-input-container"><textarea class="task-comment-input" rows="3" aria-label="Write a message"></textarea></label>
+                                        <div class="task-comment-composer-meta" aria-live="polite"><span><b>ENTER</b> SEND</span><span><b>SHIFT+ENTER</b> NEW LINE</span><span class="task-comment-byte-count">0 B / 65,535 B</span></div>
+                                        <button class="btn task-comment-send" type="button">SEND ↵</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="catalog-usage">Task und Note zeigen Verlauf und Schreibfeld dauerhaft. Wie im Chat sendet am Desktop <code>ENTER</code>; <code>SHIFT+ENTER</code> schreibt einen Zeilenumbruch. Touch-Tastaturen behalten Enter für Zeilenumbrüche; Senden erfolgt per Button oder <code>CTRL/CMD+ENTER</code>. Senden und Fokusverlust verstecken das Schreibfeld nicht.</p>
+                    </div>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>DOCUMENT RESOURCES · COMPACT REGISTER</h3><code>.document-resources</code></div>
+                    <div class="catalog-inspector-stage inspector">
+                        <div class="task-detail-document">
+                            <div class="task-detail-doc-title">NORTH GATE BARRIER INSPECTION</div>
+                            <div class="agenda-preview task-detail-doc-body"><p>Barrier at the north gate reports intermittent <strong>fault 14</strong> after the 06:00 cycle. The document keeps the panel; every resource sits one register line away.</p></div>
+                            <dl class="task-document-metadata" aria-label="Task metadata">
+                                <div><dt>CREATED</dt><dd>23.09.26, 14:39</dd></div>
+                                <div><dt>BY</dt><dd class="task-document-author">tag:amp-edupool</dd></div>
+                                <div><dt>UPDATED</dt><dd>24.09.26, 11:33</dd></div>
+                                <div><dt>COMPLETED</dt><dd>24.09.26, 08:33</dd></div>
+                            </dl>
+                            <div class="document-resources">
+                            <div class="record-resource" data-resource="attachments" data-resource-open="false">
+                                <button class="record-strip record-resource-strip" type="button" data-resource-toggle aria-expanded="false"><b class="record-strip-label">ATTACHMENTS</b><span class="record-strip-count" data-resource-count>2</span><span class="record-strip-preview" data-resource-preview>interface-specification.pdf</span><i class="record-strip-state" data-resource-state></i></button>
+                                <div class="document-resource-action"><button class="btn" type="button">+ ATTACH</button></div>
+                                <div class="record-resource-body">
+                                    <div class="note-links-section note-preview-links note-preview-attachments">
+                                        <div class="note-links-header"><span class="note-links-label">ATTACHMENTS (2)</span></div>
+                                        <div class="note-links-list">
+                                            <div class="note-link-item"><span class="note-preview-attachment-type">PDF</span><a class="note-link-target" href="#content">interface-specification.pdf</a><span class="note-preview-attachment-size">284 KB</span></div>
+                                            <div class="note-link-item"><span class="note-preview-attachment-type">PNG</span><a class="note-link-target" href="#content">terminal-dark.png</a><span class="note-preview-attachment-size">1.8 MB</span></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="record-resource" data-resource="files" data-resource-open="false">
+                                <button class="record-strip record-resource-strip" type="button" data-resource-toggle aria-expanded="false"><b class="record-strip-label">FILES</b><span class="record-strip-count" data-resource-count>1</span><span class="record-strip-preview" data-resource-preview>Wartungsvertrag 2026</span><i class="record-strip-state" data-resource-state></i></button>
+                                <div class="record-resource-body">
+                                    <section class="file-assets-section">
+                                        <div class="file-assets-list"><div class="file-assets-row">
+                                            <div class="file-assets-summary"><span class="file-assets-type">PDF</span><button class="note-link-target" type="button" title="Wartungsvertrag 2026 — open record">Wartungsvertrag 2026</button></div>
+                                            <span class="file-assets-size">248 KB</span>
+                                            <div class="file-assets-actions"><a class="btn btn--row" href="#content">OPEN</a><a class="btn btn--row" href="#content" download="wartungsvertrag.pdf">DOWNLOAD</a></div>
+                                        </div></div>
+                                    </section>
+                                </div>
+                            </div>
+                            <div class="record-resource" data-resource="links" data-resource-open="true">
+                                <button class="record-strip record-resource-strip" type="button" data-resource-toggle aria-expanded="true"><b class="record-strip-label">LINKS</b><span class="record-strip-count" data-resource-count>2</span><span class="record-strip-preview" data-resource-preview>#184 Migrate remaining public apps off legacy fastsearch</span><i class="record-strip-state" data-resource-state></i></button>
+                                <div class="document-resource-action"><button class="btn" type="button">+ LINK</button></div>
+                                <div class="record-resource-body">
+                                    <div class="task-detail-links-section">
+                                        <div class="task-detail-links-list">
+                                            <div class="task-detail-link-item"><span class="task-detail-link-direction">→</span><span class="note-link-kind" data-kind="task">TASK</span><span class="task-detail-link-relation" data-relation="2">related-to</span><button class="note-link-target task-target" type="button">#184 Migrate remaining public apps off legacy fastsearch</button></div>
+                                            <div class="task-detail-link-item"><span class="task-detail-link-direction">←</span><span class="note-link-kind" data-kind="note">NOTE</span><span class="task-detail-link-relation" data-relation="1">references</span><button class="note-link-target note-target" type="button">Runbook: edupool-viko logs to VictoriaLogs</button></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="catalog-usage"><b>CONTRACT</b> Task and Note share one compact resource bar with counts and always-available add actions. No resource is selected by default. Attachments, Files, Links and Amp threads switch one visible section in place without re-rendering or losing hydration; clicking the selected resource closes it. The example shows Links selected. Comments stay outside this bar: their stream and composer remain visible in both read and edit, below the document or beside it in a wide inspector.</p>
+                    <p class="catalog-usage"><b>ALIGNMENT</b> Resources dock at the bottom of the document column, above messages in the stacked layout. The document scrolls in <code>.record-document-scroll</code>; a long selected resource list scrolls independently below the fixed controls. Label/count controls share a row with add actions; the selected control has an underline. Narrow surfaces may wrap actions. A partial file list retains its <code>PARTIAL</code> marker.</p>
+                </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>RECORD SURFACE · COLUMNS</h3><code>@container (min-width: 38rem)</code></div>
+                        <div class="catalog-inspector-stage catalog-inspector-stage--surface inspector agenda-content">
+                            <div class="task-detail-panel">
+                                <div class="task-detail-tab-content active" data-tab-content="detail">
+                                    <div class="task-detail-doc-title">NORTH GATE BARRIER INSPECTION</div>
+                                    <div class="agenda-preview task-detail-doc-body"><p>Barrier at the north gate reports intermittent <strong>fault 14</strong> after the 06:00 cycle.</p></div>
+                                </div>
+                                <div class="record-messages" data-messages-area data-messages-open="false">
+                                    <div class="record-resize-handle" data-record-resize role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize messages column"></div>
+                                    <button class="record-strip record-messages-strip" type="button" data-messages-toggle aria-expanded="false"><b class="record-strip-label">MESSAGES</b><span class="record-strip-count">2</span><span class="record-strip-preview">KIM: Added the torque table…</span><i class="record-strip-key">M</i></button>
+                                    <div class="record-messages-body" data-messages-body>
+                                        <div class="record-stream">
+                                            <article class="record-message"><header class="record-message-header"><span class="record-message-author">KIM</span><time class="record-message-time">09:11</time></header><div class="record-message-body message-content"><p>Added the torque table from the last service.</p></div></article>
+                                            <article class="record-message"><header class="record-message-header"><span class="record-message-author">RENE</span><time class="record-message-time">08:31</time></header><div class="record-message-body message-content"><p>Use the 4 mm shim from the maintenance kit.</p></div></article>
+                                        </div>
+                                        <div class="record-composer" data-composer data-composer-open="false">
+                                            <button class="record-composer-bar" type="button" data-composer-toggle aria-expanded="false"><span>WRITE A MESSAGE…</span><b>M</b></button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="catalog-usage">Ein breiter Record-Panel wird zur Dokumentfläche: Das Dokument behält seine Spalte und seinen Scroll, die Nachrichten stehen dauerhaft daneben, getrennt durch einen ziehbaren Trenner (Doppelklick oder <code>Home</code> setzt die Breite zurück). Eine HTML-Notiz füllt ihre Spalte im Sandbox-Frame. Unterhalb der Schwelle stapelt dieselbe Komposition, und der Block schließt auf eine Registerzeile.</p>
+                    </div>
+
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>CHAT MARKDOWN</h3><code>.message-content</code></div>
+                        <div class="catalog-log">
+                            <div class="log-row type-message"><span class="message-meta"><span class="col-tag">SULLIVAN</span><time class="col-time">09:44</time></span><div class="col-message message-content"><h1>Answer</h1><p>Chat headings remain compact and preserve the message flow.</p><h2>Validation</h2><ol><li>Check the certificate name.</li><li>Run <code>deploy --verify</code>.</li></ol></div></div>
+                        </div>
+                        <p class="catalog-usage"><b>CONTRACT</b> Chat Markdown uses compact heading levels, restrained spacing, bounded code blocks and horizontally scrollable tables. Document surfaces retain their own editorial typography.</p>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>AI ACTIVITY</h3><code>.ai-run-*</code></div>
+                        <div class="catalog-log">
+                            <div class="log-row type-activity ai-run-row"><span class="message-meta"><span class="col-tag">SULLIVAN</span><time class="col-time">09:44</time></span><div class="col-message message-content"><div class="ai-run-block"><button class="ai-run-header" type="button" aria-expanded="false"><span class="ai-run-title"><span class="ai-run-indicator" aria-hidden="true">■</span><span class="ai-run-title-label">SULLIVAN THINKING</span></span><span class="ai-run-status">ROOM CONTEXT + GRAPH TRAVERSAL</span></button><div class="ai-run-steps"><div class="ai-run-step ai-run-step--running"><span class="ai-run-mark">⟳</span><span class="ai-run-label">room context + graph traversal</span></div></div></div></div></div>
+                        </div>
+                        <p class="catalog-usage"><b>CONTRACT</b> Active runs occupy one unboxed status line. Detailed steps remain available through explicit expansion; complete and error states retain semantic color.</p>
+                    </div>
+                </div>
+                <div class="catalog-grid-2">
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>TEXT LINK</h3><code>--link-* / .note-description a</code></div>
+                        <div class="note-description"><p>Open the <a href="#inventory">complete interface inventory</a> for implementation sources and scope.</p></div>
+                        <p class="catalog-usage"><b>CONTRACT</b> Text links use accessible cyan and remain underlined. Hover and keyboard focus invert onto a cyan field; priority gold is reserved for selected or important state.</p>
+                    </div>
+                    <div class="catalog-subsection">
+                        <div class="catalog-subhead"><h3>ENTITY LINKS</h3><code>.note-link-*</code></div>
+                        <div class="note-links-section">
+                            <div class="note-links-header"><span class="note-links-label">LINKS</span></div>
+                            <div class="note-links-list">
+                                <div class="note-link-item"><span class="note-link-direction">→</span><span class="note-link-kind" data-kind="task">TASK</span><span class="note-link-relation" data-relation="2">related-to</span><button class="note-link-target task-target" type="button">#184 Migrate remaining public apps off legacy fastsearch</button></div>
+                                <div class="note-link-item"><span class="note-link-direction">←</span><span class="note-link-kind" data-kind="note">NOTE</span><span class="note-link-relation" data-relation="1">references</span><button class="note-link-target note-target" type="button">Runbook: edupool-viko logs to VictoriaLogs</button></div>
+                                <div class="note-link-item"><span class="note-link-direction">→</span><span class="note-link-kind" data-kind="company">COMPANY</span><span class="note-link-relation" data-relation="1">references</span><button class="note-link-target note-target" type="button">Edupool GmbH</button></div>
+                            </div>
+                        </div>
+                        <div class="note-links-section note-preview-links note-amp-threads">
+                            <div class="note-links-header"><span class="note-links-label">AMP THREADS (2)</span></div>
+                            <div class="note-links-list">
+                                <div class="note-link-item"><span class="note-link-direction">↗</span><span class="note-link-relation">thread</span><a class="note-link-target" href="#content">Onilo SAML investigation</a></div>
+                                <div class="note-link-item"><span class="note-link-direction">↗</span><span class="note-link-relation">thread</span><a class="note-link-target" href="#content">T-01A05D01-383F-71A9-B9E6-C7DEBB8C7BD9</a></div>
+                            </div>
+                        </div>
+                        <p class="catalog-usage"><b>CONTRACT</b> Note and task destinations share one link treatment. Every row names its kind in the cyan identity token (TASK, NOTE, REMINDER, COMPANY, CONTACT, ACTIVITY) and rows sort by kind first, then by target id. Relationship verbs reuse the graph’s semantic relation roles; direction stays dim metadata and every destination remains keyboard reachable. Amp thread URLs are deduplicated into their own external-source ledger in note read views.</p>
+                    </div>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>INSPECTOR READING</h3><code>.note-preview-*</code></div>
+                    <div class="catalog-inspector-stage inspector">
+                        <div class="panel-header inspector-matrix-header"><div class="inspector-identity-row"><span class="header-text identity-reference">NOTE #722</span><span class="inspector-cell-label">STATE</span><span class="inspector-state-value">READ</span></div><div class="inspector-mode-row"><button class="btn header-operation inspector-matrix-control" data-inspector-command="e" type="button"><span>EDIT</span></button><button class="btn header-operation inspector-matrix-control" data-inspector-command="s" type="button"><span>SHARE</span></button><button class="btn header-operation task-detail-close inspector-matrix-control" data-inspector-command="escape" type="button" aria-label="Close"><span>CLOSE</span><b aria-hidden="true">×</b></button></div></div>
+                        <div class="note-preview-panel mobile-detail-document">
+                            <div class="note-preview-title">CONTEXT: REJECTED LICENCE-CODE AUDIT LOGGING</div>
+                            <nav class="note-section-jumps" aria-label="Note sections"><a class="current" aria-current="location" data-index="01" href="#catalog-current-behavior"><span class="note-section-jump-label">CURRENT BEHAVIOR</span></a><a data-index="02" href="#catalog-release-state"><span class="note-section-jump-label">RELEASE STATE</span></a><a data-index="03" href="#catalog-verification"><span class="note-section-jump-label">VERIFICATION</span></a><a data-index="04" href="#catalog-client-follow-up" title="CLIENT FOLLOW-UP DEPLOYMENT"><span class="note-section-jump-label">CLIENT FOLLOW-UP DEPLOYMENT</span></a></nav>
+                            <div class="agenda-preview note-preview-body">
+                                <h2 id="catalog-current-behavior">CURRENT BEHAVIOR</h2>
+                                <p>Rejected licence-code attempts emit structured audit events with explicit phase, actor and rejection reason.</p>
+                                <pre><code>[AUDIT] Licence code rejected</code></pre>
+                                <h2 id="catalog-release-state">RELEASE STATE</h2>
+                                <ul><li>Development deployment verified.</li><li>Production merge remains explicit.</li></ul>
+                                <h2 id="catalog-verification">VERIFICATION</h2>
+                                <p>Browser and protocol checks passed.</p>
+                                <h2 id="catalog-client-follow-up">CLIENT FOLLOW-UP DEPLOYMENT</h2>
+                                <p>The current production reaction remains visible.</p>
+                            </div>
+                            <div class="record-messages" data-messages-area data-messages-open="false">
+                                <button class="record-strip record-messages-strip" type="button" data-messages-toggle aria-expanded="false"><b class="record-strip-label">MESSAGES</b><span class="record-strip-count">3</span><span class="record-strip-preview">KIM: Shim liegt im Werkzeugkasten…</span><i class="record-strip-key">M</i></button>
+                                <div class="record-messages-body">
+                                    <div class="record-stream"></div>
+                                    <div class="record-composer" data-composer data-composer-open="false">
+                                        <button class="record-composer-bar" type="button" data-composer-toggle aria-expanded="false"><span>WRITE A MESSAGE…</span><b>M</b></button>
+                                        <div class="task-comment-input-area">
+                                            <label class="task-comment-input-container"><textarea class="task-comment-input" rows="3" aria-label="Write a message"></textarea></label>
+                                            <div class="task-comment-composer-meta" aria-live="polite"><span><b>ENTER</b> SEND</span><span><b>SHIFT+ENTER</b> NEW LINE</span><span class="task-comment-byte-count">0 B / 65,535 B</span></div>
+                                            <button class="btn task-comment-send" type="button">SEND ↵</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="catalog-usage"><b>SECTION LEDGER</b> Long notes use a deliberate two-column index rather than horizontal scrolling. The index remains sticky while the note scrolls and caps its height on small screens; long labels truncate with their full title available, and the current section uses the semantic current marker.</p>
+                    <p class="catalog-usage"><b>MESSAGES</b> Ein Datensatz ist eine Dokumentfläche plus ein Nachrichtenblock. Geschlossen kostet der Block eine Registerzeile, damit das Dokument die Panelhöhe behält; geöffnet bekommt der Nachrichtenstrom seinen eigenen Scroll über dem Composer. Es gibt keinen DETAIL/COMMENTS-Tab mehr und kein Register, das den Modus wiederholt: <code>STATE</code> im Identitätsband und die <code>EDIT</code>/<code>VIEW</code>-Operation benennen ihn bereits, die Nachrichten sind immer sichtbar.</p>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>DETAIL METADATA</h3><code>.detail-metadata-ledger</code></div>
+                    <div class="catalog-grid-2">
+                        <div><h4>TASK #184</h4><div class="inspector-metadata" tabindex="0" role="region" aria-label="Record metadata"><dl class="detail-metadata-ledger"><div><dt>CREATED BY</dt><dd class="identity-actor">RENE</dd></div><div><dt class="metadata-date-label">CREATED</dt><dd title="CREATED: 24.08.26, 09:42">24.08.26, 09:42</dd></div><div><dt class="metadata-date-label">UPDATED</dt><dd title="UPDATED: 24.08.26, 10:14">24.08.26, 10:14</dd></div><div><dt>COMPLETED</dt><dd>24 AUG / 10:14</dd></div></dl></div></div>
+                        <div><h4>REMINDER #91</h4><div class="inspector-metadata" tabindex="0" role="region" aria-label="Record metadata"><dl class="detail-metadata-ledger"><div><dt>CREATED BY</dt><dd class="identity-actor">SULLIVAN</dd></div><div><dt class="metadata-date-label">CREATED</dt><dd title="CREATED: 24.08.26, 08:10">24.08.26, 08:10</dd></div><div><dt class="metadata-date-label">UPDATED</dt><dd title="UPDATED: 24.08.26, 10:02">24.08.26, 10:02</dd></div></dl></div></div>
+                    </div>
+                    <p class="catalog-usage"><b>CONTRACT</b> Provenance stays in the inspector identity band across read, edit and comments. Use <b>CREATED BY</b> for origin; mutable task responsibility remains an <b>ASSIGNEE</b> form field. Dates use minute precision and midpoint separators. When the metadata container is at most 560px wide, CREATED and UPDATED labels are visually hidden but remain available to screen readers and as date tooltips. Values retain their order and scroll horizontally when necessary. Wider inspectors restore the labels automatically.</p>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>HTML NOTE / SANDBOX</h3><code>.note-html-frame</code></div>
+                    <div class="agenda-preview note-preview-body note-html-host" id="catalogHtmlNote"></div>
+                    <p class="catalog-usage"><b>CONTRACT</b> Self-contained HTML/CSS runs in a script-free sandboxed iframe. NRC injects stable semantic theme aliases and safely regenerates the document on theme changes; network access, forms, frames, objects, links, storage and parent application access remain blocked.</p>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>ATTACHMENTS</h3><code>.task-attachment-item</code></div>
+                    <section class="file-assets-section">
+                        <div class="panel-header"><div><span class="file-assets-title">FILES (1)</span><button class="btn" type="button">+ UPLOAD</button><button class="btn" type="button">+ LINK EXISTING</button></div></div>
+                        <div class="file-assets-list"><div class="file-assets-row">
+                            <div class="file-assets-summary"><span class="file-assets-type">PDF</span><button class="note-link-target" type="button" title="Wartungsvertrag 2026 — open record">Wartungsvertrag 2026</button></div>
+                            <span class="file-assets-size">248 KB</span>
+                            <div class="file-assets-actions"><a class="btn btn--row" href="#content">OPEN</a><a class="btn btn--row" href="#content" download="wartungsvertrag.pdf">DOWNLOAD</a></div>
+                        </div></div>
+                    </section>
+                    <nrc-attachment-list class="note-links-section note-preview-links note-preview-attachments">
+                        <div class="note-links-header"><span class="note-links-label">ATTACHMENTS (2)</span></div>
+                        <div class="note-links-list">
+                            <div class="note-link-item"><span class="note-preview-attachment-type">PDF</span><span class="note-preview-attachment-name" title="interface-specification.pdf">interface-specification.pdf</span><span class="note-preview-attachment-size">284 KB</span><span class="note-preview-attachment-actions"><button class="btn btn--row" type="button" data-attachment-open>OPEN</button><a class="btn btn--row" href="#content" download="interface-specification.pdf">DOWNLOAD</a></span></div>
+                            <div class="note-link-item"><span class="note-preview-attachment-type">PNG</span><span class="note-preview-attachment-name" title="terminal-dark.png">terminal-dark.png</span><span class="note-preview-attachment-size">1.8 MB</span><span class="note-preview-attachment-actions"><button class="btn btn--row" type="button" data-attachment-open>OPEN</button><a class="btn btn--row" href="#content" download="terminal-dark.png">DOWNLOAD</a></span></div>
+                        </div>
+                    </nrc-attachment-list>
+                    <p class="text-muted"><code>&lt;nrc-attachment-list&gt;</code> owns OPEN click handling across mounting, row replacement and removal. DOWNLOAD remains a native link; upload controls are separate.</p>
+                    <div class="catalog-attachment-list">
+                        <div class="task-attachment-item"><div class="task-attachment-filename-cell"><a class="task-attachment-filename">interface-specification.pdf</a></div><div class="task-attachment-type">PDF</div><div class="task-attachment-size">284 KB</div><button class="btn btn--row task-attachment-md-btn" type="button">REF</button><button class="btn btn--row btn--danger task-attachment-remove-btn" type="button">×</button></div>
+                        <div class="task-attachment-item"><div class="task-attachment-filename-cell"><a class="task-attachment-filename">terminal-dark.png</a></div><div class="task-attachment-type">PNG</div><div class="task-attachment-size">1.8 MB</div><button class="btn btn--row task-attachment-md-btn" type="button">REF</button><button class="btn btn--row btn--danger task-attachment-remove-btn" type="button">×</button></div>
+                    </div>
+                    <p class="catalog-usage"><b>CONTRACT</b> Read views use the same always-visible ledger as Amp threads and edges: type, linked filename, dim size. Long lists scroll, never collapse into chips. Editors retain upload state, REF and removal actions; shared views retain the bordered sidebar ledger and matching keyboard focus treatment.</p>
+                </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>NOTE SHARE / READ ONLY</h3><code>.note-share-*</code></div>
+                    <div class="catalog-share-stage note-share-panel">
+                        <div class="panel-header note-share-header header-register compact-header-register"><div class="header-register-identity-row"><span class="header-text identity-reference header-register-title">NOTE #709</span><span class="header-register-cell-label">STATE</span><span class="header-count identity-scope header-register-state">ENGINEERING · READ ONLY</span><button class="btn header-operation header-register-control" type="button">OPEN PDF</button><button class="btn header-operation header-register-control" type="button">DOWNLOAD DOCX</button><button class="btn header-operation header-register-control" type="button">OPEN IN NRC</button></div></div>
+                        <div class="note-share-content">
+                            <article class="note-share-article">
+                                <div class="note-share-title">Architecture: browser offline download manager</div>
+                                <div class="note-share-meta"><span class="note-share-project">ANTARES/EDUPOOLD</span><span>CREATED BY: <span class="identity-actor">RENE</span></span><span>UPDATED: 04 AUG 2026 / 10:14</span></div>
+                                <div class="note-share-tags"><span class="note-share-tag">PWA</span><span class="note-share-tag">OFFLINE</span><span class="note-share-tag">PERSISTENCE</span></div>
+                                <nav class="note-section-jumps" aria-label="Note sections"><a class="current" aria-current="location" data-index="01" href="#catalog-share-navigation"><span class="note-section-jump-label">CANONICAL NAVIGATION</span></a><a data-index="02" href="#catalog-share-release"><span class="note-section-jump-label">RELEASE CONTRACT</span></a><a data-index="03" href="#catalog-share-reaction"><span class="note-section-jump-label">SYSTEM REACTION</span></a></nav>
+                                <div class="agenda-preview note-share-body">
+                                    <h2 id="catalog-share-navigation">CANONICAL NAVIGATION</h2>
+                                    <p>The public note surface keeps its scope, provenance and export reactions visible while remaining read only.</p>
+                                    <pre><code>postMessage → Player-Companion
+status      ← Service Worker</code></pre>
+                                    <h2 id="catalog-share-release">RELEASE CONTRACT</h2>
+                                    <div class="note-share-table-scroll"><table><thead><tr><th>STATE</th><th>REACTION</th></tr></thead><tbody><tr><td>OFFLINE</td><td>QUEUE LOCALLY</td></tr><tr><td>ONLINE</td><td>RESUME TRANSFER</td></tr></tbody></table></div>
+                                    <h2 id="catalog-share-reaction">SYSTEM REACTION</h2>
+                                    <ul><li>Keep the current scope visible.</li><li>Report export work through disabled action labels.</li><li>Preserve source provenance in the read-only surface.</li></ul>
+                                    <p>Long notes remain one continuous reading surface; the sidebar carries only compact supporting ledgers.</p>
+                                </div>
+                                <aside class="note-share-sidebar">
+                                    <section class="note-share-links note-share-amp-threads">
+                                        <div class="note-share-section-title">AMP THREADS (1)</div>
+                                        <a class="note-share-link-row" data-type="AMP" href="#content"><span class="note-share-link-type">AMP</span><span class="note-share-link-relation">THREAD ↗</span><span class="note-share-link-title">Onilo SAML investigation</span></a>
+                                    </section>
+                                    <section class="note-share-attachments">
+                                        <div class="note-share-section-title">ATTACHMENTS (2)</div>
+                                        <a class="note-share-attachment-row" href="#content"><span class="note-share-attachment-type">PDF</span><span class="note-share-attachment-name">interface-specification.pdf</span><span class="note-share-attachment-size">284 KB</span></a>
+                                        <a class="note-share-attachment-row" href="#content"><span class="note-share-attachment-type">PNG</span><span class="note-share-attachment-name">offline-state-machine.png</span><span class="note-share-attachment-size">1.8 MB</span></a>
+                                    </section>
+                                    <section class="note-share-files file-assets-section">
+                                        <div class="panel-header"><div><span class="file-assets-title">FILES (1)</span></div></div>
+                                        <div class="file-assets-list"><div class="file-assets-row">
+                                            <div class="file-assets-summary"><span class="file-assets-type">PDF</span><button class="note-link-target" type="button" title="Wartungsvertrag 2026 — open record">Wartungsvertrag 2026</button></div>
+                                            <span class="file-assets-size">248 KB</span>
+                                            <div class="file-assets-actions"><a class="btn btn--row" href="#content">OPEN</a><a class="btn btn--row" href="#content" download="wartungsvertrag.pdf">DOWNLOAD</a></div>
+                                        </div></div>
+                                    </section>
+                                    <section class="note-share-links">
+                                        <div class="note-share-section-title">LINKED NODES</div>
+                                        <button class="note-share-link-row" type="button" data-type="NOTE"><span class="note-share-link-type">NOTE</span><span class="note-share-link-relation" data-relation="1">REFERENCES →</span><span class="note-share-link-title">Architecture: LRS analytics bridge</span></button>
+                                        <div class="note-share-link-row" data-type="TASK"><span class="note-share-link-type">TASK</span><span class="note-share-link-relation" data-relation="5">DERIVED-FROM ←</span><span class="note-share-link-title">Ship offline replacement contract</span></div>
+                                    </section>
+                                </aside>
+                            </article>
+                        </div>
+                    </div>
+                    <div class="catalog-share-state-grid">
+                        <div><div class="panel-header note-share-header header-register compact-header-register"><div class="header-register-identity-row"><span class="header-text header-register-title">NOTE</span><span class="header-register-cell-label">STATE</span><span class="header-count header-register-state">READ ONLY</span><button class="btn header-operation header-register-control" type="button" disabled>PDF</button><button class="btn header-operation header-register-control" type="button" disabled>DOCX</button><button class="btn header-operation header-register-control" type="button">NRC</button></div></div><div class="note-share-status">LOADING NOTE…</div></div>
+                        <div class="note-share-status">NOTE NOT FOUND</div>
+                        <section class="note-share-attachments"><div class="note-share-section-title">ATTACHMENTS (0)</div><div class="note-share-links-empty">NO ATTACHMENTS</div></section>
+                        <section class="note-share-links"><div class="note-share-section-title">LINKED NODES</div><div class="note-share-links-empty">NO DIRECT LINKS</div></section>
+                    </div>
+                    <p class="catalog-usage"><b>CONTRACT</b> The one-row output register separates object identity, read-only scope and export operations; the export actions are ordinary one-line operations on the shared header baseline rather than labelled OUT/OP cells; title, provenance, tags and the sticky current-section ledger span the composition; Markdown and source blocks use shared content rules; attachments and graph relations form compact ledgers. The focused route is capped at 82rem, uses a 3:1 reading/sidebar ratio, and stacks to one column at 900px. Loading or export work disables export actions without hiding the current state.</p>
+                </div>
+            </section>
+
+            <section class="catalog-section" id="customers">
+                <header class="catalog-section-header"><span>08C</span><h2>CUSTOMER WORKSPACE</h2><span>WORKSPACE ASSETS</span></header>
+                <p class="catalog-usage"><b>KEYBOARD</b> Tab reaches company and contact rows. Up/Down navigates from the focused row within its list; company navigation selects the record, while Enter or Space opens a focused contact. A desktop inspector does not block navigation in the lists outside it. Inputs, pickers and modal dialogs keep their own keyboard handling.</p>
+                <div class="catalog-customer-register customers-register" aria-label="Customer register example">
+                    <button type="button" class="customer-row" aria-pressed="true" title="Katholische Medienzentrale Fulda"><span class="customer-row-copy"><strong class="customer-row-title">Katholische Medienzentrale Fulda</strong><span class="customer-meta customer-row-meta">Fulda · Arne List</span></span></button>
+                    <button type="button" class="customer-row" aria-pressed="false" title="Medienzentrum des Kreises Heinsberg"><span class="customer-row-copy"><strong class="customer-row-title">Medienzentrum des Kreises Heinsberg</strong><span class="customer-meta customer-row-meta">Heinsberg · Arne List</span></span></button>
+                    <button type="button" class="customer-row" aria-pressed="false" title="Archivierte Beispielorganisation"><span class="customer-row-copy"><strong class="customer-row-title">Archivierte Beispielorganisation</strong><span class="customer-meta customer-row-meta">Berlin · Unassigned · <span class="customer-row-state">ARCHIVED</span></span></span></button>
+                </div>
+                <button class="btn">LOAD MORE CUSTOMERS</button>
+                <div class="customer-identity"><div><span class="customer-meta">CUSTOMER #184 / ACTIVE</span><h2>Nordwerk GmbH</h2><span class="customer-meta">MEDIA / BERLIN</span></div><div class="customer-actions"><button class="btn">EDIT</button><button class="btn">ARCHIVE</button></div></div>
+                <dl class="customer-facts"><div><dt>CUSTOMER NO.</dt><dd>C-184</dd></div><div><dt>TYPE</dt><dd>Customer</dd></div><div><dt>RESPONSIBLE</dt><dd>Anna Berger</dd></div><div><dt>PHONE</dt><dd>+49 30 123456</dd></div><div><dt>ADDRESS</dt><dd>Werkstraße 4, 10115 Berlin</dd></div><div><dt>WEBSITE</dt><dd>nordwerk.example</dd></div></dl>
+                <div class="customer-section">
+                    <div class="panel-header"><div><span>CONTACTS / 1</span><button class="btn">+ CONTACT</button></div></div>
+                    <div class="customer-contacts"><div class="customer-contact-head" aria-hidden="true"><span>NAME / ROLE</span><span>EMAIL</span><span>PHONE</span></div><button type="button" class="customer-contact" aria-pressed="true"><span><strong>Anna Berger</strong><span class="customer-meta">PROJECT LEAD</span></span><span>anna@nordwerk.example</span><span>+49 30 123456</span></button></div>
+                </div>
+                <div class="customer-section">
+                    <div class="panel-header"><div><span>ACTIVITY HISTORY</span><button class="btn">+ ACTIVITY</button></div></div>
+                    <button class="customer-event"><span class="customer-meta">12 SEP / ANNA / CALL</span><strong>Rollout agreed</strong><span>Send the documentation before the next meeting.</span></button>
+                    <p class="customer-empty">No activities yet.</p>
+                </div>
+                <div id="customerRelationshipsSentinel" aria-hidden="true"></div>
+                <div class="catalog-inspector-stage inspector">
+                    <div class="panel-header inspector-matrix-header"><div class="inspector-identity-row"><span class="header-text identity-reference">CONTACT #185</span><span class="inspector-cell-label">STATE</span><span class="detail-save-state" role="status" data-save-state="UNSAVED">UNSAVED</span></div><div class="inspector-mode-row"><button class="btn header-operation inspector-matrix-control" data-inspector-command="v" type="button"><span>VIEW</span></button><button class="btn header-operation task-detail-close inspector-matrix-control" type="button" aria-label="Close"><span>CLOSE</span><b aria-hidden="true">×</b></button></div></div>
+                    <form class="customer-inspector">
+                        <div class="customer-inspector-body detail-edit-form">
+                            <div class="customer-fields detail-edit-form">
+                                <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">NAME</span><input class="task-detail-input" name="title" value="Anna Berger" maxlength="200" required></label>
+                                <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">ROLE</span><input class="task-detail-input" name="role" value="Project lead" maxlength="200"></label>
+                                <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">EMAIL</span><input class="task-detail-input" name="email" type="email" value="anna@nordwerk.example" maxlength="200"></label>
+                                <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">PHONE</span><input class="task-detail-input" name="phone" type="tel" maxlength="200"></label>
+                            </div>
+                            <section class="customer-section" aria-label="Linked companies"><div class="panel-header"><div><span>LINKED COMPANIES / 2</span><button class="btn" type="button">LINK COMPANY</button></div></div><table class="contact-company-table"><thead><tr><th scope="col">COMPANY</th><th scope="col">ACTIONS</th></tr></thead><tbody><tr><td>Nordwerk GmbH</td><td><div class="customer-actions"><button class="btn btn--row" type="button">OPEN</button><button class="btn btn--row" type="button">UNLINK</button></div></td></tr><tr><td>Medienzentrum Kreis Herford</td><td><div class="customer-actions"><button class="btn btn--row" type="button">OPEN</button><button class="btn btn--row" type="button">UNLINK</button></div></td></tr></tbody></table></section>
+                            <p class="customer-status" role="alert"></p>
+                        </div>
+                        <div class="note-detail-actions"><button class="btn btn--primary task-modal-btn save" type="button">SAVE</button><button class="btn btn--ghost task-modal-btn" type="button">CANCEL</button><button class="btn btn--danger task-modal-btn danger" type="button">DELETE</button></div>
+                    </form>
+                </div>
+                <div class="customer-inspector"><div class="customer-inspector-body detail-edit-form">
+                    <h2 class="note-preview-title">NORDWERK GMBH</h2>
+                    <dl class="contact-facts company-facts">
+                        <div><dt>CUSTOMER NUMBER</dt><dd>K-0012</dd></div>
+                        <div><dt>TYPE</dt><dd>Kunde</dd></div>
+                        <div><dt>SECTOR</dt><dd>Maschinenbau</dd></div>
+                        <div><dt>CITY</dt><dd>Hamburg</dd></div>
+                        <div><dt>ADDRESS</dt><dd>Werkstraße 18, 21079 Hamburg, Deutschland / Verwaltungsgebäude</dd><button class="btn" type="button" aria-label="Copy address">COPY</button></div>
+                        <div><dt>WEBSITE</dt><dd><a href="https://nordwerk.example" target="_blank" rel="noopener noreferrer">nordwerk.example</a></dd><button class="btn" type="button" aria-label="Copy website">COPY</button></div>
+                        <div><dt>PHONE</dt><dd><a href="tel:+4940123456">+49 40 123456</a></dd><button class="btn" type="button" aria-label="Copy phone">COPY</button></div>
+                        <div><dt>RESPONSIBLE</dt><dd>rene</dd></div>
+                    </dl>
+                </div></div>
+                <p class="catalog-usage">Company read mode uses the contact facts family: full wrapping values, phone and HTTP(S) website links, copy actions for address, website and phone. Provenance belongs in the inspector identity band. Missing values display —; invalid website schemes remain plain text.</p>
+                <div class="customer-inspector"><div class="customer-inspector-body detail-edit-form">
+                    <h2 class="note-preview-title">ANNA BERGER</h2>
+                    <dl class="contact-facts"><div><dt>ROLE</dt><dd>Project lead</dd></div><div><dt>EMAIL</dt><dd><a href="mailto:anna@nordwerk.example">anna@nordwerk.example</a></dd><button class="btn" type="button" aria-label="Copy email">COPY</button></div><div><dt>PHONE</dt><dd>—</dd></div></dl>
+                    <section class="customer-section" aria-label="Linked companies"><div class="panel-header"><div><span>LINKED COMPANIES / 0</span><button class="btn" type="button">LINK COMPANY</button></div></div><div class="contact-company-list"><p class="customer-empty">No linked companies.</p></div></section>
+                </div></div>
+                <p class="catalog-usage"><b>CONTRACT</b> Workspace-scoped register plus company record, independent of active chat. Register rows give their full width to the company name, with city and contact below it; ACTIVE is implicit while exceptional states remain written in the metadata line. Company master data, contacts and activities use the shared inspector with read/edit modes, history and guarded draft disposal. Contact read mode puts identity and actionable contact fields first and the complete company list next. All entity inspectors keep provenance in the 20px identity band, horizontally scrollable with keyboard access when narrow; identity and save state remain visible across read/edit and comments. LINK COMPANY opens a paged inline search; existing and archived companies cannot be linked again. Relationship pages load automatically through an invisible end-of-record sentinel; no manual pagination row is shown. UNLINK deletes only the association; DELETE permanently removes the contact/activity and all its links after explicit confirmation. Company archive preserves contacts, history and graph links. Rejected saves retain drafts; disconnected or stale drafts cannot overwrite records. The customer register scrolls horizontally at mobile widths. The server-authenticated feature flag controls availability.</p>
+            </section>
+
+            <section class="catalog-section" id="slices">
+                <header class="catalog-section-header"><span>08D</span><h2>SLICE REGISTER</h2><span>WORK IN PROGRESS</span></header>
+                <p class="catalog-usage"><b>CONTRACT</b> A slice is an explicit work stream: an asset of type 11, created by name and unique within the conversation, whose members are the tasks, notes and files linked to it with a <code>member-of</code> edge. Membership is an edge, so a slice spans projects and one task can belong to several slices; a project label says which repository something belongs to, a slice says which work stream it moves. The server folds every counter from the membership edges and the client derives nothing, so the register, the record and the CLI read one definition of membership and cannot disagree. Work without a slice is counted, not invented into a bucket: the register head reports how many tasks carry no slice, and those tasks are ordinary work in the flat list. The register is the distance view: one row per slice, carrying the counters the listing sends as a bar of status shares. Member identity and member order are not on the wire for a register, so the register draws neither: its bar is the share each status holds, and under it the blocked share drawn against the whole slice, because a count cannot name the member it belongs to. A bar is always the whole slice, so a nearly-done slice and a mostly-backlog slice are comparable across rows, while the member count stays a number in the row head. The record, which holds the members, is the one surface that draws them: one mark each in creation order, with the blocked members breaking out of the band where they sit, and it draws the counters bar until the members land. Counters turn danger-colored above six open members, and movement turns muted after a week. Status marks use the <code>--status-*</code> ramp, never the <code>--accent-*</code> aliases, because several themes remap the accent names onto a decorative palette and a shape has no words to carry the meaning. Closure is an act by the owner, not a consequence of the last member reaching Done: a closed slice leaves the register until the CLOSED filter is switched on, and reopening it is the same act reversed. The first token of every row is whose work stream it is, because that is what the register's owner filter narrows by — <code>ALL</code>, <code>MY SLICES</code>, <code>UNASSIGNED</code> or one owner, beside a query that narrows by the name a slice is addressed by. The filters are the server's, the way the task query filters tasks, so a filtered listing is complete rather than a narrowing of the window that happened to be loaded; MY SLICES resolves into the reader's own name, exactly as MY TASKS resolves the assignee. The listing is paged for the same reason: a workspace piles up work streams, closed ones included, so the register draws a page and asks for the next one as the reader reaches the end of the drawn rows — by scrolling, or by walking past the last row with the arrow keys. The head reads <code>N / M SLICES</code> while part of the listing is drawn and <code>M SLICES</code> once all of it is, and the open count is folded from the drawn rows, like the task register's alerts. A filter that matches nothing says NO SLICES MATCH THE FILTER instead of reading as an empty workspace. The open record follows the listing: a page that does not carry it opens the first row drawn, unless the reader has unsaved work in that record, which stays where it is. A slice that was just created drops the filter, because it carries no owner yet and must not be hidden by the filter that was set before it. Creating, assigning and unassigning are the writes; a slice name is the identity the register, the record and the CLI address it by, so two slices cannot share one. Deleting is the one write that cannot be undone — closure has REOPEN and membership has assign — so it is the only guarded action in the record: the control asks before it sends and names the memberships it releases, and <code>nrc slice delete</code> refuses a slice that carries members, an owner or an outcome until the caller passes <code>--force</code>. The members are never part of a delete: their records stay and the register counts them as work without a slice again. The record refreshes in place: a background refresh keeps the rows that are already on screen and says so when the server cannot be reached, because a list that is replaced under the reader's pointer takes the click that is on its way to it. Every task a member table draws carries the register's status token, and that token is the control that changes the status in place: a member is re-statused without opening it, and the write is the move the flat register writes, so the two tables cannot disagree about how a status changes. A member row is the target rather than its title alone: the row carries the reference, the title inside it is the control the keyboard reaches, and the arrow keys walk the register and every member table the way they walk the other lists in the client. The row that moves is the row that opens: an arrow in the register changes the slice on screen, and an arrow in a member table opens the adjacent member in the inspector. A member table is walked from the member the reader last opened or focused, because a click on a row leaves focus on the record itself.</p>
+                <div class="slice-layout catalog-slice-layout">
+                    <aside class="slice-register" aria-label="Slice register example">
+                        <div class="slice-register-head">
+                            <span class="slice-register-title">SLICES</span>
+                            <button class="btn btn--primary header-operation header-create-action" type="button" aria-expanded="true" aria-controls="catalogSliceCreateRow">+ SLICE</button>
+                        </div>
+                        <div class="slice-create-row" id="catalogSliceCreateRow">
+                            <input class="filter-input" type="text" maxlength="128" placeholder="SLICE NAME" aria-label="Slice name">
+                            <button class="btn btn--primary" type="button">CREATE</button>
+                            <button class="btn btn--ghost" type="button">CANCEL</button>
+                        </div>
+                        <div class="slice-register-list">
+                            <button type="button" class="slice-row" aria-pressed="true">
+                                <span class="slice-row-copy">
+                                    <span class="slice-row-head"><strong class="slice-row-title">SHARDED PERSISTENCE</strong><span class="slice-row-count">14 MEM</span></span>
+                                    <div class="slice-bar-group"><div class="slice-bar"><span class="slice-bar-seg slice-bar-seg--backlog" style="--slice-share:3"></span><span class="slice-bar-seg slice-bar-seg--todo" style="--slice-share:2"></span><span class="slice-bar-seg slice-bar-seg--inprogress" style="--slice-share:3"></span><span class="slice-bar-seg slice-bar-seg--done" style="--slice-share:3"></span></div><div class="slice-bar slice-bar--blocked"><span class="slice-bar-seg slice-bar-seg--blocked" style="--slice-share:2"></span><span class="slice-bar-track" style="--slice-share:9"></span></div></div>
+                                    <span class="slice-row-meta">RENE · <span class="slice-alert">8 OPEN</span> · <span class="slice-alert">2 BLOCKED</span> · 3 DONE · 2 NOTES · 1 FILE · MOVED 2H</span>
+                                </span>
+                            </button>
+                            <button type="button" class="slice-row slice-row--cold" aria-pressed="false">
+                                <span class="slice-row-copy">
+                                    <span class="slice-row-head"><strong class="slice-row-title">WEBSOCKET SEND PATH</strong><span class="slice-row-count">7 MEM</span></span>
+                                    <div class="slice-bar-group"><div class="slice-bar"><span class="slice-bar-seg slice-bar-seg--backlog" style="--slice-share:1"></span><span class="slice-bar-seg slice-bar-seg--todo" style="--slice-share:1"></span><span class="slice-bar-seg slice-bar-seg--inprogress" style="--slice-share:2"></span><span class="slice-bar-seg slice-bar-seg--done" style="--slice-share:3"></span></div></div>
+                                    <span class="slice-row-meta">ANKE · 4 OPEN · 3 DONE · <span class="slice-cold">MOVED 26D</span></span>
+                                </span>
+                            </button>
+                            <button type="button" class="slice-row" aria-pressed="false">
+                                <span class="slice-row-copy">
+                                    <span class="slice-row-head"><strong class="slice-row-title">CUSTOMER RECORDS</strong><span class="slice-row-count">5 MEM</span></span>
+                                    <div class="slice-bar-group"><div class="slice-bar"><span class="slice-bar-seg slice-bar-seg--backlog" style="--slice-share:1"></span><span class="slice-bar-seg slice-bar-seg--inprogress" style="--slice-share:1"></span><span class="slice-bar-seg slice-bar-seg--done" style="--slice-share:3"></span></div></div>
+                                    <span class="slice-row-meta">RENE · 2 OPEN · 3 DONE · MOVED 4H</span>
+                                </span>
+                            </button>
+                            <button type="button" class="slice-row slice-row--closed" aria-pressed="false">
+                                <span class="slice-row-copy">
+                                    <span class="slice-row-head"><strong class="slice-row-title">SHARD MIGRATION TOOLING</strong><span class="slice-row-count">6 MEM</span></span>
+                                    <div class="slice-bar-group"><div class="slice-bar"><span class="slice-bar-seg slice-bar-seg--done" style="--slice-share:6"></span></div></div>
+                                    <span class="slice-row-meta">UNASSIGNED · 0 OPEN · 6 DONE · MOVED 12D · CLOSED</span>
+                                </span>
+                            </button>
+                        </div>
+                        <p class="slice-register-footnote">MEMBERS ARE ASSIGNED / ONE TASK CAN BELONG TO SEVERAL SLICES</p>
+                    </aside>
+                    <div class="slice-record">
+                        <div class="slice-identity">
+                            <div>
+                                <span class="slice-note">SLICE #41 / ACTIVE / OPENED 118D AGO</span>
+                                <h2>SHARDED PERSISTENCE</h2>
+                            </div>
+                            <div class="slice-identity-actions"><button class="btn" type="button">SAVE</button><button class="btn btn--danger" type="button">CLOSE SLICE</button><button class="btn btn--danger" type="button">DELETE SLICE</button></div>
+                        </div>
+                        <dl class="slice-facts"><div><dt>TASKS</dt><dd>11</dd></div><div><dt>OPEN</dt><dd class="slice-alert">8</dd></div><div><dt>BLOCKED</dt><dd class="slice-alert">2</dd></div><div><dt>DONE</dt><dd>3</dd></div><div><dt>NOTES</dt><dd>2</dd></div><div><dt>FILES</dt><dd>1</dd></div><div><dt>OLDEST OPEN</dt><dd>41D</dd></div><div><dt>LAST MOVED</dt><dd>2H</dd></div></dl>
+                        <div class="slice-record-shape">
+                            <div class="slice-strip slice-strip--wide"><span class="slice-mark slice-mark--blocked"></span><span class="slice-mark slice-mark--todo slice-mark--blocked"></span><span class="slice-mark slice-mark--todo"></span><span class="slice-mark slice-mark--inprogress"></span><span class="slice-mark slice-mark--inprogress"></span><span class="slice-mark slice-mark--inprogress"></span><span class="slice-mark"></span><span class="slice-mark slice-mark--done"></span><span class="slice-mark slice-mark--done"></span><span class="slice-mark slice-mark--done"></span><span class="slice-mark"></span></div>
+                            <p class="slice-strip-legend">CREATION ORDER, OLDEST LEFT · BACKLOG · TODO · IN PROGRESS · DONE · RED SPIKE BLOCKED</p>
+                        </div>
+                        <div class="slice-record-fields">
+                            <div class="slice-field slice-field--owner">
+                                <label class="slice-note" for="catalogSliceOwner">OWNER</label>
+                                <div class="slice-owner-wrapper">
+                                    <input class="filter-input slice-owner-input" id="catalogSliceOwner" type="text" maxlength="32" placeholder="UNASSIGNED" value="RENE" autocomplete="off">
+                                    <div id="catalogSliceOwnerDropdown" class="assignee-dropdown hidden"></div>
+                                </div>
+                            </div>
+                            <div class="slice-field slice-field--outcome">
+                                <label class="slice-note" for="catalogSliceOutcome">OUTCOME</label>
+                                <textarea class="filter-input slice-outcome-input" id="catalogSliceOutcome" rows="1" maxlength="2048" placeholder="One sentence. A slice is done when this is true.">Restart-safe shard persistence with no migration commands for running installations.</textarea>
+                            </div>
+                        </div>
+                        <section class="slice-section">
+                            <div class="panel-header"><div><span>MEMBERS / 11</span><button class="btn" type="button">+ ASSIGN TASK</button></div></div>
+                            <div class="slice-members">
+                                <div class="slice-member-head slice-member--task"><span>ID</span><span>PRI</span><span>TITLE</span><span>STATUS</span><span>ASN</span><span>DUE</span><span>BLK</span><span></span></div>
+                                <div class="slice-member slice-member--task slice-member-selected" data-member-task="412">
+                                    <span class="slice-dim">#412</span>
+                                    <span class="slice-dim">240</span>
+                                    <button type="button" class="slice-member-open" data-member-open="task:412" aria-current="true">Shard checkpoint SHA must cover blocked_by</button>
+                                    <button type="button" class="status-badge task-row-status status-inprogress" data-member-status="412" aria-haspopup="listbox" aria-expanded="false" aria-label="Status IN PROGRESS — change status">IN PROGRESS</button>
+                                    <span class="slice-dim">RENE</span>
+                                    <span class="slice-dim">3D</span>
+                                    <span class="slice-alert">#409</span>
+                                    <button type="button" class="btn btn--row">UNASSIGN</button>
+                                </div>
+                                <div class="slice-member slice-member--task" data-member-task="404">
+                                    <span class="slice-dim">#404</span>
+                                    <span class="slice-dim">200</span>
+                                    <button type="button" class="slice-member-open" data-member-open="task:404">Compaction manifest survives crash mid-swap</button>
+                                    <button type="button" class="status-badge task-row-status status-inprogress" data-member-status="404" aria-haspopup="listbox" aria-expanded="false" aria-label="Status IN PROGRESS — change status">IN PROGRESS</button>
+                                    <span class="slice-dim">ANKE</span>
+                                    <span class="slice-dim">12D</span>
+                                    <span class="slice-dim">—</span>
+                                    <button type="button" class="btn btn--row">UNASSIGN</button>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="slice-section">
+                            <div class="panel-header"><div><span>NOTES / 2</span><button class="btn" type="button">+ ASSIGN NOTE</button></div></div>
+                            <div class="slice-members">
+                                <div class="slice-member-head slice-member--plain"><span>ID</span><span>TITLE</span><span>AGE</span><span>MOD</span><span></span></div>
+                                <div class="slice-member slice-member--plain" data-member-note="331">
+                                    <span class="slice-dim">#331</span>
+                                    <button type="button" class="slice-member-open" data-member-open="note:331">Shard layout v3</button>
+                                    <span class="slice-dim">41D</span>
+                                    <span class="slice-dim">2D</span>
+                                    <button type="button" class="btn btn--row">UNASSIGN</button>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="slice-section">
+                            <div class="panel-header"><div><span>FILES / 1</span><button class="btn" type="button">+ ASSIGN FILE</button></div></div>
+                            <div class="slice-members">
+                                <div class="slice-member-head slice-member--file"><span>ID</span><span>TITLE</span><span>CATEGORY</span><span>SIZE</span><span></span></div>
+                                <div class="slice-member slice-member--file" data-member-file="204">
+                                    <span class="slice-dim">#204</span>
+                                    <button type="button" class="slice-member-open" data-member-open="file:204">shard-layout-v3.svg</button>
+                                    <span class="slice-dim">Diagram</span>
+                                    <span class="slice-dim">412 KB</span>
+                                    <button type="button" class="btn btn--row">UNASSIGN</button>
+                                </div>
+                            </div>
+                        </section>
+                        <p class="slice-footnote">MEMBERS ARE ASSIGNED. A LABEL SAYS WHICH REPOSITORY SOMETHING BELONGS TO; A SLICE SAYS WHICH WORK STREAM IT MOVES.</p>
+                    </div>
+                </div>
+                <div class="slice-record catalog-slice-states">
+                    <p class="slice-status-line" data-state="error">Slice listing timed out</p>
+                    <p class="slice-status-line" data-state="info">LOADING SLICES…</p>
+                    <p class="slice-empty">NO SLICES IN THIS WORKSPACE</p>
+                    <p class="slice-empty">NO SLICES MATCH THE FILTER</p>
+                    <p class="slice-status-line" data-state="info">LOADING MORE SLICES…</p>
+                    <p class="slice-empty">Select a slice to see its members, outcome and closure.</p>
+                    <p class="slice-empty">No tasks are assigned to this slice. Use + ASSIGN TASK to add one.</p>
+                    <p class="slice-empty">Loading members…</p>
+                </div>
+            </section>
+
+            <section class="catalog-section" id="inventory">
+                <header class="catalog-section-header"><span>09</span><h2>COMPLETE INVENTORY</h2><span>34 UI-FAMILIEN / 3 SUBSYSTEME</span></header>
+                <div class="catalog-inventory-tools">
+                    <label><span class="filter-label">FILTER INVENTORY</span><input class="filter-input" id="inventoryFilter" type="search" placeholder="NAME, CLASS OR SOURCE..."></label>
+                    <span id="inventoryCount">35 / 35 VISIBLE</span>
+                </div>
+                <div class="catalog-overflow">
+                    <table class="catalog-inventory-table">
+                        <thead><tr><th>FAMILY</th><th>ELEMENTS</th><th>PRODUCTION HOOK</th><th>SOURCE</th><th>SCOPE</th></tr></thead>
+                        <tbody id="inventoryBody">
+                            <tr><td>INLINE METADATA</td><td>Field-local edit in task/note lists, slices and inspector. Suggested text uses the shared searchable picker: choose an existing value, clear, or enter a new string. Selection saves immediately; Escape/CANCEL discards. Pending and failure stay at the field; title open and rename are separate. Description/content and attachments have independent editors.</td><td><code>&lt;nrc-inline-field&gt;</code>, <code>.inline-field-editor</code>, <code>.custom-select__*</code></td><td>detail-ui.js / custom-picker.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>PAGE LOADER</td><td>Automatic or manual next page, loading, error/retry, exhausted state, observer lifecycle; Notes and Customers</td><td><code>&lt;nrc-page-loader&gt;</code>, <code>nrc:load-more</code></td><td>page-loader.js / css/workspace.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>FOUNDATIONS</td><td>Color, type, selection, scrollbar; double workspace dividers, patterned section breaks, quiet list rules</td><td><code>:root</code>, <code>[data-theme]</code>, <code>--workspace-divider</code>, <code>--section-pattern</code>, <code>--border-list</code></td><td>css/main.css</td><td><b>CORE</b></td></tr>
+                            <tr><td>APP SHELL</td><td>Desktop sidebar; mobile room switcher, bottom views, full-screen inspector with collapsed metadata, always-visible compact search, keyboard viewport</td><td><code>.app-shell</code>, <code>.content-shell</code>, <code>.mobile-mast</code>, <code>.mobile-bottom</code>, <code>.mobile-inspector-navigation</code>, <code>.mobile-metadata-toggle</code></td><td>index.html / mobile-shell.js / css/mobile.css / css/mobile-tasks.css</td><td><b>LAYOUT</b></td></tr>
+                            <tr><td>BUTTONS</td><td>Central default, primary, secondary, ghost, danger, row, icon and disabled states; the action's role picks the modifier — create (the register's one primary action), attach or detach an association (default), a repeated table-row action (row: quiet at rest, accent or danger on hover and focus), destructive or interrupting (danger)</td><td><code>.btn</code>, <code>.btn--*</code>, <code>.btn--row</code>, <code>header-create-action</code></td><td>css/workspace.css / css/ledger.css</td><td><b>CORE</b></td></tr>
+                            <tr><td>TABS</td><td>Shared borderless horizontal modes filling their band on one group baseline, with counts in a fixed <code>.tab-count</code> slot: detail, reminders, link target type</td><td><code>.nav-tab</code>, <code>.tab-count</code>, <code>.tab-group</code>, <code>.task-detail-tabs</code>, <code>.note-link-picker-types</code></td><td>css/ledger.css</td><td><b>CORE</b></td></tr>
+                            <tr><td>LINK PICKER</td><td>NOTE, TASK and FILE target modes; server paging, search, loaded count, retry, keyboard selection; per-instance state and portal cleanup</td><td><code>&lt;nrc-link-picker&gt;</code>, <code>.note-link-picker*</code></td><td>links-ui.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>PANEL HEADER</td><td>20px metadata bands above inspector modes and filter/instrument controls; compact registers; output plates</td><td><code>.panel-header</code>, <code>.inspector-*-row</code>, <code>.header-register*</code>, <code>.metadata-header-register</code></td><td>css/main.css / index.html / detail-ui.js / view-manager.js</td><td><b>CORE</b></td></tr>
+                            <tr><td>SIDEBAR NAVIGATION</td><td>Rooms, DMs, always-visible view groups (Work, Knowledge, Tools), customer building icon, unread state</td><td><code>.sidebar-*</code>, <code>.view-tabs [role="group"]</code>, <code>.dm-*</code></td><td>index.html / css/workspace.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>FILTER BAR</td><td>Register cells, label, input, select, checkbox, result state; the GROUP toggle swaps the flat-list filters for the slice filters in the same row</td><td><code>.filter-*</code>, <code>.header-filter-cell</code></td><td>css/main.css / index.html</td><td><b>CORE</b></td></tr>
+                            <tr><td>CUSTOM SELECT</td><td>Native select, trigger, search, options, portal; automatic mount/cleanup, value and form-reset synchronization</td><td><code>&lt;nrc-select&gt;</code>, <code>.custom-select*</code></td><td>custom-select.js / css/custom-select.css</td><td><b>CORE</b></td></tr>
+                            <tr><td>CUSTOM PICKER</td><td>Searchable multivalue selection</td><td><code>NRCCustomPicker</code></td><td>custom-picker.js</td><td><b>CORE</b></td></tr>
+                            <tr><td>PORTAL</td><td>Anchored overlay positioning</td><td><code>Portal</code></td><td>portal.js</td><td><b>UTILITY</b></td></tr>
+                            <tr><td>PRESENCE</td><td>Online, connecting, offline, unread</td><td><code>.dm-status</code></td><td>css/main.css</td><td><b>CORE</b></td></tr>
+                            <tr><td>CHAT LOG</td><td>Metadata, quotes, mentions, search, unread, AI run; attachment download rows with type/size, PDF tab, lazy audio/video players</td><td><code>.log-row</code>, <code>.chat-attachment</code>, <code>.message-meta</code>, <code>.chat-tools</code>, <code>.chat-unread-divider</code></td><td>app.js / attachments.js / chat.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>COMPOSER</td><td>Shared chat/comment command rail, byte state, send, stop; collapsed to one line inside a record panel and expanded on demand; chat file upload (100 MB/file), multiple selection and paste</td><td><code>.input-controls</code>, <code>.task-comment-input-area</code></td><td>index.html / detail-ui.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>TOAST</td><td>Transient actionable notification</td><td><code>.toast</code></td><td>app.js / css/main.css</td><td><b>FEEDBACK</b></td></tr>
+                            <tr><td>DIALOG</td><td>Shared native modal shell, focus return, cancellation guard; confirm/prompt and file forms</td><td><code>NRCModal</code>, <code>NRCDialog</code>, <code>.nrc-dialog*</code></td><td>dialog.js / app.js / files.js / css/main.css</td><td><b>FEEDBACK</b></td></tr>
+                            <tr><td>COMMAND PALETTE</td><td>Search, grouped commands, arguments</td><td><code>.command-palette*</code>, <code>.palette-*</code></td><td>app.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>TASK TABLE</td><td>Server-filtered paging and sorting, loaded/matching counts, retry, resize/persistence, priority, badges, references, drag; the status token is the control that re-statuses the task in place, in the flat register and in a slice's member table; container-responsive two-line desktop register</td><td><code>.task-table</code>, <code>.task-list-view</code>, <code>.column-resize-handle</code>, <code>.task-row-status</code>, <code>data-member-status</code></td><td>tasks.js / task-query.js / column-resize.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>RECORD MESSAGES</td><td>One document surface plus one messages block per record; closed block is a single register line (label, count, last message, key hint), open block scrolls its own stream above a collapsed composer; a wide container turns the block into a column beside the document with a draggable divider; message cards render markdown through the shared chat renderer</td><td><code>.record-messages</code>, <code>.record-strip</code>, <code>.record-stream</code>, <code>.record-message</code>, <code>.record-composer</code>, <code>data-messages-toggle</code></td><td>detail-ui.js / tasks.js / notes.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>RECORD RESOURCES</td><td>Task/Note share one counter bar with no tab selected by default; at most one resource opens. ATTACH chooses a direct attachment or a reusable File with metadata; LINK offers Notes, Tasks and Files. These two actions stay in the header for every tab; comments remain visible separately.</td><td><code>.document-resources</code>, <code>.record-resource</code>, <code>data-resource-toggle</code>, <code>data-messages-persistent</code></td><td>detail-ui.js / files.js / links-ui.js / tasks.js / notes.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>TASK DETAIL</td><td>Stable read/edit document: title, compact inline properties, description, two-line metadata footer, shared resource registers. Metadata scrolls with the document: CREATED with author, then UPDATED and optional COMPLETED; entries wrap on narrow panels, dates stay intact. Labels are secondary, values use normal text contrast. Header keeps identity, SAVE/CANCEL and confirmed save state.</td><td><code>.record-document</code>, <code>.task-detail-*</code>, <code>.task-document-metadata</code></td><td>tasks.js / detail-ui.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>ENTITY REFERENCES</td><td>Typed task/note tokens, shared title/ID picker, search status, preview card</td><td><code>.task-reference*</code>, <code>.autocomplete-status</code></td><td>chat.js / app.js / ai.js / task-references.js</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>WORK SLICES</td><td>Explicitly created work streams whose tasks, notes and files are linked by <code>member-of</code> edge; compact wrapping label/value facts and integrated per-member status strip, owner/outcome fields directly above members (stacked on phones), owner-acted closure, assigned/unassigned work counters, owner and name filters the server answers, a paged listing that fills itself as the reader reaches its end, a filtered count and a no-match state</td><td><code>.slice-*</code>, <code>NRCSlices</code>, <code>member-of</code></td><td>slices.js / edges.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>ATTENTION REGISTER</td><td>Actionable own work grouped by primary reason: overdue, overdue/waiting follow-up, unblocks, assigned, due reminders, mentions and unread. Ordinary blocked tasks and slices are excluded. Inline dependency controls underline and use accent color on hover/focus, with a keyboard-focus outline. Dependency disclosures link directly to affected tasks across assignees; partial reads are labelled. Tasks appear once; section counts follow kind filters. Shared openers and keyboard navigation cross headings.</td><td><code>.attention-*</code>, <code>--attention-columns</code></td><td>index.html / attention.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>CALENDAR</td><td>Workspace tasks, reminder deadlines and durable appointments by local date: agenda, spanning month intervals, selected-day list, shared person/project filters, appointment editor, shared inspector and live refresh</td><td><code>.calendar-*</code>, <code>.appointment-detail-panel</code></td><td>index.html / calendar.js / appointments.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>REMINDERS</td><td>Shared entity row states, column header, ID, selection marker, keyboard title, detail-only delete; deadline filters (all / local today / upcoming / overdue), hide locked, desktop-notification permission token, editor</td><td><code>.reminder-*</code>, <code>#notificationStatus</code></td><td>index.html / tasks.js / task-state.js / reminder-notify.js</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>NOTE LIST</td><td>Resizable header, row, selected, pagination; container-responsive two-line desktop register</td><td><code>.note-card</code>, <code>.notes-list*</code>, <code>.notes-container</code></td><td>notes.js / column-resize.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>CUSTOMER WORKSPACE</td><td>Open fact register and single-rule sections, responsive contact rows with inspector selection, compact empty states, persistent activities, automatic relationship paging, archive, linked work, inspector read/edit/create, contact copy actions, unboxed company table and paged linking, guarded delete and company unlink</td><td><code>.customers-layout</code>, <code>.customer-section</code>, <code>.customer-contact</code>, <code>.customer-inspector</code>, <code>.contact-facts</code>, <code>.contact-company-table</code></td><td>customers.js / inspector.js / css/main.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>NOTE DETAIL</td><td>Same stable document as Tasks; content/format draft, header SAVE/CANCEL, metadata, section jumps, shared resources, share and script-free HTML</td><td><code>.record-document</code>, <code>.note-detail-*</code>, <code>.note-preview-*</code></td><td>notes.js / detail-ui.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>NOTE SHARE</td><td>Read-only header, export states, metadata, Markdown, attachments, linked nodes, responsive focus</td><td><code>.note-share-*</code>, <code>.agenda-preview</code></td><td>notes.js / css/main.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>HTML NOTE</td><td>Script-free sandbox, semantic theme tokens, attachment blobs</td><td><code>.note-html-frame</code>, <code>NRCHTMLNotes</code></td><td>note-html.js / notes.js</td><td><b>CONTENT</b></td></tr>
+                            <tr><td>ATTACHMENTS</td><td>Lifecycle-owned read ledger: kind, filename, size, OPEN and native DOWNLOAD. Upload progress, popover and editing remain separate.</td><td><code>&lt;nrc-attachment-list&gt;</code>, <code>.task-attachment-*</code>, <code>.attachment-popover*</code></td><td>attachments.js / css/main.css</td><td><b>COMPONENT / FEATURE</b></td></tr>
+                            <tr><td>FILE ASSETS</td><td>Compact rows with OPEN and DOWNLOAD; the title opens Details. Document resource tabs own the title/count, with no nested File header. Standalone sections retain a header; share headers use the same frame and typography as attachments and links. Empty/loading/error states share context insets. Read-first Details supports EDIT/CANCEL EDIT; upload/edit use paired fields and fixed footer actions.</td><td><code>.file-assets-*</code>, <code>NRCFiles</code></td><td>files.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>INSPECTOR</td><td>Control-matrix header with inline scrollable provenance, scoped keyboard operations, persistent resize; entity-only rail in workspace registers, conversation context and selected system events</td><td><code>.inspector-*</code>, <code>.ledger-*</code></td><td>inspector.js / detail-ui.js / app.js</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>AI WORKBENCH</td><td>Run state, response, steps, preview cards</td><td><code>.ai-*</code>, <code>.sullivan-*</code></td><td>ai.js / css/main.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>MARKDOWN CONTENT</td><td>Headings, code, links, tables, shared/nested quotes, KaTeX</td><td><code>.agenda-preview</code>, <code>.message-content</code>, <code>blockquote</code></td><td>app.js / css/main.css</td><td><b>CONTENT</b></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="catalog-subsection catalog-subsystems">
+                    <div class="catalog-subhead"><h3>STYLE SUBSYSTEMS</h3><code>separate visual contracts</code></div>
+                    <div><b>TERMINAL APP</b><span>Canonical product UI and this catalogue.</span><code>client/css/main.css</code></div>
+                    <div><b>OPERATORS MANUAL</b><span>Print/document surface; page and print rules remain isolated.</span><code>client/operators_manual/styles.css</code></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <footer class="catalog-footer"><span>NRC / NO RELAY CHAT</span><span>DESIGN SYSTEM CATALOGUE</span><span>THEME / <span data-catalog-theme-status>LUPINE</span></span><span>GEOMETRY / SQUARE</span><span id="catalogTimestamp">UPDATED 2026-09-01</span></footer>
+    <script src="../dialog.js?v=20260925document17"></script>
+    <script src="../portal.js?v=20260803a"></script>
+    <script src="../custom-picker.js?v=20260927appointment2"></script>
+    <script src="../custom-select.js?v=20260924select1"></script>
+    <script src="../note-html.js?v=20260901a"></script>
+    <script src="../page-loader.js?v=20260924pager1"></script>
+    <script src="catalog.js?v=20260912css1"></script>
+    <script src="../attachments.js?v=20260924attachment1"></script>
+    <script>window.NRCAssets = { MAX_PAYLOAD_LENGTH: 65535 };</script>
+    <script src="../detail-ui.js?v=20260927appointment2"></script>
+    <script>
+        const inlineExample = document.createElement("article");
+        inlineExample.className = "catalog-card";
+        document.getElementById("forms").append(inlineExample);
+        inlineExample.innerHTML = '<h3>INLINE METADATA</h3><p>Enter/SAVE commits; Escape/CANCEL discards. Enter FAIL to inspect the error state.</p>' + NRCDetailUI.inlineField({
+            label: "PROJECT", value: "NRC", suggestions: () => ["NRC", "CLIENT", "OPERATIONS"], save: async value => {
+                await new Promise(resolve => setTimeout(resolve, 600));
+                if (value === "FAIL") throw new Error("UPDATE REJECTED — RETRY OR CANCEL");
+            },
+        });
+        document.getElementById("catalogOpenDialog").onclick = () => {
+            const view = NRCModal.create({ title: "CONFIRM ACTION" });
+            const message = document.createElement("div");
+            message.className = "nrc-dialog-message";
+            message.textContent = "Archive selected task? This is a catalogue example; no data is changed.";
+            view.panel.insertBefore(message, view.actions);
+            for (const label of ["CANCEL", "ARCHIVE"]) {
+                const button = document.createElement("button");
+                button.className = label === "ARCHIVE" ? "btn btn--danger" : "btn";
+                button.textContent = label;
+                button.onclick = view.cancel;
+                view.actions.append(button);
+            }
+            view.show();
+        };
+        for (const loader of document.querySelectorAll("#pageLoaders nrc-page-loader")) {
+            loader.setState({ hasMore: true, loading: loader.dataset.example === "loading", error: loader.dataset.example === "error" ? "PAGE UNAVAILABLE" : "" });
+        }
+        // The same inline provenance contract applies to every entity inspector.
+        for (const row of document.querySelectorAll(".inspector-matrix-header > .inspector-identity-row")) {
+            row.querySelector(".header-text").insertAdjacentHTML("afterend", '<div class="inspector-metadata" tabindex="0" role="region" aria-label="Record metadata"><dl class="detail-metadata-ledger"><div><dt>CREATED BY</dt><dd class="identity-actor">rene</dd></div><div><dt class="metadata-date-label">CREATED</dt><dd title="CREATED: 15.09.26, 09:30">15.09.26, 09:30</dd></div><div><dt class="metadata-date-label">UPDATED</dt><dd title="UPDATED: 16.09.26, 10:14">16.09.26, 10:14</dd></div></dl></div>');
+        }
+        for (const [filename, mimeType, size] of [["spec.pdf", "application/pdf", 24576], ["recording.mp3", "audio/mpeg", 1048576], ["demo.mp4", "video/mp4", 2097152], ["source.zip", "application/zip", 4096]]) {
+            document.getElementById("catalogChatAttachments").appendChild(renderChatAttachment({fileId: "att_00000000000000000000000000000000", filename, mimeType, size}));
+        }
+    </script>
+</body>
+</html>

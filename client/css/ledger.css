@@ -1,0 +1,1703 @@
+/* =============================================================================
+   LEDGER CHAT
+   A document-oriented chat ledger with explicit chronology and live AI context.
+   ============================================================================= */
+
+:root {
+    --ledger-reading-width: 72rem;
+}
+
+.ledger-context {
+    width: 16.5rem;
+    min-width: 16.5rem;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    border-left: var(--workspace-divider);
+    background: var(--bg-primary);
+}
+
+body:has(#chatDialog[style*="display: none"]) .ledger-context:not(.inspector) {
+    display: none;
+}
+
+body:not(:has(#chatDialog[style*="display: none"])) .agenda-panel:not(.inspector) {
+    display: none;
+}
+
+.ledger-context-header > div {
+    width: 100%;
+}
+
+.ledger-context-header {
+    border-top: 0;
+}
+
+.ledger-context-header .ledger-panel-switch,
+.agenda-panel .ledger-panel-switch {
+    margin-left: auto;
+}
+
+.ledger-context-section {
+    padding: 0.5rem 0.625rem;
+    border-bottom: var(--content-border);
+}
+
+#inspectorViewContextHost > .ledger-context-section {
+    border-bottom: 0;
+}
+
+#inspectorViewContextHost > .ledger-context-section + .ledger-context-section {
+    position: relative;
+    margin-top: 0.8rem;
+    padding-top: 0.65rem;
+}
+
+#inspectorViewContextHost > .ledger-context-section + .ledger-context-section::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0.625rem;
+    right: 0.625rem;
+    height: 3px;
+    background: var(--section-pattern) 0 0 / 3px 3px;
+}
+
+#inspectorViewContextHost > .ledger-context-section:first-child .ledger-context-label {
+    display: flex;
+    height: 1.4rem;
+    align-items: center;
+    margin-bottom: 0;
+    border-bottom: var(--content-border);
+}
+
+#inspectorViewContextHost > .ledger-context-section:first-child {
+    padding-top: 0;
+}
+
+#inspectorViewContextHost > .ledger-context-section:first-child .ledger-context-values > div {
+    min-height: 1.55rem;
+    align-items: center;
+    margin-top: 0;
+}
+
+.inspector-empty-state-value {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    font-weight: 700;
+}
+
+.inspector-empty-state-help {
+    margin-top: 0.2rem;
+    color: var(--text-dim);
+    font-size: var(--font-sm);
+}
+
+.ledger-context-label {
+    margin-bottom: 0.375rem;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+#ledgerQuery {
+    margin-bottom: 0.625rem;
+    color: var(--text-primary);
+    font-size: var(--font-sm);
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+#ledgerQuery.ledger-query-empty,
+.ledger-context-empty {
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    font-weight: 400;
+}
+
+.ledger-context-values {
+    margin: 0;
+
+    & > div {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.5rem;
+        margin-top: 0.1875rem;
+    }
+
+    & dt,
+    & dd {
+        margin: 0;
+        font-size: var(--font-xs);
+    }
+
+    & dt {
+        color: var(--text-dim);
+    }
+
+    & dd {
+        max-width: 9.5rem;
+        overflow: hidden;
+        color: var(--text-primary);
+        font-family: var(--font-mono);
+        text-align: right;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+
+        &.identity-scope {
+            color: var(--identity-scope);
+            font-weight: 700;
+        }
+
+        &.identity-actor {
+            color: var(--identity-actor);
+            font-weight: 700;
+        }
+
+        &.ledger-value-complete {
+            color: var(--accent-success);
+        }
+
+        &.ledger-value-error {
+            color: var(--accent-danger);
+        }
+    }
+}
+
+.ledger-sources-section {
+    flex: 1;
+}
+
+.ledger-source-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+}
+
+.ledger-source-card {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--border-light);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: left;
+}
+
+.ledger-source-card:hover {
+    border-color: var(--border-primary);
+    background: var(--bg-hover);
+}
+
+.ledger-source-card strong,
+.ledger-source-card span {
+    display: block;
+}
+
+.ledger-source-card strong {
+    margin-bottom: 0.25rem;
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+}
+
+.ledger-source-card span {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--text-dim);
+    font-size: var(--font-xs);
+    line-height: 1.35;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+.workspace-grid :is(
+    .reminder-queue-header,
+    .task-filter-bar,
+    .notes-header,
+    .note-share-header,
+    .ledger-context-header
+) {
+    border-top: 0;
+}
+
+#logOutput.log-body {
+    padding: 1.25rem 1.5rem 4rem;
+    scroll-padding-bottom: 4rem;
+    border: 0;
+    border-radius: var(--content-radius);
+    background: var(--surface-content);
+    box-shadow: var(--content-shadow);
+}
+
+#logOutput .log-row {
+    width: min(100%, var(--ledger-reading-width));
+    grid-template-columns: minmax(0, 1fr);
+    margin: 0 auto;
+    padding: 0.25rem 0 0.5rem;
+    line-height: 1.4;
+}
+
+#logOutput .log-row + .log-row {
+    padding-top: 0.5rem;
+}
+
+#logOutput .log-row:hover {
+    background: transparent;
+}
+
+#logOutput .message-meta {
+    align-items: baseline;
+    grid-column: 1;
+    grid-row: 1;
+    padding: 0 0 0.25rem;
+}
+
+#logOutput .col-time {
+    color: var(--text-dim);
+}
+
+#logOutput .col-tag {
+    color: var(--text-primary);
+}
+
+#logOutput .col-tag.identity-actor {
+    color: var(--identity-actor);
+}
+
+#logOutput .message-own .message-meta .col-tag {
+    color: var(--chat-own-accent);
+}
+
+#logOutput .ledger-ai-answer .message-meta .col-tag,
+#logOutput .ai-run-row .message-meta .col-tag {
+    color: var(--accent-priority);
+}
+
+#logOutput .col-message {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+    padding: 0;
+    border-left: 0;
+    font-size: var(--font-base);
+    line-height: 1.5;
+}
+
+#logOutput .message-own .col-message {
+    border-left: 0;
+    background: transparent;
+}
+
+#logOutput .ledger-ai-answer .col-message {
+    border-left-color: var(--accent-priority);
+}
+
+#logOutput .ledger-ai-query {
+    padding-top: 0.875rem;
+    padding-bottom: 1rem;
+}
+
+#logOutput .ledger-ai-query .col-message {
+    font-size: var(--font-lg);
+    line-height: 1.45;
+}
+
+#logOutput .ledger-ai-query .col-message strong:first-child {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    letter-spacing: 0.06em;
+}
+
+#logOutput .ai-run-row {
+    padding-top: 0;
+    padding-bottom: 1rem;
+}
+
+#logOutput .ai-run-block {
+    max-width: 48rem;
+    margin: 0;
+}
+
+#logOutput .ai-run-header {
+    padding: 0.25rem 0;
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+}
+
+#logOutput .ai-run-steps {
+    padding: 0.25rem 0 0.25rem 0.625rem;
+}
+
+#logOutput .ledger-ai-answer {
+    padding-top: 1rem;
+}
+
+#logOutput .ledger-ai-answer .col-message {
+    font-size: 0.8125rem;
+    line-height: 1.55;
+}
+
+#logOutput .ledger-ai-answer .col-message > p:first-child {
+    margin-bottom: 0.25rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid var(--border-primary);
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    letter-spacing: 0.05em;
+}
+
+#logOutput .ledger-ai-answer .col-message > p:nth-child(2) {
+    margin-bottom: 1rem;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+}
+
+#logOutput .ledger-ai-answer .message-content table {
+    margin: 0.75rem 0 1rem;
+}
+
+#logOutput .ledger-ai-answer .message-content th {
+    background: var(--text-primary);
+    color: var(--bg-primary);
+    font-family: var(--font-mono);
+}
+
+#logOutput .ledger-ai-answer .message-content td:first-child {
+    background: var(--bg-secondary);
+    font-weight: 700;
+}
+
+#logOutput .ledger-ai-answer .task-reference {
+    color: var(--text-primary);
+    text-decoration: underline;
+    text-underline-offset: 0.125rem;
+}
+
+.input-panel {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--border-primary);
+    gap: 0;
+    background: var(--surface-panel);
+}
+
+.input-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 5.25rem;
+    grid-template-rows: auto var(--record-footer-height);
+    gap: 0;
+    align-items: stretch;
+    width: 100%;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--surface-content);
+    box-shadow: none;
+    overflow: hidden;
+}
+
+.input-container {
+    position: relative;
+    display: flex;
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+    min-height: 3.25rem;
+    height: auto;
+    padding: 0.5rem 0.75rem;
+    align-items: flex-start;
+    box-sizing: border-box;
+}
+
+#messageInput,
+.composer-input {
+    width: 100%;
+    min-height: 2.25rem;
+    height: auto;
+    padding: 0;
+    color: var(--text-primary);
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    outline: 0;
+    resize: none;
+    max-height: 7.5rem;
+    font-size: var(--font-lg);
+    line-height: 1.4;
+}
+
+.input-controls:focus-within {
+    outline: 1px solid var(--focus-interactive);
+    outline-offset: -1px;
+}
+
+.composer-meta {
+    display: flex;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    align-items: center;
+    gap: 1rem;
+    padding: 0 calc(5.25rem + 0.75rem) 0 0.75rem;
+    color: var(--text-dim);
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-primary);
+    font-family: var(--font-mono);
+    font-size: var(--font-xxs);
+}
+
+.composer-meta b {
+    color: var(--text-primary);
+}
+
+.composer-byte-count {
+    margin-left: auto;
+}
+
+.composer-byte-count--invalid {
+    color: var(--accent-danger);
+    font-weight: 700;
+}
+
+.composer-send,
+.sullivan-submit-controls {
+    grid-column: 2;
+    grid-row: 1 / 3;
+}
+
+body:not(.sullivan-workbench) .input-container {
+    grid-column: 1 / -1;
+}
+
+.composer-send,
+.sullivan-submit-controls .btn {
+    border-width: 0 0 0 1px;
+}
+
+.composer-send,
+.sullivan-submit-controls .btn {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+}
+
+.composer-send small,
+.sullivan-submit-controls small,
+.task-comment-send small {
+    font-size: var(--font-xxs);
+    opacity: 0.75;
+}
+
+.composer-send span,
+.sullivan-submit-controls span,
+.task-comment-send span {
+    font-size: var(--font-sm);
+    font-weight: 800;
+}
+
+.chat-send-btn {
+    margin-right: 0;
+}
+
+.sullivan-submit-controls,
+body.sullivan-workbench .sullivan-submit-controls {
+    display: none;
+    padding-right: 0;
+    gap: 0;
+}
+
+body.sullivan-workbench .sullivan-submit-controls {
+    display: grid;
+}
+
+body.sullivan-workbench .sullivan-submit-controls:has(#sullivanStop:not([hidden])) {
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.sullivan-submit-controls .btn {
+    display: flex;
+    min-width: 4.5rem;
+}
+
+/* Command rail, compact inspector scale. */
+.task-comment-input-area {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 4.25rem;
+    grid-template-rows: auto var(--record-footer-height);
+    gap: 0;
+    align-items: stretch;
+    padding: 0;
+    margin-top: 0.5rem;
+    border-top: 1px solid var(--border-primary);
+}
+
+.task-comment-input-container {
+    display: flex;
+    grid-column: 1 / -1;
+    grid-row: 1;
+    align-items: flex-start;
+    min-width: 0;
+    padding: 0.375rem 0.5rem;
+}
+
+.task-comment-input,
+.task-detail-panel-editable .task-comment-input {
+    width: 100%;
+    min-width: 0;
+    min-height: 2.25rem;
+    padding: 0;
+    color: var(--text-primary);
+    background: transparent;
+    border: 0;
+    outline: 0;
+    resize: none;
+    font-size: var(--font-xs);
+    line-height: 1.4;
+}
+
+.task-comment-input:focus {
+    border-color: transparent;
+}
+
+.task-comment-input-area:focus-within {
+    outline: 1px solid var(--focus-interactive);
+    outline-offset: -1px;
+}
+
+.task-comment-composer-meta {
+    display: flex;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0 calc(4.25rem + 0.5rem) 0 0.5rem;
+    color: var(--text-dim);
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-primary);
+    font-family: var(--font-mono);
+    font-size: var(--font-xxs);
+}
+
+.task-comment-composer-meta b {
+    color: var(--text-primary);
+}
+
+.task-comment-byte-count {
+    margin-left: auto;
+}
+
+.task-comment-send,
+.task-detail-panel-editable .task-comment-send {
+    display: flex;
+    grid-column: 2;
+    justify-content: center;
+    margin-right: 0.5rem;
+}
+
+.composer-send {
+    margin-right: 0.75rem;
+}
+
+.composer-send,
+.task-comment-send,
+.task-detail-panel-editable .task-comment-send {
+    grid-row: 2;
+    flex-direction: row;
+    align-items: center;
+    align-self: center;
+    margin-top: 1px;
+    padding: 0.1875rem 0.5rem;
+    border-width: 1px;
+    white-space: nowrap;
+}
+
+@media (max-width: 1200px) {
+    .ledger-context {
+        display: none;
+    }
+
+    body:not(:has(#chatDialog[style*="display: none"])) .agenda-panel:not(.inspector) {
+        display: none;
+    }
+
+    .ledger-context-label-desktop {
+        display: none;
+    }
+
+    .ledger-context-label-compact {
+        display: inline;
+    }
+}
+
+@media (max-width: 768px) {
+    #logOutput.log-body {
+        padding: 1rem 0.875rem 3rem;
+    }
+
+    #logOutput .log-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        padding-bottom: 1rem;
+    }
+
+    #logOutput .message-meta {
+        grid-column: 1;
+        grid-row: 1;
+        padding: 0 0.5rem 0.375rem 0;
+        text-align: left;
+    }
+
+    #logOutput .col-message {
+        grid-column: 1;
+        grid-row: 2;
+        padding: 0;
+        border-left: 0;
+    }
+
+    #logOutput .ledger-ai-answer .col-message {
+        padding-left: 0.625rem;
+        border-left-width: 3px;
+        border-left-style: solid;
+        font-size: var(--font-base);
+    }
+
+    .chat-header-right > span:first-child {
+        display: none;
+    }
+
+    .composer-meta {
+        gap: 0.5rem;
+    }
+
+    .composer-meta > span:nth-child(2) {
+        display: none;
+    }
+}
+
+/* =============================================================================
+   HEADER REGISTERS
+
+   Shared production grammar for non-inspector headers. Stable identity and
+   state occupy the identity register; filters, parameters, and operations use
+   addressable cells. Simple queues and output views keep one compact row.
+   ============================================================================= */
+
+.panel-header.header-register,
+.chat-header.header-register,
+.notes-header.header-register,
+.task-filter-bar.header-register {
+    display: flex;
+    height: auto;
+    min-height: var(--header-row-height);
+    align-items: stretch;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    border-bottom: var(--content-border);
+    background: var(--surface-header);
+    color: var(--text-header);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    line-height: 1;
+}
+
+.chat-header.header-register {
+    min-width: 0;
+    flex-shrink: 0;
+    font-weight: 700;
+    letter-spacing: 0.03125rem;
+}
+
+.panel-header.header-register.compact-header-register,
+.chat-header.header-register.compact-header-register {
+    min-height: var(--header-row-height);
+}
+
+.header-register > .header-register-identity-row,
+.header-register > .header-register-control-row {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    height: var(--header-row-height);
+    min-height: var(--header-row-height);
+    max-height: var(--header-row-height);
+    align-items: stretch;
+    flex: 0 0 auto;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 0;
+    padding: 0;
+    box-sizing: border-box;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.header-register > .header-register-identity-row::-webkit-scrollbar,
+.header-register > .header-register-control-row::-webkit-scrollbar {
+    display: none;
+}
+
+.header-register > .header-register-control-row {
+    border-top: var(--content-border);
+}
+
+/* Long filter registers reserve a fixed operation cell and give horizontal
+   scrolling only to their parameters. This prevents the creation action from
+   covering the final filter when the inspector narrows the workspace. */
+.header-register > .header-register-control-row:has(> .header-control-scroll) {
+    overflow: hidden;
+}
+
+.header-control-scroll {
+    display: flex;
+    min-width: 0;
+    height: 100%;
+    align-items: stretch;
+    flex: 1 1 auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.header-control-scroll::-webkit-scrollbar {
+    display: none;
+}
+
+.notes-header :is(.header-register-title, .header-register-state) {
+    border-right: 0;
+}
+
+/* Control-row cells are not separator columns: each control owns its own
+   surface, so no full-height rule is drawn between neighbouring cells. */
+.header-register > .header-register-control-row > .header-filter-cell,
+.header-register > .header-register-control-row > .header-control-scroll > .header-filter-cell {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+/* The register's flex cells outrank the UA `[hidden]` rule, so state tokens and
+   grouping-specific cells must opt out of display explicitly. */
+.header-register [hidden] {
+    display: none;
+}
+
+.header-register-cell-label,
+.header-register-title,
+.header-register-state,
+.header-register-alerts,
+.header-register-readout,
+.header-register-control,
+.header-filter-cell {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    justify-content: center;
+    flex-direction: column;
+    flex-shrink: 0;
+    padding: 0.125rem 0.375rem;
+    border: 0;
+    box-sizing: border-box;
+    background: transparent;
+    color: var(--text-header);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    line-height: 1.1;
+    white-space: nowrap;
+}
+
+:is(.header-register-cell-label, .header-register-title, .header-register-state, .header-register-alerts, .header-register-readout) {
+    border-right: var(--content-border);
+}
+
+.header-register > .header-register-identity-row > :last-child {
+    border-right: 0;
+}
+
+.header-register-cell-label,
+.header-register-control > small,
+.header-register-readout > small,
+.header-filter-cell > small,
+.header-filter-cell > label,
+.header-filter-cell > .filter-label {
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: var(--font-xxs);
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    line-height: 1;
+}
+
+.header-register-cell-label {
+    padding-inline: 0.375rem;
+}
+
+.header-register-title {
+    min-width: 6rem;
+    flex: 1 1 auto;
+    flex-shrink: 1 !important;
+    overflow: hidden;
+    color: var(--link-text);
+    font-weight: 700;
+    text-overflow: ellipsis;
+}
+
+.header-register-state {
+    color: var(--status-online);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Result counts read as scope identity, like the register title. Readouts that
+   opt into another identity keep their own token. */
+.header-register :is(.filter-result-count, .header-count):not(.identity-scope) {
+    color: var(--link-text);
+}
+
+.header-register-alerts {
+    align-items: center;
+    flex-direction: row;
+    gap: 0.375rem;
+    margin-left: auto;
+    color: var(--text-dim);
+}
+
+/* Register readouts stay separated so count, blocked and overdue are readable
+   as distinct tokens. Blocked is neutral; only overdue carries danger. */
+.header-register-alerts::before,
+.header-register-alerts > .header-register-alert + .header-register-alert::before {
+    content: "|";
+    margin-inline: 0.125rem 0.375rem;
+    color: var(--border-primary);
+    font-weight: 400;
+}
+
+.header-register-alerts > .header-register-alert {
+    color: var(--text-primary);
+}
+
+.header-register-alerts > .header-register-alert b {
+    color: inherit;
+    font-weight: 700;
+}
+
+.header-register-alerts > .header-register-alert--danger,
+.header-register-alerts > .header-register-alert--danger b {
+    color: var(--accent-danger);
+}
+
+.header-register-readout {
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+}
+
+.header-register-readout > small,
+.header-register-control > small,
+.header-filter-cell > small,
+.header-filter-cell > label,
+.header-filter-cell > .filter-label {
+    display: block;
+    margin-bottom: 0.125rem;
+}
+
+.header-register-control {
+    min-width: 3.5rem;
+    align-self: stretch;
+    height: auto;
+    align-items: center;
+    justify-content: center;
+}
+
+.header-register > .header-register-control-row > .header-register-control,
+.header-register > .header-register-control-row > .header-control-scroll > .header-register-control {
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+.header-register-control.active > small {
+    color: var(--text-dim);
+}
+
+.header-filter-cell {
+    min-width: 5.5rem;
+    flex: 0 0 7rem;
+    justify-content: space-between;
+    gap: 0;
+    /* Label at the top, control on the register's shared bottom baseline. */
+    padding: 0.15rem 0.375rem 0.2rem;
+}
+
+/* The row owns the label-to-control gap; a label margin would fight the
+   shared bottom baseline of search, selects, toggles and actions. */
+.header-register-control-row .header-filter-cell > :is(label, .filter-label) {
+    margin-bottom: 0;
+}
+
+.header-filter-cell > .filter-select,
+.header-filter-cell > .filter-input,
+.header-filter-cell > .custom-select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    margin: 0;
+}
+
+.header-filter-cell > .filter-input,
+.header-filter-cell > .filter-select,
+.header-filter-cell > .custom-select .custom-select__trigger {
+    min-height: var(--header-control-height);
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    font-weight: 500;
+}
+
+.header-filter-cell > .custom-select .custom-select__trigger {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+/* Search is the primary command line in a register: keep its label beside a
+   visibly bounded input and let the field fill the row's control band, so it
+   ends on the same baseline as selects, toggles and actions. */
+.header-register-control-row .header-filter-cell:has(> .filter-input) {
+    align-items: center;
+    flex-direction: row;
+    gap: 0.375rem;
+    padding: 0.15rem 0.375rem 0.2rem;
+}
+
+.header-register-control-row .header-filter-cell:has(> .filter-input) > :is(label, .filter-label) {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+.header-register-control-row .header-filter-cell:has(> .filter-input) > .filter-input {
+    width: auto;
+    min-height: 1.4rem;
+    height: 1.4rem;
+    flex: 1 1 auto;
+    padding-inline: 0.375rem;
+}
+
+.header-register .header-filter-cell > :is(.filter-input, .filter-select):hover,
+.header-register .header-filter-cell > .custom-select .custom-select__trigger:hover,
+.header-register .header-filter-toggle .filter-checkbox-label:hover {
+    background: var(--bg-hover);
+}
+
+.header-filter-toggle {
+    min-width: max-content;
+    flex: 0 0 auto;
+}
+
+.header-filter-toggle .filter-checkbox-label {
+    width: 100%;
+    justify-content: flex-start;
+    text-align: left;
+}
+
+/* Chat and Sullivan workbench */
+.chat-header.header-register > .header-register-identity-row {
+    overflow-x: hidden;
+}
+
+.chat-header .header-register-title {
+    /* Ellipsis needs a text block, not an anonymous flex item. */
+    display: block;
+    align-self: center;
+}
+
+.chat-header-right {
+    display: flex;
+    min-width: 0;
+    align-items: stretch;
+    align-self: stretch;
+    gap: 0;
+    margin-left: auto;
+}
+
+.chat-header-right > .header-register-readout:last-child {
+    border-right: 0;
+}
+
+.chat-keyboard-readout {
+    display: flex;
+    align-items: center;
+    padding: 0.25rem 0.5rem;
+    border-right: 1px solid var(--border-primary);
+    color: var(--accent-priority);
+    font-size: var(--font-xxs);
+    white-space: nowrap;
+}
+
+.chat-header-ai {
+    align-items: stretch;
+}
+
+.chat-header-ai .header-register-control {
+    min-width: auto;
+    flex: 0 0 auto;
+}
+
+.chat-header-ai .ask-context-chip {
+    min-width: 8rem;
+    flex: 0 0 8rem;
+    margin-right: auto;
+    gap: 0;
+}
+
+.system-log-register #systemLogFollow {
+    min-width: auto;
+    border-radius: 0;
+}
+
+.system-log-register #systemLogFollow.active {
+    border-color: var(--border-primary);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: inset 0 -2px 0 var(--status-online);
+    color: var(--status-online);
+}
+
+.system-log-register #systemLogFollow.active:hover {
+    background: var(--bg-hover);
+    color: var(--status-online);
+}
+
+.system-log-register #systemLogFollow.active::before {
+    color: var(--text-dim);
+}
+
+/* Reminders and output plates */
+.reminder-queue-header > .header-register-identity-row,
+.note-share-header > .header-register-identity-row {
+    margin: 0;
+    border: 0;
+    gap: 0;
+}
+
+.reminder-queue-header .header-register-title,
+.note-share-header .header-register-title {
+    flex: 1 1 auto;
+}
+
+.reminder-queue-header .reminder-create-btn {
+    margin: 0;
+}
+
+.reminder-queue-header .header-register-control {
+    flex: 0 0 auto;
+}
+
+.reminder-header-controls.header-register-control-row {
+    justify-content: flex-start;
+}
+
+.reminder-header-controls > .header-filter-cell {
+    min-width: max-content;
+    flex: 0 0 auto;
+}
+
+/* The register's kind segments do not fit the shared 7rem cell. */
+#attentionPanel .header-filter-cell {
+    min-width: max-content;
+    flex: 0 0 auto;
+}
+
+.reminder-header-controls > .header-filter-toggle {
+    margin-right: auto;
+}
+
+.reminder-header-controls .header-register-control {
+    min-width: 6.5rem;
+}
+
+.reminder-header-controls .reminder-create-btn {
+    min-width: 4rem;
+}
+
+.note-share-header .header-register-control {
+    flex: 0 0 auto;
+}
+
+/* Metadata is a readout, not a second full-height control row. Single-row
+   action registers retain their sizing; inspector bands live in entities.css. */
+.header-register:is(.filter-register, .instrument-register, .metadata-header-register) {
+    min-height: 0;
+}
+
+.header-register:is(.filter-register, .instrument-register, .metadata-header-register) > .header-register-identity-row {
+    height: 20px;
+    min-height: 20px;
+    max-height: 20px;
+}
+
+/* Metadata fields do not share the control row's column grid. */
+.header-register:is(.filter-register, .instrument-register, .metadata-header-register) > .header-register-identity-row :is(
+    .header-register-cell-label,
+    .header-register-title,
+    .header-register-state,
+    .header-register-alerts,
+    .header-register-readout,
+    .header-register-control,
+    .chat-keyboard-readout
+) {
+    border-inline: 0;
+}
+
+.header-register:is(.filter-register, .instrument-register, .metadata-header-register) > .header-register-identity-row > :is(span, button) {
+    padding-block: 0;
+    font-size: 10px;
+}
+
+.metadata-header-register .header-register-identity-row .header-register-readout {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.375rem;
+    padding-block: 0;
+    font-size: 10px;
+}
+
+.metadata-header-register .header-register-identity-row .header-register-readout > small {
+    margin: 0;
+    font-size: inherit;
+}
+
+/* View-specific filter register sizing */
+.filter-register > .header-register-control-row,
+.system-log-register.header-register-control-row {
+    height: var(--header-filter-row-height);
+    min-height: var(--header-filter-row-height);
+    max-height: var(--header-filter-row-height);
+}
+
+:is(
+    .filter-register > .header-register-control-row,
+    .system-log-register
+) > .header-register-control {
+    padding: 0.125rem 0.35rem;
+    font-size: var(--font-xxs);
+}
+
+.notes-header-filters.header-register-control-row {
+    justify-content: stretch;
+}
+
+.notes-search-input {
+    max-width: none;
+    height: auto;
+    flex: none;
+}
+
+.task-filter-bar > .task-filter-group.header-register-control-row {
+    flex: 0 0 auto;
+    max-width: none;
+    gap: 0;
+    overflow-x: auto;
+}
+
+.task-filter-bar > .task-filter-group .header-control-scroll > .header-filter-cell:not(.filter-group-search, .header-filter-toggle) {
+    min-width: 3.75rem;
+    max-width: 7rem;
+    flex: 0 1 7rem;
+}
+
+/* A narrowed register compresses its parameter cells; the floor is the cell's
+   own content, so labels and values never overlap. Below that the register
+   scrolls, as the desktop register contract requires. */
+@media (min-width: 769px) {
+    .task-filter-bar > .task-filter-group .header-control-scroll > .header-filter-cell:not(.filter-group-search, .header-filter-toggle) {
+        min-width: min-content;
+    }
+}
+
+/* The GROUP cell is a mode switch rather than a parameter register cell: it
+   sizes to its two toggles instead of the parameter cell's 7rem ceiling, or the
+   second toggle overflows onto the slice filter cell beside it. */
+.task-filter-bar > .task-filter-group .header-control-scroll > .header-filter-cell.task-grouping-cell {
+    min-width: 0;
+    max-width: none;
+    flex: 0 0 auto;
+}
+
+/* FLAGS keeps the parameter cell's width until its combined value needs the
+   room. The register cell itself draws the boundary. */
+@media (min-width: 769px) {
+    .task-filter-bar > .task-filter-group .header-control-scroll > .header-filter-cell.task-flags-filter:has(option:last-child:checked) {
+        min-width: 12rem;
+        max-width: 12rem;
+        flex: 0 0 12rem;
+    }
+}
+
+/* Only search fields grow; dropdowns, modes and actions stay compact. */
+.header-register-control-row > .header-filter-cell:has(> .filter-input),
+.header-register-control-row > .header-control-scroll > .header-filter-cell:has(> .filter-input) {
+    min-width: 10rem;
+    max-width: none;
+    flex: 1 0 10rem;
+}
+
+.task-filter-bar > .task-filter-group .header-control-scroll > .filter-group-search {
+    min-width: 8rem;
+    flex: 1 1 8rem;
+}
+
+.header-register .header-filter-toggle {
+    justify-content: flex-end;
+    padding-block: 0;
+}
+
+.task-filter-bar > .header-register-control-row > .header-register-control,
+.task-filter-bar > .header-register-control-row > .header-control-scroll > .header-register-control {
+    min-width: auto;
+    flex: 0 0 auto;
+}
+
+.header-register .header-filter-toggle .filter-checkbox-label {
+    display: flex;
+    height: var(--header-control-height);
+    margin-bottom: 0.2rem;
+    align-items: center;
+    gap: 0;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: var(--font-xxs);
+    font-weight: 500;
+    line-height: 1;
+}
+
+.header-filter-toggle .filter-checkbox-label:has(.filter-checkbox:checked) {
+    background: var(--bg-hover);
+    box-shadow: inset 0 -2px 0 var(--accent-selected);
+    color: var(--text-primary);
+}
+
+.header-filter-toggle .filter-checkbox {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    padding: 0;
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.header-filter-toggle .filter-checkbox-label:has(.filter-checkbox:focus-visible) {
+    outline: 1px solid var(--focus-interactive);
+    outline-offset: 1px;
+}
+
+.task-filter-bar .filter-input::placeholder {
+    color: var(--text-dim);
+    opacity: 1;
+}
+
+.system-log-register > .header-register-control {
+    min-width: auto;
+    font-size: var(--font-xxs);
+}
+
+@media (max-width: 768px) {
+    body {
+        padding: 0;
+    }
+
+    .retro-container {
+        height: 100vh;
+        border: 0;
+        box-shadow: none;
+    }
+
+    .app-shell {
+        gap: 0.25rem;
+        padding: 0.25rem;
+    }
+
+    .panel-header.header-register,
+    .chat-header.header-register,
+    .notes-header.header-register,
+    .task-filter-bar.header-register,
+    body.sullivan-workbench .chat-header {
+        height: auto;
+        flex-wrap: nowrap;
+    }
+
+    .header-register-cell-label {
+        padding-inline: 0.25rem;
+    }
+
+    .compact-header-register .header-register-cell-label {
+        display: none;
+    }
+
+    .header-register-title {
+        min-width: 4.5rem;
+    }
+
+    .chat-keyboard-readout {
+        display: none;
+    }
+
+    .compact-header-register .header-register-control {
+        min-width: 3.5rem;
+        flex-shrink: 0;
+    }
+
+    .note-share-header .header-register-state {
+        max-width: 8rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .filter-register > .header-register-control-row {
+        overscroll-behavior-inline: contain;
+    }
+
+    .filter-register > .header-register-control-row > .header-control-scroll {
+        overscroll-behavior-inline: contain;
+        scroll-snap-type: inline proximity;
+    }
+
+    .filter-register > .header-register-control-row > :not(.header-control-scroll),
+    .filter-register > .header-register-control-row > .header-control-scroll > * {
+        scroll-snap-align: start;
+    }
+
+    .header-register-control-row:has(.header-filter-cell > .filter-input) .header-filter-cell:not(:has(> .filter-input), .header-filter-toggle) {
+        flex-basis: 5.5rem;
+    }
+
+    .task-filter-bar > .header-register-control-row > .header-register-control,
+    .task-filter-bar > .header-register-control-row > .header-control-scroll > .header-register-control {
+        min-width: 5.5rem;
+        flex: 0 0 auto;
+    }
+}
+
+/* Horizontal mode switches share one visual contract. A group fills the band
+   that holds it, its segments stretch to that height, and the segments draw one
+   baseline under the group; the selected segment replaces the baseline with a
+   thicker accent line. Containers may allocate widths, but must not override
+   tab height, borders, typography or interaction states. Vertical sidebar
+   navigation is a separate component. */
+.inspector-view-cell {
+    display: flex;
+    min-width: 0;
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: stretch;
+    align-self: stretch;
+    justify-content: flex-start;
+    gap: 0;
+    margin: 0 auto 0 0;
+    padding: 0;
+}
+
+:is(.tab-group, .task-detail-tabs, .note-link-picker-types) {
+    display: flex;
+    align-self: stretch;
+    align-items: stretch;
+    gap: 0;
+    min-width: 0;
+    min-height: var(--header-control-height);
+}
+
+:is(.tab-group, .task-detail-tabs, .note-link-picker-types) > .btn:is(.nav-tab, .note-link-picker-type) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    height: auto;
+    min-height: 0;
+    align-self: stretch;
+    min-width: 0;
+    margin: 0;
+    padding: 0 0.6rem;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: inset 0 -1px 0 var(--border-primary);
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    font-weight: 600;
+    letter-spacing: 0.015625rem;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+:is(.tab-group, .task-detail-tabs, .note-link-picker-types) > .btn:is(.nav-tab, .note-link-picker-type) > :is(span, .tab-count) {
+    font: inherit;
+    letter-spacing: inherit;
+}
+
+/* A tab count owns a fixed slot, so a second digit grows into reserved space
+   instead of moving the segment and every control after it. The slot is
+   measured in digits, so it drops the label's tracking. */
+:is(.tab-group, .task-detail-tabs, .note-link-picker-types) > .btn:is(.nav-tab, .note-link-picker-type) > .tab-count {
+    min-width: 2ch;
+    margin-left: 0.25rem;
+    letter-spacing: 0;
+    text-align: left;
+}
+
+:is(.tab-group, .task-detail-tabs, .note-link-picker-types) > .btn:is(.nav-tab, .note-link-picker-type).active {
+    box-shadow: inset 0 -3px 0 var(--accent-selected);
+    color: var(--text-primary);
+    font-weight: 800;
+}
+
+:is(.tab-group, .task-detail-tabs, .note-link-picker-types) > .btn:is(.nav-tab, .note-link-picker-type):hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* The selected segment already carries the state; a hover surface would read
+   as an unselected tab. */
+:is(.tab-group, .task-detail-tabs, .note-link-picker-types) > .btn:is(.nav-tab, .note-link-picker-type).active:hover {
+    background: transparent;
+}
+
+/* Header controls have one visual contract per role. View-specific CSS may
+   size or place these roles, but must not redefine their surface or states. */
+.header-filter-cell > :is(.filter-input, .filter-select),
+.header-filter-cell > .custom-select .custom-select__trigger,
+.header-filter-toggle .filter-checkbox-label {
+    padding-inline: 0.25rem;
+    outline: 1px solid var(--border-strong);
+    outline-offset: -2px;
+    box-sizing: border-box;
+}
+
+.header-filter-cell :is(input, select, .custom-select__trigger):hover,
+.header-filter-toggle .filter-checkbox-label:hover {
+    outline-color: var(--text-primary);
+}
+
+/* Desktop parameter cells read as one-line registers: the label sits beside
+   its value and the dropdown keeps its own bounded surface, so no divider is
+   drawn between neighbouring cells. Search keeps its own bounded field;
+   toggles and operations keep their button surfaces. */
+@media (min-width: 769px) {
+    .header-register > .header-register-control-row > .header-control-scroll > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)),
+    .header-register > .header-register-control-row > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)) {
+        align-items: center;
+        justify-content: flex-start;
+        flex-direction: row;
+        align-self: flex-end;
+        height: 1.2rem;
+        min-height: 1.2rem;
+        gap: 0.375rem;
+        margin-bottom: 0.2rem;
+        padding: 0 0.375rem;
+        border: 0;
+        box-shadow: none;
+    }
+
+    .header-register > .header-register-control-row > .header-control-scroll > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)) > .filter-label::after,
+    .header-register > .header-register-control-row > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)) > .filter-label::after {
+        content: ":";
+    }
+
+    .header-register > .header-register-control-row > .header-control-scroll > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)) > :is(.filter-select, .custom-select),
+    .header-register > .header-register-control-row > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)) > :is(.filter-select, .custom-select) {
+        height: 100%;
+        flex: 1 1 auto;
+    }
+
+    .header-register > .header-register-control-row > .header-control-scroll > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)) :is(.filter-select, .custom-select__trigger),
+    .header-register > .header-register-control-row > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)) :is(.filter-select, .custom-select__trigger) {
+        height: 100%;
+        padding: 0 0.375rem 0.1rem;
+    }
+
+    .header-register > .header-register-control-row > .header-control-scroll > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)):has(.custom-select__trigger:hover),
+    .header-register > .header-register-control-row > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)):has(.custom-select__trigger:hover) {
+        background: var(--bg-hover);
+    }
+
+    .header-register > .header-register-control-row > .header-control-scroll > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)) :is(.filter-select, .custom-select__trigger):hover,
+    .header-register > .header-register-control-row > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)) :is(.filter-select, .custom-select__trigger):hover {
+        background: transparent;
+    }
+
+    /* The trigger owns its drawn edge, so focus replaces the resting outline. */
+    .header-register > .header-register-control-row > .header-control-scroll > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)) :is(.filter-select, .custom-select__trigger):focus-visible,
+    .header-register > .header-register-control-row > .header-filter-cell:not(.header-filter-toggle, :has(> .filter-input)) :is(.filter-select, .custom-select__trigger):focus-visible {
+        outline: 2px solid var(--focus-interactive);
+        outline-offset: -2px;
+    }
+
+    .header-register-control-row .header-filter-cell:has(> .filter-input) > .filter-input {
+        align-self: flex-end;
+        height: 1.2rem;
+        min-height: 1.2rem;
+        border: 1px solid var(--border-strong);
+        outline: none;
+    }
+
+    /* The label occupies the field's own control band, so it centers against the
+       input it names instead of the cell's padded content box, which the
+       bottom-aligned input does not fill. */
+    .header-register-control-row .header-filter-cell:has(> .filter-input) > :is(label, .filter-label) {
+        display: flex;
+        align-items: center;
+        align-self: flex-end;
+        height: 1.2rem;
+        min-height: 1.2rem;
+    }
+}
+
+.header-operation {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: center;
+    flex-direction: row;
+    margin: 0;
+    padding: 0 0.45rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 0;
+    outline: none;
+    background: var(--surface-control);
+    color: var(--btn-text);
+    box-shadow: none;
+    box-sizing: border-box;
+    font-family: var(--font-mono);
+    font-size: var(--font-xxs);
+    font-weight: 700;
+    line-height: 1;
+    text-align: center;
+}
+
+@media (min-width: 769px) {
+    /* Every header operation is one control at one height, whatever bar it sits
+       in. A bar that places it differently overrides placement, not size. */
+    .header-operation {
+        height: 1.2rem;
+        min-height: 1.2rem;
+    }
+
+    .header-register-control-row > .header-operation,
+    .header-register-control-row > .header-control-scroll > .header-operation,
+    .inspector-mode-row > .header-operation {
+        align-self: flex-end;
+        margin: 0 0.25rem 0.2rem;
+    }
+
+    /* The note share plate keeps one full-height row, so its export operations
+       take the same bottom baseline as a control row's instead of stretching to
+       the row like the metadata cells beside them. */
+    .note-share-header > .header-register-identity-row > .header-operation {
+        align-self: flex-end;
+        margin: 0 0.25rem 0.2rem;
+    }
+
+    .note-share-header > .header-register-identity-row > .header-operation:last-child {
+        margin-right: 0;
+    }
+
+    .header-register .header-filter-toggle .filter-checkbox-label {
+        height: 1.2rem;
+        min-height: 1.2rem;
+        margin-bottom: 0.2rem;
+        padding: 0 0.45rem;
+        border: 1px solid var(--border-strong);
+        outline: none;
+        background: var(--surface-control);
+        color: var(--btn-text);
+        box-sizing: border-box;
+    }
+}
+
+/* Creation is the register's single raised operation. Its color comes from the
+   semantic creation tokens, so every creatable view shares one treatment. */
+.header-operation.header-create-action {
+    position: sticky;
+    right: 0;
+    z-index: 2;
+    margin-left: auto;
+    border-color: var(--action-create-border);
+    background: var(--action-create-bg);
+    color: var(--action-create-text);
+}
+
+.header-register .header-register-control-row > .header-control-scroll + .header-create-action {
+    position: static;
+    flex: 0 0 auto;
+    margin-left: 0.25rem;
+}
+
+.header-operation:hover:not(:disabled) {
+    border-color: var(--btn-hover-border);
+    background: var(--btn-hover-bg);
+    color: var(--btn-hover-text);
+}
+
+.header-operation.header-create-action:hover:not(:disabled) {
+    border-color: var(--action-create-hover-border);
+    background: var(--action-create-hover-bg);
+    color: var(--action-create-hover-text);
+}
+
+.header-operation:hover > small {
+    color: inherit;
+}
+
+.header-operation.btn--danger {
+    border-color: var(--accent-danger);
+    color: var(--accent-danger);
+}
+
+.header-operation.btn--danger:hover:not(:disabled) {
+    background: var(--accent-danger);
+    color: var(--on-danger);
+}
+
+.header-operation.active {
+    box-shadow: inset 0 -2px 0 var(--accent-selected);
+}
+
+.header-operation:active {
+    box-shadow: none;
+}
+
+.header-operation:disabled {
+    border-color: var(--border-primary);
+    background: var(--bg-disabled);
+    color: var(--text-muted);
+    box-shadow: none;
+}
+
+.header-operation:focus-visible,
+.header-filter-cell :is(input, select, .custom-select__trigger):focus-visible,
+.header-register-control:has(input:focus-visible),
+.header-filter-toggle .filter-checkbox-label:has(input:focus-visible),
+:is(.tab-group, .task-detail-tabs, .note-link-picker-types) > .btn:focus-visible {
+    outline: 2px solid var(--focus-interactive);
+    outline-offset: -2px;
+}

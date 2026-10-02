@@ -1,0 +1,823 @@
+/* Catalogue-only layout. Product components continue to come from ../css/main.css. */
+html {
+    scroll-behavior: smooth;
+}
+
+body {
+    min-height: 100vh;
+    overflow: auto;
+    background: var(--bg-primary);
+}
+
+code,
+.catalog-release,
+.catalog-metrics dd,
+.catalog-mono-sample,
+.catalog-inventory-table,
+.catalog-footer {
+    font-family: var(--font-mono);
+}
+
+.catalog-masthead {
+    padding: 1rem 1.25rem 0;
+    color: var(--text-primary);
+    background: var(--surface-panel);
+    border-bottom: var(--panel-border);
+    box-shadow: var(--panel-shadow);
+}
+
+.catalog-kicker,
+.catalog-nav-label {
+    font-size: var(--font-xs);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--accent-current);
+}
+
+.catalog-title-row {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 1.75rem 0 1rem;
+}
+
+.catalog-title-row h1 {
+    font-size: clamp(1.75rem, 4vw, 3.75rem);
+    line-height: 0.9;
+    letter-spacing: -0.055em;
+}
+
+.catalog-title-row p {
+    max-width: 42rem;
+    margin-top: 0.625rem;
+    color: var(--text-dim);
+    font-size: var(--font-sm);
+}
+
+.catalog-actions,
+.catalog-demo-row,
+.catalog-status-list {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+}
+
+.catalog-customer-register {
+    width: min(100%, 15rem);
+    margin-bottom: 0.75rem;
+    border-top: 1px solid var(--border-primary);
+    border-left: 1px solid var(--border-primary);
+}
+
+.catalog-actions a {
+    text-decoration: none;
+}
+
+.catalog-release {
+    padding-right: 0.625rem;
+    font-size: var(--font-xs);
+    color: var(--text-dim);
+}
+
+.catalog-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0 -1.25rem;
+    border-top: 1px solid var(--border-primary);
+}
+
+.catalog-metrics > div {
+    min-width: 0;
+    padding: 0.5rem 1.25rem;
+    border-right: 1px solid var(--border-primary);
+}
+
+.catalog-metrics > div:last-child {
+    border-right: 0;
+}
+
+.catalog-metrics dt {
+    font-size: var(--font-xxs);
+    font-weight: 700;
+    color: var(--text-dim);
+}
+
+.catalog-metrics dd {
+    margin-top: 0.1875rem;
+    overflow: hidden;
+    font-size: var(--font-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.catalog-layout {
+    display: grid;
+    grid-template-columns: 11.75rem minmax(0, 1fr);
+}
+
+.catalog-nav {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    padding: 1rem 0;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border-primary);
+}
+
+.catalog-nav-label,
+.catalog-nav-note {
+    padding: 0 0.75rem;
+}
+
+.catalog-nav a {
+    display: block;
+    padding: 0.3125rem 0.75rem;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.catalog-nav a:first-of-type {
+    margin-top: 0.625rem;
+}
+
+.catalog-nav a:hover,
+.catalog-nav a:focus-visible {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+    box-shadow: inset 2px 0 var(--accent-current);
+    outline: none;
+}
+
+.catalog-nav-note {
+    position: absolute;
+    bottom: 1rem;
+    color: var(--text-muted);
+    font-size: var(--font-xxs);
+    line-height: 1.45;
+}
+
+.catalog-main {
+    min-width: 0;
+}
+
+.catalog-section {
+    scroll-margin-top: 0;
+    border-bottom: 1px solid var(--border-primary);
+}
+
+.catalog-section-header {
+    display: grid;
+    grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+    align-items: center;
+    min-height: 2.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--surface-header);
+    color: var(--text-header);
+    border-bottom: 1px solid var(--border-primary);
+}
+
+.catalog-section-header h2 {
+    font-size: var(--font-lg);
+    letter-spacing: 0.02em;
+}
+
+.catalog-section-header span {
+    color: var(--text-header);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+}
+
+.catalog-principles,
+.catalog-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.catalog-principles {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.catalog-principles article,
+.catalog-subsection {
+    min-width: 0;
+    padding: 1rem;
+    background: var(--surface-panel);
+    border-right: 1px solid var(--border-primary);
+    border-bottom: 1px solid var(--border-primary);
+}
+
+.catalog-principles article:last-child,
+.catalog-grid-2 > :nth-child(even) {
+    border-right: 0;
+}
+
+.catalog-principles b {
+    color: var(--accent-current);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+}
+
+.catalog-principles h3 {
+    margin: 1.25rem 0 0.375rem;
+    font-size: var(--font-base);
+}
+
+.catalog-principles p,
+.catalog-usage,
+.catalog-panel-body {
+    color: var(--text-dim);
+    font-size: var(--font-xs);
+    line-height: 1.5;
+}
+
+.catalog-subhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.catalog-subhead h3 {
+    font-size: var(--font-sm);
+}
+
+.catalog-subhead code,
+.catalog-usage b {
+    color: var(--accent-interactive);
+    font-size: var(--font-xxs);
+}
+
+.catalog-swatches {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.5rem;
+}
+
+.catalog-swatches > div {
+    min-width: 0;
+    border: 1px solid var(--border-subtle);
+}
+
+.catalog-swatches i {
+    display: block;
+    height: 3.5rem;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.catalog-swatches b,
+.catalog-swatches code {
+    display: block;
+    padding: 0.25rem 0.375rem 0;
+    overflow: hidden;
+    font-size: var(--font-xxs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.catalog-swatches code {
+    padding-top: 0;
+    padding-bottom: 0.25rem;
+    color: var(--text-dim);
+}
+
+.catalog-type-scale p {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.catalog-type-scale code {
+    min-width: 8.5rem;
+    color: var(--text-dim);
+    font-size: var(--font-xxs);
+}
+
+.catalog-mono-sample span {
+    display: inline-block;
+    width: 3.5rem;
+    color: var(--text-dim);
+}
+
+.catalog-usage {
+    margin-top: 0.75rem;
+}
+
+.catalog-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: end;
+    gap: 0.75rem;
+}
+
+.catalog-form-grid > label:not(.filter-checkbox-label) {
+    display: grid;
+    gap: 0.25rem;
+}
+
+.catalog-form-grid > .filter-result-count {
+    grid-column: 1 / -1;
+    justify-self: end;
+}
+
+.catalog-detail-form {
+    padding: 0;
+    overflow: visible;
+}
+
+.catalog-detail-form .detail-edit-field--content {
+    min-height: 4rem;
+}
+
+.catalog-detail-form .task-detail-row-desc .task-detail-textarea {
+    min-height: 4rem;
+}
+
+.catalog-panel-demo {
+    padding: 0;
+}
+
+.catalog-panel-demo > .catalog-subhead {
+    padding: 1rem 1rem 0;
+}
+
+/* Catalogue layout only: the band a horizontal tab group fills in production.
+   The group owns its own baseline, so the band draws none. */
+.catalog-tab-band {
+    display: flex;
+    align-items: stretch;
+    height: var(--header-filter-row-height);
+    padding: 0 0.375rem;
+    border-top: 1px solid var(--border-primary);
+}
+
+.catalog-resizable-panel {
+    position: relative;
+    margin-top: 0.75rem;
+    border-top: 1px solid var(--border-strong);
+    border-bottom: 1px solid var(--border-strong);
+}
+
+.catalog-panel-demo .panel-header {
+    border-top: 0;
+}
+
+.catalog-panel-body {
+    min-height: 5rem;
+    padding: 1rem;
+}
+
+.catalog-header-register-stack {
+    display: grid;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+}
+
+.catalog-header-register-stack > .header-register {
+    border-top: 1px solid var(--border-primary);
+}
+
+.catalog-sidebar-stage {
+    padding: 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+}
+
+.catalog-sidebar-demo {
+    position: static;
+    width: 11.75rem;
+    min-width: 11.75rem;
+    height: auto;
+    min-height: 0;
+    border: 1px solid var(--border-primary);
+}
+
+.catalog-sidebar-demo .sidebar-section {
+    flex: none;
+    border-bottom: 0;
+}
+
+.catalog-status-list {
+    gap: 1.25rem;
+}
+
+.catalog-status-list span {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+}
+
+.catalog-save-states,
+.catalog-semantic-states {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+}
+
+.catalog-save-states .detail-save-state {
+    margin-left: 0;
+    padding: 0.25rem 0.375rem;
+    border: 1px solid currentColor;
+}
+
+.catalog-semantic-states > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+}
+
+.catalog-selected-state {
+    color: var(--accent-selected);
+}
+
+.catalog-error-state {
+    color: var(--accent-danger);
+}
+
+.catalog-footer-contract .status-footer {
+    position: static;
+    grid-column: auto;
+    grid-row: auto;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.catalog-badge-table td {
+    width: 25%;
+}
+
+.catalog-overflow {
+    overflow-x: auto;
+}
+
+.catalog-notes-demo {
+    overflow-x: auto;
+}
+
+.catalog-notes-demo .note-card {
+    min-width: 46rem;
+}
+
+.catalog-log {
+    padding: 0.375rem 0;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    overflow: hidden;
+}
+
+.catalog-log .log-row {
+    grid-template-columns: 8.75rem minmax(0, 1fr);
+    font-size: var(--font-xs);
+}
+
+.catalog-toast-stage,
+.catalog-dialog-stage {
+    position: relative;
+    min-height: 7.5rem;
+    overflow: hidden;
+    background-color: var(--bg-secondary);
+    background-image: linear-gradient(var(--border-subtle) 1px, transparent 1px), linear-gradient(90deg, var(--border-subtle) 1px, transparent 1px);
+    background-size: 1rem 1rem;
+    border: 1px solid var(--border-subtle);
+}
+
+.catalog-toast-stage .toast {
+    position: absolute;
+    right: 0.75rem;
+    bottom: 0.75rem;
+}
+
+.catalog-dialog-stage {
+    inset: auto;
+    z-index: auto;
+    min-height: 12rem;
+    padding: 1rem;
+}
+
+.catalog-dialog-stage .nrc-dialog {
+    max-width: 23rem;
+}
+
+.catalog-empty-states {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.catalog-empty-states > div {
+    display: grid;
+    gap: 0.375rem;
+    min-height: 5rem;
+    padding: 1rem;
+    border-right: 1px solid var(--border-primary);
+}
+
+.catalog-empty-states > div:last-child {
+    border-right: 0;
+}
+
+.catalog-empty-states b {
+    color: var(--text-dim);
+    font-size: var(--font-xxs);
+}
+
+.catalog-empty-states span {
+    align-self: end;
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+}
+
+.catalog-attachment-list {
+    border: 1px solid var(--border-primary);
+}
+
+.catalog-share-stage {
+    height: 42rem;
+    margin-top: 0.75rem;
+    border: 1px solid var(--border-strong);
+}
+
+.catalog-share-stage .note-share-header {
+    border-top: 0;
+}
+
+.catalog-share-state-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+}
+
+.catalog-share-state-grid > * {
+    min-width: 0;
+}
+
+.catalog-inspector-stage {
+    width: min(100%, 34rem);
+    border: 1px solid var(--border-strong);
+    background: var(--bg-primary);
+}
+
+.catalog-inspector-stage .panel-header {
+    border-top: 0;
+}
+
+.catalog-inspector-stage .note-preview-panel {
+    min-height: 20rem;
+}
+
+/* Wide record surface. The stage supplies the width; the composition itself
+   comes from the production container query on .agenda-content. */
+.catalog-inspector-stage--surface {
+    width: min(100%, 56rem);
+}
+
+.catalog-inspector-stage--surface .task-detail-panel {
+    min-height: 20rem;
+}
+
+.catalog-inspector-stage .note-preview-body {
+    max-height: 18rem;
+    overflow-y: auto;
+}
+
+.catalog-inventory-tools {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-primary);
+}
+
+.catalog-inventory-tools label {
+    display: grid;
+    width: min(24rem, 100%);
+    gap: 0.25rem;
+}
+
+.catalog-inventory-tools > span {
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+}
+
+.catalog-inventory-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-xs);
+}
+
+.catalog-inventory-table th,
+.catalog-inventory-table td {
+    padding: 0.375rem 0.625rem;
+    text-align: left;
+    border-right: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.catalog-inventory-table th {
+    color: var(--text-dim);
+    background: var(--bg-secondary);
+    font-size: var(--font-xxs);
+}
+
+.catalog-inventory-table tr:nth-child(even) {
+    background: var(--bg-zebra);
+}
+
+.catalog-inventory-table tr:hover {
+    background: var(--bg-hover);
+}
+
+.catalog-inventory-table td:first-child,
+.catalog-inventory-table td:last-child {
+    font-weight: 700;
+}
+
+.catalog-inventory-table td:last-child b {
+    color: var(--accent-interactive);
+}
+
+.catalog-inventory-table tr[hidden] {
+    display: none;
+}
+
+.catalog-subsystems {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0;
+    padding: 0;
+}
+
+.catalog-subsystems .catalog-subhead {
+    grid-column: 1 / -1;
+    padding: 0.75rem 1rem;
+    margin: 0;
+    border-bottom: 1px solid var(--border-primary);
+}
+
+.catalog-subsystems > div:not(.catalog-subhead) {
+    display: grid;
+    gap: 0.375rem;
+    padding: 1rem;
+    border-right: 1px solid var(--border-primary);
+}
+
+.catalog-subsystems > div:last-child {
+    border-right: 0;
+}
+
+.catalog-subsystems span,
+.catalog-subsystems code {
+    color: var(--text-dim);
+    font-size: var(--font-xs);
+}
+
+.catalog-audit {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem 1.25rem;
+    padding: 0.75rem 1rem;
+    color: var(--accent-danger);
+    background: var(--danger-subtle-bg);
+    border-top: 1px solid var(--accent-danger);
+    font-size: var(--font-xs);
+}
+
+.catalog-footer {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 1rem;
+    color: var(--text-dim);
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-primary);
+    font-size: var(--font-xxs);
+}
+
+@media (max-width: 900px) {
+    .catalog-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .catalog-nav {
+        position: sticky;
+        z-index: 50;
+        display: flex;
+        gap: 0;
+        width: 100%;
+        height: auto;
+        padding: 0;
+        overflow-x: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--border-primary);
+    }
+
+    .catalog-nav-label,
+    .catalog-nav-note {
+        display: none;
+    }
+
+    .catalog-nav a {
+        flex: 0 0 auto;
+        padding: 0.5rem 0.75rem;
+        border-right: 1px solid var(--border-subtle);
+    }
+
+    .catalog-principles,
+    .catalog-swatches {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 600px) {
+    .catalog-title-row {
+        display: block;
+    }
+
+    .catalog-actions {
+        margin-top: 1rem;
+    }
+
+    .catalog-metrics,
+    .catalog-grid-2,
+    .catalog-principles,
+    .catalog-subsystems,
+    .catalog-empty-states,
+    .catalog-share-state-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .catalog-metrics > div,
+    .catalog-principles article,
+    .catalog-grid-2 > *,
+    .catalog-subsystems > div:not(.catalog-subhead),
+    .catalog-empty-states > div {
+        border-right: 0;
+        border-bottom: 1px solid var(--border-primary);
+    }
+
+    .catalog-section-header {
+        grid-template-columns: 2rem 1fr;
+    }
+
+    .catalog-section-header span:last-child {
+        display: none;
+    }
+
+    .catalog-swatches,
+    .catalog-form-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .catalog-inventory-tools {
+        align-items: start;
+        flex-direction: column;
+    }
+
+    .catalog-footer span:nth-child(2) {
+        display: none;
+    }
+}
+
+/* Slice register example: the production composition needs a bounded height
+   inside the catalogue, where it is not a flex child of the app shell. */
+.catalog-slice-layout {
+    height: 34rem;
+    border: var(--frame-border);
+    background: var(--surface-content);
+    overflow: hidden;
+}
+
+.catalog-slice-layout .slice-record {
+    padding: 1rem;
+}
+
+.catalog-slice-states {
+    margin-top: 1rem;
+    padding: 0 0.625rem 0.5rem;
+    border: var(--content-border);
+    background: var(--surface-content);
+}
+
+/* The register demo is a sample list, not a viewport-filling panel. */
+.catalog-attention-body {
+    max-width: 72rem;
+    margin-bottom: 0.75rem;
+    border: var(--content-border);
+    background: var(--surface-content);
+}

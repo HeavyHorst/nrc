@@ -1,0 +1,135 @@
+/* Compact task register composition. The 14-cell desktop row remains intact so
+   sorting, detail data, and virtual-list table spacers keep one data source. */
+@media (max-width: 768px) {
+    .task-list-view {
+        overflow-x: hidden;
+    }
+
+    .task-table,
+    .task-table[data-column-resize-ready] {
+        width: 100%;
+        table-layout: auto !important;
+    }
+
+    .task-table thead {
+        display: none;
+    }
+
+    .task-table tbody tr[data-task-id] {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-areas:
+            "title title title"
+            "status priority assignee";
+        gap: 0.375rem 0.625rem;
+        min-height: 4.25rem;
+        padding: 0.625rem 0.75rem;
+        box-sizing: border-box;
+        cursor: pointer;
+    }
+
+    .task-table tbody tr[data-task-id] > td {
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: none !important;
+        padding: 0;
+        border: 0;
+    }
+
+    .task-table tbody tr[data-task-id] > .col-title {
+        grid-area: title;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: var(--font-base);
+        font-weight: 700;
+    }
+
+    .task-table .col-title > span {
+        inset-inline-end: 0;
+    }
+
+    .task-table tbody tr[data-task-id] > .col-status {
+        grid-area: status;
+        align-self: center;
+    }
+
+    .task-table tbody tr[data-task-id] > .col-priority {
+        grid-area: priority;
+        align-self: center;
+        text-align: left;
+    }
+
+    .task-table tbody tr[data-task-id] > .col-assignee {
+        grid-area: assignee;
+        align-self: center;
+        overflow: hidden;
+        max-width: 8rem !important;
+        text-overflow: ellipsis;
+        text-align: right;
+        white-space: nowrap;
+    }
+
+    .task-table tbody tr[data-task-id] > :not(.col-title):not(.col-status):not(.col-priority):not(.col-assignee) {
+        display: none;
+    }
+
+    /* Virtual rows deliberately have no data-task-id and retain native table
+       layout, allowing their single spanning cell to preserve scroll height. */
+    .task-table tbody tr[aria-hidden="true"] {
+        display: table-row;
+    }
+
+    .task-table tbody tr[aria-hidden="true"] > td {
+        display: table-cell;
+    }
+}
+
+/* Slice register phone composition: the register is the whole surface and the
+   record is a drill-in, because the strip needs the full width to stay
+   recognizable. The desktop layout keeps register and record side by side. */
+@media (max-width: 768px) {
+    .slice-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .slice-register {
+        border-right: 0;
+    }
+
+    .slice-record {
+        display: none;
+        padding: 0.625rem;
+    }
+
+    .slice-view[data-slice-mobile-detail="true"] .slice-register {
+        display: none;
+    }
+
+    .slice-view[data-slice-mobile-detail="true"] .slice-record {
+        display: block;
+    }
+
+    /* The record's two fields share a row on a wide pane; a phone stacks them. */
+    .slice-record-fields {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* Phone controls follow the mobile register scale: the register's action is a
+       touch target, and its fields read at the mobile input size so focus does
+       not zoom the viewport. */
+    .slice-register-head > .header-operation,
+    .slice-create-row > .btn {
+        min-height: 44px;
+        height: 44px;
+        padding-inline: 8px;
+    }
+
+    .slice-create-row > .filter-input,
+    .slice-owner-input,
+    .slice-outcome-input {
+        font-size: var(--mobile-font-lg);
+    }
+
+}

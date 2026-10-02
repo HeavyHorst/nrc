@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100">
+  <!-- 
+    Design inspired by 'Allianz Industrie Forschung' (AiF) and 'Pyrex Lifetime Red'.
+    Color: Lifetime Red (#F04E30)
+    Style: Heavy Geometric / Industrial
+  -->
+  
+  <defs>
+    <style>
+      .lifetime-red { fill: #F04E30; }
+      .industrial-grey { fill: #6d6e71; }
+      .text-main { font-family: 'IBM Plex Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-weight: 600; letter-spacing: 0.5px; }
+    </style>
+  </defs>
+
+  <!-- NRC Monogram -->
+  <g transform="translate(10, 15)">
+    <!-- N: Heavy vertical with diagonal cut -->
+    <path class="lifetime-red" d="M0 70 L20 70 L20 30 L45 70 L70 70 L70 0 L50 0 L50 40 L25 0 L0 0 Z" />
+    
+    <!-- R: Connected geometric shapes -->
+    <path class="lifetime-red" d="M80 70 L100 70 L100 45 L115 70 L140 70 L120 40 C135 40 145 30 145 20 C145 10 135 0 120 0 L80 0 Z M100 30 L100 15 L120 15 C122 15 125 17 125 22 C125 28 122 30 120 30 Z" />
+    
+    <!-- C: Heavy block C -->
+    <path class="lifetime-red" d="M155 70 L205 70 L205 50 L175 50 L175 20 L205 20 L205 0 L155 0 Z" />
+  </g>
+
+  <!-- Separator (AiF style square dot nuance) -->
+  <!-- Optional: <rect x="215" y="15" width="10" height="10" class="industrial-grey" /> -->
+
+  <!-- Stacked Text: NO RELAY CHAT -->
+  <g transform="translate(225, 36)">
+    <text class="industrial-grey text-main" font-size="20" x="0" y="0">NO</text>
+    <text class="industrial-grey text-main" font-size="20" x="0" y="22">RELAY</text>
+    <text class="industrial-grey text-main" font-size="20" x="0" y="44">CHAT</text>
+  </g>
+</svg>

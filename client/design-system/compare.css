@@ -1,0 +1,111 @@
+:root {
+    color-scheme: dark;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    background: #080b0a;
+    color: #d9dfd5;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    min-height: 100vh;
+    margin: 0;
+    background: #080b0a;
+}
+
+.compare-header {
+    min-height: 5rem;
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 2rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid #4d6b5c;
+}
+
+.compare-header strong,
+.compare-case span {
+    color: #70a58a;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+}
+
+.compare-header h1 {
+    margin: 0.3rem 0 0;
+    font-size: clamp(1.25rem, 2.5vw, 2.25rem);
+}
+
+.compare-header p {
+    margin: 0;
+    color: #8f9a93;
+    font-size: 0.75rem;
+}
+
+.compare-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    background: #4d6b5c;
+}
+
+.compare-case {
+    min-width: 0;
+    height: min(52rem, calc(100vh - 2rem));
+    display: grid;
+    grid-template-rows: 3rem minmax(0, 1fr);
+    background: #101612;
+}
+
+.compare-case > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #4d6b5c;
+}
+
+.compare-case > header div {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.compare-case b {
+    font-size: 0.8rem;
+}
+
+.compare-case a {
+    flex: 0 0 auto;
+    padding: 0.35rem 0.55rem;
+    border: 1px solid #70a58a;
+    color: #d9dfd5;
+    font-size: 0.65rem;
+    text-decoration: none;
+}
+
+.compare-case a:hover {
+    background: #70a58a;
+    color: #080b0a;
+}
+
+.compare-case iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: #ffffff;
+}
+
+@media (max-width: 70rem) {
+    .compare-header {
+        align-items: start;
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+
+    .compare-case {
+        height: 48rem;
+    }
+}

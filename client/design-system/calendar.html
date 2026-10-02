@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en" data-theme="lupine">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NRC / Calendar prototype</title>
+  <link rel="icon" href="../favicon.svg">
+  <link rel="stylesheet" href="../css/main.css?v=20260926rows3">
+  <link rel="stylesheet" href="calendar.css">
+</head>
+<body class="calendar-study">
+  <div class="study-banner"><strong>NRC / INTERACTIVE STUDY</strong><span>Fictional data · Today: 28 Sep 2026 · Changes last until reload</span><button class="btn" id="theme">DARK THEME</button></div>
+  <div class="study-shell">
+    <nav class="study-nav" aria-label="Workspace views"><span>WORK / NRC-300</span><button class="btn" data-view="attention">ATTENTION <small>WHY</small></button><button class="btn" data-view="calendar">CALENDAR <small>WHEN</small></button><p>Two views.<br>Same records.</p><a href="index.html">UI CATALOGUE ↗</a></nav>
+    <main>
+      <header class="panel-header header-register filter-register">
+        <div class="header-register-identity-row"><span class="header-register-title" id="title">CALENDAR</span><span class="header-register-state" id="range"></span></div>
+        <div class="header-register-control-row study-controls" id="controls">
+          <div class="study-calendar-controls"><button class="btn" id="prev" aria-label="Previous month">←</button><button class="btn" id="today">TODAY</button><button class="btn" id="next" aria-label="Next month">→</button><div class="tab-group" role="group" aria-label="Calendar layout"><button class="btn nav-tab" data-mode="agenda">AGENDA</button><button class="btn nav-tab" data-mode="month">MONTH</button></div></div>
+          <label class="header-filter-cell">ASSIGNEE <select class="filter-select" id="person"><option value="">ALL</option><option>RENE</option><option>ALEX</option><option>JORDAN</option></select></label>
+          <label class="header-filter-cell">PROJECT <select class="filter-select" id="project"><option value="">ALL</option><option>SEARCH</option><option>PLATFORM</option><option>CUSTOMERS</option><option>ADMIN</option></select></label>
+        </div>
+      </header>
+      <div class="study-context" id="context"></div>
+      <div id="overdue"></div>
+      <div class="study-content"><section id="records" aria-label="Work records"></section><aside id="inspector" aria-label="Record inspector" hidden></aside></div>
+      <div class="study-status" id="status" role="status" aria-live="polite"></div>
+    </main>
+  </div>
+  <script type="module" src="calendar.mjs"></script>
+</body>
+</html>

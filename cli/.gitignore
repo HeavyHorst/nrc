@@ -1,0 +1,8 @@
+/nrc
+cmd/nrc/nrc
+*.o
+*.a
+*.so
+.DS_Store
+dist/
+bin/

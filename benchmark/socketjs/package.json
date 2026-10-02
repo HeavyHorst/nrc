@@ -1,0 +1,15 @@
+{
+  "name": "nrc-socketjs-benchmark",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Comparable Socket.IO benchmark baseline for NRC",
+  "scripts": {
+    "server": "node server.js",
+    "bench": "node benchmark.js"
+  },
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
+  }
+}

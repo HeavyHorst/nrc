@@ -1,0 +1,49 @@
+# Build artifacts
+server
+server_debug
+codename_orion
+test_runner
+/nrc
+/client/dist/
+/cli/dist/
+nrc-ai/nrc-ai
+services/bots/nrc-ai/nrc-ai
+
+# Local deployment helper
+/docker/deploy.sh
+
+# Local credentials (keep the tracked configuration example).
+.env
+.env.*
+!.env.example
+
+# Benchmark binary
+benchmark/nrc-bench
+benchmark/bin/
+
+# Benchmark results
+/.benchmark-results/
+
+# Benchmark artifacts
+node_modules/
+benchmark/socketjs/node_modules/
+benchmark/uwebsockets/.deps/
+benchmark/uwebsockets/uwebsockets-bench-server
+benchmark/uwebsockets/uwebsockets-bench-server.manifest.txt
+/.amp/
+.hegel/
+
+# Metrics bot binary
+nrc-metrics/nrc-metrics
+
+data/
+
+# Clay client binaries
+client_clay/nrc_terminal
+client_clay/client_clay
+
+# CLI toolbox binary
+cli/toolbox/nrc
+
+# Tailscale proxy binary
+services/auth/tailscale-proxy/tailscale-proxy

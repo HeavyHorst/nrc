@@ -1,0 +1,47 @@
+# Optional overlay: adds the publishing sidecar and private Tailscale API gateway.
+# Use with docker/docker-compose.yml. Both host ports are loopback-only;
+# put ONLY 8093 behind your public HTTPS reverse proxy.
+services:
+  tailscale-proxy:
+    environment: !override
+      # Remove base-file interpolation overrides; shared credentials come from .env.
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      NRC_PUBLISH_BACKEND: http://publish:8094
+      NRC_PUBLISH_WORKSPACE: ${NRC_PUBLISH_WORKSPACE:?set NRC_PUBLISH_WORKSPACE}
+  websocket-server:
+    environment: !override {}
+  publish:
+    build:
+      context: ..
+      dockerfile: services/bots/nrc-publish/Dockerfile
+    # Same authoritative infrastructure credentials as NRC and the proxy.
+    env_file:
+      - ../.env
+    environment:
+      NRC_SERVER: ws://websocket-server:8080
+      NRC_WORKSPACE: ${NRC_PUBLISH_WORKSPACE:?set NRC_PUBLISH_WORKSPACE}
+      PUBLISH_ADMIN_USER: ${PUBLISH_ADMIN_USER:?set PUBLISH_ADMIN_USER}
+      PUBLISH_ADMIN_PASSWORD: ${PUBLISH_ADMIN_PASSWORD:?set PUBLISH_ADMIN_PASSWORD}
+      PUBLISH_REVIEW_URL: ${PUBLISH_REVIEW_URL:-}
+      PUBLISH_BRAND: ${PUBLISH_BRAND:-NRC}
+      PUBLISH_ADMIN_ADDR: :8094
+      PUBLISH_FILES_DIR: /data/files
+    ports:
+      - "127.0.0.1:8093:8093"
+      - "127.0.0.1:8094:8094"
+    volumes:
+      - publish-data:/data
+      - attachments:/data/files:ro
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - websocket-server
+    restart: unless-stopped
+    networks:
+      - orion-network
+
+volumes:
+  publish-data:
