@@ -1,8 +1,8 @@
 {
   "id": "./",
-  "name": "NRC Terminal",
-  "short_name": "NRC",
-  "description": "No Relay Chat terminal for realtime messages and persistent tasks.",
+  "name": "nrc",
+  "short_name": "nrc",
+  "description": "nrc terminal for realtime messages and persistent tasks.",
   "start_url": "./",
   "scope": "./",
   "display_override": ["window-controls-overlay"],

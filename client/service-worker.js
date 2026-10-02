@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261002docs1";
+const CACHE_NAME = "nrc-terminal-20261002name1";
 
 const APP_SHELL = [
   "./",

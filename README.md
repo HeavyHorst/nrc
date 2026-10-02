@@ -1,4 +1,4 @@
-# NRC — No Relay Chat
+# nrc
 
 NRC is a single-node collaboration server written in Odin, with a web client and
 a Go CLI. It combines real-time chat and DMs with persistent tasks, notes, files,

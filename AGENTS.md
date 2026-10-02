@@ -1,12 +1,12 @@
 # AGENTS.md
 
 ## Project Overview
-This is NRC (No Relay Chat), a WebSocket collaboration server written in **Odin**.
+This is nrc, a WebSocket collaboration server written in **Odin**.
 Workers own workspace state and non-blocking connection I/O. Start with
 `docs/DEVELOPMENT.md` for architecture, build and test commands.
 
 ## NRC Design Philosophy
-"No Relay Chat" emphasizes the ephemeral, real-time nature of the system. It is a dry, functional piece of infrastructure, like a government utility or a dedicated hardware terminal.
+nrc combines real-time chat with persistent workspace records.
 
 - **NRC-300**: Standard nomenclature for the terminal interface.
 - **Messages**: Ephemeral by default. Operators can enable bounded room-message retention; DMs remain ephemeral.

@@ -12,8 +12,8 @@ var version = "dev"
 
 var rootCmd = &cobra.Command{
 	Use:   "nrc",
-	Short: "NRC - No Relay Chat CLI",
-	Long:  "NRC - No Relay Chat CLI\n\nA command-line interface for NRC real-time collaboration.",
+	Short: "nrc CLI",
+	Long:  "nrc CLI\n\nA command-line interface for nrc real-time collaboration.",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		h, _ := cmd.Flags().GetBool("human")
 		j, _ := cmd.Flags().GetBool("json")
