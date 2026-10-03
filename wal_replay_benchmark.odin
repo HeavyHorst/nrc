@@ -11,6 +11,7 @@ import "core:time"
 
 import "persistence"
 import pr "protocol"
+import "ulid"
 
 Replay_Bench_Worker :: struct {
 	dir, kind:                                string,
@@ -22,6 +23,7 @@ Replay_Bench_Worker :: struct {
 	entities:                                 int,
 	tlsf_bytes:                               int,
 	worker_heap:                              bool,
+	clock_setup:                              time.Duration,
 }
 
 replay_bench_worker :: proc(raw: rawptr) {
@@ -52,6 +54,12 @@ replay_bench_worker :: proc(raw: rawptr) {
 		delete(backing, heap)
 	}
 	shard_replay_state_init()
+	// The clock is thread-local. Match production worker initialization rather
+	// than timing its potentially two-second TSC calibration as WAL replay.
+	clock_watch: time.Stopwatch
+	time.stopwatch_start(&clock_watch)
+	ulid.init()
+	d.clock_setup = time.stopwatch_duration(clock_watch)
 	sync.wait_group_done(d.ready)
 	for sync.atomic_load(d.start) == 0 do time.sleep(100 * time.Microsecond)
 	d.ok = init_active_sharded_worker_persistence(d.dir, FRESH_STORAGE_LAYOUT_GENERATION, d.index, d.workers)
@@ -245,6 +253,8 @@ benchmark_wal_replay :: proc(t: ^testing.T) {
 	start, release: u32
 	sync.wait_group_add(&ready, workers)
 	sync.wait_group_add(&done, workers)
+	setup_watch: time.Stopwatch
+	time.stopwatch_start(&setup_watch)
 	for &d, index in data {
 		d = {
 			dir           = dir,
@@ -266,6 +276,16 @@ benchmark_wal_replay :: proc(t: ^testing.T) {
 		assert(threads[index] != nil)
 	}
 	sync.wait_group_wait(&ready)
+	setup_elapsed := time.stopwatch_duration(setup_watch)
+	clock_max: time.Duration
+	for d in data do clock_max = max(clock_max, d.clock_setup)
+	fmt.printf(
+		"REPLAY_SETUP kind=%s workers=%d seconds=%.9f clock_max_seconds=%.9f\n",
+		kind,
+		workers,
+		time.duration_seconds(setup_elapsed),
+		time.duration_seconds(clock_max),
+	)
 	replay_bench_perf_control(perf_control, perf_ack, "enable\n")
 	watch: time.Stopwatch
 	time.stopwatch_start(&watch)

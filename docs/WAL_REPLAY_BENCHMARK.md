@@ -5,6 +5,13 @@
 16 pinned workers. It uses real files and the host storage implementation,
 not simulation or an in-memory decoder.
 
+**Timing correction:** the historical campaigns below inadvertently included
+lazy per-worker clock initialization inside the replay timer. On this orb,
+Odin's TSC-frequency fallback sleeps for two seconds. Their rates and speedups
+describe that larger interval, not isolated WAL-processing CPU scalability.
+The current harness initializes every worker's clock before the gate and
+reports setup separately; the corrected campaign is recorded at the end.
+
 ## Workload and timing contract
 
 - Fixed total workload: 524,288 create records, one mutation per transaction,
@@ -24,7 +31,12 @@ not simulation or an in-memory decoder.
   WAL MB/s is logical file bytes divided by elapsed time, not physical disk I/O.
 - Timing starts after every worker is initialized and waiting at a shared start
   gate, and ends when the last persistence initialization returns. Thread
-  creation, fixture generation, correctness checks and teardown are excluded.
+  creation, initial heap/page setup, clock calibration, fixture generation,
+  correctness checks and teardown are excluded. `REPLAY_SETUP` reports
+  wall time from thread creation through all workers becoming ready, and the
+  maximum individual worker clock-initialization duration. These overlapping
+  durations must not be added together. Setup excludes fixture generation,
+  post-replay verification and teardown, so setup + replay is not total startup.
   The start gate uses 100 µs polling, insignificant for second-long samples.
   Network readiness, retained messages and full server startup are not timed.
 - Every run checks success, shard ownership, entity counts, IDs, types/status,
@@ -43,8 +55,8 @@ not simulation or an in-memory decoder.
 
 The current benchmark defaults to the production growing worker TLSF heap
 (`NRC_REPLAY_BENCH_ALLOCATOR=worker`). Explicit `heap` selects the old libc heap;
-`tlsf` selects the historical fixed-budget experiment. Results below were
-measured before the production-default rollout, not with the growing heap.
+`tlsf` selects the historical fixed-budget experiment. Historical results were
+measured before the production-default rollout and clock-boundary correction.
 Growing-heap initial setup is excluded, but subsequent pool growth is timed.
 
 Build once, then exit the compiler before timing. Use a disposable location;
@@ -69,8 +81,10 @@ amp orb service logs wal-replay-bench
 amp orb service stop wal-replay-bench
 ```
 
-The runner retains pilot/run logs, `samples.json` and `summary.json`, and refuses
-to overwrite a result directory. `NRC_REPLAY_BENCH_PER_SHARD` and
+The runner retains pilot/run logs, `samples.json` and `summary.json`, including
+separate setup/clock durations, and refuses to overwrite a result directory.
+It requires a binary with the corrected `REPLAY_SETUP` output; historical
+binaries require their matching historical runner. `NRC_REPLAY_BENCH_PER_SHARD` and
 `NRC_REPLAY_BENCH_PAYLOAD_BYTES` can change fixture dimensions; set them
 consistently during generation and replay. Do not compile, run other benchmarks
 or execute CPU-heavy tests during the campaign.
@@ -535,4 +549,140 @@ Checked logs, samples, median/min/max summaries, the 24 gated counter runs,
 three CPU profiles as text reports, binary/source fingerprints and verification
 results are retained under `.amp/in/artifacts/wal-replay-optimization/`.
 Raw DWARF stack data and disposable fixture/binary directories are not exported.
-The changes are local and uncommitted.
+Those samples predate the production allocator rollout and clock correction.
+
+## Clock-initialized replay, 2026-10-03
+
+Oracle identified that the benchmark did not call `ulid.init()` on its replay
+workers. The first WAL initialization therefore lazily calibrated each worker's
+thread-local TSC inside the timer. A diagnostic trace confirmed failed hardware
+`perf_event_open` calls followed by two-second sleeps. The sleeps overlap across
+workers, creating roughly two wall seconds of fixed overhead, not two seconds
+times the worker count. Production initializes the clock before persistence.
+
+The corrected harness initializes each pinned worker's clock before signaling
+`ready`. It reports aggregate worker setup separately, including thread creation,
+initial heap setup/page touching and clock initialization. A second diagnostic
+trace verified that all eight calibration sleeps precede `REPLAY_SETUP` and the
+replay interval. Traced diagnostic times are not throughput samples.
+
+### Campaign contract
+
+Based on [the worker-default revision](https://github.com/HeavyHorst/nrc/commit/22a85c9fc5e9617576abcf170249ce20fd25de93)
+plus this benchmark-only clock/setup-reporting correction. Same Odin version,
+compiler flags, reported 8-core/16-thread KVM hardware, affinity ordering and
+canonical workload described above. Regenerated with the unchanged fixture
+builder: 524,288 records per workload and the same serialized WAL sizes.
+Recovery still uses two verified passes. No production recovery or allocator
+policy changed in this follow-up.
+
+Two sequential disk campaigns: fixed-budget TLSF first, growing production
+worker heap second. Each uses 1/2/4/8/16 workers, ten independent processes per
+cell, rotating/reversing configuration order and one excluded pilot per cell.
+The RAM-backed control then uses the exact disk fixtures copied to ext4 on a
+6 GiB loop image in tmpfs, one/eight workers, ten processes per cell and fixed
+TLSF. All **360 timed samples and 36 pilots** passed full entity/payload checks.
+There are no subtracted or synthetically corrected historical samples here.
+No builds, tests or other benchmark campaigns ran concurrently.
+
+Host scheduling, device caches and power policy remain uncontrolled. These are
+sequential campaigns, not interleaved allocator/storage A/B pairs. Hardware
+instruction/cycle counters remain unavailable. All rates below are median
+**thousand records/s**, counting each logical record once.
+
+### Fixed-budget TLSF, disk
+
+| Workers | Tasks, k records/s | Assets, k records/s | Mixed, k records/s |
+| ---: | ---: | ---: | ---: |
+| 1 | 174.9 | 214.1 | 190.4 |
+| 2 | 323.2 | 395.2 | 353.7 |
+| 4 | 516.6 | 526.4 | 533.8 |
+| 8 | 460.6 | 507.4 | 497.7 |
+| 16 | 474.9 | 522.8 | 480.9 |
+
+One-to-eight speedups are **2.63× / 2.37× / 2.61×**, rather than the historical
+1.65× / 1.55× / 1.59× over the interval containing clock initialization.
+Eight-worker replay takes **1.138 / 1.033 / 1.053 seconds**. Median setup spans
+approximately 2.15–2.85 seconds across cells; clock calibration alone remains
+approximately two seconds, now correctly reported outside replay.
+
+Disk throughput still flattens around four workers. Sixteen workers use SMT,
+not sixteen physical cores. Raw min/max spread is retained: the fastest
+sixteen-worker Asset/Mixed runs exceed 1.1 million records/s while their medians
+are around 0.5 million. Do not interpret small median differences as a proven
+benefit or regression, or infer a precise native-server CPU ceiling.
+
+### Growing production worker heap, disk
+
+| Workers | Tasks, k records/s | Assets, k records/s | Mixed, k records/s |
+| ---: | ---: | ---: | ---: |
+| 1 | 126.4 | 164.9 | 140.5 |
+| 2 | 137.8 | 203.7 | 161.7 |
+| 4 | 234.0 | 372.1 | 278.6 |
+| 8 | 438.2 | 539.8 | 503.0 |
+| 16 | 526.1 | 557.5 | 566.6 |
+
+One-to-eight speedups are **3.47× / 3.27× / 3.58×**; eight-worker replay takes
+**1.197 / 0.972 / 1.047 seconds**. Median setup spans approximately 2.15–2.90
+seconds. Subsequent pool growth and faults are included in replay, unlike the
+fixed-budget comparison.
+
+This is a production-policy measurement, **not a constant-preallocation CPU
+control**: the initial write-touched capacity is 64 MiB per worker, so it grows
+from 64 MiB at one worker to 512 MiB at eight and 1 GiB at sixteen. More workers
+can move more page-commit work into excluded setup and require less timed
+growth. The fixed-budget comparison keeps total preallocation at 1.75 GiB
+for every worker count. Do not attribute all production-mode speedup to CPU
+parallelism or treat its low-worker allocation overhead as storage latency.
+
+### RAM-backed fixed-budget control
+
+| Workload | One worker, k records/s | Eight workers, k records/s | Speedup |
+| --- | ---: | ---: | ---: |
+| Tasks | 187.0 | 1,029.5 | 5.51× |
+| Assets | 231.3 | 1,147.7 | 4.96× |
+| Mixed | 206.3 | 1,043.7 | 5.06× |
+
+Eight-worker replay takes **0.510 / 0.457 / 0.502 seconds**, versus disk's
+1.138 / 1.033 / 1.053 seconds with the same fixed-budget mode. The storage-medium
+control changes the remaining limit substantially: roughly twice the
+eight-worker throughput and much stronger scaling. This supports a significant
+storage-path contribution after calibration is excluded, but does not identify
+a particular device, filesystem lock or scheduling bottleneck. The loop/ext4
+path still performs synchronous direct I/O; this is not a pure CPU benchmark.
+No shared SHA lock was found. Remaining nonlinearity cannot be assigned to SHA,
+memory bandwidth or a specific global lock from these measurements alone.
+
+### Gated counters and allocation placement
+
+Three independent Mixed perf-stat runs for each allocator and one/eight workers,
+after the throughput campaigns. The existing FIFO gates exclude setup and
+teardown. All **12 diagnostic runs** passed full replay verification. Medians:
+
+| Mode | Workers | Replay seconds | CPU seconds | Average active CPUs | Page faults | mprotect | pread64 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fixed TLSF | 1 | 2.696 | 2.448 | 0.91 | 62 | 0 | 1,792 |
+| Fixed TLSF | 8 | 0.995 | 2.492 | 2.51 | 81 | 0 | 1,792 |
+| Growing worker | 1 | 3.813 | 3.916 | 1.03 | 303,388 | 0 | 1,792 |
+| Growing worker | 8 | 0.988 | 5.364 | 5.43 | 122,985 | 0 | 1,792 |
+
+Average active CPUs is computed per run as gated CPU seconds / replay seconds,
+then summarized; it is not perf's whole-process `CPUs utilized` field. CPU totals
+include harness threads but exclude storage work charged outside this process.
+The fixed comparison now shows about 2.5 active CPUs at eight workers, not the
+historical 0.86 over the interval containing calibration.
+
+The production heap retains zero measured `mprotect` calls, but growth/page
+commit costs are now visible inside replay. Its higher CPU work and faults
+must not be described as proof of a particular contention mechanism without
+stacks or lock traces. Nor does zero `mprotect` mean allocation is free.
+
+### Verification and exports
+
+The normal root suite passed **570 tests**, production vet passed, Python syntax
+was checked, and all sample counts and median/min/max rates were independently
+recomputed from record counts and elapsed times. Raw samples, setup durations,
+run/pilot logs, gated counter files and source/binary fingerprints are retained
+under `.amp/in/artifacts/wal-replay-clock-fixed/`. Disposable fixtures, binary,
+RAM image and loop mount are removed after export. Historical reports remain
+available, clearly distinguished from these newly measured results.

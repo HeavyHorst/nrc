@@ -19,6 +19,8 @@ cases = [(kind, workers) for kind in ("task", "asset", "mixed")
          for workers in worker_counts]
 pattern = re.compile(r"REPLAY_RESULT kind=(\w+) workers=(\d+) records=(\d+) "
                      r"seconds=([\d.]+) records_per_second=([\d.]+)")
+setup_pattern = re.compile(r"REPLAY_SETUP kind=(\w+) workers=(\d+) "
+                           r"seconds=([\d.]+) clock_max_seconds=([\d.]+)")
 samples = []
 
 
@@ -30,11 +32,14 @@ def run(kind, workers, label):
                             stderr=subprocess.STDOUT, timeout=300)
     (output / f"{label}-{kind}-{workers}.log").write_text(result.stdout)
     match = pattern.search(result.stdout)
-    if result.returncode or not match or "The test was successful" not in result.stdout:
+    setup = setup_pattern.search(result.stdout)
+    if result.returncode or not match or not setup or "The test was successful" not in result.stdout:
         raise RuntimeError(f"Failed {label}/{kind}/{workers}; inspect retained log")
     assert match[1] == kind and int(match[2]) == workers
+    assert setup[1] == kind and int(setup[2]) == workers
     sample = dict(kind=kind, workers=workers, records=int(match[3]),
-                  seconds=float(match[4]), records_per_second=float(match[5]))
+                  seconds=float(match[4]), records_per_second=float(match[5]),
+                  setup_seconds=float(setup[3]), clock_max_seconds=float(setup[4]))
     print(label, json.dumps(sample), flush=True)
     return sample
 
@@ -58,12 +63,16 @@ for kind, workers in cases:
     selected = [s for s in samples if s["kind"] == kind and s["workers"] == workers]
     rates = [s["records_per_second"] for s in selected]
     seconds = [s["seconds"] for s in selected]
+    setup_seconds = [s["setup_seconds"] for s in selected]
     baseline = statistics.median(s["records_per_second"] for s in samples
                                  if s["kind"] == kind and s["workers"] == 1)
     row = dict(kind=kind, workers=workers, samples=len(selected),
                median_records_per_second=statistics.median(rates),
                min_records_per_second=min(rates), max_records_per_second=max(rates),
                median_seconds=statistics.median(seconds),
+               median_setup_seconds=statistics.median(setup_seconds),
+               min_setup_seconds=min(setup_seconds), max_setup_seconds=max(setup_seconds),
+               median_clock_max_seconds=statistics.median(s["clock_max_seconds"] for s in selected),
                wal_MB_per_second=selected[0]["wal_bytes"] / statistics.median(seconds) / 1e6,
                speedup=statistics.median(rates) / baseline)
     summary.append(row)
