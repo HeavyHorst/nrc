@@ -13,6 +13,7 @@ package main
 import "core:container/queue"
 import "core:fmt"
 import "core:log"
+import tlsf "core:mem/tlsf"
 import "core:net"
 import "core:strings"
 import "core:sync"
@@ -302,7 +303,7 @@ worker_state_init_core :: proc(server: ^NRC_Server, thread_index: int, connectio
 	}
 
 	connection_storage_init()
-	td.spool = byte_pool.init_buffer_pool()
+	td.spool = byte_pool.init_buffer_pool(worker_backing_allocator())
 	init_batch_state_pool()
 	td.state = .Running
 	td.active_sockets = make(map[net.TCP_Socket]struct{}, connection_capacity)
@@ -326,13 +327,13 @@ worker_state_init_core :: proc(server: ^NRC_Server, thread_index: int, connectio
 }
 
 worker_state_init_real_io :: proc() -> bool {
-	errno := nbio.init(&td.io)
+	errno := nbio.init(&td.io, alloc = worker_backing_allocator())
 	if errno != linux.Errno.NONE {
 		log.errorf("[T%d] Failed to initialize nbio: %v", td.thread_index, errno)
 		return false
 	}
 
-	if err := nbio.pbuf_ring_init(&td.io); err != linux.Errno.NONE {
+	if err := nbio.pbuf_ring_init(&td.io, allocator = worker_backing_allocator()); err != linux.Errno.NONE {
 		log.errorf("[T%d] Failed to initialize buffer ring: %v", td.thread_index, err)
 		return false
 	}
@@ -413,6 +414,19 @@ worker_run_pre_tick :: proc() -> (did_work: bool) {
 }
 
 worker_thread :: proc(worker_data: Worker_Thread_Data) {
+	// Notify the coordinator only after allocator and scratch teardown finish.
+	defer sync.wait_group_done(&worker_data.server.wg)
+	backing := context.allocator
+	heap: tlsf.Allocator
+	if !worker_heap_init(&heap, backing) {
+		log.errorf("[T%d] Failed to initialize worker TLSF heap", worker_data.thread_index)
+		_ = chan.send(worker_data.server.worker_startup, false)
+		return
+	}
+	defer tlsf.destroy(&heap)
+	td.backing_allocator = backing
+	// Context assignments are lexical: install in the complete worker scope.
+	context.allocator = worker_heap_allocator(&heap)
 	defer jwt_validation_scratch_destroy()
 	worker_state_init_core(worker_data.server, worker_data.thread_index)
 
@@ -426,13 +440,11 @@ worker_thread :: proc(worker_data: Worker_Thread_Data) {
 
 	if !worker_state_init_real_io() {
 		_ = chan.send(td.server.worker_startup, false)
-		sync.wait_group_done(&td.server.wg)
 		return
 	}
 
 	if !worker_state_init_real_persistence() {
 		_ = chan.send(td.server.worker_startup, false)
-		sync.wait_group_done(&td.server.wg)
 		return
 	}
 	worker_state_start_real_timers()
@@ -470,7 +482,6 @@ worker_thread :: proc(worker_data: Worker_Thread_Data) {
 	}
 
 	when ODIN_DEBUG do debug_log("[T%d] Worker thread exiting - notifying wait group", td.thread_index)
-	sync.wait_group_done(&td.server.wg)
 }
 
 run_worker_maintenance :: proc() {

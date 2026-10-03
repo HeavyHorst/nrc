@@ -934,6 +934,8 @@ test_active_sharded_startup_recovers_torn_wal_tail_before_replay :: proc(t: ^tes
 	testing.expect(t, append_shard_transaction(&writer, &test_data.tx))
 	shutdown_shard_transaction_writer(&writer)
 
+	valid_inspection := persistence.inspect_wal_file_strict(path, SHARD_WAL_MAGIC, shard, proc(_: u8, _: u16, _: []byte) -> bool {return true})
+	testing.expect(t, valid_inspection.ok && valid_inspection.record_count == 1)
 	valid_file, valid_open_err := os.open(path)
 	testing.expect(t, valid_open_err == nil)
 	valid_size: i64
@@ -973,6 +975,21 @@ test_active_sharded_startup_recovers_torn_wal_tail_before_replay :: proc(t: ^tes
 		testing.expect(t, size_err == nil)
 		testing.expect_value(t, recovered_size, valid_size)
 		os.close(recovered_file)
+	}
+	// The reused inspection must describe the durable prefix, not the torn
+	// suffix. Appending and strict reinspection exercise the continued chain.
+	reopened := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)workspace)
+	testing.expect(t, reopened != nil)
+	if reopened != nil {
+		testing.expect_value(t, reopened.wal.record_count, u64(1))
+		testing.expect_value(t, reopened.wal.durable_record_count, u64(1))
+		testing.expect_value(t, reopened.wal.last_hash, valid_inspection.last_hash)
+		testing.expect(t, shard_compaction_test_append_task(reopened, workspace, 11, "after recovered tail"))
+		testing.expect(t, persistence.flush_write_batch(&reopened.wal))
+		inspection, floors, ok := scan_shard_transaction_wal(path, shard, {}, false, false)
+		testing.expect(t, ok)
+		testing.expect_value(t, inspection.record_count, u64(2))
+		testing.expect_value(t, floors, Shard_High_Water_Requirements{task = 11, asset = 20, edge = 30})
 	}
 }
 
@@ -1102,6 +1119,14 @@ test_legacy_checkpoint_sealed_and_active_wals_replay_in_manifest_order :: proc(t
 	writer := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)workspace)
 	testing.expect(t, writer != nil)
 	if writer != nil {
+		// Three sequence records but only one active record. Each file starts
+		// its own hash chain; neither cumulative count nor sealed hash is valid
+		// append state for the active file.
+		active := persistence.inspect_wal_file_strict(active_path, SHARD_WAL_MAGIC, shard, proc(_: u8, _: u16, _: []byte) -> bool {return true})
+		sealed := persistence.inspect_wal_file_strict(sealed_path, SHARD_WAL_MAGIC, shard, proc(_: u8, _: u16, _: []byte) -> bool {return true})
+		testing.expect(t, active.ok && sealed.ok && active.last_hash != sealed.last_hash)
+		testing.expect_value(t, writer.wal.record_count, u64(1))
+		testing.expect_value(t, writer.wal.last_hash, active.last_hash)
 		continuation := pr.Task {
 			id      = 40,
 			conv_id = 77,

@@ -1,6 +1,7 @@
 package main
 
 import "core:log"
+import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:sync"
@@ -63,6 +64,7 @@ Shard_Compactor_Thread_Data :: struct {
 }
 
 Shard_Compaction_Job :: struct {
+	allocator:                     mem.Allocator, // Thread-safe ownership across the worker/service boundary.
 	message_source_generation:     u64, // Nonzero selects immutable retained WAL sealing.
 	owner_worker:                  int,
 	shard:                         int,
@@ -80,6 +82,7 @@ Shard_Compaction_Job :: struct {
 }
 
 Shard_Compaction_Result :: struct {
+	allocator:                     mem.Allocator,
 	message_source_generation:     u64,
 	message_sealed_bytes:          u64,
 	owner_worker:                  int,
@@ -95,8 +98,20 @@ Shard_Compaction_Result :: struct {
 	ok:                            bool,
 }
 
+destroy_shard_compaction_job :: proc(job: ^Shard_Compaction_Job) {
+	allocator := context.allocator
+	if job.allocator.procedure != nil do allocator = job.allocator
+	context.allocator = allocator
+	if job.shard_dir != "" do delete(job.shard_dir)
+	if job.source_present do destroy_shard_segment_clean_source(&job.source)
+	job^ = {}
+}
+
 destroy_shard_compaction_result :: proc(result: ^Shard_Compaction_Result, remove_reservation: bool) {
 	if result == nil do return
+	allocator := context.allocator
+	if result.allocator.procedure != nil do allocator = result.allocator
+	context.allocator = allocator
 	if result.active_reservation_path != "" {
 		if remove_reservation do _ = storage_io.remove(result.active_reservation_storage, result.active_reservation_path)
 		delete(result.active_reservation_path)
@@ -478,6 +493,7 @@ shard_compaction_cleaning_plan :: proc(
 
 enqueue_shard_compaction_job :: proc(server: ^NRC_Server, writer: ^Shard_Transaction_Writer) -> bool {
 	if server == nil || writer == nil || !writer.managed do return false
+	context.allocator = worker_backing_allocator()
 	legacy_sealed := writer.manifest.sealed_present && writer.compaction == .Sealed
 	catalog_ready := shard_writer_catalog_cleaning_ready(writer)
 	if !legacy_sealed && !catalog_ready do return false
@@ -504,6 +520,7 @@ enqueue_shard_compaction_job :: proc(server: ^NRC_Server, writer: ^Shard_Transac
 	cloned_dir, clone_err := strings.clone(writer.shard_dir)
 	if clone_err != nil do return false
 	job := Shard_Compaction_Job {
+		allocator                     = context.allocator,
 		owner_worker                  = writer.owner_worker,
 		shard                         = writer.shard,
 		storage                       = writer.storage,
@@ -552,6 +569,7 @@ enqueue_shard_compaction_job :: proc(server: ^NRC_Server, writer: ^Shard_Transac
 when NRC_SIMULATION {
 	enqueue_shard_compaction_job_event :: proc(world: ^Sim_World, writer: ^Shard_Transaction_Writer) -> bool {
 		if world == nil || writer == nil || !writer.managed do return false
+		context.allocator = worker_backing_allocator()
 		legacy_sealed := writer.manifest.sealed_present && writer.compaction == .Sealed
 		catalog_ready := shard_writer_catalog_cleaning_ready(writer)
 		if !legacy_sealed && !catalog_ready do return false
@@ -578,6 +596,7 @@ when NRC_SIMULATION {
 		cloned_dir, clone_err := strings.clone(writer.shard_dir)
 		if clone_err != nil do return false
 		job := Shard_Compaction_Job {
+			allocator                     = context.allocator,
 			owner_worker                  = writer.owner_worker,
 			shard                         = writer.shard,
 			storage                       = writer.storage,
@@ -612,9 +631,11 @@ when NRC_SIMULATION {
 }
 
 run_shard_compaction_job :: proc(job: Shard_Compaction_Job) -> Shard_Compaction_Result {
-	defer if job.shard_dir != "" do delete(job.shard_dir)
-	owned_source := job.source
-	defer if job.source_present do destroy_shard_segment_clean_source(&owned_source)
+	allocator := context.allocator
+	if job.allocator.procedure != nil do allocator = job.allocator
+	context.allocator = allocator
+	owned_job := job
+	defer destroy_shard_compaction_job(&owned_job)
 	if job.message_source_generation != 0 {
 		// This value contains only job-owned immutable inputs, never a pointer
 		// into the worker's live store, indexes, caches, or allocator arenas.
@@ -625,6 +646,7 @@ run_shard_compaction_job :: proc(job: Shard_Compaction_Job) -> Shard_Compaction_
 		}
 		bytes, ok := cluster_message_segment_wal(&build_store, job.message_source_generation, job.message_source_generation + 1)
 		return {
+			allocator = allocator,
 			owner_worker = job.owner_worker,
 			shard = job.shard,
 			message_source_generation = job.message_source_generation,
@@ -633,6 +655,7 @@ run_shard_compaction_job :: proc(job: Shard_Compaction_Job) -> Shard_Compaction_
 		}
 	}
 	result := Shard_Compaction_Result {
+		allocator             = allocator,
 		owner_worker          = job.owner_worker,
 		shard                 = job.shard,
 		manifest_generation   = job.manifest.manifest_generation,
@@ -643,7 +666,7 @@ run_shard_compaction_job :: proc(job: Shard_Compaction_Job) -> Shard_Compaction_
 	if injected_write_failure do persistence.set_wal_short_write_for_test(1)
 	if injected_sync_failure do persistence.set_wal_sync_failure_for_test()
 	source: ^Shard_Segment_Clean_Source
-	if job.source_present do source = &owned_source
+	if job.source_present do source = &owned_job.source
 	source_max_bytes := job.source_max_bytes
 	if source_max_bytes == 0 do source_max_bytes = SHARD_SEGMENT_CLEAN_MAX_SOURCE_BYTES
 	result.segments = build_shard_segment_catalog(
@@ -699,8 +722,7 @@ discard_queued_shard_compaction_jobs :: proc(server: ^NRC_Server) {
 		if job.active_reservation_generation != 0 {
 			remove_shard_active_reservation(job.storage, job.shard_dir, job.active_reservation_generation)
 		}
-		if job.shard_dir != "" do delete(job.shard_dir)
-		if job.source_present do destroy_shard_segment_clean_source(&job.source)
+		destroy_shard_compaction_job(&job)
 	}
 }
 

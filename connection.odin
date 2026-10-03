@@ -42,7 +42,7 @@ connection_storage_init :: proc() {
 	if connection_storage_initialized {
 		return
 	}
-	hm.dynamic_init(&td.connections_by_handle, context.allocator)
+	hm.dynamic_init(&td.connections_by_handle, worker_backing_allocator())
 	td.retained_connection_count = 0
 	connection_storage_initialized = true
 }
@@ -442,6 +442,7 @@ batch_pool_max_free_for_class :: proc(class: int) -> int {
 // Initializes one free-list per class. Lists are LIFO to improve cache locality
 // by reusing the most recently returned batch-state blocks first.
 init_batch_state_pool :: proc() {
+	context.allocator = worker_backing_allocator()
 	for i in 0 ..< Batch_Pool_Class_Count {
 		td.batch_state_pool.free_lists[i] = make([dynamic]^Batch_Send_State, 0, 32)
 	}
@@ -449,6 +450,7 @@ init_batch_state_pool :: proc() {
 
 // Frees all cached blocks during thread shutdown.
 destroy_batch_state_pool :: proc() {
+	context.allocator = worker_backing_allocator()
 	for i in 0 ..< Batch_Pool_Class_Count {
 		free_list := td.batch_state_pool.free_lists[i]
 		for state in free_list {
@@ -463,6 +465,7 @@ destroy_batch_state_pool :: proc() {
 // Layout: [Batch_Send_State][Batch_Item * capacity][iovec * capacity]
 // `items_base`/`iovec_base` are stored so reused states can restore full slices.
 alloc_batch_state_block :: proc(capacity: int, pool_class: int) -> ^Batch_Send_State {
+	context.allocator = worker_backing_allocator()
 	total_size := size_of(Batch_Send_State) + capacity * size_of(Batch_Item) + capacity * size_of(nbio.iovec)
 
 	block, _ := mem.alloc_bytes(total_size)
@@ -564,6 +567,7 @@ alloc_batch_state :: proc(count: int) -> ^Batch_Send_State {
 // Free batch state (single free for entire allocation)
 free_batch_state :: proc(state: ^Batch_Send_State) {
 	if state == nil do return
+	context.allocator = worker_backing_allocator()
 	if state.pool_class < 0 || state.pool_class >= Batch_Pool_Class_Count {
 		td.batch_state_pool.heap_fallback_frees += 1
 		free(state)

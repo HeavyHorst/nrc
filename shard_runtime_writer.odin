@@ -270,11 +270,20 @@ replay_shard_compaction_sequence_host :: proc(
 	apply: bool,
 	recover_active_tail: bool,
 	replayed_record_count: ^u64 = nil,
+	active_inspection: ^persistence.Strict_WAL_Inspection = nil,
 ) -> (
 	floors: Shard_High_Water_Requirements,
 	ok: bool,
 ) {
-	return replay_shard_compaction_sequence_with_storage(storage_io.host_context(), shard_dir, manifest, apply, recover_active_tail, replayed_record_count)
+	return replay_shard_compaction_sequence_with_storage(
+		storage_io.host_context(),
+		shard_dir,
+		manifest,
+		apply,
+		recover_active_tail,
+		replayed_record_count,
+		active_inspection,
+	)
 }
 
 replay_shard_compaction_sequence_with_storage :: proc(
@@ -284,10 +293,12 @@ replay_shard_compaction_sequence_with_storage :: proc(
 	apply: bool,
 	recover_active_tail: bool,
 	replayed_record_count: ^u64 = nil,
+	active_inspection: ^persistence.Strict_WAL_Inspection = nil,
 ) -> (
 	floors: Shard_High_Water_Requirements,
 	ok: bool,
 ) {
+	if active_inspection != nil do active_inspection^ = {}
 	if !shard_compaction_manifest_is_valid(manifest) do return
 	origins: Workspace_Data_Replay_Origins
 	owns_origins := workspace_data_origins_begin(&origins)
@@ -330,6 +341,7 @@ replay_shard_compaction_sequence_with_storage :: proc(
 	if !replay_ok do return floors, false
 	if replayed_record_count != nil do replayed_record_count^ += inspection.record_count
 	if apply && !validate_replayed_shard_edges(manifest.shard) do return floors, false
+	if active_inspection != nil do active_inspection^ = inspection
 	return next_floors, true
 }
 
@@ -385,7 +397,8 @@ init_managed_shard_transaction_writer_with_storage :: proc(
 	active_path := shard_generation_wal_path(shard_dir, manifest.active_generation)
 	defer delete(active_path)
 	if !persistence.init_wal(&writer.wal, storage, active_path, SHARD_WAL_MAGIC, SHARD_WAL_VERSION, shard, nrc_wal_time_now) do return false
-	floors, replay_ok := replay_shard_compaction_sequence(storage, shard_dir, manifest, false, true)
+	active_inspection: persistence.Strict_WAL_Inspection
+	floors, replay_ok := replay_shard_compaction_sequence(storage, shard_dir, manifest, false, true, nil, &active_inspection)
 	if !replay_ok {
 		persistence.shutdown_wal(&writer.wal)
 		writer^ = {}
@@ -397,17 +410,9 @@ init_managed_shard_transaction_writer_with_storage :: proc(
 		writer^ = {}
 		return false
 	}
-	// Each manifest member has an independent hash chain. The complete sequence
-	// above validates cross-file high-water monotonicity; this second active-only
-	// scan restores the append hash and record counters.
-	active_inspection, active_floors, active_ok := scan_shard_transaction_wal(storage, active_path, shard, {}, false, false)
-	_ = active_floors
-	if !active_ok {
-		delete(cloned_dir)
-		persistence.shutdown_wal(&writer.wal)
-		writer^ = {}
-		return false
-	}
+	// Reuse the active file's verified hash/count from the recovery scan. These
+	// are file-local, unlike the sequence's cumulative high-water requirements.
+	// Tail truncation has already succeeded before inspection.ok becomes true.
 	persistence.set_recovered_wal_state(&writer.wal, active_inspection.last_hash, active_inspection.record_count)
 	writer.shard = shard
 	writer.storage = storage

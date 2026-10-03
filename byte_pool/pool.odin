@@ -33,6 +33,7 @@ Alloc_Header :: struct #align (align_of(uintptr)) {
 #assert(size_of(Alloc_Header) % align_of(uintptr) == 0)
 
 BufferPool :: struct {
+	backing_allocator:     runtime.Allocator,
 	arenas:                [dynamic]^Pool_Arena,
 	active_index:          int,
 	used:                  u64,
@@ -48,8 +49,10 @@ BufferPool :: struct {
 	invalid_release_count: u64,
 }
 
-init_buffer_pool :: proc() -> ^BufferPool {
+init_buffer_pool :: proc(allocator := context.allocator) -> ^BufferPool {
+	context.allocator = allocator
 	pool := new(BufferPool)
+	pool.backing_allocator = allocator
 	pool.active_index = -1
 	pool.usage_budget = DEFAULT_POOL_USAGE_BUDGET_BYTES
 	pool.rotate_threshold = DEFAULT_ARENA_ROTATE_THRESHOLD
@@ -70,6 +73,7 @@ destroy_buffer_pool :: proc(pool: ^BufferPool) {
 	if pool == nil {
 		return
 	}
+	context.allocator = pool.backing_allocator
 
 	for arena in pool.arenas {
 		if arena == nil do continue
@@ -84,6 +88,7 @@ buffer_pool_add_arena :: proc(pool: ^BufferPool) -> bool {
 	if pool == nil {
 		return false
 	}
+	context.allocator = pool.backing_allocator
 
 	arena := new(Pool_Arena)
 	err := virtual.arena_init_growing(&arena.arena, reserved = DEFAULT_ARENA_RESERVE_BYTES)

@@ -82,6 +82,20 @@ asset and edge mutations share atomic shard transactions. Background compaction
 uses manifest-driven immutable segments. Transient asynchronous send buffers
 use the thread-local byte pool and are released on completion.
 
+Each production worker installs its own unsynchronized `core:mem/tlsf` heap
+for worker-owned state: entities, maps, indexes and interned strings. It starts
+with a write-touched 64 MiB backing pool, grows in at least 64 MiB chunks (larger
+for oversized requests), reuses freed blocks and releases all pools at worker
+exit. This commits approximately 64 MiB per worker before replay; freed pools
+are retained until exit rather than returned immediately to the OS.
+Individual allocations must fit TLSF's block limit (below 4 GiB on 64-bit,
+including alignment overhead); unsupported allocation/resize requests fail
+without changing an existing allocation. Growth pools never exceed that limit.
+The temporary allocator is unchanged. Byte-pool virtual arenas, connection
+handle storage, batch pools and nbio infrastructure retain their existing
+backing allocators. Compaction/sealing jobs and results explicitly capture the
+thread-safe backing allocator, never the owning worker's TLSF heap.
+
 | Path | Responsibility |
 | --- | --- |
 | `server.odin`, `worker.odin` | Startup, routing, worker lifecycle |

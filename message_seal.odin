@@ -151,9 +151,13 @@ enqueue_message_seal :: proc(store: ^Message_Store, now_ns: i64) -> bool {
 		return false
 	}
 	if store.frozen_published do return true
+	// Only immutable job inputs cross to the service; the frozen store above
+	// remains worker-owned and uses the worker's long-lived allocator.
+	context.allocator = worker_backing_allocator()
 	directory, err := strings.clone(store.directory)
 	if err != nil {store.poisoned = true; return false}
 	job := Shard_Compaction_Job {
+		allocator                 = context.allocator,
 		message_source_generation = store.frozen.active_generation,
 		owner_worker              = td.thread_index,
 		shard                     = store.shard,

@@ -19,6 +19,16 @@ This document lists the benchmarks currently in this repository, what they measu
 7. Disk, network, and concurrent workloads use explicit stopwatches because their multi-phase boundaries do not fit a single microbenchmark callback. Their output must state warm/cold cache and durability semantics.
 8. Allocation counts are separate runs with explicit tracking allocators. Do not compare allocator-instrumented timing with normal timing.
 
+## WAL Replay CPU Scaling
+
+[`WAL_REPLAY_BENCHMARK.md`](WAL_REPLAY_BENCHMARK.md) describes the task-only,
+asset-only and 50/50 mixed replay workloads and measured worker scaling.
+`wal_replay_benchmark.odin` times full production shard persistence initialization,
+including recovery validation, append-state restoration and state/index rebuild.
+`benchmark/wal_replay.py` runs ten checked independent processes per configuration
+and retains raw logs, samples and median/min–max summaries. Host WAL reads use
+O_DIRECT; these are not page-cache-only decoding rates.
+
 ## SPSC Queue Transfer
 
 `spsc/spsc_benchmark.odin` measures one producer and one consumer on separate

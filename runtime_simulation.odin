@@ -221,8 +221,7 @@ when NRC_SIMULATION {
 			storage_io.destroy_sync_snapshot(&snapshot)
 		case Sim_Compaction_Job_Event:
 			job := value.job
-			if job.shard_dir != "" do delete(job.shard_dir)
-			if job.source_present do destroy_shard_segment_clean_source(&job.source)
+			destroy_shard_compaction_job(&job)
 		case Sim_Compaction_Result_Event:
 			result := value.result
 			destroy_shard_compaction_result(&result, false)

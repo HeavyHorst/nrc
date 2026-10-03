@@ -234,6 +234,9 @@ Server_Thread :: struct {
 	// Consolidated workspace state (replaces 6 separate maps)
 	workspaces:                map[string]^Workspace_State,
 
+	// Thread-safe parent heap for infrastructure and cross-thread job ownership.
+	backing_allocator:         mem.Allocator,
+
 	// Thread-local send buffer pool
 	spool:                     ^byte_pool.BufferPool,
 
@@ -300,7 +303,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:fbd6114e"
+BUILD_VERSION :: "dev-2026-10:15234ef"
 PROTOCOL_VERSION :: 8 // Calendar appointment rows carry an explicit time interval.
 
 jwt_auth_secret: string

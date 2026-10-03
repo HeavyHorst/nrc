@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:hash/xxhash"
 import "core:log"
+import tlsf "core:mem/tlsf"
 import "core:os"
 import "core:strings"
 import "core:sync/chan"
@@ -28,10 +29,14 @@ when !NRC_SIMULATION {
 // and owner responsiveness before any sealed file exists.
 @(test)
 test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
+	service_context := context
+	heap: tlsf.Allocator
+	assert(worker_heap_init(&heap, context.allocator, 64 * 1024))
+	defer tlsf.destroy(&heap)
 	old_td := new(Server_Thread)
 	old_td^ = td
 	td = {}
-	defer {td = old_td^; free(old_td)}
+	defer {td = old_td^; free(old_td, service_context.allocator)}
 	server: NRC_Server
 	td.server = &server
 	server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
@@ -42,6 +47,8 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	defer spsc.destroy(server.shard_compaction_results[0])
 	defer discard_queued_shard_compaction_jobs(&server)
 	defer discard_queued_shard_compaction_results(&server)
+	td.backing_allocator = service_context.allocator
+	context.allocator = worker_heap_allocator(&heap)
 	dir := test_wal_path("message-seal-channel")
 	_ = os.remove_all(dir)
 	testing.expect(t, os.make_directory(dir) == nil)
@@ -87,6 +94,12 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	testing.expect(t, maintained)
 	_, flushed := flush_pending_retained_message_writes(&td.message_stores)
 	testing.expect(t, flushed && store.seal_in_flight)
+	testing.expect(t, worker_heap_contains_for_test(&heap, store.frozen))
+	job, queued := chan.try_recv(server.shard_compaction_jobs)
+	assert(queued)
+	testing.expect_value(t, job.allocator, service_context.allocator)
+	testing.expect(t, !worker_heap_contains_for_test(&heap, raw_data(job.shard_dir)))
+	assert(chan.try_send(server.shard_compaction_jobs, job))
 	sealed_path := message_store_path(store.directory, 2, "wal"); defer delete(sealed_path)
 	testing.expect(t, !os.exists(sealed_path))
 	testing.expect(t, store.wal.enabled && store.active_generation == 3)
@@ -102,7 +115,7 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	testing.expect_value(t, result, Message_Store_Result.Capacity)
 	store.active_started_hour += 1
 	testing.expect_value(t, store.wal.write_offset, 0)
-	worker := thread.create_and_start_with_poly_data(&server, proc(s: ^NRC_Server) {_ = service_shard_compaction_job(s)}, context)
+	worker := thread.create_and_start_with_poly_data(&server, proc(s: ^NRC_Server) {_ = service_shard_compaction_job(s)}, service_context)
 	thread.join(worker)
 	thread.destroy(worker)
 	testing.expect(t, process_shard_compaction_results())
