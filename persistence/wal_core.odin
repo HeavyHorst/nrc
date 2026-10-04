@@ -1299,11 +1299,19 @@ truncate_wal_at_with_storage :: proc(storage: storage_io.Context, path: string, 
 	}
 	defer storage_io.discard(f)
 
+	if wal_recovery_fault_for_test == .Truncate {
+		wal_recovery_fault_for_test = .None
+		return false
+	}
 	trunc_err := storage_io.truncate(f, offset)
 	if trunc_err != nil {
 		log.errorf("[T%d] Failed to truncate WAL at offset %d: %v", thread_index, offset, trunc_err)
 		return false
 	} else {
+		if wal_recovery_fault_for_test == .Sync {
+			wal_recovery_fault_for_test = .None
+			return false
+		}
 		if storage_io.sync(f) != nil do return false
 		log.infof("[T%d] Truncated WAL at offset %d", thread_index, offset)
 	}

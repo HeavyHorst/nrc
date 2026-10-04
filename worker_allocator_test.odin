@@ -210,6 +210,8 @@ test_worker_heap_prefaults_all_fresh_pages_without_touching_guards :: proc(t: ^t
 	mapping, err := linux.mmap(0, uint(5 * page), {.READ, .WRITE}, {.PRIVATE, .ANONYMOUS})
 	assert(err == .NONE)
 	defer linux.munmap(mapping, uint(5 * page))
+	// Guard residency must not depend on the machine's global THP policy.
+	_ = linux.madvise(mapping, uint(5 * page), .NOHUGEPAGE)
 	bytes := ([^]byte)(mapping)[:5 * page]
 	// No read before allocation: the unaligned result crosses three absent
 	// anonymous pages, with an untouched guard page on each side.

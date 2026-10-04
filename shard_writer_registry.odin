@@ -60,7 +60,7 @@ shutdown_shard_writer_registry :: proc(registry: ^Shard_Writer_Registry) -> bool
 	return ok
 }
 
-init_shard_writer_registry :: proc(registry: ^Shard_Writer_Registry, generation_dir: string, worker, worker_count: int) -> bool {
+init_shard_writer_registry :: proc(registry: ^Shard_Writer_Registry, generation_dir: string, worker, worker_count: int, apply := false) -> bool {
 	if registry == nil || registry.mode != .Inactive || len(registry.writers) != 0 || worker < 0 || worker >= worker_count || !valid_storage_layout_worker_count(worker_count) do return false
 	registry.worker = worker
 	registry.worker_count = worker_count
@@ -73,7 +73,7 @@ init_shard_writer_registry :: proc(registry: ^Shard_Writer_Registry, generation_
 		_, append_err := append(&registry.writers, Shard_Transaction_Writer{})
 		if append_err != nil {shutdown_shard_writer_registry(registry); return false}
 		shard_dir := sharded_shard_path(generation_dir, shard)
-		initialized := init_managed_shard_transaction_writer(&registry.writers[writer_index], shard_dir, shard, worker, worker_count)
+		initialized := init_managed_shard_transaction_writer(&registry.writers[writer_index], shard_dir, shard, worker, worker_count, apply)
 		delete(shard_dir)
 		if !initialized {shutdown_shard_writer_registry(registry); return false}
 		registry.writers[writer_index].batch_writes = true
@@ -177,11 +177,9 @@ schedule_shard_writer_fsyncs_if_due :: proc(registry: ^Shard_Writer_Registry) ->
 
 init_active_sharded_worker_persistence :: proc(data_dir: string, generation: u64, worker, worker_count: int) -> bool {
 	if td.workspaces == nil || len(td.workspaces) != 0 do return false
+	if td.shard_writers.mode != .Inactive || len(td.shard_writers.writers) != 0 do return false
 	generation_dir := sharded_generation_path(data_dir, generation)
 	defer delete(generation_dir)
-	// Opening the writers performs WAL tail recovery before strict replay. This
-	// preserves the durable prefix after a process dies during the final record.
-	if !init_shard_writer_registry(&td.shard_writers, generation_dir, worker, worker_count) do return false
 	initialized := false
 	defer if !initialized {
 		shutdown_shard_writer_registry(&td.shard_writers)
@@ -192,19 +190,15 @@ init_active_sharded_worker_persistence :: proc(data_dir: string, generation: u64
 		td.edge_seq = 0
 	}
 
+	// Validate, recover and apply each file once into unpublished worker state.
+	// Any writer-open/recovery/application failure discards all earlier state.
+	// The listener remains behind the all-workers-ready barrier until success.
+	if !init_shard_writer_registry(&td.shard_writers, generation_dir, worker, worker_count, true) do return false
 	max_floors: Shard_High_Water_Requirements
-	for shard in 0 ..< LOGICAL_SHARD_COUNT {
-		owner, assignment_ok := logical_shard_worker(shard, worker_count)
-		if !assignment_ok do return false
-		if owner != worker do continue
-		writer_index := td.shard_writers.writer_index[shard]
-		if writer_index < 0 do return false
-		writer := &td.shard_writers.writers[writer_index]
-		floors, replay_ok := replay_shard_compaction_sequence(writer.shard_dir, writer.manifest, true, false)
-		if !replay_ok || floors != writer.floors do return false
-		shard_max_requirement(&max_floors.task, floors.task)
-		shard_max_requirement(&max_floors.asset, floors.asset)
-		shard_max_requirement(&max_floors.edge, floors.edge)
+	for &writer in td.shard_writers.writers {
+		shard_max_requirement(&max_floors.task, writer.floors.task)
+		shard_max_requirement(&max_floors.asset, writer.floors.asset)
+		shard_max_requirement(&max_floors.edge, writer.floors.edge)
 	}
 	td.task_seq = max_floors.task
 	td.asset_seq = max_floors.asset

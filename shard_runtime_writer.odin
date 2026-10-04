@@ -271,6 +271,7 @@ replay_shard_compaction_sequence_host :: proc(
 	recover_active_tail: bool,
 	replayed_record_count: ^u64 = nil,
 	active_inspection: ^persistence.Strict_WAL_Inspection = nil,
+	checkpoint_input_floors: ^Shard_High_Water_Requirements = nil,
 ) -> (
 	floors: Shard_High_Water_Requirements,
 	ok: bool,
@@ -283,6 +284,7 @@ replay_shard_compaction_sequence_host :: proc(
 		recover_active_tail,
 		replayed_record_count,
 		active_inspection,
+		checkpoint_input_floors,
 	)
 }
 
@@ -294,11 +296,13 @@ replay_shard_compaction_sequence_with_storage :: proc(
 	recover_active_tail: bool,
 	replayed_record_count: ^u64 = nil,
 	active_inspection: ^persistence.Strict_WAL_Inspection = nil,
+	checkpoint_input_floors: ^Shard_High_Water_Requirements = nil,
 ) -> (
 	floors: Shard_High_Water_Requirements,
 	ok: bool,
 ) {
 	if active_inspection != nil do active_inspection^ = {}
+	if checkpoint_input_floors != nil do checkpoint_input_floors^ = {}
 	if !shard_compaction_manifest_is_valid(manifest) do return
 	origins: Workspace_Data_Replay_Origins
 	owns_origins := workspace_data_origins_begin(&origins)
@@ -335,6 +339,9 @@ replay_shard_compaction_sequence_with_storage :: proc(
 		if replayed_record_count != nil do replayed_record_count^ += inspection.record_count
 		floors = next
 	}
+	// Checkpoint-building input ends after the sealed file, before active.
+	// Capture its floors during this validated scan instead of rereading it.
+	if checkpoint_input_floors != nil do checkpoint_input_floors^ = floors
 	active_path := shard_generation_wal_path(shard_dir, manifest.active_generation)
 	inspection, next_floors, replay_ok := scan_shard_transaction_wal(storage, active_path, manifest.shard, floors, apply, recover_active_tail)
 	delete(active_path)
@@ -379,8 +386,13 @@ init_managed_shard_transaction_writer :: proc {
 	init_managed_shard_transaction_writer_with_storage,
 }
 
-init_managed_shard_transaction_writer_host :: proc(writer: ^Shard_Transaction_Writer, shard_dir: string, shard, owner_worker, worker_count: int) -> bool {
-	return init_managed_shard_transaction_writer_with_storage(writer, storage_io.host_context(), shard_dir, shard, owner_worker, worker_count)
+init_managed_shard_transaction_writer_host :: proc(
+	writer: ^Shard_Transaction_Writer,
+	shard_dir: string,
+	shard, owner_worker, worker_count: int,
+	apply := false,
+) -> bool {
+	return init_managed_shard_transaction_writer_with_storage(writer, storage_io.host_context(), shard_dir, shard, owner_worker, worker_count, apply)
 }
 
 init_managed_shard_transaction_writer_with_storage :: proc(
@@ -388,6 +400,7 @@ init_managed_shard_transaction_writer_with_storage :: proc(
 	storage: storage_io.Context,
 	shard_dir: string,
 	shard, owner_worker, worker_count: int,
+	apply := false,
 ) -> bool {
 	if writer == nil || writer.wal.enabled || writer.poisoned do return false
 	owner, assignment_ok := logical_shard_worker(shard, worker_count)
@@ -398,7 +411,8 @@ init_managed_shard_transaction_writer_with_storage :: proc(
 	defer delete(active_path)
 	if !persistence.init_wal(&writer.wal, storage, active_path, SHARD_WAL_MAGIC, SHARD_WAL_VERSION, shard, nrc_wal_time_now) do return false
 	active_inspection: persistence.Strict_WAL_Inspection
-	floors, replay_ok := replay_shard_compaction_sequence(storage, shard_dir, manifest, false, true, nil, &active_inspection)
+	checkpoint_input_floors: Shard_High_Water_Requirements
+	floors, replay_ok := replay_shard_compaction_sequence(storage, shard_dir, manifest, apply, true, nil, &active_inspection, &checkpoint_input_floors)
 	if !replay_ok {
 		persistence.shutdown_wal(&writer.wal)
 		writer^ = {}
@@ -438,18 +452,10 @@ init_managed_shard_transaction_writer_with_storage :: proc(
 				return false
 			}
 		}
-		writer.catalog_floors, replay_ok = replay_shard_checkpoint_input(storage, shard_dir, manifest, false)
-		if !replay_ok {
-			shutdown_shard_transaction_writer(writer)
-			return false
-		}
+		writer.catalog_floors = checkpoint_input_floors
 	}
 	if manifest.sealed_present {
-		writer.compaction_floors, replay_ok = replay_shard_checkpoint_input(storage, shard_dir, manifest, false)
-		if !replay_ok {
-			shutdown_shard_transaction_writer(writer)
-			return false
-		}
+		writer.compaction_floors = checkpoint_input_floors
 	}
 	return true
 }

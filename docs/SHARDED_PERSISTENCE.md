@@ -108,12 +108,19 @@ Do not edit manifests or choose WAL files by modification time.
 
 Startup acquires `storage-layout.lock`, validates `storage-layout.manifest`, and validates all 256
 shard directories. A pre-compaction shard may initially contain only `active.wal`; its owner publishes
-the first `shard.manifest` while opening it. Existing shard manifests and every file they reference are
-validated before each owned shard is replayed in this order:
+the first `shard.manifest` while opening it. After validating the shard manifest, its owner validates
+and applies each referenced WAL in one scan, in this order:
 
 ```text
 catalog segments in order (optional) → sealed WAL (optional) → active WAL
 ```
+
+Replay builds unpublished worker state. Checksums, hash-chain links, transaction semantics and
+workspace origins are still checked; final edge endpoints are validated after the whole shard.
+The same scan supplies sequence floors and the active file's append hash/count. Any open, scan,
+application or tail-recovery failure closes the worker's writers and discards its replayed state.
+The listener is published only after all workers successfully initialize. Validation-only managed
+writer initialization remains available for callers that do not rebuild worker state.
 
 All startup WAL scans use aligned `O_DIRECT` reads. Recovery therefore validates bytes obtained from
 the storage device rather than clean Linux page-cache pages that may still contain newer data after a
@@ -121,9 +128,11 @@ failed `fsync` and process restart. If the filesystem cannot provide direct I/O 
 fails closed instead of falling back to cached recovery.
 
 Catalog segments and sealed files are immutable and scanned strictly. The active WAL may discard only a
-physically short trailing suffix that does not contain a complete record header. A complete record
-with bad magic, checksum, hash chain, semantic data, or a length extending beyond EOF fails closed;
-NRC does not truncate ambiguous corruption. Missing manifest-referenced files also fail startup.
+physically incomplete final append: a short trailing header, or a bounded, chain-linked header whose
+payload is cut off by EOF. Recovery must successfully truncate and sync that suffix before startup
+can succeed. Complete checksum failures, invalid magic/flags/length bounds, broken hash links and
+semantic rejection remain fatal and are never truncated. Missing manifest-referenced files also
+fail startup.
 
 If a manifest still references a sealed WAL, startup restores the active writer and schedules the
 segment cleaning job again. A cleaned segment, catalog, or WAL generation created before a crash but

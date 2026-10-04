@@ -185,6 +185,20 @@ WAL_Sync_Fault_State :: struct {
 @(thread_local)
 wal_sync_fault_state: WAL_Sync_Fault_State
 
+// One-shot recovery I/O failures, after replay has visited the valid prefix.
+WAL_Recovery_Fault :: enum {
+	None,
+	Truncate,
+	Sync,
+}
+
+@(thread_local)
+wal_recovery_fault_for_test: WAL_Recovery_Fault
+
+set_wal_recovery_failure_for_test :: proc(fault: WAL_Recovery_Fault) {
+	wal_recovery_fault_for_test = fault
+}
+
 set_wal_short_write_for_test :: proc(short_write_bytes: int) {
 	set_wal_short_write_after_for_test(short_write_bytes, 1)
 }

@@ -27,8 +27,9 @@ reports setup separately; the corrected campaign is recorded at the end.
   restores append state, validates and applies transactions, rebuilds entity
   indexes, validates final edge endpoints and restores sequence floors.
   The original measurements below scan active-only WAL bytes **three times**;
-  the scan-reuse change in the follow-up section reduces that to **two**. Effective
-  WAL MB/s is logical file bytes divided by elapsed time, not physical disk I/O.
+  the first scan-reuse change reduces that to **two**, and the current combined
+  recovery/application path scans them **once**. Effective WAL MB/s is logical
+  file bytes divided by elapsed time, not physical disk I/O.
 - Timing starts after every worker is initialized and waiting at a shared start
   gate, and ends when the last persistence initialization returns. Thread
   creation, initial heap/page setup, clock calibration, fixture generation,
@@ -776,6 +777,97 @@ gain was only 77 ms (1.34%), and four-worker startup was effectively unchanged.
 Its helper, benchmark call and dedicated test were removed together.
 
 The prefault A/B and 10× measurements above included FD preallocation in both
-conditions. They remain valid comparisons, but the final combination without
-that experiment has not been timed. Do not subtract 77 ms from other campaigns
-or present their historical numbers as measurements of the final commit.
+conditions. They remain valid comparisons, but at that review the combination
+without that experiment had not yet been timed. Do not subtract 77 ms from other
+campaigns or relabel their historical numbers; the fresh comparison below uses
+the actual default without FD preallocation.
+
+## Single-pass recovery and huge-page trial (2026-10-04)
+
+Baseline: [26c8503](https://github.com/HeavyHorst/nrc/commit/26c8503efc491e17310f500be24b55a8c08edbaa).
+Three conditions: baseline, single-pass recovery/application, and single-pass
+plus best-effort huge-page advice on fully owned TLSF backing interiors. None
+includes FD-table preallocation. Ten independent processes per cell, alternating
+condition/case order; same corpora and growing worker heaps. Root production
+files retained after the trial match the measured single-pass condition.
+
+Single-pass startup keeps checksum/hash-chain, transaction/origin and final-edge
+validation, active-tail truncate+sync, and file-local append hash/count. It applies
+validated records into unpublished state and discards that state on any failure.
+Checkpoint+sealed prefix floors are captured during the scan instead of rescanned;
+the active-only timing corpus does not measure that separate benefit.
+
+### Retained single-pass result
+
+524288 create records, 1024-byte payloads and 256 shards. Median seconds:
+
+| Kind | 1 worker, before→single | 4 workers, before→single | 8 workers, before→single | Single 1→8 speedup |
+| --- | ---: | ---: | ---: | ---: |
+| Tasks | 3.273→2.351 | 0.965→0.731 | 0.619→0.450 | 5.22× |
+| Assets | 2.583→1.715 | 0.743→0.525 | 0.537→0.374 | 4.58× |
+| Mixed | 2.965→2.023 | 0.867→0.616 | 0.570→0.375 | 5.40× |
+
+At eight workers the reductions are 27.3%, 30.4% and 34.3%. With 10× Mixed
+(5242880 records / 6467092480 WAL bytes), replay improves 4.798→2.871 s,
+or 40.2%, reaching 1.826 million logical records/s.
+
+Throughput from the unrounded single-pass median durations:
+
+| Kind | Workers | Logical records/s | Serialized WAL MB/s |
+| --- | ---: | ---: | ---: |
+| Tasks | 1 | 223013 | 282.3 |
+| Tasks | 4 | 717259 | 908.0 |
+| Tasks | 8 | 1164496 | 1474.3 |
+| Assets | 1 | 305707 | 367.2 |
+| Assets | 4 | 999081 | 1199.9 |
+| Assets | 8 | 1401344 | 1683.0 |
+| Mixed | 1 | 259230 | 319.8 |
+| Mixed | 4 | 851216 | 1050.0 |
+| Mixed | 8 | 1399670 | 1726.5 |
+| Mixed 10× | 8 | 1826199 | 2252.6 |
+
+MB is 1000000 bytes. The generated Tasks/Assets/Mixed WAL corpora contain
+663748608 / 629669888 / 646709248 bytes respectively, including serialized
+headers and transaction metadata. One operation here is one logical entity
+create replayed, not a live request or an individual validation step. These
+rates divide each corpus's logical WAL bytes by replay time; they are not
+physical disk bandwidth or full-startup throughput.
+
+Real-server Mixed launch→listener medians, including setup and TCP-readiness
+verification, are 7.086→6.199 s at one worker, 5.076→4.806 s at four and
+4.882→4.654 s at eight. Large eight-worker startup improves 9.143→7.379 s
+(19.3%). Listener RSS remains effectively unchanged: approximately 881.6,
+1135.3 and 1218.7 MiB for small 1/4/8, and 7874.4 MiB for large eight workers.
+
+### Huge pages: measured, not retained as default
+
+The hint worked: large startup shows 7440 MiB AnonHugePages; gated faults drop
+1835209→61019 and median CPU-s 21.086→16.622 versus single-pass ordinary pages.
+However, incremental full-startup benefit is inconsistent on small Mixed and
+only 208 ms / 2.8% between medians on large Mixed, with 6/10 faster pairs and a
+134 ms median paired saving. Large replay improves another 5.7% (2.871→2.708 s).
+Live-growth tail latency under pressure was not measured with `defrag=madvise`.
+After Oracle review, retain single-pass/prefix-floor reuse but remove the THP
+production hint and its dedicated bounds code; preserve the prototype in exports.
+
+Three gated large eight-worker CPU profiles per condition attribute 20.53–21.91%
+of single-pass CPU samples to SHA hardware-transform leaves, 5.22–5.25% to XXH64,
+and 22.84–26.61% to fault-handling stacks. Page zeroing is included in those
+stacks; TLSF bookkeeping is 3.04–3.52%. No targeted TLB/IPI or direct-compaction
+samples occur, which is not proof of absence under other pressure. There is no
+demonstrated allocator mutex or DRAM-bandwidth ceiling explaining nonlinearity.
+
+This is RAM-backed ext4/loop with O_DIRECT, not cold physical-disk throughput.
+Odin a2fb372, optimized builds, tracking disabled, Linux 6.1.158+, eight exposed
+cores/sixteen logical CPUs, KVM; hardware PMU/governor unavailable and host
+scheduling uncontrolled. The roughly 8 GiB filesystem is additional to RSS.
+Initial heap commitment grows with worker count, so this is not a constant-memory
+CPU control. Full startup and isolated replay are separate measurements.
+
+All 420 timing samples, 18 diagnostic processes and nine loss-free CPU captures
+were checked; raw archive hashes match the original recordings. Existing
+corruption/torn-tail/durable-prefix tests were reused, extending only floor and
+recovery-I/O-cleanup coverage. Full spreads, paired results, raw samples/logs,
+readiness RAM/THP snapshots, counters/stacks, archived recordings, source/binary
+fingerprints and scripts are in `.amp/in/artifacts/wal-replay-single-pass/REPORT.md`
+and adjacent exports.

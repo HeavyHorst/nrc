@@ -1,5 +1,6 @@
 package main
 
+import "core:bytes"
 import "core:encoding/endian"
 import "core:fmt"
 import "core:log"
@@ -483,32 +484,62 @@ test_multi_shard_startup_failure_discards_earlier_replay_and_closes_all_writers 
 		shutdown_shard_transaction_writer(&writer)
 	}
 
-	shard_replay_state_init()
-	td.thread_index = worker
-	set_shard_replay_apply_failure_for_test(failing_shard)
-	testing.expect(t, !init_active_sharded_worker_persistence(data_dir, generation, worker, worker_count))
-	testing.expect(t, !shard_replay_apply_fault.armed)
-	clear_shard_replay_apply_failure_for_test()
-	testing.expect(t, td.shard_writers.mode == .Inactive && len(td.shard_writers.writers) == 0)
-	testing.expect(t, len(td.workspaces) == 0)
-	testing.expect(t, get_workspace(workspaces[0]) == nil && get_workspace(workspaces[1]) == nil)
-	testing.expect_value(t, td.task_seq, u64(0))
-	testing.expect_value(t, td.asset_seq, u64(0))
-	testing.expect_value(t, td.edge_seq, u64(0))
+	failing_path := sharded_active_wal_path(generation_dir, failing_shard)
+	defer delete(failing_path)
+	prefix, prefix_err := os.read_entire_file(failing_path, context.allocator)
+	assert(prefix_err == nil)
+	defer delete(prefix)
+	faults := [3]persistence.WAL_Recovery_Fault{.None, .Truncate, .Sync}
+	defer persistence.set_wal_recovery_failure_for_test(.None)
+	defer clear_shard_replay_apply_failure_for_test()
+	for fault in faults {
+		if fault != .None {
+			// Both shards' valid records have been applied before recovery I/O.
+			// A failed sync may follow a successful truncate; do not assume the
+			// on-disk suffix survives that failure.
+			torn_file, open_err := os.open(failing_path, {.Write, .Append})
+			assert(open_err == nil)
+			torn_suffix: [17]byte
+			written, write_err := os.write(torn_file, torn_suffix[:])
+			assert(write_err == nil && written == len(torn_suffix))
+			assert(os.sync(torn_file) == nil)
+			os.close(torn_file)
+		}
+		shard_replay_state_init()
+		td.thread_index = worker
+		if fault == .None {
+			set_shard_replay_apply_failure_for_test(failing_shard)
+		} else {
+			persistence.set_wal_recovery_failure_for_test(fault)
+		}
+		testing.expect(t, !init_active_sharded_worker_persistence(data_dir, generation, worker, worker_count))
+		testing.expect(t, !shard_replay_apply_fault.armed)
+		testing.expect_value(t, persistence.wal_recovery_fault_for_test, persistence.WAL_Recovery_Fault.None)
+		testing.expect(t, td.shard_writers.mode == .Inactive && len(td.shard_writers.writers) == 0)
+		testing.expect(t, len(td.workspaces) == 0)
+		testing.expect(t, get_workspace(workspaces[0]) == nil && get_workspace(workspaces[1]) == nil)
+		testing.expect_value(t, td.task_seq, u64(0))
+		testing.expect_value(t, td.asset_seq, u64(0))
+		testing.expect_value(t, td.edge_seq, u64(0))
+		failed_bytes, read_err := os.read_entire_file(failing_path, context.allocator)
+		assert(read_err == nil)
+		testing.expect_value(t, len(failed_bytes), len(prefix) + (fault == .Truncate ? 17 : 0))
+		testing.expect(t, bytes.equal(failed_bytes[:len(prefix)], prefix))
+		delete(failed_bytes)
 
-	// A false return is sent to the server's all-workers-ready barrier, keeping
-	// listener publication blocked. After repair, every writer must reopen and
-	// each shard must replay exactly once.
-	testing.expect(t, init_active_sharded_worker_persistence(data_dir, generation, worker, worker_count))
-	for workspace in workspaces {
-		conv := get_conversation(get_workspace(workspace), pr.WORKSPACE_DATA_ID)
-		testing.expect(t, conv != nil && len(conv.tasks) == 1 && len(conv.assets) == 1 && len(conv.edges) == 1)
+		// Listener publication remains blocked on failure. Every writer must
+		// reopen on retry, and each shard must replay exactly once.
+		testing.expect(t, init_active_sharded_worker_persistence(data_dir, generation, worker, worker_count))
+		for workspace in workspaces {
+			conv := get_conversation(get_workspace(workspace), pr.WORKSPACE_DATA_ID)
+			testing.expect(t, conv != nil && len(conv.tasks) == 1 && len(conv.assets) == 1 && len(conv.edges) == 1)
+		}
+		testing.expect_value(t, td.task_seq, u64(10))
+		testing.expect_value(t, td.asset_seq, u64(20))
+		testing.expect_value(t, td.edge_seq, u64(30))
+		shutdown_shard_writer_registry(&td.shard_writers)
+		shard_replay_state_destroy()
 	}
-	testing.expect_value(t, td.task_seq, u64(10))
-	testing.expect_value(t, td.asset_seq, u64(20))
-	testing.expect_value(t, td.edge_seq, u64(30))
-	shutdown_shard_writer_registry(&td.shard_writers)
-	shard_replay_state_destroy()
 }
 
 @(test)
@@ -1122,6 +1153,10 @@ test_legacy_checkpoint_sealed_and_active_wals_replay_in_manifest_order :: proc(t
 		// Three sequence records but only one active record. Each file starts
 		// its own hash chain; neither cumulative count nor sealed hash is valid
 		// append state for the active file.
+		// Prefix floors exclude active, even when captured by the same scan.
+		testing.expect_value(t, writer.catalog_floors, Shard_High_Water_Requirements{task = 20})
+		testing.expect_value(t, writer.compaction_floors, Shard_High_Water_Requirements{task = 20})
+		testing.expect_value(t, writer.floors, Shard_High_Water_Requirements{task = 30})
 		active := persistence.inspect_wal_file_strict(active_path, SHARD_WAL_MAGIC, shard, proc(_: u8, _: u16, _: []byte) -> bool {return true})
 		sealed := persistence.inspect_wal_file_strict(sealed_path, SHARD_WAL_MAGIC, shard, proc(_: u8, _: u16, _: []byte) -> bool {return true})
 		testing.expect(t, active.ok && sealed.ok && active.last_hash != sealed.last_hash)
