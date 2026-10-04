@@ -136,7 +136,9 @@ test_worker_heap_rejects_unsupported_sizes_without_mutation :: proc(t: ^testing.
 		data      = &state,
 	}
 	heap: tlsf.Allocator
-	assert(worker_heap_init(&heap, &backing, 64 * mem.Kilobyte))
+	// Exercise request bounds with an injected rejecting backing allocator,
+	// not the production mmap pool path (which bypasses that allocator).
+	assert(tlsf.init(&heap, backing, 64 * mem.Kilobyte, WORKER_HEAP_POOL_BYTES) == .None)
 	defer tlsf.destroy(&heap)
 	allocator := worker_heap_allocator(&heap)
 	original, err := mem.alloc_bytes(113, 64, allocator)
@@ -237,4 +239,83 @@ test_worker_heap_prefaults_all_fresh_pages_without_touching_guards :: proc(t: ^t
 		testing.expect_value(t, forward_err, mem.Allocator_Error.None)
 		for b, i in span do testing.expect_value(t, b, byte((i * 7 + 3) % 251))
 	}
+}
+
+@(test)
+test_worker_heap_aligned_pool_rounding_and_release :: proc(t: ^testing.T) {
+	when !WORKER_HEAP_HUGEPAGES do return
+	backing := context.allocator
+	heap: tlsf.Allocator
+	assert(worker_heap_init(&heap, &backing))
+	start := raw_data(heap.pool.data)
+	page := WORKER_HEAP_PAGE_BYTES
+	testing.expect_value(t, uintptr(start) % uintptr(page), uintptr(0))
+	// TLSF's initial pool includes header overhead: freeing only its logical
+	// byte length must also unmap the final rounded-up backing page.
+	mapped := (len(heap.pool.data) + page - 1) & ~(page - 1)
+	last := rawptr(uintptr(start) + uintptr(mapped - mem.PAGE_SIZE))
+	resident: [1]b8
+	testing.expect_value(t, linux.mincore(start, uint(mem.PAGE_SIZE), resident[:]), linux.Errno.NONE)
+	testing.expect_value(t, resident[0], b8(true))
+	testing.expect_value(t, linux.mincore(last, uint(mem.PAGE_SIZE), resident[:]), linux.Errno.NONE)
+	tlsf.destroy(&heap)
+	testing.expect_value(t, linux.mincore(start, uint(mem.PAGE_SIZE), resident[:]), linux.Errno.ENOMEM)
+	testing.expect_value(t, linux.mincore(last, uint(mem.PAGE_SIZE), resident[:]), linux.Errno.ENOMEM)
+}
+
+Worker_Heap_Tracking_Failure :: struct {
+	backing: mem.Allocator,
+	reject:  bool,
+	growth:  rawptr,
+}
+
+worker_heap_tracking_failure_for_test :: proc(
+	data: rawptr,
+	mode: mem.Allocator_Mode,
+	size, alignment: int,
+	old_memory: rawptr,
+	old_size: int,
+	location := #caller_location,
+) -> (
+	[]byte,
+	mem.Allocator_Error,
+) {
+	state := cast(^Worker_Heap_Tracking_Failure)data
+	if state.reject && (mode == .Alloc || mode == .Alloc_Non_Zeroed) && size == size_of(tlsf.Pool) do return nil, .Out_Of_Memory
+	result, err := worker_heap_backing_allocator_proc(&state.backing, mode, size, alignment, old_memory, old_size, location)
+	if mode == .Alloc && size >= WORKER_HEAP_POOL_BYTES && err == .None do state.growth = raw_data(result)
+	return result, err
+}
+
+@(test)
+test_worker_heap_mapped_growth_tracking_failure_cleanup :: proc(t: ^testing.T) {
+	when !WORKER_HEAP_HUGEPAGES do return
+	state := Worker_Heap_Tracking_Failure {
+		backing = context.allocator,
+		reject  = true,
+	}
+	adapter := mem.Allocator {
+		procedure = worker_heap_tracking_failure_for_test,
+		data      = &state,
+	}
+	heap: tlsf.Allocator
+	assert(tlsf.init(&heap, adapter, 4096, WORKER_HEAP_POOL_BYTES) == .None)
+	defer tlsf.destroy(&heap)
+	allocator := worker_heap_allocator(&heap)
+	original, err := mem.alloc_bytes(113, 64, allocator)
+	assert(err == .None)
+	for &b, i in original do b = byte((i * 3 + 7) % 251)
+	failed, failure := mem.alloc_bytes(8193, 64, allocator)
+	testing.expect_value(t, failure, mem.Allocator_Error.Out_Of_Memory)
+	testing.expect_value(t, len(failed), 0)
+	testing.expect(t, heap.pool.next == nil)
+	assert(state.growth != nil)
+	resident: [1]b8
+	testing.expect_value(t, linux.mincore(state.growth, uint(mem.PAGE_SIZE), resident[:]), linux.Errno.ENOMEM)
+	for b, i in original do testing.expect_value(t, b, byte((i * 3 + 7) % 251))
+	state.reject = false
+	retried, retry_err := mem.alloc_bytes(8193, 64, allocator)
+	testing.expect_value(t, retry_err, mem.Allocator_Error.None)
+	testing.expect(t, heap.pool.next != nil)
+	for b in retried do testing.expect_value(t, b, byte(0))
 }

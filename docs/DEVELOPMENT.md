@@ -90,6 +90,16 @@ exit. Fresh zeroed backing is write-touched before TLSF initializes block header
 including growth pools; unused pool tails therefore become resident too.
 This commits approximately 64 MiB per worker before replay; freed pools
 are retained until exit rather than returned immediately to the OS.
+On Linux, pools of at least 64 MiB use anonymous mappings aligned and rounded
+to 2 MiB. The server requests transparent hugepages with `MADV_HUGEPAGE`
+before touching the pool. The request is advisory: ordinary pages remain usable
+if the kernel rejects the advice or cannot supply hugepages. No reserved
+hugetlb pool or system-wide policy change is required. Check `AnonHugePages`
+in `/proc/PID/smaps` to verify actual backing; advice alone is not proof.
+Rounding can add less than 2 MiB per pool. Under memory pressure, THP can
+cause allocation or compaction stalls. Build with
+`-define:WORKER_HEAP_HUGEPAGES=false` to restore the caller-backed pool path.
+Small pools and TLSF tracking nodes continue to use the caller's allocator.
 The licensed, pinned copy in `vendor/tlsf/` rolls back a fresh growth pool if its
 tracking-node allocation fails, preserving existing allocations and freeing the
 untracked backing buffer. See its README for the upstream revision and local fix.

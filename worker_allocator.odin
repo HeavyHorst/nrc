@@ -2,9 +2,12 @@ package main
 
 import "base:intrinsics"
 import "core:mem"
+import "core:sys/linux"
 import tlsf "vendor/tlsf"
 
 WORKER_HEAP_POOL_BYTES :: 64 * mem.Megabyte
+WORKER_HEAP_HUGEPAGES :: #config(WORKER_HEAP_HUGEPAGES, true)
+WORKER_HEAP_PAGE_BYTES :: int(2 * mem.Megabyte)
 
 // The control stays at a stable address on the worker's stack until all worker
 // callbacks and scratch cleanup have finished. Pools retain freed blocks for
@@ -30,7 +33,45 @@ worker_heap_backing_allocator_proc :: proc(
 	mem.Allocator_Error,
 ) {
 	backing := cast(^mem.Allocator)data
-	result, err := backing.procedure(backing.data, mode, size, alignment, old_memory, old_size, location)
+	result: []byte
+	err: mem.Allocator_Error
+	when WORKER_HEAP_HUGEPAGES {
+		// TLSF requests pools with .Alloc and frees their original slices. Its
+		// small tracking nodes still belong to the caller's backing allocator.
+		if mode == .Free && old_size >= WORKER_HEAP_POOL_BYTES {
+			mapped := (old_size + WORKER_HEAP_PAGE_BYTES - 1) & ~(WORKER_HEAP_PAGE_BYTES - 1)
+			if linux.munmap(old_memory, uint(mapped)) != .NONE do return nil, .Invalid_Argument
+			return nil, .None
+		}
+		if mode == .Alloc && size >= WORKER_HEAP_POOL_BYTES {
+			if alignment <= 0 || alignment > WORKER_HEAP_PAGE_BYTES || (alignment & (alignment - 1)) != 0 do return nil, .Invalid_Argument
+			if size > max(int) - 2 * WORKER_HEAP_PAGE_BYTES do return nil, .Out_Of_Memory
+			mapped := (size + WORKER_HEAP_PAGE_BYTES - 1) & ~(WORKER_HEAP_PAGE_BYTES - 1)
+			span := mapped + WORKER_HEAP_PAGE_BYTES
+			memory, map_err := linux.mmap(0, uint(span), {.READ, .WRITE}, {.PRIVATE, .ANONYMOUS})
+			if map_err != .NONE do return nil, .Out_Of_Memory
+			start := uintptr(memory)
+			aligned := (start + uintptr(WORKER_HEAP_PAGE_BYTES - 1)) & ~uintptr(WORKER_HEAP_PAGE_BYTES - 1)
+			prefix := aligned - start
+			suffix := uintptr(span) - prefix - uintptr(mapped)
+			if prefix > 0 && linux.munmap(memory, uint(prefix)) != .NONE {
+				_ = linux.munmap(memory, uint(span))
+				return nil, .Out_Of_Memory
+			}
+			if suffix > 0 && linux.munmap(rawptr(aligned + uintptr(mapped)), uint(suffix)) != .NONE {
+				_ = linux.munmap(rawptr(aligned), uint(span) - uint(prefix))
+				return nil, .Out_Of_Memory
+			}
+			// This is advisory, not MAP_HUGETLB: disabled/unsupported THP or
+			// hugepage allocation failure still permits ordinary-page backing.
+			_ = linux.madvise(rawptr(aligned), uint(mapped), .HUGEPAGE)
+			result = ([^]byte)(rawptr(aligned))[:size]
+		} else {
+			result, err = backing.procedure(backing.data, mode, size, alignment, old_memory, old_size, location)
+		}
+	} else {
+		result, err = backing.procedure(backing.data, mode, size, alignment, old_memory, old_size, location)
+	}
 	if err == .None && mode == .Alloc && len(result) > 0 {
 		// Fresh .Alloc memory is zeroed. Write before TLSF reads its block flags
 		// to avoid first reading a shared zero page and subsequently faulting COW.
