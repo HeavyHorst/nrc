@@ -871,3 +871,74 @@ recovery-I/O-cleanup coverage. Full spreads, paired results, raw samples/logs,
 readiness RAM/THP snapshots, counters/stacks, archived recordings, source/binary
 fingerprints and scripts are in `.amp/in/artifacts/wal-replay-single-pass/REPORT.md`
 and adjacent exports.
+
+## Payload zeroing and replay index insertion (2026-10-04)
+
+Baseline: [48a2fd3](https://github.com/HeavyHorst/nrc/commit/48a2fd35b9e8da96b1dd41fcc0d4d6673679c674).
+These experiments do not reduce replay volume or change compaction. Large Mixed
+again contains 5242880 create records / 6467092480 serialized WAL bytes, eight
+workers, 1 KiB payloads and production growing TLSF heaps. Same toolchain/orb,
+RAM-backed ext4/O_DIRECT, tracking disabled. Each row is a separate alternating
+ten-process-per-condition campaign with one excluded warmup per condition;
+do not compare absolute times between rows as a speedup.
+
+| Candidate | Before median, s | Candidate median, s | Reduction | Faster pairs |
+| --- | ---: | ---: | ---: | ---: |
+| Non-zeroed payload allocation, explicit descriptors | 3.010484 | 3.009772 | 0.024% | 6/10 |
+| Replay-only B-tree load, ordered records | 3.114043 | 2.962546 | 4.865% | 8/10 |
+| Replay-only B-tree load, reverse-ID records | 3.167166 | 3.162177 | 0.158% | 6/10 |
+
+The zeroing change was reverted: no meaningful wall-time benefit. The index
+candidate uses existing `btree.load` only while synchronous shard replay applies
+records; ordinary live mutations retain `btree.set`. Sorted keys take its append
+path, while unordered/equal keys and full leaves fall back to normal insertion.
+No validation is removed and no index work is deferred beyond readiness. Ordered
+candidate throughput is 1.770 million logical records/s / 2183 decimal WAL MB/s.
+Reverse order shows no demonstrated wall-time improvement; three gated perf-stat
+runs show CPU-s medians 20.41684→20.72154, a noisy 1.49% increase. Fallback has
+an extra rightmost-path traversal, so this is an order-sensitive tradeoff, not a
+universal speedup. Oracle found no blockers and recommended keeping the small
+replay-only candidate on that evidence; the varied-data follow-up below supersedes
+that retention decision. This is streaming insertion, not bulk index rebuilding.
+
+Normal 571, simulation 656 and B-tree 31 tests and optimized vet passed, reusing
+existing unordered-index/query and B-tree split/replacement fixtures. All 60
+retained timing processes and 12 gated perf-stat diagnostics completed; replay
+also verifies entity counts/ownership/IDs/types/status/timestamps and payload
+bytes outside timing. Full startup was not measured. Raw data, spreads, patches,
+sources and scripts are in `.amp/in/artifacts/wal-replay-index-load/REPORT.md`,
+its `reverse/` directory and the adjacent `wal-replay-zeroing/` export.
+
+### ID-sorted records with varied index fields: candidate rejected
+
+The earlier ordered fixture correlated timestamps with IDs and used identical
+task priorities/statuses. Real checkpoints sort by ID, not by those index keys.
+The follow-up keeps IDs ascending but cycles all four task statuses and five
+priorities, with deterministic non-monotonic update and completion timestamps.
+Set `NRC_REPLAY_BENCH_VARIED=1` for both generation and replay. Verification
+checks stored fields, active counts, time-index order and global/project/assignee
+priority-index order against independently sorted expected keys outside timing.
+Both builds share this exact benchmark code; only the insertion implementation
+differs. Twelve small replay checks cover Tasks/Assets/Mixed, uniform/varied and
+both builds before the large run.
+
+Same large Mixed record/byte counts and eight-worker RAM-backed setup as above,
+ten alternating processes per condition and one excluded warmup each:
+
+| Insertion | Median replay, s | Range, s | Logical records/s | WAL MB/s |
+| --- | ---: | ---: | ---: | ---: |
+| Ordinary B-tree set | 3.352239 | 3.318558–3.646109 | 1563994 | 1929.2 |
+| Replay-only B-tree load | 3.377904 | 3.305169–3.528109 | 1552110 | 1914.5 |
+
+The candidate median is 0.77% slower, with overlapping spreads. It wins only
+3/10 pairs; median paired loss is 34.35 ms. Three gated perf-stat runs show CPU-s
+medians 23.71214→23.20181 (2.15% lower) and effectively identical faults
+(1835208→1835209), but this small diagnostic sample does not establish a CPU
+benefit or offset the lack of a repeatable wall-time benefit. Reject the candidate:
+ordinary insertion and its original tests are restored. Retain only the varied
+fixture and stronger benchmark verification. This corpus emulates checkpoint ID
+ordering using active-WAL post-images; literal catalog/checkpoint files, edges,
+other asset types and full process startup were not measured.
+
+Raw samples/logs, counters, source/patch snapshots, binary fingerprints and
+reproduction scripts are in `.amp/in/artifacts/wal-replay-varied/`.

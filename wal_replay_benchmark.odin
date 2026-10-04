@@ -1,8 +1,10 @@
 // Opt-in full production persistence startup, with balanced, fixed-size shard data.
 package main
 
+import "btree"
 import "core:fmt"
 import "core:os"
+import "core:slice"
 import "core:sync"
 import "core:testing"
 import "core:thread"
@@ -23,6 +25,7 @@ Replay_Bench_Worker :: struct {
 	entities:                                 int,
 	tlsf_bytes:                               int,
 	worker_heap:                              bool,
+	varied:                                   bool,
 	clock_setup:                              time.Duration,
 }
 
@@ -73,14 +76,23 @@ replay_bench_worker :: proc(raw: rawptr) {
 			tasks := d.kind == "asset" ? 0 : (d.kind == "mixed" ? d.per_shard / 2 : d.per_shard)
 			d.ok = d.ok && len(conv.tasks) == tasks && len(conv.assets) == d.per_shard - tasks
 			for id, task in conv.tasks {
+				ordinal := d.kind == "mixed" ? (int(id) - 1) / 2 : int(id) - 1
+				status := d.varied ? pr.TaskStatus(ordinal % 4) : pr.TaskStatus.Todo
+				updated := d.varied ? i64((ordinal * 7919 + shard * 53) % d.per_shard + 1) : i64(id)
 				d.ok =
 					d.ok &&
 					int(id) >= 1 &&
 					int(id) <= d.per_shard &&
 					task.conv_id == pr.WORKSPACE_DATA_ID &&
-					task.status == .Todo &&
+					task.status == status &&
 					len(task.description) == d.payload_bytes &&
-					task.updated_at == i64(id)
+					task.updated_at == updated
+				if d.varied {
+					d.ok =
+						d.ok &&
+						task.priority == u8((ordinal * 37 + shard * 11) % 5) &&
+						task.completed_at == (status == .Done ? i64((ordinal * 3253 + shard * 97) % d.per_shard + 1) : 0)
+				}
 				if len(backing) > 0 {
 					d.ok = d.ok && uintptr(task) >= uintptr(raw_data(backing)) && uintptr(task) < uintptr(raw_data(backing)) + uintptr(len(backing))
 				}
@@ -102,13 +114,69 @@ replay_bench_worker :: proc(raw: rawptr) {
 				for value, i in asset.payload do d.ok = d.ok && value == byte('a' + i % 26)
 				d.entities += 1
 			}
+			// Independently sort expected keys after timing, rather than deriving
+			// expected order from the index implementation under test.
+			expected := make([]Task_Sort_Key, tasks)
+			priority_keys := make([]Task_Query_Key, tasks)
+			active := 0
+			for i in 0 ..< tasks {
+				id := d.kind == "mixed" ? 2 * i + 1 : i + 1
+				status := d.varied ? pr.TaskStatus(i % 4) : pr.TaskStatus.Todo
+				stamp := d.varied ? i64((i * 7919 + shard * 53) % d.per_shard + 1) : i64(id)
+				if status == .Done do stamp = i64((i * 3253 + shard * 97) % d.per_shard + 1)
+				if status != .Done do active += 1
+				expected[i] = {
+					sort_at = stamp,
+					task_id = pr.TaskID(id),
+				}
+				priority_keys[i] = {
+					number  = d.varied ? i64((i * 37 + shard * 11) % 5) : 0,
+					task_id = pr.TaskID(id),
+				}
+			}
+			slice.sort_by(expected, proc(a, b: Task_Sort_Key) -> bool {return a.sort_at == b.sort_at ? a.task_id < b.task_id : a.sort_at < b.sort_at})
+			slice.sort_by(priority_keys, proc(a, b: Task_Query_Key) -> bool {return a.number == b.number ? a.task_id < b.task_id : a.number < b.number})
+			d.ok = d.ok && conv.active_task_count == active && btree.count(&conv.task_index) == tasks
+			it := btree.iter(&conv.task_index)
+			position := 0
+			for found := btree.iter_first(&it); found; found = btree.iter_next(&it) {
+				d.ok = d.ok && position < tasks && btree.item(&it) == expected[position]
+				position += 1
+			}
+			d.ok = d.ok && position == tasks
+			btree.iter_destroy(&it)
+			query_trees := [3]^btree.BTreeG(Task_Query_Key){&conv.task_query_indexes.trees[0][0], nil, nil}
+			if tasks > 0 {
+				query_trees[1] = &conv.task_project_indexes[""].indexes.trees[0][0]
+				query_trees[2] = &conv.task_assignee_indexes[""].indexes.trees[0][0]
+			}
+			for tree in query_trees {
+				if tree == nil do continue
+				query_it := btree.iter(tree)
+				position = 0
+				for found := btree.iter_first(&query_it); found; found = btree.iter_next(&query_it) {
+					actual := btree.item(&query_it)
+					d.ok =
+						d.ok &&
+						position < tasks &&
+						actual.number == priority_keys[position].number &&
+						actual.task_id == priority_keys[position].task_id &&
+						actual.text == nil &&
+						!actual.due_missing
+					position += 1
+				}
+				d.ok = d.ok && position == tasks
+				btree.iter_destroy(&query_it)
+			}
+			delete(expected)
+			delete(priority_keys)
 		}
 	}
 	d.ok = shutdown_shard_writer_registry(&td.shard_writers) && d.ok
 	shard_replay_state_destroy()
 }
 
-replay_bench_fixture :: proc(dir, kind: string, per_shard, payload_bytes: int) -> (total_bytes: u64) {
+replay_bench_fixture :: proc(dir, kind: string, per_shard, payload_bytes: int, varied := false) -> (total_bytes: u64) {
 	assert(os.make_directory(dir) == nil)
 	assert(bootstrap_sharded_storage_layout(dir))
 	generation := sharded_generation_path(dir, FRESH_STORAGE_LAYOUT_GENERATION)
@@ -142,6 +210,13 @@ replay_bench_fixture :: proc(dir, kind: string, per_shard, payload_bytes: int) -
 					description = payload,
 					status      = .Todo,
 					updated_at  = i64(id),
+				}
+				if varied {
+					ordinal := kind == "mixed" ? i / 2 : i
+					task.status = pr.TaskStatus(ordinal % 4)
+					task.priority = u8((ordinal * 37 + shard * 11) % 5)
+					task.updated_at = i64((ordinal * 7919 + shard * 53) % per_shard + 1)
+					if task.status == .Done do task.completed_at = i64((ordinal * 3253 + shard * 97) % per_shard + 1)
 				}
 				built, ok = build_shard_task_mutation(transmute([]byte)workspace, .Create, &task, floors)
 			} else {
@@ -204,11 +279,12 @@ benchmark_wal_replay :: proc(t: ^testing.T) {
 	assert(kind == "task" || kind == "asset" || kind == "mixed")
 	per_shard := message_store_benchmark_env_int("NRC_REPLAY_BENCH_PER_SHARD", 2048)
 	payload_bytes := message_store_benchmark_env_int("NRC_REPLAY_BENCH_PAYLOAD_BYTES", 1024)
+	varied := message_store_benchmark_env_int("NRC_REPLAY_BENCH_VARIED", 0) == 1
 	assert(per_shard > 0 && per_shard % 2 == 0 && payload_bytes > 0)
 	mode := os.get_env_alloc("NRC_REPLAY_BENCH_MODE", context.allocator)
 	defer delete(mode)
 	if mode == "generate" {
-		bytes := replay_bench_fixture(dir, kind, per_shard, payload_bytes)
+		bytes := replay_bench_fixture(dir, kind, per_shard, payload_bytes, varied)
 		fmt.printf("REPLAY_FIXTURE kind=%s records=%d bytes=%d\n", kind, per_shard * LOGICAL_SHARD_COUNT, bytes)
 		return
 	}
@@ -265,6 +341,7 @@ benchmark_wal_replay :: proc(t: ^testing.T) {
 			payload_bytes = payload_bytes,
 			tlsf_bytes    = tlsf_bytes,
 			worker_heap   = allocator_kind == "" || allocator_kind == "worker",
+			varied        = varied,
 			cpu           = cpus[index],
 			ready         = &ready,
 			done          = &done,
