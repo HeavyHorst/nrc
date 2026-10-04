@@ -33,8 +33,8 @@ reports setup separately; the corrected campaign is recorded at the end.
   gate, and ends when the last persistence initialization returns. Thread
   creation, initial heap/page setup, clock calibration, fixture generation,
   correctness checks and teardown are excluded. `REPLAY_SETUP` reports
-  wall time from thread creation through all workers becoming ready, and the
-  maximum individual worker clock-initialization duration. These overlapping
+  wall time from worker creation through all workers becoming
+  ready, and the maximum individual worker clock-initialization duration. These overlapping
   durations must not be added together. Setup excludes fixture generation,
   post-replay verification and teardown, so setup + replay is not total startup.
   The start gate uses 100 µs polling, insignificant for second-long samples.
@@ -58,6 +58,9 @@ The current benchmark defaults to the production growing worker TLSF heap
 `tlsf` selects the historical fixed-budget experiment. Historical results were
 measured before the production-default rollout and clock-boundary correction.
 Growing-heap initial setup is excluded, but subsequent pool growth is timed.
+Descriptor-table preallocation was an experiment included in the prefault and
+10× campaigns below, with its cost in setup. It is no longer used in production
+or the harness; those historical timings have not been relabeled.
 
 Build once, then exit the compiler before timing. Use a disposable location;
 generation refuses existing directories. On machines with fewer than sixteen
@@ -686,3 +689,93 @@ run/pilot logs, gated counter files and source/binary fingerprints are retained
 under `.amp/in/artifacts/wal-replay-clock-fixed/`. Disposable fixtures, binary,
 RAM image and loop mount are removed after export. Historical reports remain
 available, clearly distinguished from these newly measured results.
+
+## Write-first worker TLSF prefault trial (2026-10-03)
+
+Fresh zeroed TLSF backing is now write-touched before pool header initialization,
+including growth pools. The existing FD-preallocation trial is present in both
+conditions. Ten alternating independent samples per cell on the same Mixed
+524288-record corpus, ext4/loop backed by RAM, with O_DIRECT reads:
+
+| Workers | Replay before→after, s | Full launch→listener before→after, s | Listener RSS before→after, MiB |
+| ---: | ---: | ---: | ---: |
+| 1 | 3.512→2.829 | 7.176→7.075 | 854.7→881.6 |
+| 4 | 1.741→0.757 | 6.390→4.922 | 927.1→1135.3 |
+| 8 | 0.784→0.460 | 5.600→4.698 | 1024.4→1218.7 |
+
+Eight-worker replay improves 41.3%, full startup 16.1%; the cost is roughly
+194 MiB additional resident memory from committing unused growth-pool tails.
+One→eight replay speedup is 6.15× rather than 4.48×, but initial committed
+capacity still increases with worker count: this is not a constant-budget
+CPU control. These results do not replace the disk tables above.
+
+Three gated eight-worker CPU profiles per condition attribute 34.40/29.89/30.47%
+of before CPU samples to the targeted TLB/IPI leaves, all with COW and TLB-flush
+stacks; none are sampled after. SHA-256 then accounts for 35.58–36.40%, XXH64
+7.56–9.99%. Gated CPU-s falls 5.175→2.443; page faults increase 122986→131160
+because more backing is committed. This is removal of the expensive COW/IPI
+path, not elimination of faults or proof of zero TLB activity.
+
+Raw samples, setup timings, real-server readiness/RAM snapshots, counters,
+profiles, source/binary fingerprints, reproduction scripts and checksum-verified
+perf recordings are under `.amp/in/artifacts/wal-replay-prefault/`, with a full
+`REPORT.md`. Throughput is 1.140 million logical records/s on this RAM-backed
+workload; a 10× corpus at unchanged throughput would take about 4.6 s of replay,
+an extrapolation rather than a measurement. Fixed startup costs amortize, but
+hashing, memory commitment, indexes and storage work grow with the corpus.
+
+After the campaign, the licensed pinned TLSF copy in `vendor/tlsf/` received a
+separate tracking-allocation-failure rollback fix. The measured binaries predate
+that dependency switch and do not exercise its failure path. Its regression
+fails on the original dependency and passes with rollback; normal/simulation
+root suites pass 571/656 tests, production vet and targeted Go E2E pass, and
+Oracle's follow-up review finds no blockers.
+
+## 10× Mixed corpus follow-up (2026-10-03)
+
+Ten alternating independent processes per size, worker count and timing mode,
+using the same current binaries (prefaulting plus vendored TLSF recovery fix).
+Small is 524288 records/646709248 WAL bytes; large is 5242880 records/6467092480
+bytes. Payloads remain 1024 bytes, shards remain 256, and records per shard grow
+2048→20480. Both corpora use RAM-backed ext4/loop with O_DIRECT reads, not disk.
+
+| Workers | Small→large replay, s | Small→large full startup, s | Small→large listener RSS, GiB |
+| ---: | ---: | ---: | ---: |
+| 1 | 3.076→29.671 | 7.132→34.735 | 0.861→7.361 |
+| 4 | 0.799→8.022 | 5.074→12.724 | 1.109→7.609 |
+| 8 | 0.529→5.026 | 4.764→9.260 | 1.190→7.690 |
+
+At eight workers, 10× data takes 9.50× replay time but only 1.94× full startup
+and 6.46× resident memory. Large throughput is 1.043 million logical records/s;
+one→eight speedup is 5.90× versus small's 5.82×. Fixed startup costs amortize,
+while record processing remains approximately proportional. Use the fresh
+same-binary 0.529 s baseline, not the previous campaign's 0.460 s value.
+
+Three gated large-corpus CPU captures show SHA-256 hardware-transform leaves
+at 30.26–30.57%, XXH64 at 7.11–7.28%, and fault-handling stacks at 19.55–23.53%,
+almost entirely under TLSF backing prefaulting. Kernel page-zeroing alone is
+11.09–15.05%; it is included in fault handling, not an additional category.
+TLSF bookkeeping leaves are 2.05–2.19%. No targeted COW/TLB IPI leaves are
+sampled. Gated eight-worker counters show 28.347 CPU-s and 1835208 faults;
+ordinary page commitment remains work even though the old COW hotspot is gone.
+No DRAM-bandwidth ceiling or allocator mutex is established by these profiles.
+
+All 120 timing samples and 18 diagnostic processes pass their checks; all six
+CPU captures report zero lost samples and all saved listener snapshots report
+zero swap. The filesystem's roughly 6.7 GiB backing is additional to process
+RSS. Full spreads, setup timing, counters, profiles, archived recordings,
+reproduction scripts and fingerprints are retained in
+`.amp/in/artifacts/wal-replay-10x/REPORT.md` and its adjacent exports.
+
+## Retained changes after review
+
+Keep write-first initial/growth-pool prefaulting, accepting earlier commitment
+of unused pool tails, and the pinned TLSF tracking-node OOM rollback fix.
+Reject startup FD-table preallocation: its ten-run eight-worker full-startup
+gain was only 77 ms (1.34%), and four-worker startup was effectively unchanged.
+Its helper, benchmark call and dedicated test were removed together.
+
+The prefault A/B and 10× measurements above included FD preallocation in both
+conditions. They remain valid comparisons, but the final combination without
+that experiment has not been timed. Do not subtract 77 ms from other campaigns
+or present their historical numbers as measurements of the final commit.

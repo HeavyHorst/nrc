@@ -9,6 +9,7 @@ redistributing source, binaries or images.
 | NRC material | Source | License notice |
 | --- | --- | --- |
 | `btree/` Odin port | [tidwall/btree](https://github.com/tidwall/btree) | [MIT, Josh Baker](btree/LICENSE) |
+| `vendor/tlsf/`, with growth-failure rollback | [Odin core/mem/tlsf, a2fb372](https://github.com/odin-lang/Odin/tree/a2fb372/core/mem/tlsf) | [BSD-3-Clause, Matthew Conte; port by Jeroen van Rijn](vendor/tlsf/LICENSE) |
 | Unrolled encoding in `ulid/ulid.odin` | [RobThree/NUlid](https://github.com/RobThree/NUlid) | [MIT, Rob Janssen](ulid/NUlid-LICENSE) |
 | Omarchy-derived palettes in `client/css/foundation.css` | [basecamp/omarchy](https://github.com/basecamp/omarchy) | [MIT, David Heinemeier Hansson](client/css/OMARCHY_LICENSE.txt) |
 | `nbio/`, adapted for NRC | [laytan/odin-http at matching revision `b5b5492`](https://github.com/laytan/odin-http/tree/b5b5492b499f6f7fdf0909394f15cec930b22a02/nbio) | [MIT, Laytan Laats](nbio/LICENSE) |

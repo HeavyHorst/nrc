@@ -13,13 +13,13 @@ package main
 import "core:container/queue"
 import "core:fmt"
 import "core:log"
-import tlsf "core:mem/tlsf"
 import "core:net"
 import "core:strings"
 import "core:sync"
 import "core:sync/chan"
 import "core:sys/linux"
 import "core:time"
+import tlsf "vendor/tlsf"
 
 import "byte_pool"
 import nbio "nbio/poly"
@@ -418,7 +418,7 @@ worker_thread :: proc(worker_data: Worker_Thread_Data) {
 	defer sync.wait_group_done(&worker_data.server.wg)
 	backing := context.allocator
 	heap: tlsf.Allocator
-	if !worker_heap_init(&heap, backing) {
+	if !worker_heap_init(&heap, &backing) {
 		log.errorf("[T%d] Failed to initialize worker TLSF heap", worker_data.thread_index)
 		_ = chan.send(worker_data.server.worker_startup, false)
 		return

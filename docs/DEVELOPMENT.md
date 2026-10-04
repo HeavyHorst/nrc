@@ -82,12 +82,17 @@ asset and edge mutations share atomic shard transactions. Background compaction
 uses manifest-driven immutable segments. Transient asynchronous send buffers
 use the thread-local byte pool and are released on completion.
 
-Each production worker installs its own unsynchronized `core:mem/tlsf` heap
+Each production worker installs its own unsynchronized Odin TLSF heap
 for worker-owned state: entities, maps, indexes and interned strings. It starts
 with a write-touched 64 MiB backing pool, grows in at least 64 MiB chunks (larger
 for oversized requests), reuses freed blocks and releases all pools at worker
-exit. This commits approximately 64 MiB per worker before replay; freed pools
+exit. Fresh zeroed backing is write-touched before TLSF initializes block headers,
+including growth pools; unused pool tails therefore become resident too.
+This commits approximately 64 MiB per worker before replay; freed pools
 are retained until exit rather than returned immediately to the OS.
+The licensed, pinned copy in `vendor/tlsf/` rolls back a fresh growth pool if its
+tracking-node allocation fails, preserving existing allocations and freeing the
+untracked backing buffer. See its README for the upstream revision and local fix.
 Individual allocations must fit TLSF's block limit (below 4 GiB on 64-bit,
 including alignment overhead); unsupported allocation/resize requests fail
 without changing an existing allocation. Growth pools never exceed that limit.

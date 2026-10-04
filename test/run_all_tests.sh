@@ -33,6 +33,7 @@ run "$odin_tests" persistence/ "${odin_common[@]}" -define:NRC_SIMULATION=true
 run "$odin_tests" storage_io/ "${odin_common[@]}"
 run "$odin_tests" storage_io/ "${odin_common[@]}" -define:NRC_SIMULATION=true
 run "$odin_tests" btree/ "${odin_common[@]}" "${odin_hegel[@]}"
+run "$odin_tests" vendor/tlsf/ "${odin_common[@]}"
 run "$odin_tests" byte_pool/ "${odin_common[@]}" "${odin_hegel[@]}"
 run "$odin_tests" spsc/ "${odin_common[@]}" "${odin_hegel[@]}"
 run "$odin_tests" ulid/ "${odin_common[@]}" "${odin_hegel[@]}"

@@ -3,7 +3,6 @@ package main
 import "core:fmt"
 import "core:hash/xxhash"
 import "core:log"
-import tlsf "core:mem/tlsf"
 import "core:os"
 import "core:strings"
 import "core:sync/chan"
@@ -15,6 +14,7 @@ import "persistence"
 import pr "protocol"
 import "spsc"
 import "storage_io"
+import tlsf "vendor/tlsf"
 
 when !NRC_SIMULATION {
 	_ :: nbio.init
@@ -31,7 +31,7 @@ when !NRC_SIMULATION {
 test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	service_context := context
 	heap: tlsf.Allocator
-	assert(worker_heap_init(&heap, context.allocator, 64 * 1024))
+	assert(worker_heap_init(&heap, &service_context.allocator, 64 * 1024))
 	defer tlsf.destroy(&heap)
 	old_td := new(Server_Thread)
 	old_td^ = td

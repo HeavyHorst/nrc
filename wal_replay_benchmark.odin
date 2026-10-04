@@ -2,12 +2,12 @@
 package main
 
 import "core:fmt"
-import mem_tlsf "core:mem/tlsf"
 import "core:os"
 import "core:sync"
 import "core:testing"
 import "core:thread"
 import "core:time"
+import mem_tlsf "vendor/tlsf"
 
 import "persistence"
 import pr "protocol"
@@ -37,7 +37,7 @@ replay_bench_worker :: proc(raw: rawptr) {
 	control: mem_tlsf.Allocator
 	selected := heap
 	if d.worker_heap {
-		assert(worker_heap_init(&control, heap))
+		assert(worker_heap_init(&control, &heap))
 		selected = worker_heap_allocator(&control)
 	} else if d.tlsf_bytes > 0 {
 		backing = make([]byte, d.tlsf_bytes, heap)

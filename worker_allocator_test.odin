@@ -1,8 +1,9 @@
 package main
 
 import "core:mem"
-import tlsf "core:mem/tlsf"
+import "core:sys/linux"
 import "core:testing"
+import tlsf "vendor/tlsf"
 
 import "byte_pool"
 import pr "protocol"
@@ -17,8 +18,9 @@ worker_heap_contains_for_test :: proc(heap: ^tlsf.Allocator, p: rawptr) -> bool 
 
 @(test)
 test_worker_heap_growth_resize_alignment_and_reuse :: proc(t: ^testing.T) {
+	backing := context.allocator
 	heap: tlsf.Allocator
-	assert(worker_heap_init(&heap, context.allocator, 4096))
+	assert(worker_heap_init(&heap, &backing, 4096))
 	defer tlsf.destroy(&heap)
 	allocator := worker_heap_allocator(&heap)
 	first, err := mem.alloc_bytes(3073, 64, allocator)
@@ -56,7 +58,7 @@ test_worker_heap_growth_resize_alignment_and_reuse :: proc(t: ^testing.T) {
 test_worker_heap_keeps_specialized_pools_on_backing :: proc(t: ^testing.T) {
 	backing := context.allocator
 	heap: tlsf.Allocator
-	assert(worker_heap_init(&heap, backing, 64 * mem.Kilobyte))
+	assert(worker_heap_init(&heap, &backing, 64 * mem.Kilobyte))
 	defer tlsf.destroy(&heap)
 	old_td := new(Server_Thread, backing)
 	old_td^ = td
@@ -134,7 +136,7 @@ test_worker_heap_rejects_unsupported_sizes_without_mutation :: proc(t: ^testing.
 		data      = &state,
 	}
 	heap: tlsf.Allocator
-	assert(worker_heap_init(&heap, backing, 64 * mem.Kilobyte))
+	assert(worker_heap_init(&heap, &backing, 64 * mem.Kilobyte))
 	defer tlsf.destroy(&heap)
 	allocator := worker_heap_allocator(&heap)
 	original, err := mem.alloc_bytes(113, 64, allocator)
@@ -186,4 +188,51 @@ test_worker_heap_rejects_unsupported_sizes_without_mutation :: proc(t: ^testing.
 	testing.expect_value(t, len(near_limit), 0)
 	testing.expect_value(t, state.requests, 2)
 	testing.expect_value(t, state.last_size, 4 * mem.Gigabyte)
+}
+
+worker_heap_mapped_backing_for_test :: proc(
+	data: rawptr,
+	mode: mem.Allocator_Mode,
+	size, alignment: int,
+	old_memory: rawptr,
+	old_size: int,
+	location := #caller_location,
+) -> (
+	[]byte,
+	mem.Allocator_Error,
+) {
+	return (cast(^[]byte)data)^, .None
+}
+
+@(test)
+test_worker_heap_prefaults_all_fresh_pages_without_touching_guards :: proc(t: ^testing.T) {
+	page := mem.PAGE_SIZE
+	mapping, err := linux.mmap(0, uint(5 * page), {.READ, .WRITE}, {.PRIVATE, .ANONYMOUS})
+	assert(err == .NONE)
+	defer linux.munmap(mapping, uint(5 * page))
+	bytes := ([^]byte)(mapping)[:5 * page]
+	// No read before allocation: the unaligned result crosses three absent
+	// anonymous pages, with an untouched guard page on each side.
+	span := bytes[2 * page - 17:3 * page + 17]
+	parent := mem.Allocator {
+		procedure = worker_heap_mapped_backing_for_test,
+		data      = &span,
+	}
+	resident: [5]b8
+	assert(linux.mincore(mapping, uint(len(bytes)), resident[:]) == .NONE)
+	for r in resident do testing.expect_value(t, r, b8(false))
+	result, alloc_err := worker_heap_backing_allocator_proc(&parent, .Alloc, len(span), 1, nil, 0)
+	testing.expect_value(t, alloc_err, mem.Allocator_Error.None)
+	testing.expect_value(t, raw_data(result), raw_data(span))
+	assert(linux.mincore(mapping, uint(len(bytes)), resident[:]) == .NONE)
+	for r, i in resident do testing.expect_value(t, r, b8(i >= 1 && i <= 3))
+	for b in result do testing.expect_value(t, b, byte(0))
+	// Forwarded modes must not zero existing contents at page boundaries.
+	for &b, i in result do b = byte((i * 7 + 3) % 251)
+	modes := []mem.Allocator_Mode{.Resize, .Resize_Non_Zeroed, .Alloc_Non_Zeroed, .Free}
+	for mode in modes {
+		_, forward_err := worker_heap_backing_allocator_proc(&parent, mode, len(span), 1, raw_data(span), len(span))
+		testing.expect_value(t, forward_err, mem.Allocator_Error.None)
+		for b, i in span do testing.expect_value(t, b, byte((i * 7 + 3) % 251))
+	}
 }
