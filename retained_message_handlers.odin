@@ -490,10 +490,9 @@ retained_message_try_stage_append :: proc(ctx: ^Retained_Dedup_Context, key: str
 		delete(key); finish_retained_send(ctx, .Poisoned, 0); return true
 	}
 	if store.pending_dedup == nil do store.pending_dedup = make(map[string]int, 16)
-	record := make([]byte, record_length)
-	defer delete(record)
+	record := store.wal.write_buffer[batch_offset:][:record_length]
 	assert(encode_message_record(&ctx.message, record[persistence.LOG_HEADER_SIZE:]), "validated retained message failed to encode")
-	assert(persistence.finalize_and_write_record(&store.wal, 1, record), "bounded retained message failed to stage")
+	assert(persistence.stage_record_in_place(&store.wal, 1, record_length), "bounded retained message failed to stage")
 	if _, append_err := append(
 		&store.pending_appends,
 		Message_Pending_Append {

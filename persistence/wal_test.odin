@@ -928,6 +928,55 @@ test_oversized_record_flushes_staged_batch_first :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_in_place_staging_preserves_chain_without_flushing_full_batch :: proc(t: ^testing.T) {
+	path := test_wal_path("in-place-staging.log")
+	reference_path := test_wal_path("in-place-staging-reference.log")
+	_ = os.remove(path); _ = os.remove(reference_path)
+	defer os.remove(path); defer os.remove(reference_path)
+	reset_test_wal_clock()
+	state, reference: WAL_State
+	if !testing.expect(t, init_wal(&state, path, TEST_MAGIC, TEST_VERSION, TEST_THREAD_INDEX, test_wal_time_now)) do return
+	defer shutdown_wal(&state)
+	if !testing.expect(t, init_wal(&reference, reference_path, TEST_MAGIC, TEST_VERSION, TEST_THREAD_INDEX, test_wal_time_now)) do return
+	defer shutdown_wal(&reference)
+	// Dirty headers detect dependence on the temporary record's former zeroing.
+	for &b in state.write_buffer do b = 0xa7
+	invalid_sizes := [3]int{-1, LOG_HEADER_SIZE - 1, WRITE_BATCH_MAX_BYTES + 1}
+	for size in invalid_sizes {
+		testing.expect(t, !stage_record_in_place(&state, u8(Test_Op.Create), size))
+	}
+	testing.expect_value(t, state.write_offset, 0)
+	testing.expect_value(t, state.buffered_record_count, u64(0))
+	record_sizes := [2]int{LOG_HEADER_SIZE + 13, WRITE_BATCH_MAX_BYTES - LOG_HEADER_SIZE - 13}
+	for size, index in record_sizes {
+		record := make([]byte, size)
+		for i in LOG_HEADER_SIZE ..< size do record[i] = u8(i * 17 + index * 29)
+		copy(state.write_buffer[state.write_offset + LOG_HEADER_SIZE:][:size - LOG_HEADER_SIZE], record[LOG_HEADER_SIZE:])
+		op := index == 0 ? u8(Test_Op.Create) : u8(Test_Op.Update)
+		testing.expect(t, stage_record_in_place(&state, op, size))
+		testing.expect(t, finalize_and_write_record(&reference, op, record))
+		delete(record)
+	}
+	testing.expect_value(t, state.write_offset, WRITE_BATCH_MAX_BYTES)
+	testing.expect_value(t, state.buffered_record_count, u64(2))
+	testing.expect_value(t, state.record_count, u64(0))
+	testing.expect_value(t, state.write_count, u64(0))
+	testing.expect_value(t, state.fsync_count, u64(0))
+	testing.expect(t, !stage_record_in_place(&state, u8(Test_Op.Delete), LOG_HEADER_SIZE))
+	testing.expect_value(t, state.write_offset, WRITE_BATCH_MAX_BYTES)
+	testing.expect_value(t, state.buffered_record_count, u64(2))
+	testing.expect(t, bytes.equal(state.write_buffer[:], reference.write_buffer[:]))
+	testing.expect(t, state.buffered_last_hash == reference.last_hash)
+	testing.expect(t, flush_write_batch_deferred_fsync(&state))
+	testing.expect_value(t, state.record_count, u64(2))
+	testing.expect_value(t, state.durable_record_count, u64(0))
+	testing.expect_value(t, state.fsync_count, u64(0))
+	inspection := inspect_wal_file_strict(path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
+	testing.expect(t, inspection.ok)
+	testing.expect_value(t, inspection.record_count, u64(2))
+}
+
+@(test)
 test_deferred_fsync_record_finalization_covers_batch_boundary_and_oversized_writes :: proc(t: ^testing.T) {
 	record_sizes := [2]int{WRITE_BATCH_MAX_BYTES, WRITE_BATCH_MAX_BYTES + 1}
 	for record_size in record_sizes {

@@ -362,6 +362,24 @@ finalize_and_write_record_deferred_fsync :: proc(state: ^WAL_State, op: u8, buf:
 	return finalize_and_write_record_internal(state, op, buf, false)
 }
 
+// Finalize payload already encoded at write_buffer[write_offset+LOG_HEADER_SIZE:].
+// Unlike finalize_and_write_record, this only stages: it never writes or fsyncs,
+// even when the record exactly fills the batch. The owner controls publication
+// and must finish consuming a flushed batch before reusing its storage.
+stage_record_in_place :: proc(state: ^WAL_State, op: u8, record_size: int) -> bool {
+	if !state.enabled || record_size < LOG_HEADER_SIZE || record_size > WRITE_BATCH_MAX_BYTES || state.write_offset + record_size > WRITE_BATCH_MAX_BYTES {
+		return false
+	}
+	record := state.write_buffer[state.write_offset:][:record_size]
+	previous_hash := state.last_hash
+	if state.buffered_record_count > 0 do previous_hash = state.buffered_last_hash
+	finalize_wal_record_buffer(state.magic, state.version, op, &previous_hash, record, &state.crc64_state)
+	compute_chain_hash(&state.sha_state, record, state.buffered_last_hash[:])
+	state.write_offset += record_size
+	state.buffered_record_count += 1
+	return true
+}
+
 finalize_and_write_record_internal :: proc(state: ^WAL_State, op: u8, buf: []byte, sync_if_due: bool) -> bool {
 	if !state.enabled {
 		return false
