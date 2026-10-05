@@ -51,8 +51,8 @@ body.sullivan-workbench #chatAttach {
     outline: none;
 }
 
-/* Shared list states. Selection wins over hover; keyboard focus outlines the
-   whole row, including lists whose accessible opener is a child button. */
+/* Shared list states. Selection wins over hover; selection, pointer hover and
+   keyboard focus outline the whole row, including child-button openers. */
 :is(.note-card, .reminder-row, .attention-row, .task-table tbody tr, .system-log-table tbody tr, .customer-row, .customer-contact, .customer-event, .slice-row, .slice-member):hover {
     background: var(--bg-hover);
 }
@@ -61,9 +61,11 @@ body.sullivan-workbench #chatAttach {
     background: var(--selected-row-bg);
     color: var(--selected-row-text);
     box-shadow: inset 3px 0 var(--selected-row-accent);
+    outline: 1px solid var(--focus-interactive);
+    outline-offset: -1px;
 }
 
-:is(.note-card, .reminder-row, .attention-row, .task-table tbody tr, .system-log-table tbody tr, .customer-row, .customer-contact, .customer-event, .slice-row, .slice-member):is(:focus-visible, :has(.task-row-open:focus-visible, .slice-member-open:focus-visible, .task-row-status:focus-visible)) {
+:is(.note-card, .reminder-row, .attention-row, .task-table tbody tr, .system-log-table tbody tr, .customer-row, .customer-contact, .customer-event, .slice-row, .slice-member):is(:hover, :focus-visible, :has(.task-row-open:focus-visible, .slice-member-open:focus-visible, .task-row-status:focus-visible)) {
     outline: 1px solid var(--focus-interactive);
     outline-offset: -1px;
 }
