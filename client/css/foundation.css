@@ -81,7 +81,7 @@
     --accent-current: #f04e30; /* Current navigation position */
     --accent-selected: #ffb700; /* Strong selected/focused state */
     --accent-highlight: var(--accent-interactive); /* Legacy alias for existing interactive accents */
-    --accent-danger: #f04e30; /* Errors, blocked, muted */
+    --accent-danger: #b32d28; /* Destructive actions and errors */
     --accent-success: #00a651; /* Online, connected, done */
     --accent-priority: var(--accent-selected); /* Legacy alias for priority/important accents */
     --identity-scope: #0076a2;
@@ -94,7 +94,7 @@
     --room-color-3: var(--accent-success);
     --room-color-4: var(--accent-current);
     --room-color-5: var(--accent-selected);
-    --on-danger: #111111;
+    --on-danger: #ffffff;
     --on-priority: #111111;
     --current-dot-border: var(--text-primary);
     --focus-interactive: var(--accent-interactive);
@@ -281,7 +281,7 @@
     --accent-current: #e84040; /* Current navigation position */
     --accent-selected: #ffb700; /* Strong selected/focused state */
     --accent-highlight: var(--accent-interactive); /* Legacy alias for existing interactive accents */
-    --accent-danger: #e84040; /* Errors, blocked, muted */
+    --accent-danger: #ff9494; /* Destructive actions and errors */
     --accent-success: #40c870; /* Online, connected, done */
     --accent-priority: var(--accent-selected); /* Legacy alias for priority/important accents */
     --identity-scope: #3ca5a7;
@@ -819,14 +819,15 @@
     --accent-current: var(--omarchy-red);
     --accent-selected: var(--omarchy-yellow);
     --accent-highlight: var(--accent-interactive);
-    --accent-danger: var(--omarchy-red);
+    /* Danger is semantic, not the terminal palette's decorative "red" slot. */
+    --accent-danger: #ff9494;
     --accent-success: var(--omarchy-green);
     --accent-priority: var(--accent-selected);
     --identity-scope: var(--omarchy-cyan);
     --identity-actor: var(--omarchy-magenta);
     --identity-reference: var(--omarchy-accent);
     --identity-artifact: var(--omarchy-yellow);
-    --on-danger: var(--omarchy-background);
+    --on-danger: #111111;
     --on-priority: var(--omarchy-background);
     --current-dot-border: var(--border-primary);
     --focus-interactive: var(--accent-interactive);
@@ -877,8 +878,8 @@
     --media-overlay-bg: color-mix(in srgb, transparent 10%, #000000);
     --media-overlay-backdrop: color-mix(in srgb, transparent 15%, #000000);
 
-    --blocking-depth-0-border: var(--omarchy-red);
-    --blocking-depth-0-bg: color-mix(in srgb, transparent 84%, var(--omarchy-red));
+    --blocking-depth-0-border: var(--accent-danger);
+    --blocking-depth-0-bg: color-mix(in srgb, transparent 84%, var(--accent-danger));
     --blocking-depth-1-border: var(--omarchy-blue);
     --blocking-depth-1-bg: color-mix(in srgb, transparent 88%, var(--omarchy-blue));
     --blocking-depth-2-border: var(--omarchy-cyan);
@@ -891,12 +892,12 @@
     --blocking-depth-5-bg: color-mix(in srgb, transparent 90%, var(--omarchy-cyan));
     --blocking-depth-overflow-border: var(--omarchy-green);
     --blocking-depth-overflow-bg: color-mix(in srgb, transparent 90%, var(--omarchy-green));
-    --danger-subtle-bg: color-mix(in srgb, transparent 84%, var(--omarchy-red));
+    --danger-subtle-bg: color-mix(in srgb, transparent 84%, var(--accent-danger));
     --task-status-todo-border: var(--omarchy-yellow);
 
     --graph-edge-reference: var(--identity-scope);
     --graph-edge-related: var(--identity-scope);
-    --graph-edge-dependency: var(--omarchy-red);
+    --graph-edge-dependency: var(--accent-danger);
     --graph-edge-blocking: var(--identity-artifact);
     --graph-edge-derived: var(--identity-actor);
     --graph-edge-superseding: var(--omarchy-blue);
@@ -931,23 +932,14 @@
     --identity-artifact: color-mix(in srgb, var(--omarchy-yellow) 30%, var(--omarchy-foreground));
     --graph-edge-reference: var(--identity-scope);
     --graph-edge-related: var(--identity-scope);
-    --graph-edge-dependency: color-mix(in srgb, var(--omarchy-red) 70%, var(--omarchy-foreground));
     --graph-edge-blocking: var(--identity-artifact);
     --graph-edge-derived: var(--identity-actor);
     --graph-edge-superseding: var(--identity-reference);
-    --on-danger: #111111;
     --on-priority: #111111;
-}
-
-[data-theme="kanagawa"] {
-    --graph-edge-dependency: color-mix(in srgb, var(--omarchy-red) 65%, var(--omarchy-foreground));
-    --on-danger: var(--omarchy-background);
 }
 
 [data-theme="nord"] {
     --identity-actor: color-mix(in srgb, var(--omarchy-magenta) 90%, var(--omarchy-foreground));
-    --graph-edge-dependency: color-mix(in srgb, var(--omarchy-red) 65%, var(--omarchy-foreground));
-    --on-danger: #111111;
 }
 
 [data-theme="matte-black"] {
@@ -970,21 +962,15 @@
     --action-create-hover-text: #111111;
 }
 
-/* Danger is read as text on the record surface as well as used as a fill, so a
-   palette whose red sits too close to its own background states a readable red.
-   Each value is the smallest foreground mix that reaches 4.5:1 as text and keeps
-   the hover fill legible under --on-danger. */
-[data-theme="lupine"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 90%, var(--omarchy-foreground)); }
-[data-theme="matte-black"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 90%, var(--omarchy-foreground)); }
-[data-theme="catppuccin-latte"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 90%, var(--omarchy-foreground)); }
-[data-theme="ristretto"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 95%, var(--omarchy-foreground)); }
-[data-theme="flexoki-light"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 85%, var(--omarchy-foreground)); }
-[data-theme="gruvbox"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 70%, var(--omarchy-foreground)); }
-[data-theme="lumon"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 70%, var(--omarchy-foreground)); }
-[data-theme="everforest"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 60%, var(--omarchy-foreground)); }
-[data-theme="solitude"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 60%, var(--omarchy-foreground)); }
-[data-theme="kanagawa"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 55%, var(--omarchy-foreground)); }
-[data-theme="forest-night"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 50%, var(--omarchy-foreground)); }
-[data-theme="rose-pine"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 50%, var(--omarchy-foreground)); }
-[data-theme="nord"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 45%, var(--omarchy-foreground)); }
-[data-theme="miasma"] { --accent-danger: color-mix(in srgb, var(--omarchy-red) 40%, var(--omarchy-foreground)); }
+/* Light surfaces need dark red text and a light foreground on the hover fill.
+   Keep identities and decorative palette colors independent of this role. */
+:is(
+    [data-theme="catppuccin-latte"],
+    [data-theme="flexoki-light"],
+    [data-theme="lupine"],
+    [data-theme="rose-pine"],
+    [data-theme="white"]
+) {
+    --accent-danger: #b32d28;
+    --on-danger: #ffffff;
+}

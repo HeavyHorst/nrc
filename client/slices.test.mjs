@@ -645,6 +645,8 @@ test("the record renders the outcome it holds, so a later close cannot erase it"
   const markup = element("sliceRecord").innerHTML;
   assert.match(markup, /id="sliceOutcome"[^>]*>Ship the register\.<\/textarea>/, "the outcome field carries the record");
   assert.match(markup, /id="sliceOwner"[^>]*value="anke"/, "the owner field carries the record");
+  assert.match(markup, /class="btn" data-slice-action="close"/, "reversible closure is neutral");
+  assert.match(markup, /class="btn btn--danger" data-slice-action="delete"/, "deletion remains destructive");
 
   const listed = slices.getState().slices[0];
   assert.equal(listed.outcome, undefined, "the listing itself never carries the outcome");

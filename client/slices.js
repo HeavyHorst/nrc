@@ -1534,7 +1534,7 @@
           <button class="btn" data-slice-action="save" ${locked ? "disabled" : ""}>SAVE</button>
           ${closed
             ? `<button class="btn" data-slice-action="reopen" ${locked ? "disabled" : ""}>REOPEN SLICE</button>`
-            : `<button class="btn btn--danger" data-slice-action="close" ${locked ? "disabled" : ""}>CLOSE SLICE</button>`}
+            : `<button class="btn" data-slice-action="close" ${locked ? "disabled" : ""}>CLOSE SLICE</button>`}
           <button class="btn btn--danger" data-slice-action="delete" ${locked ? "disabled" : ""}>DELETE SLICE</button>
         </div>
       </div>
