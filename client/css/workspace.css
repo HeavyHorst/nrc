@@ -649,9 +649,8 @@ hr {
 .inspector-metadata {
     flex: 1 1 0;
     min-width: 0;
-    container-type: inline-size;
     overflow-x: auto;
-    scrollbar-width: none;
+    scrollbar-width: thin;
     text-transform: none;
     letter-spacing: normal;
 }
@@ -661,43 +660,37 @@ hr {
 }
 .inspector-metadata .detail-metadata-ledger {
     display: flex;
-    gap: 0.25rem;
+    gap: 0;
     width: max-content;
-    padding: 0 0.125rem;
+    padding: 0;
     border: 0;
-    font-size: 9px;
-    line-height: 20px;
+    font-size: max(var(--font-xs), var(--mobile-font-sm));
+    line-height: 1.3;
     font-weight: 400;
 }
 .inspector-metadata .detail-metadata-ledger > div {
-    display: flex;
+    display: grid;
     gap: 0.125rem;
+    padding: 0.25rem 0.625rem;
+    border-left: 1px solid var(--border-list);
     white-space: nowrap;
 }
-.inspector-metadata .detail-metadata-ledger > div + div::before {
-    content: "·";
-    color: var(--text-dim);
+.inspector-metadata .detail-metadata-ledger dt {
+    font-size: max(var(--font-xxs), var(--mobile-font-xs));
+    letter-spacing: 0.04em;
 }
-@container (max-width: 560px) {
-    .inspector-metadata .metadata-date-label {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip-path: inset(50%);
-    }
-}
-@container (max-width: 400px) {
-    .inspector-metadata .detail-metadata-ledger > div:first-child dt {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip-path: inset(50%);
-    }
+.inspector-metadata .detail-metadata-ledger dd.identity-actor {
+    font-weight: 500;
 }
 .inspector .panel-header.inspector-matrix-header > .inspector-identity-row:has(.inspector-metadata) > span {
     flex: 0 0 auto;
+    align-self: center;
+}
+.inspector .panel-header.inspector-matrix-header > .inspector-identity-row:has(.inspector-metadata) {
+    height: auto;
+    min-height: 40px;
+    max-height: none;
+    align-items: center;
 }
 
 .detail-metadata-ledger.detail-object-register {

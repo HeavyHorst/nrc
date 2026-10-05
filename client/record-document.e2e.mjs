@@ -48,13 +48,6 @@ try {
     if (!process.env.NRC_SCREENSHOT_DIR) return;
     await fs.mkdir(process.env.NRC_SCREENSHOT_DIR, { recursive: true });
     await page.locator("#inspector").screenshot({ path: `${process.env.NRC_SCREENSHOT_DIR}/${name}.png` });
-    if (name.startsWith("task-") && !name.endsWith("resources")) {
-      const scroll = page.locator('.record-document-scroll');
-      const top = await scroll.evaluate(el => el.scrollTop);
-      await page.locator('.task-document-metadata').scrollIntoViewIfNeeded();
-      await page.locator("#inspector").screenshot({ path: `${process.env.NRC_SCREENSHOT_DIR}/${name}-metadata.png` });
-      await scroll.evaluate((el, top) => el.scrollTop = top, top);
-    }
   };
   const geometry = async selector => page.locator(selector).evaluate(el => {
     const r = el.getBoundingClientRect();
@@ -63,7 +56,7 @@ try {
   await page.evaluate(() => {
     const task = roomTasks.get(0n).get(259n);
     const empty = document.createElement("div");
-    empty.innerHTML = renderTaskDocumentMetadata(task);
+    empty.innerHTML = buildTaskHeaderMetadata(task);
     if (empty.textContent.includes("COMPLETED")) throw new Error("Open task has completion metadata");
     task.completedAt = 1790231580000000000n;
     task.createdBy = "tag:amp-edupool";
@@ -87,21 +80,9 @@ try {
         const cancel = type === "task" ? "#taskDetailToggleFocus" : "#noteDetailToggleView";
         await page.locator(title).waitFor();
         if (type === "task") {
-          assert.equal(await page.locator('.inspector-identity-row .inspector-metadata').count(), 0);
-          assert.deepEqual(await page.locator('.task-document-metadata dt').allTextContents(), ['CREATED', 'BY', 'UPDATED', 'COMPLETED']);
-          const meta = await geometry('.task-document-metadata');
-          const body = await geometry(content);
-          assert.ok(meta.y >= body.y + body.height, 'metadata follows description');
-          assert.ok(await page.locator('.task-document-metadata').evaluate(el => el.scrollWidth <= el.clientWidth), 'metadata fits narrow document');
-          const rows = await page.locator('.task-document-metadata > div').evaluateAll(els => els.map(el => el.getBoundingClientRect().y));
-          if (width === 2200) {
-            assert.equal(rows[0], rows[1], 'created and author share the first line');
-            assert.equal(rows[2], rows[3], 'updated and completed share the second line');
-            const columns = await page.locator('.task-document-metadata dt, .task-document-metadata dd').evaluateAll(els => els.map(el => el.getBoundingClientRect().x));
-            assert.equal(columns[2], columns[6], 'BY and COMPLETED labels align');
-            assert.equal(columns[3], columns[7], 'author and completion values align');
-          }
-          if (width === 390) assert.ok(rows[3] > rows[2], 'completion wraps as a whole on narrow panels');
+          assert.equal(await page.locator('.inspector-identity-row .inspector-metadata').count(), 1);
+          assert.deepEqual(await page.locator('.inspector-metadata dt').allTextContents(), ['CREATED BY', 'CREATED', 'UPDATED', 'COMPLETED']);
+          assert.equal(await page.locator('.record-document-scroll .detail-metadata-ledger').count(), 0, 'no duplicate body provenance');
         }
         assert.ok(await page.locator(`.inspector-mode-row #${type}DetailDelete`).isVisible(), 'delete is available in the read header');
         assert.equal(await page.locator(`.agenda-content #${type}DetailDelete`).count(), 0, 'no bottom delete action');
@@ -188,7 +169,7 @@ try {
         await page.locator('[data-resource="attachments"] [data-resource-toggle]').click();
         await page.locator(edit).click();
         await page.locator(editor).waitFor();
-        if (type === "task") assert.equal(await page.locator('.record-document-scroll > .task-document-metadata').count(), 1, 'edit mode preserves metadata inside the scrolling document');
+        if (type === "task") assert.equal(await page.locator('.inspector-identity-row .inspector-metadata').count(), 1, 'edit mode preserves header metadata');
         assert.ok(await page.locator(`.inspector-mode-row #${type}DetailDelete`).isVisible(), 'delete stays in the edit header');
         if (type === "note") assert.equal(await page.locator('.document-resources [data-resource="threads"]').getAttribute('data-resource-open'), 'false', "attachments replace the Amp threads panel");
         assert.ok(await page.locator('.record-message').isVisible(), "comments stay visible during content editing");

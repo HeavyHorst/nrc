@@ -4050,14 +4050,16 @@ function bindTaskDetailPanelHandlers(agendaContent) {
   agendaContent.addEventListener("keydown", handleDetailPanelKeydown);
 }
 
-function renderTaskDocumentMetadata(task) {
-  const date = value => escapeHtml(window.NRCDetailUI.formatHeaderDate(value));
-  return `<dl class="task-document-metadata" aria-label="Task metadata">
-    <div><dt>CREATED</dt><dd>${date(task.createdAt)}</dd></div>
-    <div><dt>BY</dt><dd class="task-document-author">${escapeHtml(task.createdBy || "—")}</dd></div>
-    <div><dt>UPDATED</dt><dd>${date(task.updatedAt)}</dd></div>
-    ${task.completedAt && task.completedAt !== 0n ? `<div><dt>COMPLETED</dt><dd>${date(task.completedAt)}</dd></div>` : ""}
-  </dl>`;
+function buildTaskHeaderMetadata(task) {
+  const rows = [
+    { label: "CREATED BY", value: task.createdBy || "—", role: "actor" },
+    { label: "CREATED", value: window.NRCDetailUI.formatHeaderDate(task.createdAt) },
+    { label: "UPDATED", value: window.NRCDetailUI.formatHeaderDate(task.updatedAt) },
+  ];
+  if (task.completedAt && task.completedAt !== 0n) {
+    rows.push({ label: "COMPLETED", value: window.NRCDetailUI.formatHeaderDate(task.completedAt) });
+  }
+  return window.NRCDetailUI.renderHeaderMetadata(rows);
 }
 
 function renderTaskDocumentProperties(task) {
@@ -4098,6 +4100,7 @@ function showTaskDetailPanel(task, { view = true } = {}) {
   const commentCount = comments.length;
   agendaHeader.innerHTML = `<div class="inspector-identity-row">
     <span class="header-text identity-reference">TASK #${task.id}</span>
+    ${buildTaskHeaderMetadata(task)}
     <span class="inspector-cell-label">STATE</span>
     ${view || descriptionFocusMode ? '<span class="inspector-state-value">READ</span>' : window.NRCDetailUI.renderSaveState("SAVED")}
   </div><div class="inspector-mode-row">
@@ -4131,7 +4134,6 @@ function showTaskDetailPanel(task, { view = true } = {}) {
             </div>
           </div>
         </section>
-        ${renderTaskDocumentMetadata(task)}
         </div>
         ${window.NRCDetailUI.renderDocumentResources({ kind: "task", attachments: task.attachments,
           attachmentControl: taskAttachmentsControl(task), open: taskResourceOpen })}
@@ -4311,7 +4313,6 @@ function enterDescriptionFocus() {
     <div class="task-detail-document record-document record-document-scroll">
       ${renderTaskDocumentProperties(task)}
       <div class="agenda-preview task-detail-doc-body">${renderedDesc}</div>
-      ${renderTaskDocumentMetadata(task)}
     </div>
     ${window.NRCDetailUI.renderDocumentResources({ kind: "task", attachments: task.attachments,
       attachmentControl: taskAttachmentsControl(task), open: taskResourceOpen })}
