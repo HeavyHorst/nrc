@@ -47,7 +47,6 @@ when NRC_SIMULATION {
 		asset_count:         int,
 		edge_count:          int,
 		adjacency_count:     int,
-		active_task_count:   int,
 		task_index_count:    int,
 		task_btree_count:    int,
 		task_index_key:      Task_Sort_Key,
@@ -87,7 +86,6 @@ when NRC_SIMULATION {
 		result.asset_count = len(conv.assets)
 		result.edge_count = len(conv.edges)
 		result.adjacency_count = len(conv.edges_by_entity)
-		result.active_task_count = conv.active_task_count
 		result.task_index_count = len(conv.task_index_keys)
 		result.task_btree_count = btree.count(&conv.task_index)
 		result.task_index_key, result.task_index_present = conv.task_index_keys[1]
@@ -119,7 +117,6 @@ when NRC_SIMULATION {
 			task_adjacency[0] == 1 &&
 			len(asset_adjacency) == 1 &&
 			asset_adjacency[0] == 1 &&
-			result.active_task_count == 1 &&
 			result.task_index_count == 1 &&
 			result.task_btree_count == 1 &&
 			result.task_index_present &&
@@ -155,7 +152,6 @@ when NRC_SIMULATION {
 			a.asset_count == b.asset_count &&
 			a.edge_count == b.edge_count &&
 			a.adjacency_count == b.adjacency_count &&
-			a.active_task_count == b.active_task_count &&
 			a.task_index_count == b.task_index_count &&
 			a.task_btree_count == b.task_btree_count &&
 			a.task_index_key == b.task_index_key &&

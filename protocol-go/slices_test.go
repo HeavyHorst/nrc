@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+func TestTaskSliceIndependentCounterSums(t *testing.T) {
+	s := TaskSlice{Backlog: 40000, Todo: 30000, Done: 65535, Notes: 1, Files: 2}
+	if s.OpenCount() != 70000 || s.TaskCount() != 135535 || s.MemberCount() != 135538 {
+		t.Fatalf("wrapped independent counters: open=%d tasks=%d members=%d", s.OpenCount(), s.TaskCount(), s.MemberCount())
+	}
+	for _, s := range []TaskSlice{{Backlog: 65535}, {Backlog: 65535, Todo: 1}} {
+		want := uint32(s.Backlog) + uint32(s.Todo)
+		if s.OpenCount() != want || s.TaskCount() != want {
+			t.Fatalf("boundary sum: got open=%d tasks=%d, want %d", s.OpenCount(), s.TaskCount(), want)
+		}
+	}
+}
+
 func TestEncodeListTaskSlices(t *testing.T) {
 	// The first page of an unfiltered listing: conv_id, no flags, an empty owner,
 	// an empty name, the page bound and the correlation id.

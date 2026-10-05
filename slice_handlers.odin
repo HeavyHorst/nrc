@@ -108,21 +108,21 @@ unassigned_task_count :: proc(conv: ^Conversation_State, assigned: ^map[pr.TaskI
 // it was counted as work. A task retired into a note is not work: it leaves the
 // task indexes and the member query, so it is not counted here either, and the
 // counters and the record stay in agreement.
-fold_task_member :: proc(entry: ^pr.TaskSlice, task: ^pr.Task) -> bool {
+fold_task_member :: proc(entry: ^pr.TaskSlice, task: ^pr.Task, overflow: ^bool = nil) -> bool {
 	if task == nil || task.status == .Note do return false
 	switch task.status {
 	case .Backlog:
-		entry.backlog += 1
+		slice_increment_count(&entry.backlog, overflow)
 	case .Todo:
-		entry.todo += 1
+		slice_increment_count(&entry.todo, overflow)
 	case .InProgress:
-		entry.in_progress += 1
+		slice_increment_count(&entry.in_progress, overflow)
 	case .Done:
-		entry.done += 1
+		slice_increment_count(&entry.done, overflow)
 	case .Note:
 		return false
 	}
-	if task.blocked_by != 0 do entry.blocked += 1
+	if task.blocked_by != 0 do slice_increment_count(&entry.blocked, overflow)
 	// Done members do not hold the oldest-active age back.
 	if task.status != .Done && (entry.oldest_active_at == 0 || task.created_at < entry.oldest_active_at) {
 		entry.oldest_active_at = task.created_at
@@ -133,17 +133,27 @@ fold_task_member :: proc(entry: ^pr.TaskSlice, task: ^pr.Task) -> bool {
 
 // fold_asset_member adds one note or file member. Other asset kinds are not
 // members of a work stream, so a link to one does not invent a member.
-fold_asset_member :: proc(entry: ^pr.TaskSlice, asset: ^pr.Asset) {
+fold_asset_member :: proc(entry: ^pr.TaskSlice, asset: ^pr.Asset, overflow: ^bool = nil) {
 	if asset == nil do return
 	#partial switch asset.asset_type {
 	case .Note:
-		entry.notes += 1
+		slice_increment_count(&entry.notes, overflow)
 	case .File:
-		entry.files += 1
+		slice_increment_count(&entry.files, overflow)
 	case:
 		return
 	}
 	if asset.updated_at > entry.last_moved_at do entry.last_moved_at = asset.updated_at
+}
+
+// Wire counters are independent u16 categories, not a bound on total members.
+// Keep a counter representable and let the listing reject the entire result.
+slice_increment_count :: proc(count: ^u16, overflow: ^bool) {
+	if count^ == max(u16) {
+		if overflow != nil do overflow^ = true
+		return
+	}
+	count^ += 1
 }
 
 // Slice_Order_Entry pairs a listing entry with the slice record's own creation
@@ -215,6 +225,7 @@ Slice_Page :: struct {
 	next_cursor:      Slice_Cursor,
 	assigned_tasks:   u32,
 	unassigned_tasks: u32,
+	error:            string,
 }
 
 // slice_matches_filters reports whether a record is part of what the query asks
@@ -301,6 +312,7 @@ collect_task_slices :: proc(
 		}
 		if m.closed do entry.flags += pr.TaskSliceFlag_CLOSED
 
+		overflow := false
 		key := Edge_Entity_Key {
 			target_type = .Asset,
 			target_id   = u64(asset.asset_id),
@@ -314,11 +326,15 @@ collect_task_slices :: proc(
 				switch member_type {
 				case .Task:
 					task_id := pr.TaskID(member_id)
-					if fold_task_member(&entry, conv.tasks[task_id]) && assigned != nil {
+					if fold_task_member(&entry, conv.tasks[task_id], &overflow) && assigned != nil {
 						assigned[task_id] = {}
 					}
 				case .Asset:
-					fold_asset_member(&entry, conv.assets[pr.AssetID(member_id)])
+					fold_asset_member(&entry, conv.assets[pr.AssetID(member_id)], &overflow)
+				}
+				if overflow {
+					clear(slices)
+					return Slice_Page{error = "Slice listing representation limit exceeded: member category exceeds 65535"}
 				}
 			}
 		}
@@ -392,7 +408,7 @@ process_list_task_slices :: proc(c: ^NRC_Connection, req: pr.ListTaskSlicesReque
 		with_work_counters = !req.has_cursor && !req.has_owner && !req.has_name,
 	}
 	page := collect_task_slices(conv, query, &slices, &assigned, allocator)
-	send_task_slice_list(c, req.conv_id, slices[:], page, "", req.correlation_id)
+	send_task_slice_list(c, req.conv_id, slices[:], page, page.error, req.correlation_id)
 }
 
 // ============================================================================

@@ -186,7 +186,6 @@ index_task :: proc(conv: ^Conversation_State, task: ^pr.Task) {
 	if task.blocked_by != 0 {
 		relation_tree_index(&conv.task_blockers, Entity_Reference_Key{parent_id = u64(task.blocked_by), entity_id = u64(task.id)})
 	}
-	if task_status_is_active(task.status) do conv.active_task_count += 1
 }
 
 remove_task_from_index :: proc(conv: ^Conversation_State, task: ^pr.Task) {
@@ -209,7 +208,6 @@ remove_task_from_index :: proc(conv: ^Conversation_State, task: ^pr.Task) {
 	}
 	_, _ = btree.remove(&conv.task_index, key)
 	delete_key(&conv.task_index_keys, task.id)
-	if task_status_is_active(task.status) do conv.active_task_count -= 1
 }
 
 replace_task_in_index :: proc(conv: ^Conversation_State, old_task, new_task: ^pr.Task) {

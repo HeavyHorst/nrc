@@ -190,11 +190,6 @@ handle_create_room_mapping_asset :: proc(c: ^NRC_Connection, req: pr.CreateAsset
 		stale_mapping = true
 	}
 
-	if len(conv.assets) >= pr.MAX_ASSETS_PER_CONVERSATION {
-		send_error_response(c, .C_CreateAsset, "Asset limit reached", req.correlation_id)
-		return
-	}
-
 	payload := build_room_mapping_payload(normalized_name, conv_id)
 	defer delete(payload)
 

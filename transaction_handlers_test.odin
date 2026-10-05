@@ -4,6 +4,143 @@ import "core:encoding/endian"
 import "core:testing"
 
 import pr "protocol"
+import ws "websocket"
+
+@(test)
+test_oversized_cascade_deletes_reject_without_storage_failure :: proc(t: ^testing.T) {
+	workspace := "oversized-cascade"
+	if !init_room_mapping_test_state("oversized_cascade.log", workspace) {
+		testing.expect(t, false, "initialize cascade fixture")
+		return
+	}
+	defer cleanup_room_mapping_test_state()
+	server: NRC_Server
+	previous_server := td.server
+	td.server = &server
+	persistent_mutation_failure_seen = false
+	defer {td.server = previous_server; persistent_mutation_failure_seen = false}
+	c := make_room_mapping_test_connection(workspace)
+	c.state = .Idle
+	c.is_sending = true
+	defer send_queue_destroy(&c)
+	workspace_state := get_or_create_connection_workspace(&c)
+	conv := get_or_create_conversation(workspace_state, pr.WORKSPACE_DATA_ID)
+	asset := alloc_asset(nil, nil, nil, nil)
+	asset.asset_id = 1; asset.asset_type = .File; asset.conv_id = pr.WORKSPACE_DATA_ID
+	asset_store_put(workspace_state, workspace, conv, asset)
+	task := alloc_task(nil, nil, nil, nil, nil, nil, nil, nil)
+	task.id = 1; task.status = .Backlog; task.conv_id = pr.WORKSPACE_DATA_ID
+	task_store_put(conv, task)
+	for i in 0 ..< SHARD_TRANSACTION_MAX_MUTATIONS {
+		edge := alloc_edge(nil)
+		edge.edge_id = pr.EdgeID(i + 1); edge.conv_id = pr.WORKSPACE_DATA_ID
+		edge.source_type = .Asset; edge.source_id = 1
+		edge.target_type = .Task; edge.target_id = 1; edge.relation = .RelatedTo
+		edge_store_put(conv, edge)
+	}
+	// Each root plus its edges exceeds the mutation bound by exactly one.
+	for mode in 0 ..< 4 {
+		if mode == 0 {
+			handle_delete_asset(&c, {conv_id = pr.WORKSPACE_DATA_ID, asset_id = 1})
+		} else if mode == 1 {
+			process_delete_task(&c, {conv_id = pr.WORKSPACE_DATA_ID, task_id = 1})
+		} else {
+			typ := mode == 2 ? pr.TransactionEntityType.Asset : pr.TransactionEntityType.Task
+			body := transaction_test_delete_body(pr.WORKSPACE_DATA_ID, typ, 1)
+			ops := [1]pr.TransactionOperation{{op_type = mode == 2 ? .AssetDelete : .TaskDelete, body = body[:]}}
+			process_apply_transaction(&c, {operations = ops[:]})
+		}
+		testing.expect(
+			t,
+			!server.closing && !server.fatal_storage_error && !persistent_mutation_failure_seen,
+			"oversized request must not shut down the server",
+		)
+		testing.expect(t, conv.assets[1] == asset && conv.tasks[1] == task, "rejection preserves root records")
+		testing.expect_value(t, len(conv.edges), SHARD_TRANSACTION_MAX_MUTATIONS)
+		testing.expect_value(t, td.shard_writers.writers[0].wal.record_count, u64(0))
+		testing.expect_value(t, send_queue_len(&c), 1)
+		if item := send_queue_peek(&c); item != nil {
+			frame := frame_lease_data(item.lease)
+			_, header_size, frame_err := ws.readFrameHeader(frame)
+			testing.expect_value(t, frame_err, nil)
+			payload := frame[header_size:]
+			if mode == 0 {
+				response, err := pr.parseErrorResponseMessage(payload)
+				testing.expect_value(t, err, nil)
+				testing.expect_value(t, string(response.error_msg), "Asset deletion exceeds atomic transaction size limit")
+			} else if mode == 1 {
+				response, err := pr.parseTaskListResponse(payload, nil, nil)
+				testing.expect_value(t, err, nil)
+				testing.expect(t, !response.success)
+				testing.expect_value(t, string(response.error), "Task deletion exceeds atomic transaction size limit")
+			} else {
+				testing.expect_value(t, pr.get_opcode(payload), pr.Opcode.S_TransactionResult)
+				testing.expect_value(t, payload[3], u8(pr.TransactionResultStatus.Rejected))
+			}
+		}
+		send_queue_drain(&c)
+	}
+}
+
+@(test)
+test_asset_and_edge_mutations_exceed_former_workspace_limits :: proc(t: ^testing.T) {
+	workspace := "record-counts-without-quotas"
+	if !init_room_mapping_test_state("record_counts_without_quotas.log", workspace) {
+		testing.expect(t, false, "initialize record-count fixture")
+		return
+	}
+	defer cleanup_room_mapping_test_state()
+	c := make_room_mapping_test_connection(workspace)
+	defer send_queue_destroy(&c)
+	ws := get_or_create_connection_workspace(&c)
+	conv := get_or_create_conversation(ws, pr.WORKSPACE_DATA_ID)
+	for i in 0 ..< 10_000 {
+		asset := alloc_asset(nil, nil, nil, nil)
+		asset.asset_id = pr.AssetID(i + 1)
+		asset.conv_id = pr.WORKSPACE_DATA_ID
+		asset.asset_type = .File
+		asset_store_put(ws, workspace, conv, asset)
+	}
+	td.asset_seq = 10_000
+	asset_handler_test_create(&c, pr.WORKSPACE_DATA_ID, .File, .None, 0, "new file", "")
+	testing.expect_value(t, len(conv.assets), 10_001)
+	testing.expect(t, conv.assets[10_001] != nil, "standalone asset creation exceeds former quota")
+	handle_create_asset(&c, pr.CreateAssetRequest{conv_id = pr.WORKSPACE_DATA_ID, asset_type = .RoomMapping, preview = transmute([]byte)string("UNBOUNDED")})
+	testing.expect_value(t, len(conv.assets), 10_002)
+	testing.expect(t, conv.assets[10_002] != nil && conv.assets[10_002].asset_type == .RoomMapping, "room creation exceeds former asset quota")
+	for i in 0 ..< 50_000 {
+		edge := alloc_edge(nil)
+		edge.edge_id = pr.EdgeID(i + 1)
+		edge.conv_id = pr.WORKSPACE_DATA_ID
+		edge.source_type = .Asset
+		edge.source_id = 1
+		edge.target_type = .Asset
+		edge.target_id = 2
+		edge.relation = .RelatedTo
+		edge_store_put(conv, edge)
+	}
+	td.edge_seq = 50_000
+	handle_create_edge(
+		&c,
+		pr.CreateEdgeRequest{conv_id = pr.WORKSPACE_DATA_ID, source_type = .Asset, source_id = 1, target_type = .Asset, target_id = 2, relation = .RelatedTo},
+	)
+	testing.expect_value(t, len(conv.edges), 50_001)
+	testing.expect(t, conv.edges[50_001] != nil, "standalone edge creation exceeds former quota")
+	asset_body: [21]byte
+	endian.put_u64(asset_body[:], .Big, u64(pr.WORKSPACE_DATA_ID))
+	endian.put_u16(asset_body[8:], .Big, u16(pr.AssetType.File))
+	edge_body: [34]byte
+	endian.put_u64(edge_body[:], .Big, u64(pr.WORKSPACE_DATA_ID))
+	transaction_test_ref(edge_body[8:], .Existing, .Asset, 1)
+	transaction_test_ref(edge_body[20:], .Existing, .Asset, 2)
+	endian.put_u16(edge_body[32:], .Big, u16(pr.RelationType.RelatedTo))
+	ops := [2]pr.TransactionOperation{{op_type = .AssetCreate, body = asset_body[:]}, {op_type = .EdgeCreate, body = edge_body[:]}}
+	process_apply_transaction(&c, pr.ApplyTransactionRequest{operations = ops[:]})
+	testing.expect_value(t, len(conv.assets), 10_003)
+	testing.expect_value(t, len(conv.edges), 50_002)
+	testing.expect(t, conv.assets[10_003] != nil && conv.edges[50_002] != nil, "transaction creation exceeds both former quotas")
+	testing.expect_value(t, td.shard_writers.writers[0].wal.record_count, u64(4))
+}
 
 transaction_test_ref :: proc(buf: []byte, kind: pr.TransactionReferenceKind, typ: pr.TransactionEntityType, id: u64) {
 	buf[0] = u8(kind); buf[1] = u8(typ); endian.put_u16(buf[2:], .Big, 0); endian.put_u64(buf[4:], .Big, id)

@@ -55,7 +55,6 @@ task_store_move :: proc(conv: ^Conversation_State, snapshot: ^pr.Task) {
 task_store_assert_counts :: proc(conv: ^Conversation_State) {
 	assert(len(conv.tasks) == len(conv.task_index_keys))
 	assert(len(conv.tasks) == btree.count(&conv.task_index))
-	assert(conv.active_task_count >= 0 && conv.active_task_count <= len(conv.tasks))
 }
 
 asset_store_put :: proc(ws: ^Workspace_State, workspace_id: string, conv: ^Conversation_State, asset: ^pr.Asset) {

@@ -88,6 +88,16 @@ func TestDecodeTaskQueryPageAndProjects(t *testing.T) {
 	if page.NextCursor.Text != "cursor" || page.NextCursor.TaskID != 9 || page.TotalCount != 11 || page.CorrelationID != 13 {
 		t.Fatalf("unexpected query page: %+v", page)
 	}
+	for _, total := range []uint32{10001, 50001, ^uint32(0)} {
+		binary.BigEndian.PutUint32(buf.Bytes()[buf.Len()-10:buf.Len()-6], total)
+		page, err := DecodeTaskQueryPage(buf.Bytes())
+		if err != nil {
+			t.Fatalf("total %d: %v", total, err)
+		}
+		if page.TotalCount != total || !page.Success || len(page.Tasks) != 0 || page.NextCursor.Text != "cursor" || page.CorrelationID != 13 {
+			t.Fatalf("incorrect large-total query page: %+v", page)
+		}
+	}
 	buf.Reset()
 	binary.Write(buf, binary.BigEndian, uint64(7))
 	binary.Write(buf, binary.BigEndian, uint16(2))
@@ -123,6 +133,16 @@ func TestDecodeTaskListPage(t *testing.T) {
 	}
 	if !page.Success || !page.HasMore || len(page.Tasks) != 1 || page.NextCursor.SortAt != 88 || page.TotalCount != 12 || page.CorrelationID != 55 {
 		t.Fatalf("incorrect page: %+v", page)
+	}
+	for _, total := range []uint32{10001, 50001, ^uint32(0)} {
+		binary.BigEndian.PutUint32(buf.Bytes()[buf.Len()-10:buf.Len()-6], total)
+		page, err := DecodeTaskListPage(buf.Bytes())
+		if err != nil {
+			t.Fatalf("total %d: %v", total, err)
+		}
+		if page.TotalCount != total || !page.Success || !page.HasMore || len(page.Tasks) != 1 || page.Tasks[0].ID != task.ID || page.NextCursor.SortAt != 88 || page.CorrelationID != 55 {
+			t.Fatalf("incorrect large-total page: %+v", page)
+		}
 	}
 }
 

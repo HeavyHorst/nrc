@@ -43,10 +43,6 @@ Edge :: struct {
 	created_by:  []byte,
 }
 
-// Edge limits
-MAX_EDGES_PER_CONVERSATION :: 50000
-MAX_EDGES_PER_ASSET :: 1000
-
 // ============================================================================
 // CreateEdge (C_CreateEdge = 40)
 // ============================================================================

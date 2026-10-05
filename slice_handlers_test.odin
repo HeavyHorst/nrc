@@ -7,6 +7,111 @@ import pr "protocol"
 
 slice_test_bytes :: proc(value: string) -> []byte {return transmute([]byte)value}
 
+@(test)
+test_slice_member_category_boundaries :: proc(t: ^testing.T) {
+	// Each wire category accepts 65535, and the next fold must signal overflow
+	// without wrapping. Blocked is independent of the status categories.
+	for category in 0 ..< 7 {
+		entry: pr.TaskSlice
+		overflow := false
+		task := pr.Task {
+			status = .Backlog,
+		}
+		asset := pr.Asset {
+			asset_type = .Note,
+		}
+		count: ^u16
+		switch category {
+		case 0:
+			count = &entry.backlog
+		case 1:
+			task.status = .Todo; count = &entry.todo
+		case 2:
+			task.status = .InProgress; count = &entry.in_progress
+		case 3:
+			task.status = .Done; count = &entry.done
+		case 4:
+			task.blocked_by = 1; count = &entry.blocked
+		case 5:
+			count = &entry.notes
+		case 6:
+			asset.asset_type = .File; count = &entry.files
+		}
+		for i in 0 ..< 65535 {
+			if category < 5 {
+				// Split blocked work across statuses to test blocked alone.
+				if category == 4 && i >= 40000 do task.status = .Todo
+				_ = fold_task_member(&entry, &task, &overflow)
+			} else {
+				fold_asset_member(&entry, &asset, &overflow)
+			}
+		}
+		testing.expect(t, !overflow, "65535 fits each category")
+		testing.expect_value(t, count^, u16(65535))
+		if category < 5 {
+			_ = fold_task_member(&entry, &task, &overflow)
+		} else {
+			fold_asset_member(&entry, &asset, &overflow)
+		}
+		testing.expect(t, overflow, "65536 exceeds the category representation")
+		testing.expect_value(t, count^, u16(65535))
+	}
+}
+
+@(test)
+test_slice_independent_categories_can_exceed_total_u16 :: proc(t: ^testing.T) {
+	entry: pr.TaskSlice
+	overflow := false
+	task := pr.Task {
+		status = .Backlog,
+	}
+	for _ in 0 ..< 40000 do _ = fold_task_member(&entry, &task, &overflow)
+	task.status = .Todo
+	for _ in 0 ..< 30000 do _ = fold_task_member(&entry, &task, &overflow)
+	task.status = .Done
+	for _ in 0 ..< 65535 do _ = fold_task_member(&entry, &task, &overflow)
+	testing.expect(t, !overflow, "only per-category limits apply")
+	testing.expect_value(t, entry.backlog, u16(40000))
+	testing.expect_value(t, entry.todo, u16(30000))
+	testing.expect_value(t, entry.done, u16(65535))
+	testing.expect_value(t, u32(entry.backlog) + u32(entry.todo), u32(70000))
+}
+
+@(test)
+test_slice_listing_rejects_member_category_overflow :: proc(t: ^testing.T) {
+	conv: Conversation_State
+	slice_test_state(&conv)
+	defer slice_test_destroy(&conv)
+	asset := slice_test_slice_asset(77, `{"version":1,"name":"Boundary"}`)
+	slice_test_add_asset(&conv, &asset)
+	tasks := make([]pr.Task, 65536)
+	defer delete(tasks)
+	for i in 0 ..< 65535 {
+		tasks[i] = pr.Task {
+			id     = pr.TaskID(i + 1),
+			status = .Backlog,
+		}
+		conv.tasks[tasks[i].id] = &tasks[i]
+		slice_test_member_of(&conv, .Task, u64(tasks[i].id), 77)
+	}
+	slices := make([dynamic]pr.TaskSlice)
+	defer delete(slices)
+	page := collect_task_slices(&conv, Slice_Query{limit = 10}, &slices, nil, context.temp_allocator)
+	testing.expect_value(t, page.error, "")
+	testing.expect_value(t, len(slices), 1)
+	if len(slices) == 1 do testing.expect_value(t, slices[0].backlog, u16(65535))
+	tasks[65535] = pr.Task {
+		id     = 65536,
+		status = .Backlog,
+	}
+	conv.tasks[65536] = &tasks[65535]
+	slice_test_member_of(&conv, .Task, 65536, 77)
+	page = collect_task_slices(&conv, Slice_Query{limit = 10}, &slices, nil, context.temp_allocator)
+	testing.expect_value(t, page.error, "Slice listing representation limit exceeded: member category exceeds 65535")
+	testing.expect_value(t, len(slices), 0)
+	testing.expect(t, !page.has_more, "an error is not a successful partial listing")
+}
+
 slice_test_state :: proc(conv: ^Conversation_State) {
 	conv.tasks = make(map[pr.TaskID]^pr.Task)
 	conv.assets = make(map[pr.AssetID]^pr.Asset)

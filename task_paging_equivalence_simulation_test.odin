@@ -24,7 +24,6 @@ when NRC_SIMULATION {
 		btree_keys:      [TASK_PAGING_EQ_COUNT]Task_Sort_Key,
 		btree_key_count: int,
 		task_count:      int,
-		active_count:    int,
 		index_count:     int,
 		btree_count:     int,
 		task_seq:        u64,
@@ -88,7 +87,6 @@ when NRC_SIMULATION {
 			state.btree_key_count += 1
 		}
 		state.task_count = len(conv.tasks)
-		state.active_count = conv.active_task_count
 		state.index_count = len(conv.task_index_keys)
 		state.btree_count = btree.count(&conv.task_index)
 		state.task_seq = td.task_seq
@@ -103,7 +101,6 @@ when NRC_SIMULATION {
 		return(
 			a.task_count == b.task_count &&
 			a.btree_key_count == b.btree_key_count &&
-			a.active_count == b.active_count &&
 			a.index_count == b.index_count &&
 			a.btree_count == b.btree_count &&
 			a.task_seq == b.task_seq \

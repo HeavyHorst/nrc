@@ -5,8 +5,72 @@ import "core:encoding/endian"
 import "core:os"
 import "core:testing"
 import pr "protocol"
+import ws "websocket"
 
 when !NRC_SIMULATION do _ :: os.remove
+
+@(test)
+test_oversized_completion_rejects_without_storage_failure :: proc(t: ^testing.T) {
+	workspace := "oversized-completion"
+	if !init_room_mapping_test_state("oversized_completion.log", workspace) {
+		testing.expect(t, false, "initialize completion fixture")
+		return
+	}
+	defer cleanup_room_mapping_test_state()
+	server: NRC_Server
+	previous_server := td.server
+	td.server = &server
+	persistent_mutation_failure_seen = false
+	defer {td.server = previous_server; persistent_mutation_failure_seen = false}
+	c := make_room_mapping_test_connection(workspace)
+	c.state = .Idle; c.is_sending = true
+	defer send_queue_destroy(&c)
+	conv := get_or_create_conversation(get_or_create_connection_workspace(&c), pr.WORKSPACE_DATA_ID)
+	description: [pr.MAX_TASK_DESCRIPTION_LENGTH]byte
+	for &b in description do b = 'd'
+	// The expanded completion exceeds the 16 MiB WAL record size while its
+	// mutation count remains well below 65535.
+	for i in 0 ..< 8_501 {
+		task := alloc_task(transmute([]byte)string("task"), description[:], nil, nil, nil, nil, nil, nil)
+		task.id = pr.TaskID(i + 1); task.conv_id = pr.WORKSPACE_DATA_ID
+		task.status = .Backlog; task.blocked_by = i == 0 ? 0 : 1
+		task_store_put(conv, task)
+	}
+	td.task_seq = 8_501
+	for mode in 0 ..< 3 {
+		if mode == 0 {
+			process_update_task(&c, {conv_id = pr.WORKSPACE_DATA_ID, task_id = 1, status = .Done})
+		} else if mode == 1 {
+			process_move_task(&c, {conv_id = pr.WORKSPACE_DATA_ID, task_id = 1, status = .Done})
+		} else {
+			body := task_unblock_test_status_patch(pr.WORKSPACE_DATA_ID, 1, .Done)
+			ops := [1]pr.TransactionOperation{{op_type = .TaskPatch, body = body[:]}}
+			process_apply_transaction(&c, {operations = ops[:]})
+		}
+		testing.expect(t, !server.closing && !server.fatal_storage_error && !persistent_mutation_failure_seen, "oversized completion is not a storage failure")
+		testing.expect_value(t, conv.tasks[1].status, pr.TaskStatus.Backlog)
+		for id, task in conv.tasks do testing.expect_value(t, task.blocked_by, id == 1 ? pr.TaskID(0) : pr.TaskID(1))
+		testing.expect_value(t, btree.count(&conv.task_blockers), 8_500)
+		testing.expect_value(t, td.shard_writers.writers[0].wal.record_count, u64(0))
+		testing.expect_value(t, send_queue_len(&c), 1)
+		if item := send_queue_peek(&c); item != nil {
+			frame := frame_lease_data(item.lease)
+			_, header_size, frame_err := ws.readFrameHeader(frame)
+			testing.expect_value(t, frame_err, nil)
+			payload := frame[header_size:]
+			if mode < 2 {
+				response, err := pr.parseTaskListResponse(payload, nil, nil)
+				testing.expect_value(t, err, nil)
+				testing.expect(t, !response.success)
+				testing.expect_value(t, string(response.error), "Task completion exceeds atomic transaction size limit")
+			} else {
+				testing.expect_value(t, pr.get_opcode(payload), pr.Opcode.S_TransactionResult)
+				testing.expect_value(t, payload[3], u8(pr.TransactionResultStatus.Rejected))
+			}
+		}
+		send_queue_drain(&c)
+	}
+}
 
 task_unblock_test_seed :: proc(t: ^testing.T, workspace: string, conv: ^Conversation_State, conv_id: pr.ConversationID, id, blocker: pr.TaskID) {
 	task := alloc_task(transmute([]byte)string("preserved title"), transmute([]byte)string("preserved description"), nil, nil, nil, nil, nil, nil)

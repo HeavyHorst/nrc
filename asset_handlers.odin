@@ -62,13 +62,6 @@ handle_create_asset :: proc(c: ^NRC_Connection, req: pr.CreateAssetRequest) {
 		}
 	}
 
-	// Check asset limit
-	if len(conv.assets) >= pr.MAX_ASSETS_PER_CONVERSATION {
-		log.warnf("[T%d] Asset limit reached for conversation %d", td.thread_index, req.conv_id)
-		send_error_response(c, .C_CreateAsset, "Asset limit reached", req.correlation_id)
-		return
-	}
-
 	// A slice is addressed by its name: the register selects by it, `slice get`
 	// resolves by it and `slice assign` takes it. Two slices with one name would
 	// make all three ambiguous, so the name is unique per conversation.
@@ -298,6 +291,10 @@ handle_delete_asset :: proc(c: ^NRC_Connection, req: pr.DeleteAssetRequest) {
 	collect_edges_for_entity_delete_excluding(conv, &parent_edges_to_delete, pr.TargetType.Asset, u64(req.asset_id), &child_edges_to_delete)
 
 	if td.shard_writers.mode == .Active {
+		if 1 + len(assets_to_delete) + len(child_edges_to_delete.edge_ids) + len(parent_edges_to_delete.edge_ids) > SHARD_TRANSACTION_MAX_MUTATIONS {
+			send_error_response(c, .C_DeleteAsset, "Asset deletion exceeds atomic transaction size limit", req.correlation_id)
+			return
+		}
 		workspace := transmute([]byte)workspace_id
 		writer := shard_writer_for_workspace(&td.shard_writers, workspace)
 		if writer == nil {

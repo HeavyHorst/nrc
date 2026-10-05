@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,8 +16,177 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
+	"github.com/heavyhorst/nrc/cli/pkg/client"
+	"github.com/heavyhorst/nrc/cli/pkg/conn"
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
+
+func TestFetchTasksBeyondFormerQuota(t *testing.T) {
+	const total = 10037
+	pageSize := int(protocol.MaxTaskPageSize)
+	pageCount := (total + pageSize - 1) / pageSize
+	pages := make([][]byte, 0, pageCount)
+	requests := make([][]byte, 0, pageCount)
+	var cursor *protocol.TaskPageCursor
+	for offset := 0; offset < total; offset += pageSize {
+		request, err := protocol.EncodeListTasksPaged(7, 0x1f, protocol.MaxTaskPageSize, cursor, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, request)
+		var tasks []*protocol.Task
+		for i := offset; i < total && i < offset+pageSize; i++ {
+			id := uint64(total - i)
+			// Groups exercise both timestamp advancement and the ID tie-breaker.
+			tasks = append(tasks, &protocol.Task{ID: id, ConvID: 7, Title: fmt.Sprintf("task-%d", id), UpdatedAt: int64(id / 1000)})
+		}
+		last := tasks[len(tasks)-1]
+		next := protocol.TaskPageCursor{SortAt: last.UpdatedAt, TaskID: last.ID}
+		pages = append(pages, testTaskListPage(tasks, offset+len(tasks) < total, next, total))
+		cursor = &next
+	}
+	s, received := testTaskPageSession(t, pages)
+	tasks, err := fetchTasks(s, 0x1f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != total {
+		t.Fatalf("got %d tasks, want %d", len(tasks), total)
+	}
+	seen := make(map[uint64]bool, total)
+	for i, task := range tasks {
+		id := uint64(total - i)
+		if seen[task.ID] || task.ID != id || task.Title != fmt.Sprintf("task-%d", id) || task.UpdatedAt != int64(id/1000) {
+			t.Fatalf("task %d: duplicate or incorrect record: %#v", i, task)
+		}
+		seen[task.ID] = true
+	}
+	if len(received) != pageCount {
+		t.Fatalf("got %d requests, want exactly %d", len(received), pageCount)
+	}
+	for i, want := range requests {
+		got := <-received
+		if got.Opcode != protocol.C_ListTasksPaged || !bytes.Equal(got.Data, want) {
+			t.Fatalf("request %d: opcode %d data %x, want %x", i, got.Opcode, got.Data, want)
+		}
+	}
+}
+
+func TestFetchTasksRejectsNonDescendingCursor(t *testing.T) {
+	a := protocol.TaskPageCursor{SortAt: 20, TaskID: 10}
+	for _, tc := range []struct {
+		name    string
+		cursors []protocol.TaskPageCursor
+	}{
+		{"cycle", []protocol.TaskPageCursor{a, {SortAt: 20, TaskID: 9}, a}},
+		{"equal", []protocol.TaskPageCursor{a, a}},
+		{"backwards_timestamp", []protocol.TaskPageCursor{a, {SortAt: 21, TaskID: 1}}},
+		{"backwards_id", []protocol.TaskPageCursor{a, {SortAt: 20, TaskID: 11}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var pages [][]byte
+			for _, cursor := range tc.cursors {
+				pages = append(pages, testTaskListPage([]*protocol.Task{{ID: cursor.TaskID, ConvID: 7, UpdatedAt: cursor.SortAt}}, true, cursor, 1))
+			}
+			s, received := testTaskPageSession(t, pages)
+			tasks, err := fetchTasks(s, 0x1f)
+			if err == nil || !strings.Contains(err.Error(), "cursor did not advance") || tasks != nil {
+				t.Fatalf("tasks = %v, error = %v; want cursor rejection", tasks, err)
+			}
+			if len(received) != len(pages) {
+				t.Fatalf("got %d requests, want %d before rejection", len(received), len(pages))
+			}
+		})
+	}
+}
+
+func testTaskPageSession(t *testing.T, pages [][]byte) (*conn.Session, <-chan *protocol.Message) {
+	t.Helper()
+	requests := make(chan *protocol.Message, len(pages)+1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		for i := 0; ; i++ {
+			_, wire, err := ws.ReadMessage()
+			if err != nil {
+				return
+			}
+			request, err := protocol.ReadMessage(wire)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			requests <- request
+			if i >= len(pages) {
+				t.Error("unexpected extra task page request")
+				return
+			}
+			wire, err = (&protocol.Message{Opcode: protocol.S_TaskListPage, Data: pages[i]}).Write()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := ws.WriteMessage(websocket.BinaryMessage, wire); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}))
+	t.Cleanup(server.Close)
+	c := client.New("ws"+strings.TrimPrefix(server.URL, "http")+"/", "workspace")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return &conn.Session{Client: c, RoomID: 7}, requests
+}
+
+func testTaskListPage(tasks []*protocol.Task, hasMore bool, cursor protocol.TaskPageCursor, total uint32) []byte {
+	buf := new(bytes.Buffer)
+	write := func(value any) { _ = binary.Write(buf, binary.BigEndian, value) }
+	str := func(value string) { write(uint16(len(value))); buf.WriteString(value) }
+	write(uint64(7))
+	write(uint8(1))
+	write(uint16(len(tasks)))
+	for _, task := range tasks {
+		write(task.ID)
+		write(task.ConvID)
+		str(task.Title)
+		str(task.Description)
+		write(task.Status)
+		write(task.OrderIndex)
+		str(task.Assignee)
+		write(task.Priority)
+		write(task.Color)
+		str(task.CreatedBy)
+		write(task.CreatedAt)
+		write(task.UpdatedAt)
+		str(task.ExternalRef)
+		write(task.DueAt)
+		write(task.BlockedBy)
+		write(task.CompletedAt)
+		str(task.CompletedBy)
+		str(task.Project)
+		buf.Write(protocol.EncodeAttachments(task.Attachments))
+	}
+	var more uint8
+	if hasMore {
+		more = 1
+	}
+	write(more)
+	write(cursor.SortAt)
+	write(cursor.TaskID)
+	write(total)
+	str("")
+	write(uint32(0))
+	return buf.Bytes()
+}
 
 func TestFilterReadyTasks(t *testing.T) {
 	tasks := []*protocol.Task{

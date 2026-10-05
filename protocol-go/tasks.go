@@ -702,7 +702,7 @@ func DecodeTaskQueryPage(payload []byte) (*TaskQueryPage, error) {
 		return nil, err
 	}
 	page.NextCursor.Text = text
-	if binary.Read(buf, binary.BigEndian, &page.TotalCount) != nil || page.TotalCount > MaxTotalTasksPerConversation {
+	if binary.Read(buf, binary.BigEndian, &page.TotalCount) != nil {
 		return nil, fmt.Errorf("invalid task query count")
 	}
 	page.ErrorMessage, err = readString(buf)
@@ -793,9 +793,6 @@ func DecodeTaskListPage(payload []byte) (*TaskListPage, error) {
 	}
 	if err := binary.Read(buf, binary.BigEndian, &page.TotalCount); err != nil {
 		return nil, fmt.Errorf("task page total_count: %w", err)
-	}
-	if page.TotalCount > MaxTotalTasksPerConversation {
-		return nil, fmt.Errorf("task total count %d exceeds safety maximum %d", page.TotalCount, MaxTotalTasksPerConversation)
 	}
 	errMsg, err := readString(buf)
 	if err != nil {
@@ -951,8 +948,8 @@ type TaskSlice struct {
 
 // OpenCount is the number of task members that are not Done. A slice's WIP load
 // is read from this, so it is derived rather than stored.
-func (s TaskSlice) OpenCount() uint16 {
-	return s.Backlog + s.Todo + s.InProgress
+func (s TaskSlice) OpenCount() uint32 {
+	return uint32(s.Backlog) + uint32(s.Todo) + uint32(s.InProgress)
 }
 
 // MemberCount is every member the slice carries: tasks with a status, notes and
@@ -963,8 +960,8 @@ func (s TaskSlice) MemberCount() uint32 {
 }
 
 // TaskCount is the members that carry a task status.
-func (s TaskSlice) TaskCount() uint16 {
-	return s.Backlog + s.Todo + s.InProgress + s.Done
+func (s TaskSlice) TaskCount() uint32 {
+	return s.OpenCount() + uint32(s.Done)
 }
 
 func (s TaskSlice) IsClosed() bool { return s.Flags&TaskSliceFlagClosed != 0 }

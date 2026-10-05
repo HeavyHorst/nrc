@@ -199,9 +199,6 @@ MAX_TASK_DESCRIPTION_LENGTH :: 2048
 MAX_ASSIGNEE_LENGTH :: 32
 MAX_EXTERNAL_REF_LENGTH :: 512
 MAX_PROJECT_LENGTH :: 128
-MAX_ACTIVE_TASKS_PER_CONVERSATION :: 1000
-MAX_TASKS_PER_CONVERSATION :: 1000 // Legacy name retained for source compatibility.
-MAX_TOTAL_TASKS_PER_CONVERSATION :: 10000
 MAX_TASK_PAGE_SIZE :: 1000
 // One listing frame carries at most this many slices. A slice is an explicit
 // work stream, so the ceiling is a frame bound, not a count of labels.

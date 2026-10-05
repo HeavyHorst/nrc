@@ -54,12 +54,12 @@ Applies to task operation failures such as validation/not-found/allocation in:
 
 - Parse failures in dispatcher (`process_protocol_payload`) for all parsed opcodes.
 - Invalid/corrupted opcode and unhandled opcode paths in dispatcher.
-- Asset failures (limit reached, not found, allocation failure, missing workspace/conversation) for:
+- Asset failures (not found, allocation failure, missing workspace/conversation) for:
   - `C_CreateAsset` (30)
   - `C_UpdateAsset` (31)
   - `C_DeleteAsset` (32)
   - `C_GetAsset` (33)
-- Edge failures (invalid endpoints, self-edge, limit reached, not found, allocation failure, missing workspace/conversation) for:
+- Edge failures (invalid endpoints, self-edge, not found, allocation failure, missing workspace/conversation) for:
   - `C_CreateEdge` (40)
   - `C_DeleteEdge` (41)
 - Voice join failures for `C_JoinVoice` (10) when room creation/join fails.
