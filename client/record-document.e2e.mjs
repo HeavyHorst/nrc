@@ -79,6 +79,26 @@ try {
         const edit = type === "task" ? "#taskDetailToggleFocus" : "#noteDetailEdit";
         const cancel = type === "task" ? "#taskDetailToggleFocus" : "#noteDetailToggleView";
         await page.locator(title).waitFor();
+        if (width > 768) {
+          const listHeader = await geometry("#notesPanel .header-register-identity-row");
+          const identity = await geometry("#inspectorHeader .inspector-identity-row");
+          assert.equal(identity.height, listHeader.height, "record and list identity bands have equal heights");
+          assert.equal(identity.y + identity.height, listHeader.y + listHeader.height, "identity bands share a bottom baseline");
+          const metadata = page.locator("#inspectorHeader .inspector-metadata");
+          assert.deepEqual(await metadata.evaluate(el => ({
+            scrollbar: getComputedStyle(el).scrollbarWidth,
+            verticalOverflow: el.scrollHeight > el.clientHeight,
+          })), { scrollbar: "none", verticalOverflow: false }, "provenance has no visible scrollbar or clipped height");
+          if (width === 1600) {
+            const fixed = await geometry("#inspectorHeader .header-text");
+            await metadata.focus();
+            await page.keyboard.press("ArrowRight");
+            await page.waitForFunction(() => document.querySelector("#inspectorHeader .inspector-metadata").scrollLeft > 0);
+            assert.deepEqual(await geometry("#inspectorHeader .header-text"), fixed, "scrolling provenance leaves record identity fixed");
+            await page.keyboard.press("ArrowLeft");
+            await page.waitForFunction(() => document.querySelector("#inspectorHeader .inspector-metadata").scrollLeft === 0);
+          }
+        }
         if (type === "task") {
           assert.equal(await page.locator('.inspector-identity-row .inspector-metadata').count(), 1);
           assert.deepEqual(await page.locator('.inspector-metadata dt').allTextContents(), ['CREATED BY', 'CREATED', 'UPDATED', 'COMPLETED']);

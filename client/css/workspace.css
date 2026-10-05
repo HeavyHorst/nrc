@@ -649,11 +649,14 @@ hr {
 .inspector-metadata {
     flex: 1 1 0;
     min-width: 0;
+    height: 100%;
     overflow-x: auto;
-    scrollbar-width: thin;
+    overflow-y: hidden;
+    scrollbar-width: none;
     text-transform: none;
     letter-spacing: normal;
 }
+.inspector-metadata::-webkit-scrollbar { display: none; }
 .inspector-metadata:focus-visible {
     outline: 1px solid var(--accent-interactive);
     outline-offset: -1px;
@@ -662,22 +665,22 @@ hr {
     display: flex;
     gap: 0;
     width: max-content;
+    height: 100%;
     padding: 0;
     border: 0;
-    font-size: max(var(--font-xs), var(--mobile-font-sm));
+    font-size: 10px;
     line-height: 1.3;
     font-weight: 400;
 }
 .inspector-metadata .detail-metadata-ledger > div {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 0.375rem;
-    padding: 0.125rem 0.625rem;
-    border-left: 1px solid var(--border-list);
+    padding: 0 0.625rem;
     white-space: nowrap;
 }
 .inspector-metadata .detail-metadata-ledger dt {
-    font-size: max(var(--font-xxs), var(--mobile-font-xs));
+    font-size: inherit;
     letter-spacing: 0.04em;
 }
 .inspector-metadata .detail-metadata-ledger dd.identity-actor {
@@ -686,12 +689,6 @@ hr {
 .inspector .panel-header.inspector-matrix-header > .inspector-identity-row:has(.inspector-metadata) > span {
     flex: 0 0 auto;
     align-self: center;
-}
-.inspector .panel-header.inspector-matrix-header > .inspector-identity-row:has(.inspector-metadata) {
-    height: auto;
-    min-height: 24px;
-    max-height: none;
-    align-items: center;
 }
 
 .detail-metadata-ledger.detail-object-register {
