@@ -16,6 +16,7 @@ import "byte_pool"
 import hgl "hegel"
 import nbio "nbio/poly"
 import pr "protocol"
+import tlsf "vendor/tlsf"
 
 when !NRC_SIMULATION {
 	_ :: chan.try_send
@@ -31,6 +32,7 @@ when !NRC_SIMULATION {
 	_ :: hgl.run
 	_ :: nbio.iovec
 	_ :: pr.User_Type
+	_ :: tlsf.Allocator
 }
 
 when NRC_SIMULATION {
@@ -346,6 +348,12 @@ when NRC_SIMULATION {
 			}
 		}
 
+		backing := context.allocator
+		heap: tlsf.Allocator
+		assert(worker_heap_init(&heap, &backing, 64 * mem.Kilobyte))
+		defer tlsf.destroy(&heap)
+		td.backing_allocator = backing
+		context.allocator = worker_heap_allocator(&heap)
 		worker_state_init_core(data.server, data.worker_index, data.expected_count)
 		defer worker_state_destroy_core_for_test()
 		sim: Sim_Runtime
@@ -669,6 +677,7 @@ when NRC_SIMULATION {
 			workspace_id := threaded_worker_lifetime_workspace(index)
 			target_worker := http_upgrade_target_worker_index(workspace_id, THREADED_WORKER_LIFETIME_WORKER_COUNT)
 			conn := new(HTTP_Upgrade_Connection)
+			conn.allocator = context.allocator
 			conn.server = &server
 			conn.sock = threaded_worker_lifetime_sock(index)
 			conn.state = .New

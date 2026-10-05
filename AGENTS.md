@@ -79,7 +79,7 @@ Theme values are defined in `client/css/foundation.css`, not in this document.
 - **Naming**: snake_case for variables and functions, PascalCase for types
 - **Error handling**: Uses Odin's error return patterns with `Maybe(T)` types
 - **Memory**: Manual memory management with explicit `new()`, `free()`, `delete()` calls
-- **Async/network send buffers**: Short-lived dynamically allocated buffers that cross an async send boundary (`nrc_send_frame`, `websocket_send_all`, queued sends, `nbio.send_all`/writev) should be allocated from `byte_pool` (`byte_pool.alloc(td.spool, ...)`) and released in the send completion callback with `byte_pool.release(td.spool, buf)`. Stable connection-owned buffers, static storage, and explicitly ref-counted shared broadcast buffers are acceptable when their lifetime is guaranteed to exceed the async operation. Do not use `make`/`delete` for transient frame/send buffers; the multi-arena byte pool is a deliberate performance optimization and ownership model.
+- **Async/network send buffers**: Short-lived dynamically allocated buffers that cross an async send boundary (`nrc_send_frame`, `websocket_send_all`, queued sends, `nbio.send_all`/writev) should be allocated through `byte_pool` (`byte_pool.alloc(td.spool, ...)`) and released in the send completion callback with `byte_pool.release(td.spool, buf)`. This ownership/accounting layer shares the worker TLSF heap; it is not a separate arena allocator. Stable connection-owned buffers, static storage, and explicitly ref-counted shared broadcast buffers are acceptable when their lifetime is guaranteed to exceed the async operation. Do not bypass the ownership layer with bare `make`/`delete`, and never bulk-reset the shared worker heap while records or I/O leases are live.
 - **Logging**: Uses structured logging with thread IDs and context information
 - **Constants**: ALL_CAPS with underscores (e.g., `PENDING_QUEUE_CAPACITY`)
 - **Time**: Always use `ulid.time_now()` instead of `time.now()` for better performance (syscall optimization)
@@ -175,7 +175,7 @@ intentionally exercise expected-error logging and need local suppression.
 - Uses buffered channels for thread-safe inter-thread communication
 - WebSocket upgrade handling is optimized to minimize memory allocations
 - Buffer sizes are tuned for performance (8KB connection buffers)
-- The `byte_pool` package is the hot-path allocator for transient frame/send buffers. It uses multi-arena allocation/rotation to reduce allocator overhead and fragmentation under high concurrency. Prefer the existing helpers (`allocate_websocket_frame_buffer`, `send_pooled_buffer`, `send_pooled_buffer_priority`) when constructing WebSocket responses, and add new pooled-send callbacks rather than mixing allocator families.
+- The `byte_pool` package captures the worker TLSF allocator for transient buffers, retains original allocation provenance for shortened send slices, and tracks buffer-only live bytes. Prefer the existing helpers (`allocate_websocket_frame_buffer`, `send_pooled_buffer`, `send_pooled_buffer_priority`) when constructing WebSocket responses, and preserve exact-once completion release. Coordinator and cross-thread job allocations must retain their thread-safe backing allocator rather than capturing worker TLSF.
 
 ## Default Configuration
 

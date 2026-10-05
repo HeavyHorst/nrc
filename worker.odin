@@ -303,7 +303,10 @@ worker_state_init_core :: proc(server: ^NRC_Server, thread_index: int, connectio
 	}
 
 	connection_storage_init()
-	td.spool = byte_pool.init_buffer_pool(worker_backing_allocator())
+	// Capture the worker heap once; asynchronous leases must not depend on
+	// whichever allocator a later callback temporarily installs in context.
+	td.spool = byte_pool.init_buffer_pool(context.allocator)
+	if td.spool == nil do panic("failed to initialize worker buffer allocator")
 	init_batch_state_pool()
 	td.state = .Running
 	td.active_sockets = make(map[net.TCP_Socket]struct{}, connection_capacity)

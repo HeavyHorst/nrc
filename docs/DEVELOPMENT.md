@@ -80,7 +80,10 @@ Workspace bytes hash to one of 256 logical shards; the shard maps to a worker.
 Changing worker count changes ownership, not storage identity. Durable task,
 asset and edge mutations share atomic shard transactions. Background compaction
 uses manifest-driven immutable segments. Transient asynchronous send buffers
-use the thread-local byte pool and are released on completion.
+use the worker's shared TLSF heap through `byte_pool` and are released on
+completion. The package retains allocation provenance and buffer-only accounting,
+not a separate arena heap. Typed leases and shared references govern I/O lifetime;
+shortened send slices still release the original complete allocation.
 
 Each production worker installs its own unsynchronized Odin TLSF heap
 for worker-owned state: entities, maps, indexes and interned strings. It starts
@@ -106,10 +109,16 @@ untracked backing buffer. See its README for the upstream revision and local fix
 Individual allocations must fit TLSF's block limit (below 4 GiB on 64-bit,
 including alignment overhead); unsupported allocation/resize requests fail
 without changing an existing allocation. Growth pools never exceed that limit.
-The temporary allocator is unchanged. Byte-pool virtual arenas, connection
-handle storage, batch pools and nbio infrastructure retain their existing
-backing allocators. Compaction/sealing jobs and results explicitly capture the
-thread-safe backing allocator, never the owning worker's TLSF heap.
+The temporary allocator is unchanged. Connection handle storage, batch pools
+and nbio infrastructure retain their existing backing allocators.
+Compaction/sealing jobs and results explicitly capture the thread-safe backing
+allocator, never the owning worker's TLSF heap. Buffer allocations capture the
+worker heap once; they are allocated and released only on that worker.
+Buffer-scoped `Free_All` is unsupported because it would reset unrelated worker
+records. Live-byte counters include each backing block's capacity and metadata,
+not total TLSF heap usage. The 64 MiB buffer usage budget is a reporting
+denominator, not an allocation cap. TLSF growth caused by a transient burst is
+retained until worker exit; consider post-drain RSS as well as live buffer bytes.
 
 | Path | Responsibility |
 | --- | --- |

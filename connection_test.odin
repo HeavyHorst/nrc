@@ -355,27 +355,14 @@ connection_lifetime_pool_drained :: proc(pool: ^byte_pool.BufferPool) -> bool {
 	if pool == nil || pool.used != 0 {
 		return false
 	}
-	for arena in pool.arenas {
-		if arena == nil {
-			return false
-		}
-		if arena.live_allocs != 0 {
-			return false
-		}
-	}
-	return true
+	return pool.live_allocs == 0
 }
 
 connection_lifetime_pool_live_alloc_count :: proc(pool: ^byte_pool.BufferPool) -> uint {
 	if pool == nil {
 		return 0
 	}
-	live: uint
-	for arena in pool.arenas {
-		if arena == nil do continue
-		live += arena.live_allocs
-	}
-	return live
+	return pool.live_allocs
 }
 
 connection_lifetime_pending_count :: proc(pending: ^[CONNECTION_LIFETIME_STATEFUL_MAX_PENDING]Connection_Lifetime_Stateful_Pending) -> int {
@@ -2276,9 +2263,8 @@ test_connection_close_cleanup_and_leaks :: proc(t: ^testing.T) {
 	testing.expect_value(t, td.retained_connection_count, 0)
 	testing.expect_value(t, td.connection_count, 0)
 	if td.retained_connection_count > 0 {
-		delete_key(&td.active_sockets, conn.sock)
-		connection_remove(conn)
-		td.connection_count = 0
+		// Never bypass reclamation while callbacks still own buffers.
+		testing.fail_now(t, "close must drain all I/O and reclaim the connection before teardown")
 	}
 
 	testing.expect_value(t, len(td.active_sockets), 0)

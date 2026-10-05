@@ -55,7 +55,7 @@ test_worker_heap_growth_resize_alignment_and_reuse :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_worker_heap_keeps_specialized_pools_on_backing :: proc(t: ^testing.T) {
+test_worker_heap_shares_buffer_storage_but_keeps_cross_thread_pools_on_backing :: proc(t: ^testing.T) {
 	backing := context.allocator
 	heap: tlsf.Allocator
 	assert(worker_heap_init(&heap, &backing, 64 * mem.Kilobyte))
@@ -86,18 +86,43 @@ test_worker_heap_keeps_specialized_pools_on_backing :: proc(t: ^testing.T) {
 	batch := alloc_batch_state(3)
 	testing.expect(t, !worker_heap_contains_for_test(&heap, batch))
 	free_batch_state(batch)
-	testing.expect(t, !worker_heap_contains_for_test(&heap, td.spool))
-	testing.expect_value(t, td.spool.backing_allocator, backing)
-	td.spool.rotate_threshold = 1
+	testing.expect(t, worker_heap_contains_for_test(&heap, td.spool))
+	testing.expect_value(t, td.spool.backing_allocator, context.allocator)
 	a, err_a := byte_pool.alloc(td.spool, 128)
 	b, err_b := byte_pool.alloc(td.spool, 257)
 	assert(err_a == .None && err_b == .None)
-	testing.expect_value(t, len(td.spool.arenas), 2)
-	for arena in td.spool.arenas do testing.expect(t, !worker_heap_contains_for_test(&heap, arena))
-	testing.expect(t, !worker_heap_contains_for_test(&heap, raw_data(a)))
-	testing.expect(t, !worker_heap_contains_for_test(&heap, raw_data(b)))
-	byte_pool.release(td.spool, a)
+	testing.expect_value(t, td.spool.live_allocs, uint(2))
+	testing.expect(t, worker_heap_contains_for_test(&heap, raw_data(a)))
+	testing.expect(t, worker_heap_contains_for_test(&heap, raw_data(b)))
+	for &value, i in b do value = byte((i * 7 + 19) % 251)
+	// Force growth while records and an asynchronous buffer remain live, then
+	// churn mixed-size buffers through the same heap and drain individually.
+	last_pool := &heap.pool
+	for last_pool.next != nil do last_pool = last_pool.next
+	burst, burst_err := byte_pool.alloc(td.spool, WORKER_HEAP_POOL_BYTES + 4097)
+	assert(burst_err == .None)
+	testing.expect(t, last_pool.next != nil)
+	byte_pool.release(td.spool, burst)
+	sizes := []uint{31, 4097, 65539, 131071, 257, 8193}
+	for size in sizes {
+		buf, err := byte_pool.alloc(td.spool, size)
+		assert(err == .None)
+		for &value in buf do value = 203
+		byte_pool.release(td.spool, buf[:1])
+	}
+	for value, i in b do testing.expect_value(t, value, byte((i * 7 + 19) % 251))
+	testing.expect_value(t, string(task.title), "task")
+	testing.expect_value(t, string(asset.payload), "payload")
+	byte_pool.release(td.spool, a[:3])
 	byte_pool.release(td.spool, b)
+	testing.expect_value(t, td.spool.used, u64(0))
+	testing.expect_value(t, td.spool.live_allocs, uint(0))
+	// A buffer-scoped reset must never invalidate shared durable state.
+	iface := byte_pool.allocator(td.spool)
+	_, reset_err := iface.procedure(iface.data, .Free_All, 0, 0, nil, 0)
+	testing.expect_value(t, reset_err, mem.Allocator_Error.Mode_Not_Implemented)
+	testing.expect_value(t, task.id, u64(17))
+	testing.expect_value(t, asset.asset_id, u64(23))
 }
 
 Worker_Heap_Rejecting_Backing :: struct {

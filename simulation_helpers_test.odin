@@ -19,6 +19,7 @@ import hgl "hegel"
 import nbio "nbio/poly"
 import pr "protocol"
 import "storage_io"
+import tlsf "vendor/tlsf"
 
 when !NRC_SIMULATION {
 	_ :: bytes.equal
@@ -33,6 +34,7 @@ when !NRC_SIMULATION {
 	_ :: nbio.iovec
 	_ :: pr.get_opcode
 	_ :: storage_io.Context
+	_ :: tlsf.Allocator
 }
 
 when NRC_SIMULATION {
@@ -65,8 +67,10 @@ when NRC_SIMULATION {
 	}
 
 	Sim_Test_Context :: struct {
-		sim:   Sim_Runtime,
-		conns: [SIM_TEST_MAX_CLIENTS]^NRC_Connection,
+		sim:     Sim_Runtime,
+		conns:   [SIM_TEST_MAX_CLIENTS]^NRC_Connection,
+		heap:    tlsf.Allocator,
+		backing: runtime.Allocator,
 	}
 
 	Sim_Quiescence_Drain_Result :: enum u8 {
@@ -366,7 +370,15 @@ when NRC_SIMULATION {
 
 	simulation_test_begin :: proc(ctx: ^Sim_Test_Context, thread_index: int = 97) {
 		ctx^ = {}
+		ctx.backing = context.allocator
+		assert(worker_heap_init(&ctx.heap, &ctx.backing, 1024 * 1024))
+		td.backing_allocator = ctx.backing
 		worker_state_init_core(nil, thread_index)
+		// Test-owned entities retain their tracking allocator; async buffer
+		// ownership now exercises the real worker heap instead of virtual arenas.
+		byte_pool.destroy_buffer_pool(td.spool)
+		td.spool = byte_pool.init_buffer_pool(worker_heap_allocator(&ctx.heap))
+		assert(td.spool != nil)
 		nrc_sim_runtime_init(&ctx.sim)
 	}
 
@@ -402,6 +414,8 @@ when NRC_SIMULATION {
 		nrc_sim_runtime_destroy(&ctx.sim)
 		connection_test_storage_destroy()
 		worker_state_destroy_core_for_test()
+		tlsf.destroy(&ctx.heap)
+		td.backing_allocator = {}
 		ctx^ = {}
 	}
 
@@ -2492,26 +2506,15 @@ test_split_websocket_header_growth_oom_closes_once_and_releases_accumulator :: p
 		testing.expect_value(t, td.spool.allocation_count - td.spool.release_count, outstanding_before_prefix + 1)
 		accumulator_ptr := raw_data(conn.receive_accumulator.buf)
 
-		arena := byte_pool.active_arena(td.spool)
-		testing.expect(t, arena != nil, "byte pool should have an active arena")
-		if arena == nil do return
-		old_allocator := arena.alloc
-		old_max_arenas := td.spool.max_arenas
-		old_rotate_threshold := td.spool.rotate_threshold
+		old_allocator := td.spool.backing_allocator
 		fail_allocator := Receive_Growth_OOM_Allocator {
 			backing = old_allocator,
 		}
-		arena.alloc = runtime.Allocator {
+		td.spool.backing_allocator = runtime.Allocator {
 			procedure = receive_growth_oom_allocator_proc,
 			data      = &fail_allocator,
 		}
-		td.spool.max_arenas = 1
-		td.spool.rotate_threshold = 0
-		defer {
-			arena.alloc = old_allocator
-			td.spool.max_arenas = old_max_arenas
-			td.spool.rotate_threshold = old_rotate_threshold
-		}
+		defer td.spool.backing_allocator = old_allocator
 
 		allocations_before_growth := td.spool.allocation_count
 		releases_before_growth := td.spool.release_count

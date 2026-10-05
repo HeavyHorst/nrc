@@ -3,6 +3,7 @@ package main
 import "core:c/libc"
 import "core:container/queue"
 import "core:fmt"
+import "core:mem"
 import "core:net"
 import "core:sys/linux"
 import "core:testing"
@@ -12,6 +13,7 @@ import "byte_pool"
 import io_uring "nbio/_io_uring"
 import nbio "nbio/poly"
 import "ulid"
+import tlsf "vendor/tlsf"
 
 Connection_Close_Barrier_Kind :: enum {
 	Send,
@@ -43,7 +45,15 @@ connection_close_barrier_run :: proc(t: ^testing.T, kind: Connection_Close_Barri
 	// Suite-wide policy matching server startup. Per-test signal restore would
 	// race with concurrent tests; io_uring writes to shut-down sockets raise PIPE.
 	libc.signal(13, transmute(proc "cdecl" (_: i32))uintptr(1))
-	ierr := nbio.init(&td.io, ring_entries = 8)
+	backing := context.allocator
+	orig_backing := td.backing_allocator
+	defer td.backing_allocator = orig_backing
+	heap: tlsf.Allocator
+	assert(worker_heap_init(&heap, &backing, mem.Megabyte))
+	defer tlsf.destroy(&heap)
+	td.backing_allocator = backing
+	context.allocator = worker_heap_allocator(&heap)
+	ierr := nbio.init(&td.io, ring_entries = 8, alloc = backing)
 	testing.expect(t, ierr == .NONE, fmt.tprintf("nbio.init small ring error: %v", ierr))
 	if ierr != .NONE do return
 	defer nbio.destroy(&td.io)

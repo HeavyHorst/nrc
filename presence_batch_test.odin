@@ -311,13 +311,13 @@ when !NRC_SIMULATION {
 		expected := make([]byte, len(held), context.temp_allocator)
 		copy(expected, held)
 		testing.expect(t, nrc_sim_run_next_send_completion(&ctx.sim)) // Other recipient releases its reference.
-		td.spool.rotate_threshold = 128
+		allocations_before := td.spool.allocation_count
 		begin_presence_batch_wave()
 		for i in 0 ..< 100 do broadcast_presence_update_by_id("presence-lease", 3, .UserLeft, fmt.tprintf("new-%d", i))
 		_, ok = worker_finish_callback_wave()
 		testing.expect(t, ok)
 		testing.expect(t, bytes.equal(held, expected), "in-flight bytes must not be mutated or recycled")
-		testing.expect(t, td.spool.rotation_count > 0)
+		testing.expect(t, td.spool.allocation_count > allocations_before)
 		nrc_sim_run_all_send_completions(&ctx.sim)
 		testing.expect_value(t, td.spool.used, u64(0))
 		testing.expect_value(t, td.spool.invalid_release_count, u64(0))
