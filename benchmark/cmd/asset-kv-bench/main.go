@@ -149,7 +149,7 @@ func main() {
 	flag.IntVar(&cfg.PayloadSize, "payload-size", 4096, "Asset payload size in bytes before optional zstd compression")
 	flag.IntVar(&cfg.PreviewSize, "preview-size", 128, "Asset preview size in bytes")
 	flag.IntVar(&cfg.Workspaces, "workspaces", 4, "NRC workspaces / Redis key workspace shards")
-	flag.IntVar(&cfg.Conversations, "conversations", 16, "Conversation IDs to distribute assets across")
+	flag.IntVar(&cfg.Conversations, "conversations", 16, "Legacy compatibility flag; assets use workspace-data scope 0")
 	flag.BoolVar(&cfg.Zstd, "zstd", false, "Use NRC zstd payload encoding and store equivalent compressed Redis values")
 
 	flag.StringVar(&cfg.ServerURL, "server", "ws://localhost:8080", "NRC WebSocket server URL")
@@ -526,7 +526,8 @@ func workerWorkspace(cfg config, workerID int) string {
 }
 
 func workerConvID(cfg config, workerID, assetIndex int) uint64 {
-	return uint64(1000 + ((workerID + assetIndex) % cfg.Conversations))
+	// Durable records belong to the workspace, not individual chat rooms.
+	return protocol.WorkspaceDataConvID
 }
 
 func printResult(result operationResult) {

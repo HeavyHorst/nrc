@@ -86,6 +86,10 @@ cd benchmark
 
 `--pipeline-depth=1` is the default and keeps one in-flight request per worker connection. Values above 1 pipeline both backends: NRC sends that many WebSocket asset requests with unique correlation IDs before reading matched responses, and Redis writes that many RESP commands before reading replies in order.
 
+Assets use workspace-data scope `0`. Use `--workspaces` to distribute records;
+`--conversations` remains accepted for compatibility but no longer changes asset scope.
+Reject samples with nonzero `errors`; rejected creates are not successful throughput.
+
 Profiles:
 
 | Profile | Mix |

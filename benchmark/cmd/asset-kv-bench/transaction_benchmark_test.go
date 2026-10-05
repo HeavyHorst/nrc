@@ -21,6 +21,18 @@ type transactionBenchPacket struct {
 	txn  bool
 }
 
+func TestWorkerConvIDUsesWorkspaceDataScope(t *testing.T) {
+	for _, conversations := range []int{1, 7, 64} {
+		for _, worker := range []int{0, 3, 19} {
+			for _, asset := range []int{0, 13, 127} {
+				if got := workerConvID(config{Conversations: conversations}, worker, asset); got != 0 {
+					t.Fatalf("conversations=%d worker=%d asset=%d: scope=%d, want 0", conversations, worker, asset, got)
+				}
+			}
+		}
+	}
+}
+
 // Drain a complete pipeline wave, checking every correlated ACK and result ID.
 func transactionBenchWave(w *nrcWorker, packets []transactionBenchPacket) error {
 	_ = w.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
