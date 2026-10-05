@@ -118,13 +118,11 @@ replay_bench_worker :: proc(raw: rawptr) {
 			// expected order from the index implementation under test.
 			expected := make([]Task_Sort_Key, tasks)
 			priority_keys := make([]Task_Query_Key, tasks)
-			active := 0
 			for i in 0 ..< tasks {
 				id := d.kind == "mixed" ? 2 * i + 1 : i + 1
 				status := d.varied ? pr.TaskStatus(i % 4) : pr.TaskStatus.Todo
 				stamp := d.varied ? i64((i * 7919 + shard * 53) % d.per_shard + 1) : i64(id)
 				if status == .Done do stamp = i64((i * 3253 + shard * 97) % d.per_shard + 1)
-				if status != .Done do active += 1
 				expected[i] = {
 					sort_at = stamp,
 					task_id = pr.TaskID(id),
@@ -136,7 +134,7 @@ replay_bench_worker :: proc(raw: rawptr) {
 			}
 			slice.sort_by(expected, proc(a, b: Task_Sort_Key) -> bool {return a.sort_at == b.sort_at ? a.task_id < b.task_id : a.sort_at < b.sort_at})
 			slice.sort_by(priority_keys, proc(a, b: Task_Query_Key) -> bool {return a.number == b.number ? a.task_id < b.task_id : a.number < b.number})
-			d.ok = d.ok && conv.active_task_count == active && btree.count(&conv.task_index) == tasks
+			d.ok = d.ok && btree.count(&conv.task_index) == tasks
 			it := btree.iter(&conv.task_index)
 			position := 0
 			for found := btree.iter_first(&it); found; found = btree.iter_next(&it) {

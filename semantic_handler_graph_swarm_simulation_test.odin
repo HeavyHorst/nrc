@@ -192,16 +192,6 @@ when NRC_SIMULATION {
 		return count
 	}
 
-	semantic_handler_swarm_task_status_active :: proc(status: pr.TaskStatus) -> bool {
-		return status == .Backlog || status == .Todo || status == .InProgress
-	}
-
-	semantic_handler_swarm_active_task_count :: proc(model: ^Semantic_Handler_Swarm_Model) -> int {
-		count := 0
-		for live, id in model.task_live do if live && semantic_handler_swarm_task_status_active(model.task_status[id]) do count += 1
-		return count
-	}
-
 	semantic_handler_swarm_select_task :: proc(model: ^Semantic_Handler_Swarm_Model, selector: u8) -> pr.TaskID {
 		count := semantic_handler_swarm_live_task_count(model)
 		if count == 0 do return 0
@@ -860,7 +850,6 @@ when NRC_SIMULATION {
 		   td.edge_seq != model.edge_high ||
 		   conv == nil ||
 		   len(conv.tasks) != semantic_handler_swarm_live_task_count(model) ||
-		   conv.active_task_count != semantic_handler_swarm_active_task_count(model) ||
 		   !semantic_handler_swarm_task_indexes_exact(conv, model) ||
 		   !semantic_handler_swarm_note_indexes_exact(conv, model) {
 			return "handler swarm task/index/floor state differs from model"

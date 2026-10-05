@@ -182,10 +182,6 @@ when NRC_SIMULATION {
 		return task
 	}
 
-	generated_shard_model_task_is_active :: proc(status: pr.TaskStatus) -> bool {
-		return status == .Backlog || status == .Todo || status == .InProgress
-	}
-
 	generated_shard_asset_snapshot :: proc(state: Generated_Shard_Model_Asset, id: u64, attachments: ^[1]pr.Attachment) -> pr.Asset {
 		attachments[0] = pr.Attachment {
 			file_id     = transmute([]byte)string("generated-asset-file-0"),
@@ -499,9 +495,6 @@ when NRC_SIMULATION {
 		if len(conv.task_index_keys) != int(live_task_count) || btree.count(&conv.task_index) != int(live_task_count) {
 			return "task paging index cardinality differs from generated model", false
 		}
-		expected_active_tasks := 0
-		for state in model.tasks do if state.live && generated_shard_model_task_is_active(state.status) do expected_active_tasks += 1
-		if conv.active_task_count != expected_active_tasks do return "active task count differs from generated model", false
 		if len(conv.assets) != int(live_asset_count) do return "unexpected asset map entries", false
 		live_note_count := 0
 		for state in model.assets do if state.live && state.asset_type == .Note do live_note_count += 1

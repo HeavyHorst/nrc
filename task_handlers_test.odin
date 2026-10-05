@@ -474,30 +474,40 @@ test_task_create_persistence_failure_is_not_visible_or_acknowledged :: proc(t: ^
 }
 
 @(test)
-test_task_create_enforces_active_and_total_retention_limits :: proc(t: ^testing.T) {
+test_task_mutations_exceed_former_workspace_limits :: proc(t: ^testing.T) {
 	workspace_id := "task-handler-limits"
 	if !init_room_mapping_test_state("task_handler_limits.log", workspace_id) {
-		testing.expect(t, false, "task limit fixture should initialize")
+		testing.expect(t, false, "task fixture should initialize")
 		return
 	}
 	defer cleanup_room_mapping_test_state()
 	c := make_room_mapping_test_connection(workspace_id)
 	defer send_queue_destroy(&c)
-	conv := get_or_create_conversation(get_or_create_workspace(workspace_id), 90)
-
-	conv.active_task_count = pr.MAX_ACTIVE_TASKS_PER_CONVERSATION
-	process_create_task(&c, pr.CreateTaskRequest{conv_id = 90, title = transmute([]byte)string("blocked active"), status = .Backlog})
-	testing.expect_value(t, len(conv.tasks), 0)
-	testing.expect_value(t, td.shard_writers.writers[0].wal.record_count, u64(0))
-
-	conv.active_task_count = 0
-	for i in 0 ..< pr.MAX_TOTAL_TASKS_PER_CONVERSATION {
-		conv.tasks[pr.TaskID(i + 1)] = nil
+	conv := get_or_create_conversation(get_or_create_workspace(workspace_id), pr.WORKSPACE_DATA_ID)
+	// Populate real indexed records at both former boundaries, without timing
+	// thousands of WAL writes. Expectations deliberately use the old numbers.
+	for i in 0 ..< 10_000 {
+		task := alloc_task(transmute([]byte)string("existing"), nil, nil, nil, nil, nil, nil, nil)
+		task.id = pr.TaskID(i + 1)
+		task.conv_id = pr.WORKSPACE_DATA_ID
+		task.status = i < 1_000 ? .Backlog : .Done
+		task.order_index = u16(i)
+		task_store_put(conv, task)
 	}
-	process_create_task(&c, pr.CreateTaskRequest{conv_id = 90, title = transmute([]byte)string("blocked total"), status = .Done})
-	testing.expect_value(t, len(conv.tasks), pr.MAX_TOTAL_TASKS_PER_CONVERSATION)
-	testing.expect_value(t, td.shard_writers.writers[0].wal.record_count, u64(0))
-	clear(&conv.tasks)
+	td.task_seq = 10_000
+	process_create_task(&c, pr.CreateTaskRequest{conv_id = pr.WORKSPACE_DATA_ID, title = transmute([]byte)string("new active"), status = .Backlog})
+	testing.expect_value(t, len(conv.tasks), 10_001)
+	testing.expect(t, conv.tasks[10_001] != nil, "active task creation exceeds both former quotas")
+	process_move_task(&c, pr.MoveTaskRequest{conv_id = pr.WORKSPACE_DATA_ID, task_id = 1_001, status = .Todo, order_index = 0})
+	testing.expect_value(t, conv.tasks[1_001].status, pr.TaskStatus.Todo)
+	process_update_task(&c, pr.UpdateTaskRequest{conv_id = pr.WORKSPACE_DATA_ID, task_id = 1_002, status = .InProgress})
+	testing.expect_value(t, conv.tasks[1_002].status, pr.TaskStatus.InProgress)
+	body := transaction_test_task_create_body(pr.WORKSPACE_DATA_ID, .Existing, 0, 't')
+	ops := [1]pr.TransactionOperation{{op_type = .TaskCreate, body = body[:]}}
+	process_apply_transaction(&c, pr.ApplyTransactionRequest{operations = ops[:]})
+	testing.expect_value(t, len(conv.tasks), 10_002)
+	testing.expect(t, conv.tasks[10_002] != nil, "transaction creation also exceeds former quotas")
+	testing.expect_value(t, td.shard_writers.writers[0].wal.record_count, u64(4))
 }
 
 @(test)
@@ -672,7 +682,6 @@ when NRC_SIMULATION {
 		task_count:     int,
 		wal_records:    u64,
 		task_floor:     u64,
-		active_tasks:   int,
 		response_count: int,
 	}
 
@@ -738,15 +747,9 @@ when NRC_SIMULATION {
 		conv := get_conversation(ws, req.conv_id)
 		if conv == nil do return result, "created conversation missing", false
 		result.task_count = len(conv.tasks)
-		result.active_tasks = conv.active_task_count
 		result.wal_records = td.shard_writers.writers[0].wal.record_count
 		result.task_floor = td.shard_writers.writers[0].floors.task
-		expected_active_tasks := task_status_is_active(req.status) ? 1 : 0
-		if pr.get_opcode(payload) != .S_TaskCreated ||
-		   result.task_count != 1 ||
-		   result.active_tasks != expected_active_tasks ||
-		   result.wal_records != 1 ||
-		   result.task_floor != 1 {
+		if pr.get_opcode(payload) != .S_TaskCreated || result.task_count != 1 || result.wal_records != 1 || result.task_floor != 1 {
 			return result, "create-task path did not produce the expected successful mutation", false
 		}
 		return result, "", true
@@ -799,11 +802,7 @@ when NRC_SIMULATION {
 		if payloads_equal {
 			for value, index in direct.payload[:direct.payload_len] do if value != wire.payload[index] {payloads_equal = false; break}
 		}
-		if !payloads_equal ||
-		   direct.task_count != wire.task_count ||
-		   direct.active_tasks != wire.active_tasks ||
-		   direct.wal_records != wire.wal_records ||
-		   direct.task_floor != wire.task_floor {
+		if !payloads_equal || direct.task_count != wire.task_count || direct.wal_records != wire.wal_records || direct.task_floor != wire.task_floor {
 			return hgl.interesting("direct and split-wire create-task semantics differ")
 		}
 		return hgl.valid()
@@ -815,7 +814,6 @@ when NRC_SIMULATION {
 		task_count:     int,
 		wal_records:    u64,
 		task_floor:     u64,
-		active_tasks:   int,
 		index_count:    int,
 		btree_count:    int,
 		index_key:      Task_Sort_Key,
@@ -897,20 +895,16 @@ when NRC_SIMULATION {
 		conv := get_conversation(ws, req.conv_id)
 		if conv == nil do return result, "updated conversation missing", false
 		result.task_count = len(conv.tasks)
-		result.active_tasks = conv.active_task_count
 		result.wal_records = td.shard_writers.writers[0].wal.record_count
 		result.task_floor = td.shard_writers.writers[0].floors.task
 		result.index_count = len(conv.task_index_keys)
 		result.index_key, result.index_present = conv.task_index_keys[req.task_id]
 		result.btree_count = btree.count(&conv.task_index)
 		if result.index_present do result.btree_contains = btree.contains(&conv.task_index, result.index_key)
-		final_status := u8(req.status) == 255 ? pr.TaskStatus.Todo : req.status
-		expected_active_tasks := task_status_is_active(final_status) ? 1 : 0
 		expected_task_floor := u64(1)
 		if req.blocked_by != 0 && req.blocked_by != max(pr.TaskID) do expected_task_floor = max(expected_task_floor, u64(req.blocked_by))
 		if pr.get_opcode(payload) != .S_TaskUpdated ||
 		   result.task_count != 1 ||
-		   result.active_tasks != expected_active_tasks ||
 		   result.wal_records != 2 ||
 		   result.task_floor != expected_task_floor ||
 		   result.index_count != 1 ||
@@ -927,7 +921,6 @@ when NRC_SIMULATION {
 		for index in 0 ..< a.payload_len do if a.payload[index] != b.payload[index] do return false
 		return(
 			a.task_count == b.task_count &&
-			a.active_tasks == b.active_tasks &&
 			a.wal_records == b.wal_records &&
 			a.task_floor == b.task_floor &&
 			a.index_count == b.index_count &&
@@ -1072,7 +1065,6 @@ when NRC_SIMULATION {
 		task_payload:     [TASK_CREATE_EQUIVALENCE_PAYLOAD_CAPACITY]byte,
 		task_payload_len: int,
 		task_count:       int,
-		active_tasks:     int,
 		wal_records:      u64,
 		wal_last_hash:    [32]byte,
 		task_floor:       u64,
@@ -1165,7 +1157,6 @@ when NRC_SIMULATION {
 		conv := get_conversation(ws, conv_id)
 		if conv == nil do return result, "final task mutation conversation missing", false
 		result.task_count = len(conv.tasks)
-		result.active_tasks = conv.active_task_count
 		result.wal_records = td.shard_writers.writers[0].wal.record_count
 		result.wal_last_hash = td.shard_writers.writers[0].wal.last_hash
 		result.task_floor = td.shard_writers.writers[0].floors.task
@@ -1180,13 +1171,11 @@ when NRC_SIMULATION {
 
 		switch kind {
 		case .Move:
-			expected_active := task_status_is_active(move_req.status) ? 1 : 0
 			task := conv.tasks[1]
 			if task == nil do return result, "moved task missing", false
 			expected_key := make_task_sort_key(task)
 			if pr.get_opcode(payload) != .S_TaskMoved ||
 			   result.task_count != 1 ||
-			   result.active_tasks != expected_active ||
 			   result.wal_records != 2 ||
 			   result.wal_last_hash == ([32]byte{}) ||
 			   result.task_floor != 1 ||
@@ -1206,7 +1195,6 @@ when NRC_SIMULATION {
 		case .Delete:
 			if pr.get_opcode(payload) != .S_TaskDeleted ||
 			   result.task_count != 0 ||
-			   result.active_tasks != 0 ||
 			   result.wal_records != 2 ||
 			   result.wal_last_hash == ([32]byte{}) ||
 			   result.task_floor != 1 ||
@@ -1228,7 +1216,6 @@ when NRC_SIMULATION {
 		for index in 0 ..< a.task_payload_len do if a.task_payload[index] != b.task_payload[index] do return false
 		return(
 			a.task_count == b.task_count &&
-			a.active_tasks == b.active_tasks &&
 			a.wal_records == b.wal_records &&
 			a.wal_last_hash == b.wal_last_hash &&
 			a.task_floor == b.task_floor &&

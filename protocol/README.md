@@ -849,12 +849,12 @@ Each limit names the constant that enforces it in `protocol/`.
 - **Task assignee**: 32 bytes max (`MAX_ASSIGNEE_LENGTH`)
 - **External reference**: 512 bytes max (`MAX_EXTERNAL_REF_LENGTH`)
 - **Task project label**: 128 bytes max (`MAX_PROJECT_LENGTH`)
-- **Active tasks per conversation**: 1000 max (`MAX_ACTIVE_TASKS_PER_CONVERSATION`, also `MAX_TASKS_PER_CONVERSATION`)
-- **Total retained tasks per conversation**: 10000 max (`MAX_TOTAL_TASKS_PER_CONVERSATION`)
+- **Workspace task counts**: no fixed active-task or total-task quota; available resources and wire-format bounds still apply.
 - **Task page size**: 1000 max (`MAX_TASK_PAGE_SIZE`)
 - **Work slices per page**: 512 max (`MAX_TASK_SLICE_COUNT`), which is also the frame bound
 - **Slice name**: 128 bytes max (`MAX_PROJECT_LENGTH`)
 - **Slice outcome**: 2048 bytes max (`MAX_SLICE_OUTCOME_LENGTH`)
+- **Slice member counters**: each status, blocked, note and file counter is a u16 (65535 max). A listing that cannot represent a category returns an error rather than wrapped counts; totals across categories may exceed 65535.
 
 ### Assets, edges and attachments
 
@@ -863,10 +863,9 @@ Each limit names the constant that enforces it in `protocol/`.
 - **Asset payload**: 65535 bytes max (`MAX_PAYLOAD_LENGTH`)
 - **Appointment description**: 2048 bytes max (`MAX_APPOINTMENT_DESCRIPTION_LENGTH`)
 - **Appointment URL**: 2048 bytes max (`MAX_APPOINTMENT_URL_LENGTH`)
-- **Assets per conversation**: 10000 max (`MAX_ASSETS_PER_CONVERSATION`)
-- **Edges per conversation**: 50000 max (`MAX_EDGES_PER_CONVERSATION`)
-- **Edges per asset**: 1000 max (`MAX_EDGES_PER_ASSET`)
+- **Workspace asset and edge counts**: no fixed count quotas; available resources and wire-format bounds still apply.
 - **Transaction operations**: 256 max (`MAX_TRANSACTION_OPERATIONS`)
+- **Expanded atomic persistence operations**: 65535 mutations and 16 MiB per WAL transaction. Oversized cascade deletes or task completions are rejected without changing records or shutting down the server.
 - **Attachment file ID**: 36 bytes max (`MAX_FILE_ID_LENGTH`, `att_` + 32 hex chars)
 - **Attachment filename**: 256 bytes max (`MAX_FILENAME_LENGTH`)
 - **Attachment MIME type**: 128 bytes max (`MAX_MIME_TYPE_LENGTH`)

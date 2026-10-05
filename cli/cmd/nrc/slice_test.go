@@ -12,6 +12,21 @@ import (
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
 
+func TestSliceEntryIndependentCounterSums(t *testing.T) {
+	for _, s := range []protocol.TaskSlice{
+		{Backlog: 65535},
+		{Backlog: 65535, Todo: 1},
+		{Backlog: 40000, Todo: 30000, Done: 65535, Notes: 1, Files: 2},
+	} {
+		entry := toSliceEntry(s, nil)
+		open := uint32(s.Backlog) + uint32(s.Todo)
+		tasks := open + uint32(s.Done)
+		if entry.Open != open || entry.Tasks != tasks || entry.Members != tasks+uint32(s.Notes)+uint32(s.Files) {
+			t.Fatalf("wrapped slice entry: %+v", entry)
+		}
+	}
+}
+
 // TestAssetTypeNamesCoverEveryProtocolType keeps the CLI's name tables complete.
 // Both tables are hand-written, so a type added to protocol-go without a name
 // here would be selectable on the wire but rejected as an argument and printed

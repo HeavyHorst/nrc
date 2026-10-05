@@ -61,12 +61,6 @@ process_create_task :: proc(c: ^NRC_Connection, req: pr.CreateTaskRequest) {
 	ws := get_or_create_connection_workspace(c)
 	conv := get_or_create_conversation(ws, req.conv_id)
 
-	// Retain completed history while bounding both active work and total RAM use.
-	if len(conv.tasks) >= pr.MAX_TOTAL_TASKS_PER_CONVERSATION {
-		send_task_list_error(c, req.conv_id, "Maximum total tasks per conversation reached", req.correlation_id)
-		return
-	}
-
 	// Generate task ID and timestamps
 	task_id := generate_task_id()
 	now := nrc_time_unix_nanos()
@@ -74,10 +68,6 @@ process_create_task :: proc(c: ^NRC_Connection, req: pr.CreateTaskRequest) {
 
 	// Use status from request (default Backlog, or Note for notes)
 	initial_status := req.status
-	if task_status_is_active(initial_status) && conv.active_task_count >= pr.MAX_ACTIVE_TASKS_PER_CONVERSATION {
-		send_task_list_error(c, req.conv_id, "Maximum active tasks per conversation reached", req.correlation_id)
-		return
-	}
 
 	// Calculate initial order_index (append to end of the target status column)
 	order_index, column_ok := calculate_next_order_index(conv.tasks, initial_status)
@@ -152,10 +142,6 @@ process_update_task :: proc(c: ^NRC_Connection, req: pr.UpdateTaskRequest) {
 	new_status := u8(req.status) != 255 ? req.status : old_task.status
 	ws := get_connection_workspace(c)
 	conv := get_conversation(ws, req.conv_id)
-	if !task_status_is_active(prev_status) && task_status_is_active(new_status) && conv.active_task_count >= pr.MAX_ACTIVE_TASKS_PER_CONVERSATION {
-		send_task_list_error(c, req.conv_id, "Maximum active tasks per conversation reached", req.correlation_id)
-		return
-	}
 
 	// Determine completed_by based on status transition (must be done before alloc)
 	new_completed_by: []byte
@@ -223,8 +209,12 @@ process_update_task :: proc(c: ^NRC_Connection, req: pr.UpdateTaskRequest) {
 		collect_task_unblocks(conv, new_task, &unblocks)
 	}
 	// Persist before swapping the in-memory owner or acknowledging the mutation.
-	if !persist_task_with_unblocks(workspace_id, new_task, .Update, unblocks[:]) {
-		persistent_mutation_failed("task", "update", workspace_id)
+	if persisted, too_large := persist_task_with_unblocks(workspace_id, new_task, .Update, unblocks[:]); !persisted {
+		if too_large {
+			send_task_list_error(c, req.conv_id, "Task completion exceeds atomic transaction size limit", req.correlation_id)
+		} else {
+			persistent_mutation_failed("task", "update", workspace_id)
+		}
 		free_task(new_task)
 		return
 	}
@@ -274,6 +264,10 @@ process_delete_task :: proc(c: ^NRC_Connection, req: pr.DeleteTaskRequest) {
 	collect_edges_for_entity_delete_excluding(conv, &task_edges_to_delete, pr.TargetType.Task, u64(req.task_id), &asset_edges_to_delete)
 
 	if td.shard_writers.mode == .Active {
+		if 1 + len(assets_to_delete) + len(asset_edges_to_delete.edge_ids) + len(task_edges_to_delete.edge_ids) > SHARD_TRANSACTION_MAX_MUTATIONS {
+			send_task_list_error(c, req.conv_id, "Task deletion exceeds atomic transaction size limit", req.correlation_id)
+			return
+		}
 		workspace := transmute([]byte)workspace_id
 		writer := shard_writer_for_workspace(&td.shard_writers, workspace)
 		if writer == nil {
@@ -354,10 +348,6 @@ process_move_task :: proc(c: ^NRC_Connection, req: pr.MoveTaskRequest) {
 	prev_status := old_task.status
 	now := nrc_time_unix_nanos()
 	conv := get_conversation(ws, req.conv_id)
-	if !task_status_is_active(prev_status) && task_status_is_active(req.status) && conv.active_task_count >= pr.MAX_ACTIVE_TASKS_PER_CONVERSATION {
-		send_task_list_error(c, req.conv_id, "Maximum active tasks per conversation reached", req.correlation_id)
-		return
-	}
 
 	// Determine completed_by based on status transition
 	new_completed_by: []byte
@@ -434,8 +424,12 @@ process_move_task :: proc(c: ^NRC_Connection, req: pr.MoveTaskRequest) {
 		collect_task_unblocks(conv, task, &unblocks)
 	}
 	// Persist before mutating/replacing the in-memory task or acknowledging.
-	if !persist_task_with_unblocks(workspace_id, task, .Move, unblocks[:]) {
-		persistent_mutation_failed("task", "move", workspace_id)
+	if persisted, too_large := persist_task_with_unblocks(workspace_id, task, .Move, unblocks[:]); !persisted {
+		if too_large {
+			send_task_list_error(c, req.conv_id, "Task completion exceeds atomic transaction size limit", req.correlation_id)
+		} else {
+			persistent_mutation_failed("task", "move", workspace_id)
+		}
 		if completed_by_changed {
 			free_task(task)
 		}

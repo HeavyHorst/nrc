@@ -7,10 +7,8 @@ import pr "protocol"
 
 // Scan the primary map independently of index membership and cached sort keys.
 store_test_check_tasks :: proc(t: ^testing.T, conv: ^Conversation_State) {
-	active := 0
 	blockers := 0
 	for id, task in conv.tasks {
-		if task.status == .Backlog || task.status == .Todo || task.status == .InProgress do active += 1
 		timestamp := task.status == .Done ? task.completed_at : task.updated_at
 		_, found := btree.get(&conv.task_index, Task_Sort_Key{timestamp, id})
 		testing.expect(t, found)
@@ -21,7 +19,6 @@ store_test_check_tasks :: proc(t: ^testing.T, conv: ^Conversation_State) {
 			testing.expect(t, found)
 		}
 	}
-	testing.expect_value(t, conv.active_task_count, active)
 	testing.expect_value(t, btree.count(&conv.task_index), len(conv.tasks))
 	testing.expect_value(t, len(conv.task_index_keys), len(conv.tasks))
 	testing.expect_value(t, btree.count(&conv.task_blockers), blockers)

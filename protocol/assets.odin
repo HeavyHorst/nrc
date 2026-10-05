@@ -62,7 +62,6 @@ Asset :: struct {
 MAX_OWNER_LENGTH :: 64
 MAX_PREVIEW_LENGTH :: 4096
 MAX_PAYLOAD_LENGTH :: 65535 // Payload length is encoded as u16 on the wire
-MAX_ASSETS_PER_CONVERSATION :: 10000
 
 // ============================================================================
 // CreateAsset (C_CreateAsset = 30)

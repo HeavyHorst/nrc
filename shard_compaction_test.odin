@@ -268,9 +268,7 @@ shard_compaction_test_restart_tasks_are_exact :: proc(
 		if failure != nil do failure^ = "task count"
 		return false
 	}
-	if len(conv.task_index_keys) != len(expected_tasks) ||
-	   btree.count(&conv.task_index) != len(expected_tasks) ||
-	   conv.active_task_count != len(expected_tasks) {
+	if len(conv.task_index_keys) != len(expected_tasks) || btree.count(&conv.task_index) != len(expected_tasks) {
 		if failure != nil do failure^ = "task index cardinality"
 		return false
 	}

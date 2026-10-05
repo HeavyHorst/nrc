@@ -22,7 +22,6 @@ test_task_index_equal_timestamps_transitions_and_delete :: proc(t: ^testing.T) {
 		conv.tasks[tasks[i].id] = &tasks[i]
 		index_task(&conv, &tasks[i])
 	}
-	testing.expect_value(t, conv.active_task_count, 1)
 	testing.expect_value(t, btree.count(&conv.task_index), 3)
 
 	actual: [dynamic]Task_Sort_Key
@@ -41,7 +40,6 @@ test_task_index_equal_timestamps_transitions_and_delete :: proc(t: ^testing.T) {
 	tasks[1].completed_at = 0
 	tasks[1].updated_at = 300
 	replace_task_in_index(&conv, &old, &tasks[1])
-	testing.expect_value(t, conv.active_task_count, 2)
 	testing.expect_value(t, conv.task_index_keys[1], Task_Sort_Key{sort_at = 300, task_id = 1})
 
 	remove_task_from_index(&conv, &tasks[0])
@@ -72,7 +70,6 @@ test_task_recovery_populates_and_replaces_paging_index :: proc(t: ^testing.T) {
 	testing.expect(t, conv != nil, "recovery should create conversation")
 	if conv == nil do return
 	testing.expect_value(t, conv.task_index_keys[41], Task_Sort_Key{sort_at = 700, task_id = 41})
-	testing.expect_value(t, conv.active_task_count, 0)
 
 	parsed.status = .Backlog
 	parsed.updated_at = 900
@@ -80,9 +77,7 @@ test_task_recovery_populates_and_replaces_paging_index :: proc(t: ^testing.T) {
 	testing.expect(t, apply_persisted_task(workspace_id, &parsed), "replayed update should replace task")
 	testing.expect_value(t, btree.count(&conv.task_index), 1)
 	testing.expect_value(t, conv.task_index_keys[41], Task_Sort_Key{sort_at = 900, task_id = 41})
-	testing.expect_value(t, conv.active_task_count, 1)
 
 	apply_persisted_delete(workspace_id, 9, 41)
 	testing.expect_value(t, btree.count(&conv.task_index), 0)
-	testing.expect_value(t, conv.active_task_count, 0)
 }

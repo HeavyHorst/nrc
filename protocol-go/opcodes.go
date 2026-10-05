@@ -258,10 +258,7 @@ const (
 	MaxAssigneeLength               = 32
 	MaxExternalRefLength            = 512
 	MaxProjectLength                = 128
-	MaxActiveTasksPerConversation   = 1000
-	MaxTasksPerConversation         = MaxActiveTasksPerConversation // Legacy name retained for source compatibility.
 	MaxTaskPageSize                 = 1000
-	MaxTotalTasksPerConversation    = 10000
 	// One listing frame carries at most this many slices. A slice is an explicit
 	// work stream, so the ceiling is a frame bound, not a count of labels.
 	MaxTaskSliceCount     = 512
@@ -274,14 +271,7 @@ const (
 
 // Asset limits - matches server protocol/assets.odin
 const (
-	MaxOwnerLength           = 64
-	MaxPreviewLength         = 4096
-	MaxPayloadLength         = 65535 // Payload length is encoded as uint16 on the wire.
-	MaxAssetsPerConversation = 10000
-)
-
-// Edge limits - matches server protocol/edges.odin
-const (
-	MaxEdgesPerConversation = 50000
-	MaxEdgesPerAsset        = 1000
+	MaxOwnerLength   = 64
+	MaxPreviewLength = 4096
+	MaxPayloadLength = 65535 // Payload length is encoded as uint16 on the wire.
 )

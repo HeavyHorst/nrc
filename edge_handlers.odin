@@ -61,13 +61,6 @@ handle_create_edge :: proc(c: ^NRC_Connection, req: pr.CreateEdgeRequest) {
 		return
 	}
 
-	// Check edge limit
-	if len(conv.edges) >= pr.MAX_EDGES_PER_CONVERSATION {
-		log.warnf("[T%d] Edge limit reached for conversation %d", td.thread_index, req.conv_id)
-		send_error_response(c, .C_CreateEdge, "Edge limit reached", req.correlation_id)
-		return
-	}
-
 	// Generate an ID candidate; publish the high-water only after WAL acceptance.
 	edge_id := pr.EdgeID(td.edge_seq + 1)
 

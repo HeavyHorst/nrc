@@ -461,14 +461,13 @@ func fetchTasks(s *conn.Session, statusMask uint8) ([]*protocol.Task, error) {
 			return nil, fmt.Errorf("parsing tasks: %w", err)
 		}
 		tasks = append(tasks, page.Tasks...)
-		if len(tasks) > protocol.MaxTotalTasksPerConversation {
-			return nil, fmt.Errorf("task list exceeds safety maximum %d", protocol.MaxTotalTasksPerConversation)
-		}
 		if !page.HasMore {
 			return tasks, nil
 		}
 		next := page.NextCursor
-		if cursor != nil && *cursor == next {
+		// The server walks strictly descending (SortAt, TaskID) keys.
+		if cursor != nil && (next.SortAt > cursor.SortAt ||
+			next.SortAt == cursor.SortAt && next.TaskID >= cursor.TaskID) {
 			return nil, fmt.Errorf("task pagination cursor did not advance")
 		}
 		cursor = &next

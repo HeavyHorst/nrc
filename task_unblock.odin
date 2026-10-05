@@ -38,15 +38,16 @@ collect_task_unblocks :: proc(conv: ^Conversation_State, completed: ^pr.Task, up
 	}
 }
 
-persist_task_with_unblocks :: proc(workspace_id: string, task: ^pr.Task, op: Task_Log_Op, updates: []pr.Task) -> bool {
-	if len(updates) == 0 do return persist_shard_task_mutation(workspace_id, op, task)
-	if !task_persistence_lengths_supported(task) do return false
+persist_task_with_unblocks :: proc(workspace_id: string, task: ^pr.Task, op: Task_Log_Op, updates: []pr.Task) -> (ok, too_large: bool) {
+	if len(updates) == 0 do return persist_shard_task_mutation(workspace_id, op, task), false
+	if len(updates) >= SHARD_TRANSACTION_MAX_MUTATIONS do return false, true
+	if !task_persistence_lengths_supported(task) do return false, false
 	writer := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)workspace_id)
-	if writer == nil do return false
+	if writer == nil do return false, false
 	p: Transaction_Prepared
 	defer transaction_cleanup(&p)
-	if !transaction_add_task_mutation(&p, 0, task, op) do return false
-	for &next in updates do if !transaction_add_task_mutation(&p, 0, &next, .Update) do return false
+	if !transaction_add_task_mutation(&p, 0, task, op) do return false, false
+	for &next in updates do if !transaction_add_task_mutation(&p, 0, &next, .Update) do return false, false
 	tx := Shard_Transaction {
 		workspace        = transmute([]byte)workspace_id,
 		task_high_water  = max(writer.floors.task, u64(task.id), u64(task.blocked_by)),
@@ -54,7 +55,8 @@ persist_task_with_unblocks :: proc(workspace_id: string, task: ^pr.Task, op: Tas
 		edge_high_water  = writer.floors.edge,
 		mutations        = p.mutations[:],
 	}
-	return append_shard_transaction(writer, &tx)
+	if _, err := shard_transaction_size(&tx); err == .Too_Large do return false, true
+	return append_shard_transaction(writer, &tx), false
 }
 
 apply_task_unblocks :: proc(ws: ^Workspace_State, updates: []pr.Task) {

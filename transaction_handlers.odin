@@ -536,7 +536,7 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 			case .TaskDelete, .AssetDelete, .EdgeDelete:
 			}
 		}
-		// Enforce projected limits after all creates, patches, and cascades are known.
+		// Preserve blocker integrity after all creates, patches, and cascades are known.
 		for item in p.delete_tasks {
 			conv := get_conversation(ws, item.conv_id)
 			it := btree.iter(&conv.task_blockers)
@@ -549,18 +549,6 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 				next := (^pr.Task)(transaction_projected_entity(&p, .Task, item.conv_id, key.entity_id, live))
 				if next.blocked_by == pr.TaskID(item.id) do break planning
 			}
-		}
-		for op, i in req.operations {conv_id := p.conv_ids[i]; conv := get_conversation(ws, conv_id); tasks := 0; active := 0; assets := 0; edges := 0; if conv != nil {tasks = len(conv.tasks); active = conv.active_task_count; assets = len(conv.assets); edges = len(conv.edges)}
-			for item in p.delete_tasks do if item.conv_id == conv_id {tasks -= 1; old := conv.tasks[pr.TaskID(item.id)]; if old != nil && task_status_is_active(old.status) do active -= 1}; for item in p.delete_assets do if item.conv_id == conv_id do assets -= 1; for item in p.delete_edges do if item.conv_id == conv_id do edges -= 1
-			for _, j in req.operations {if p.conv_ids[j] != conv_id do continue; switch p.entity_ty[j] {case .Task:
-					if req.operations[j].op_type ==
-					   .TaskCreate {tasks += 1; if task_status_is_active((^pr.Task)(p.entity[j]).status) do active += 1} else if req.operations[j].op_type == .TaskPatch {old := (^pr.Task)(p.old[j]); next := (^pr.Task)(p.entity[j]); if task_status_is_active(old.status) != task_status_is_active(next.status) do active += task_status_is_active(next.status) ? 1 : -1}; case .Asset:
-					if req.operations[j].op_type == .AssetCreate do assets += 1; case .Edge:
-					if req.operations[j].op_type == .EdgeCreate do edges += 1}}
-			if tasks > pr.MAX_TOTAL_TASKS_PER_CONVERSATION ||
-			   active > pr.MAX_ACTIVE_TASKS_PER_CONVERSATION ||
-			   assets > pr.MAX_ASSETS_PER_CONVERSATION ||
-			   edges > pr.MAX_EDGES_PER_CONVERSATION {failed = u16(i); break planning}; _ = op
 		}
 		slice.sort_by(
 			p.delete_edges[:],
@@ -578,6 +566,7 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 			edge_high_water  = p.edge_seq,
 			mutations        = p.mutations[:],
 		}
+		if _, err := shard_transaction_size(&tx); err == .Too_Large do break planning
 		if !append_shard_transaction(writer, &tx) {
 			if consume_shard_append_deferred() do return
 			if consume_shard_append_backpressure() do break planning

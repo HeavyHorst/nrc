@@ -120,7 +120,6 @@ when NRC_SIMULATION {
 	Semantic_Dependent_Task_Model :: struct {
 		kind:        Semantic_Dependent_Task_Kind,
 		live:        bool,
-		active:      bool,
 		asset_live:  bool,
 		edge_live:   bool,
 		task_id:     pr.TaskID,
@@ -789,8 +788,7 @@ when NRC_SIMULATION {
 			   writer.wal.pending_bytes != 0 ||
 			   writer.wal.last_hash != campaign.initial_wal_hash ||
 			   conv == nil ||
-			   len(conv.tasks) != 0 ||
-			   conv.active_task_count != 0 {
+			   len(conv.tasks) != 0 {
 				return "partial request changed sequence, floor, WAL, or conversation state"
 			}
 			return ""
@@ -798,7 +796,6 @@ when NRC_SIMULATION {
 		if !semantic_transport_persistence_task_exact(task) ||
 		   conv == nil ||
 		   len(conv.tasks) != 1 ||
-		   conv.active_task_count != 1 ||
 		   writer.floors != (Shard_High_Water_Requirements{task = 1}) ||
 		   td.task_seq != 1 ||
 		   td.asset_seq != 0 ||
@@ -1005,7 +1002,6 @@ when NRC_SIMULATION {
 		if !semantic_transport_persistence_task_exact(task) ||
 		   conv == nil ||
 		   len(conv.tasks) != 1 ||
-		   conv.active_task_count != 1 ||
 		   td.task_seq != 1 ||
 		   td.asset_seq != 0 ||
 		   td.edge_seq != 0 {
@@ -1045,7 +1041,6 @@ when NRC_SIMULATION {
 		if !semantic_transport_persistence_updated_task_exact(get_task(base.workspace, pr.WORKSPACE_DATA_ID, 1)) ||
 		   conv == nil ||
 		   len(conv.tasks) != 1 ||
-		   conv.active_task_count != 0 ||
 		   td.task_seq != 1 ||
 		   td.asset_seq != 0 ||
 		   td.edge_seq != 0 ||
@@ -1347,7 +1342,6 @@ when NRC_SIMULATION {
 			if !semantic_transport_persistence_enqueue_create(campaign, req, split_a, split_b) do return false
 			model.kind = .Created
 			model.live = true
-			model.active = req.status == .Backlog || req.status == .Todo || req.status == .InProgress
 			model.task_floor += 1
 			model.task_id = pr.TaskID(model.task_floor)
 			model.create_req = req
@@ -1393,7 +1387,6 @@ when NRC_SIMULATION {
 			if !semantic_transport_persistence_enqueue_delete(campaign, pr.WORKSPACE_DATA_ID, model.task_id, 0xD400 + u32(index), split_a, split_b) do return false
 			model.kind = .Deleted
 			model.live = false
-			model.active = false
 			model.create_req = {}
 			model.update_req = {}
 			model.asset_live = false
@@ -1404,7 +1397,6 @@ when NRC_SIMULATION {
 		req.task_id = model.task_id
 		if !semantic_transport_persistence_enqueue_update(campaign, req, split_a, split_b) do return false
 		model.kind = .Updated
-		model.active = req.status == .Backlog || req.status == .Todo || req.status == .InProgress
 		model.create_req = {}
 		model.update_req = req
 		return true
@@ -1417,7 +1409,6 @@ when NRC_SIMULATION {
 		   td.asset_seq != model.asset_floor ||
 		   td.edge_seq != model.edge_floor ||
 		   len(conv.tasks) != (model.live ? 1 : 0) ||
-		   conv.active_task_count != (model.active ? 1 : 0) ||
 		   !semantic_global_compaction_task_indexes_exact(conv) {
 			return "dependent generated task model shape differs"
 		}
@@ -1660,7 +1651,6 @@ when NRC_SIMULATION {
 		   td.asset_seq != 1 ||
 		   td.edge_seq != 2 ||
 		   len(conv.tasks) != 2 ||
-		   conv.active_task_count != 2 ||
 		   !semantic_transport_persistence_task_exact(conv.tasks[1]) ||
 		   !semantic_multihop_task_two_exact(conv.tasks[2], task_two_updated) ||
 		   !semantic_global_compaction_task_indexes_exact(conv) ||
@@ -2045,7 +2035,6 @@ when NRC_SIMULATION {
 		   td.task_seq != 1 ||
 		   conv == nil ||
 		   len(conv.tasks) != 0 ||
-		   conv.active_task_count != 0 ||
 		   !semantic_global_compaction_task_indexes_exact(conv) {
 			return "dependent delete/recreate zero-task state differs from model"
 		}
@@ -2076,7 +2065,6 @@ when NRC_SIMULATION {
 		   td.task_seq != 2 ||
 		   conv == nil ||
 		   len(conv.tasks) != 1 ||
-		   conv.active_task_count != 1 ||
 		   get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 1) != nil ||
 		   !semantic_dependent_history_created_task_exact(get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 2), 2, create_two) ||
 		   !semantic_global_compaction_task_indexes_exact(conv) {
@@ -2133,7 +2121,6 @@ when NRC_SIMULATION {
 		   td.edge_seq != 0 ||
 		   conv == nil ||
 		   len(conv.tasks) != 1 ||
-		   conv.active_task_count != 1 ||
 		   get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 1) != nil ||
 		   !semantic_dependent_history_created_task_exact(get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 2), 2, create_two) ||
 		   !semantic_global_compaction_task_indexes_exact(conv) {
@@ -2207,7 +2194,6 @@ when NRC_SIMULATION {
 		   td.edge_seq != 0 ||
 		   conv == nil ||
 		   len(conv.tasks) != 1 ||
-		   conv.active_task_count != 1 ||
 		   !semantic_transport_persistence_task_exact(get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 1)) ||
 		   !semantic_global_compaction_task_indexes_exact(conv) {
 			return "dependent cascade asset creation differs from model"
@@ -2251,11 +2237,9 @@ when NRC_SIMULATION {
 		}
 		nrc_sim_run_all_receives(&campaign.ctx.sim)
 		conv = get_conversation(get_workspace(campaign.workspace), pr.WORKSPACE_DATA_ID)
-		expected_active := update_req.status == .Backlog || update_req.status == .Todo || update_req.status == .InProgress
 		if writer.wal.record_count != 4 ||
 		   conv == nil ||
 		   len(conv.tasks) != 1 ||
-		   conv.active_task_count != (expected_active ? 1 : 0) ||
 		   !semantic_dependent_history_task_exact(get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 1), update_req) ||
 		   !semantic_global_compaction_task_indexes_exact(conv) {
 			return "dependent cascade update differs from model"
@@ -2272,7 +2256,6 @@ when NRC_SIMULATION {
 		   writer.floors != (Shard_High_Water_Requirements{task = 1, asset = 1, edge = 1}) ||
 		   conv == nil ||
 		   len(conv.tasks) != 0 ||
-		   conv.active_task_count != 0 ||
 		   !semantic_global_compaction_task_indexes_exact(conv) {
 			return "dependent cascade atomic deletion differs from model"
 		}
@@ -2297,7 +2280,6 @@ when NRC_SIMULATION {
 		   td.task_seq != 2 ||
 		   conv == nil ||
 		   len(conv.tasks) != 1 ||
-		   conv.active_task_count != 1 ||
 		   !semantic_dependent_history_created_task_exact(get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 2), 2, create_two) ||
 		   !semantic_global_compaction_task_indexes_exact(conv) {
 			return "dependent cascade speculative recreation differs from model"
@@ -2335,7 +2317,6 @@ when NRC_SIMULATION {
 		   td.edge_seq != 1 ||
 		   conv == nil ||
 		   len(conv.tasks) != expected_tasks ||
-		   conv.active_task_count != expected_tasks ||
 		   get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 2) != nil ||
 		   !semantic_global_compaction_task_indexes_exact(conv) {
 			return "dependent cascade recovery differs from captured prefix"
@@ -2405,7 +2386,6 @@ when NRC_SIMULATION {
 			enqueued = semantic_transport_persistence_enqueue_delete(campaign, pr.WORKSPACE_DATA_ID, continued.task_id, 0xD600, split_a, split_b)
 			continued.kind = .Deleted
 			continued.live = false
-			continued.active = false
 			continued.asset_live = false
 			continued.edge_live = false
 			continued.create_req = {}
@@ -2415,7 +2395,6 @@ when NRC_SIMULATION {
 			enqueued = semantic_transport_persistence_enqueue_create(campaign, req, split_a, split_b)
 			continued.kind = .Created
 			continued.live = true
-			continued.active = req.status == .Backlog || req.status == .Todo || req.status == .InProgress
 			continued.task_floor += 1
 			continued.task_id = pr.TaskID(continued.task_floor)
 			continued.create_req = req
@@ -2425,7 +2404,6 @@ when NRC_SIMULATION {
 			req.task_id = continued.task_id
 			enqueued = semantic_transport_persistence_enqueue_update(campaign, req, split_a, split_b)
 			continued.kind = .Updated
-			continued.active = req.status == .Backlog || req.status == .Todo || req.status == .InProgress
 			continued.create_req = {}
 			continued.update_req = req
 		}
@@ -2504,7 +2482,6 @@ when NRC_SIMULATION {
 		model := Semantic_Dependent_Task_Model {
 			kind       = .Original,
 			live       = true,
-			active     = true,
 			task_id    = 1,
 			task_floor = 1,
 		}
@@ -2712,7 +2689,6 @@ when NRC_SIMULATION {
 		   writer.wal.durable_record_count != 2 ||
 		   conv == nil ||
 		   len(conv.tasks) != 1 ||
-		   conv.active_task_count != 0 ||
 		   !semantic_transport_persistence_updated_task_exact(get_task(base.workspace, pr.WORKSPACE_DATA_ID, 1)) ||
 		   td.task_seq != 1 ||
 		   td.asset_seq != 0 ||
@@ -2792,7 +2768,6 @@ when NRC_SIMULATION {
 		if !semantic_transport_persistence_active_task_exact(active_task) ||
 		   conv == nil ||
 		   len(conv.tasks) != 2 ||
-		   conv.active_task_count != 2 ||
 		   td.task_seq != 2 ||
 		   writer.floors != (Shard_High_Water_Requirements{task = 2}) ||
 		   writer.compaction_floors != (Shard_High_Water_Requirements{task = 1}) ||
@@ -2903,7 +2878,6 @@ when NRC_SIMULATION {
 		   writer.manifest.sealed_present ||
 		   conv == nil ||
 		   len(conv.tasks) != 2 ||
-		   conv.active_task_count != 2 ||
 		   !semantic_transport_persistence_task_exact(get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 1)) ||
 		   !semantic_transport_persistence_active_task_exact(get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 2)) {
 			return "published semantic checkpoint and active WAL did not replay exactly"
@@ -3043,7 +3017,6 @@ when NRC_SIMULATION {
 			if writer.floors != (Shard_High_Water_Requirements{task = 2}) ||
 			   td.task_seq != 2 ||
 			   len(conv.tasks) != 2 ||
-			   conv.active_task_count != 2 ||
 			   !semantic_transport_persistence_task_exact(get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 1)) ||
 			   !semantic_transport_persistence_active_task_exact(get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 2)) {
 				return "global compaction live create differs from exact model"
@@ -3052,7 +3025,6 @@ when NRC_SIMULATION {
 			if writer.floors != (Shard_High_Water_Requirements{task = 1}) ||
 			   td.task_seq != 1 ||
 			   len(conv.tasks) != 1 ||
-			   conv.active_task_count != 0 ||
 			   !semantic_transport_persistence_updated_task_exact(get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 1)) ||
 			   get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 2) != nil {
 				return "global compaction live update differs from exact model"
@@ -3061,7 +3033,6 @@ when NRC_SIMULATION {
 			if writer.floors != (Shard_High_Water_Requirements{task = 1}) ||
 			   td.task_seq != 1 ||
 			   len(conv.tasks) != 0 ||
-			   conv.active_task_count != 0 ||
 			   len(conv.task_index_keys) != 0 ||
 			   btree.count(&conv.task_index) != 0 ||
 			   get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 1) != nil {
@@ -3071,7 +3042,6 @@ when NRC_SIMULATION {
 			if writer.floors != (Shard_High_Water_Requirements{task = 1, asset = 1, edge = 1}) ||
 			   td.task_seq != 1 ||
 			   len(conv.tasks) != 0 ||
-			   conv.active_task_count != 0 ||
 			   len(conv.task_index_keys) != 0 ||
 			   btree.count(&conv.task_index) != 0 ||
 			   get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, 1) != nil {
@@ -3104,7 +3074,6 @@ when NRC_SIMULATION {
 	) -> string {
 		expected_tasks := semantic_global_compaction_prior_task_count(mutation, active_durable)
 		expected_floors := semantic_global_compaction_prior_floors(mutation, active_durable)
-		expected_active_tasks := semantic_global_compaction_prior_active_count(mutation, active_durable)
 		writer := semantic_transport_persistence_writer(campaign)
 		conv := get_conversation(get_workspace(campaign.workspace), pr.WORKSPACE_DATA_ID)
 		if writer == nil ||
@@ -3116,7 +3085,6 @@ when NRC_SIMULATION {
 		   td.edge_seq != expected_floors.edge ||
 		   conv == nil ||
 		   len(conv.tasks) != expected_tasks ||
-		   conv.active_task_count != expected_active_tasks ||
 		   !semantic_global_compaction_task_indexes_exact(conv) {
 			return "global compaction recovered task state differs from durable model"
 		}
@@ -3148,7 +3116,6 @@ when NRC_SIMULATION {
 		final_tasks := prior_tasks + 1
 		final_floors := prior_floors
 		final_floors.task += 1
-		expected_active_tasks := semantic_global_compaction_prior_active_count(mutation, active_durable) + 1
 		conv := get_conversation(get_workspace(campaign.workspace), pr.WORKSPACE_DATA_ID)
 		if writer == nil ||
 		   writer.floors != final_floors ||
@@ -3157,7 +3124,6 @@ when NRC_SIMULATION {
 		   td.edge_seq != final_floors.edge ||
 		   conv == nil ||
 		   len(conv.tasks) != final_tasks ||
-		   conv.active_task_count != expected_active_tasks ||
 		   !semantic_global_compaction_task_indexes_exact(conv) {
 			return "global compaction final state shape differs from exact model"
 		}
@@ -3297,11 +3263,9 @@ when NRC_SIMULATION {
 		continued := get_task(campaign.workspace, pr.WORKSPACE_DATA_ID, continued_id)
 		conv := get_conversation(get_workspace(campaign.workspace), pr.WORKSPACE_DATA_ID)
 		continued_order := u16(semantic_global_compaction_prior_active_count(mutation, active_durable))
-		expected_active_tasks := int(continued_order) + 1
 		if !semantic_global_compaction_continued_task_exact(continued, continued_id, continued_order) ||
 		   conv == nil ||
 		   len(conv.tasks) != expected_tasks + 1 ||
-		   conv.active_task_count != expected_active_tasks ||
 		   writer.floors != (Shard_High_Water_Requirements{task = expected_floors.task + 1, asset = expected_floors.asset, edge = expected_floors.edge}) {
 			return "global compaction continued WebSocket mutation failed"
 		}
@@ -3498,7 +3462,6 @@ when NRC_SIMULATION {
 		model := Semantic_Dependent_Task_Model {
 			kind       = .Original,
 			live       = true,
-			active     = true,
 			task_id    = 1,
 			task_floor = 1,
 		}
@@ -5246,7 +5209,6 @@ when NRC_SIMULATION {
 		   td.edge_seq != expected_floors.edge ||
 		   conv == nil ||
 		   len(conv.tasks) != 1 ||
-		   conv.active_task_count != (task_fsync_completed ? 0 : 1) ||
 		   len(conv.assets) != int(expected_floors.asset) ||
 		   len(conv.edges) != int(expected_floors.edge) ||
 		   !semantic_deferred_rotation_adjacency_exact(conv, asset_fsync_completed) ||
@@ -5414,7 +5376,6 @@ when NRC_SIMULATION {
 		   td.edge_seq != expected_floors.edge ||
 		   conv == nil ||
 		   len(conv.tasks) != 2 ||
-		   conv.active_task_count != int(continuation_order) + 1 ||
 		   len(conv.assets) != int(expected_floors.asset) ||
 		   len(conv.edges) != int(expected_floors.edge) ||
 		   !semantic_deferred_rotation_adjacency_exact(conv, asset_fsync_completed) ||

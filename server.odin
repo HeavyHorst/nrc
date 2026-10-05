@@ -184,7 +184,6 @@ Conversation_State :: struct {
 	calendar_appointments:     btree.BTreeG(Appointment_Index_Key),
 	calendar_appointment_keys: map[pr.AssetID]Appointment_Index_Key,
 	calendar_ready:            bool,
-	active_task_count:         int, // Backlog/Todo/InProgress tasks only
 	assets:                    map[pr.AssetID]^pr.Asset, // asset_id -> asset
 	note_index:                btree.BTreeG(Note_Sort_Key), // note ordering index for pagination
 	note_index_keys:           map[pr.AssetID]Note_Sort_Key, // asset_id -> current note sort key
@@ -303,7 +302,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:e61fd45"
+BUILD_VERSION :: "dev-2026-10:79d9483"
 PROTOCOL_VERSION :: 8 // Calendar appointment rows carry an explicit time interval.
 
 jwt_auth_secret: string

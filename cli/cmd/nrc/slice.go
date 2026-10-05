@@ -95,10 +95,10 @@ type sliceEntry struct {
 	ClosedAt       int64  `json:"closed_at,omitempty"`
 	ClosedBy       string `json:"closed_by,omitempty"`
 	Members        uint32 `json:"members"`
-	Tasks          uint16 `json:"tasks"`
+	Tasks          uint32 `json:"tasks"`
 	Notes          uint16 `json:"notes"`
 	Files          uint16 `json:"files"`
-	Open           uint16 `json:"open"`
+	Open           uint32 `json:"open"`
 	Backlog        uint16 `json:"backlog"`
 	Todo           uint16 `json:"todo"`
 	InProgress     uint16 `json:"in_progress"`
