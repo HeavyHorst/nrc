@@ -669,9 +669,10 @@ hr {
     font-weight: 400;
 }
 .inspector-metadata .detail-metadata-ledger > div {
-    display: grid;
-    gap: 0.125rem;
-    padding: 0.25rem 0.625rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.375rem;
+    padding: 0.125rem 0.625rem;
     border-left: 1px solid var(--border-list);
     white-space: nowrap;
 }
@@ -688,7 +689,7 @@ hr {
 }
 .inspector .panel-header.inspector-matrix-header > .inspector-identity-row:has(.inspector-metadata) {
     height: auto;
-    min-height: 40px;
+    min-height: 24px;
     max-height: none;
     align-items: center;
 }

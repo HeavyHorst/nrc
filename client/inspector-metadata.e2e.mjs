@@ -67,7 +67,8 @@ try {
             ["STATUS", "PRIORITY", "CATEGORY", "DUE", "PROJECT", "ASSIGNEE", "BLOCKED BY", "REFERENCE"],
             "Task read mode exposes operational fields");
         }
-        assert.ok((await page.locator("#inspectorHeader .inspector-identity-row").boundingBox()).height >= 40);
+        const identityHeight = (await page.locator("#inspectorHeader .inspector-identity-row").boundingBox()).height;
+        assert.ok(identityHeight >= 24 && identityHeight <= 30, `${width}/${theme}/${type}: compact one-line identity band (${identityHeight}px)`);
         const geometry = await metadata.evaluate(el => {
           const state = el.parentElement.lastElementChild;
           return { width: el.clientWidth, right: el.getBoundingClientRect().right, stateLeft: state.getBoundingClientRect().left,
@@ -79,9 +80,9 @@ try {
         const cells = await metadata.locator("dl > div").evaluateAll(els => els.map(el => {
           const label = el.querySelector("dt").getBoundingClientRect();
           const value = el.querySelector("dd").getBoundingClientRect();
-          return { labelBottom: label.bottom, valueTop: value.top, x: label.x, valueX: value.x };
+          return { labelBottom: label.bottom, valueBottom: value.bottom, labelRight: label.right, valueLeft: value.left };
         }));
-        assert.ok(cells.every(cell => cell.labelBottom <= cell.valueTop && cell.x === cell.valueX), "each label sits above its aligned value");
+        assert.ok(cells.every(cell => cell.labelRight < cell.valueLeft && Math.abs(cell.labelBottom - cell.valueBottom) < 2), "each label sits beside its value on one baseline");
         assert.equal(await metadata.locator("dd").nth(1).getAttribute("title"), "CREATED: 15.09.26, 23:37", "date tooltip includes its label");
         await metadata.focus();
         for (let i = 0; i < 30; i++) await page.keyboard.press("ArrowRight");
