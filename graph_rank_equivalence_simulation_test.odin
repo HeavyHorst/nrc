@@ -153,6 +153,23 @@ when NRC_SIMULATION {
 		has_union_edge := false
 		for present in union_edges do has_union_edge = has_union_edge || present
 		if has_union_edge {
+			// Floating-point addition is not associative. Accumulate by entity type/ID,
+			// the server's canonical order, rather than the fixture's Task-first order.
+			// Otherwise a 1-ULP difference can change a strict score sort at top-N.
+			entity_order: [GRAPH_QUERY_EQUIVALENCE_ENTITY_COUNT]int
+			for entity, entity_index in entities {
+				insert_at := entity_index
+				for insert_at > 0 {
+					previous := entities[entity_order[insert_at - 1]]
+					if u16(previous.target_type) < u16(entity.target_type) ||
+					   (previous.target_type == entity.target_type && previous.target_id < entity.target_id) {
+						break
+					}
+					entity_order[insert_at] = entity_order[insert_at - 1]
+					insert_at -= 1
+				}
+				entity_order[insert_at] = entity_index
+			}
 			personalization: [GRAPH_QUERY_EQUIVALENCE_ENTITY_COUNT]f64
 			weight_sum := 0.0
 			for anchor_index in 0 ..< int(req.anchor_count) {
@@ -177,7 +194,7 @@ when NRC_SIMULATION {
 					next[entity_index] = (1.0 - GRAPH_RANK_EQ_DAMPING) * personalization[entity_index]
 				}
 				dangling := 0.0
-				for entity_index in 0 ..< GRAPH_QUERY_EQUIVALENCE_ENTITY_COUNT {
+				for entity_index in entity_order {
 					if !union_nodes[entity_index] do continue
 					if degrees[entity_index] == 0 {
 						dangling += ranks[entity_index]
@@ -194,7 +211,7 @@ when NRC_SIMULATION {
 					next[entity_index] += GRAPH_RANK_EQ_DAMPING * dangling * personalization[entity_index]
 				}
 				delta := 0.0
-				for entity_index in 0 ..< GRAPH_QUERY_EQUIVALENCE_ENTITY_COUNT do delta += math.abs(next[entity_index] - ranks[entity_index])
+				for entity_index in entity_order do delta += math.abs(next[entity_index] - ranks[entity_index])
 				ranks = next
 				if delta < GRAPH_RANK_EQ_TOLERANCE do break
 			}
@@ -488,7 +505,7 @@ when NRC_SIMULATION {
 	}
 
 	graph_rank_eq_mandatory_cases :: proc(t: ^testing.T) -> bool {
-		cases := [4]struct {
+		cases := [5]struct {
 			edge_seed, anchor_seed, candidate_seed, options, correlation: i64,
 		} {
 
@@ -501,6 +518,8 @@ when NRC_SIMULATION {
 			{63, 0, 22, 4_103, 0x7103},
 			// DerivedFrom-or-Supersedes incoming traversal with distinct candidate ordering.
 			{63, 0, 71, 2_241, 0x7104},
+			// Hegel regression: Asset 2 anchor, almost-tied Tasks 1/2 at the top-N cutoff.
+			{59, 20, 0, 1_005, 0},
 		}
 		for values, case_index in cases {
 			req, edge_mask := graph_rank_eq_request(values.edge_seed, values.anchor_seed, values.candidate_seed, values.options, values.correlation)
