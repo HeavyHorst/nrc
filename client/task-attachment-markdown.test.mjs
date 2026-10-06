@@ -4,7 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 const attachmentSource = fs.readFileSync(new URL("./attachments.js", import.meta.url), "utf8");
-const taskSource = fs.readFileSync(new URL("./tasks.js", import.meta.url), "utf8");
+const noteSource = fs.readFileSync(new URL("./notes.js", import.meta.url), "utf8");
 
 test("attachment read ledger shows every file once and preserves preview/download destinations", () => {
   const sandbox = vm.createContext({
@@ -56,7 +56,7 @@ function extractFunction(source, name) {
   assert.fail(`Could not extract ${name}`);
 }
 
-test("task Markdown resolves attachment references", () => {
+test("shared task/note Markdown renderer resolves attachment references", () => {
   const sandbox = {
     parseMarkdown(markdown) {
       assert.equal(markdown, "![Screenshot](/files/file-1?inline=true&filename=shot.png)");
@@ -71,8 +71,8 @@ test("task Markdown resolves attachment references", () => {
       `${extractFunction(attachmentSource, "attachmentFileURL")}\n` +
       `${extractFunction(attachmentSource, "getAttachmentRefURL")}\n` +
       `${extractFunction(attachmentSource, "resolveAttachmentRefs")}\n` +
-      `${extractFunction(taskSource, "renderTaskMarkdownWithAttachments")}\n` +
-      `result = renderTaskMarkdownWithAttachments("![Screenshot](att:0)", attachments);`,
+      `${extractFunction(noteSource, "renderNoteMarkdownWithAttachments")}\n` +
+      `result = renderNoteMarkdownWithAttachments("![Screenshot](att:0)", attachments);`,
     sandbox,
   );
 

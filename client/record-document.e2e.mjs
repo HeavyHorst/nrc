@@ -27,6 +27,7 @@ try {
     const stamp = 1790336880000000000n;
     const task = { id: 259n, convId: 0n, title: "TaskCards beim Import deduplizieren", description: "Verbundene TaskCards werden beim Import mehrfach angelegt.\n\n### Anforderung\n\n- Karten anhand ihrer stabilen ID erkennen.\n- Eine Karte nur einmal anlegen und mehrfach verlinken.", status: 1, priority: 200, color: 0, createdBy: "rene", createdAt: stamp, updatedAt: stamp, attachments: [], assignee: "anna", project: "antares/edupool_boards", dueAt: 0n, blockedBy: 0n };
     roomTasks.set(0n, new Map([[259n, task]]));
+    task.description += "\n\nAmp: [Import review](https://ampcode.com/threads/T-01a05d01-383f-71a9-b9e6-c7debb8c7bd9)\n\n[Duplicate](https://ampcode.com/threads/T-01a05d01-383f-71a9-b9e6-c7debb8c7bd9?view=full)";
     const note = { assetId: 4826n, convId: 0n, assetType: 5, owner: "anna", createdAt: stamp, updatedAt: stamp, attachments: [],
       preview: JSON.stringify({ title: "OIDC: Claims und Scopes", project: "antares/edupool_boards", tags: ["oidc", "sso", "claims"], format: "markdown" }),
       payload: "Technische Referenz für die Anbindung eines Identity Providers.\n\n### Vereinbarungen\n\n- Identität und Rollen explizit zuordnen.\n- Benötigte Scopes dokumentieren.\n- Redirect-URIs und Logout-Verhalten prüfen." };
@@ -175,12 +176,18 @@ try {
         await page.locator(title).click();
         assert.ok(await page.locator(`#${type}CommentInput`).isVisible(), "Escape and blur never hide comments");
         await capture(`${type}-${theme}-${width}-read`);
-        if (type === "note") {
+        {
           const threads = page.locator('.document-resources [data-resource="threads"]');
           assert.equal(await threads.locator('[data-resource-count]').textContent(), "1");
           await threads.locator('[data-resource-toggle]').click();
           assert.ok(await threads.locator('.record-resource-body').isVisible());
           assert.equal(await page.locator('.document-resources [data-resource-open="true"]').count(), 1, "threads replace the links panel");
+          const threadLink = threads.locator('a');
+          assert.equal(await threadLink.count(), 1, 'thread references are deduplicated');
+          assert.equal(await threadLink.textContent(), 'Import review');
+          assert.equal(await threadLink.getAttribute('href'), 'https://ampcode.com/threads/T-01a05d01-383f-71a9-b9e6-c7debb8c7bd9');
+          assert.equal(await page.locator(content).locator('a[href*="ampcode.com/threads/"]').count(), 0, 'thread links move out of the document body');
+          await capture(`${type}-${theme}-${width}-amp-threads`);
         }
         if (width === 390) {
           await page.locator('.document-resources').scrollIntoViewIfNeeded();
@@ -191,7 +198,9 @@ try {
         await page.locator(editor).waitFor();
         if (type === "task") assert.equal(await page.locator('.inspector-identity-row .inspector-metadata').count(), 1, 'edit mode preserves header metadata');
         assert.ok(await page.locator(`.inspector-mode-row #${type}DetailDelete`).isVisible(), 'delete stays in the edit header');
-        if (type === "note") assert.equal(await page.locator('.document-resources [data-resource="threads"]').getAttribute('data-resource-open'), 'false', "attachments replace the Amp threads panel");
+        assert.equal(await page.locator('.document-resources [data-resource="threads"]').getAttribute('data-resource-open'), 'false', "attachments replace the Amp threads panel");
+        assert.equal(await page.locator('.document-resources [data-resource="threads"] [data-resource-count]').textContent(), '1', 'edit retains the threads register');
+        if (type === "task") assert.match(await page.locator(editor).inputValue(), /Amp: \[Import review\]\(https:\/\/ampcode.com\/threads\//, 'editing preserves original Markdown');
         assert.ok(await page.locator('.record-message').isVisible(), "comments stay visible during content editing");
         // Focusing the editor on a phone may scroll the document. Compare from
         // the same scroll origin, then exercise scrolling separately below.
@@ -340,6 +349,16 @@ try {
       }
     }
   }
+  await page.evaluate(async () => {
+    await NRCInspector.close();
+    roomTasks.get(0n).get(259n).description = "";
+    await NRCInspector.openEntity({ roomId: 0n, type: "task", id: 259n });
+  });
+  const emptyTaskThreads = page.locator('[data-resource="threads"]');
+  assert.equal(await emptyTaskThreads.locator('[data-resource-count]').textContent(), '0', 'tasks without descriptions retain the empty threads register');
+  await emptyTaskThreads.locator('[data-resource-toggle]').click();
+  assert.ok(await emptyTaskThreads.getByText('NO AMP THREADS', { exact: true }).isVisible());
+  assert.ok(await page.getByText('No description', { exact: true }).isVisible());
   assert.deepEqual(errors, []);
   console.log("PASS: stable task/note geometry, compact resources, persistent comments and sending, cancel, long content and HTML; two themes at 2200/1600/390px");
 } finally {

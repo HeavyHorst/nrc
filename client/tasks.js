@@ -3903,11 +3903,14 @@ function getTaskMarkdown(task) {
   return taskMarkdownUpdates.get(getTaskMarkdownUpdateKey(task))?.draft ?? task.description ?? "";
 }
 
-function renderTaskMarkdownWithAttachments(markdown, attachments = []) {
-  const source = typeof resolveAttachmentRefs === "function"
-    ? resolveAttachmentRefs(markdown, attachments)
-    : markdown;
-  return typeof parseMarkdown === "function" ? parseMarkdown(source) : escapeHtml(source);
+function renderTaskDocumentResources(task, ampThreads) {
+  return window.NRCDetailUI.renderDocumentResources({ kind: "task", attachments: task.attachments,
+    attachmentControl: taskAttachmentsControl(task), open: taskResourceOpen,
+    threadsHtml: window.NRCDetailUI.renderResourceBlock({
+      resource: "threads", label: "AMP THREADS", open: taskResourceOpen.threads === true,
+      count: ampThreads.length, preview: ampThreads[0]?.label || "", bodyHtml: renderNoteAmpThreads(ampThreads),
+    }),
+  });
 }
 
 function renderSelectedTaskMarkdown(task) {
@@ -4135,8 +4138,7 @@ function showTaskDetailPanel(task, { view = true } = {}) {
           </div>
         </section>
         </div>
-        ${window.NRCDetailUI.renderDocumentResources({ kind: "task", attachments: task.attachments,
-          attachmentControl: taskAttachmentsControl(task), open: taskResourceOpen })}
+        ${renderTaskDocumentResources(task, renderNoteMarkdownPresentation(getTaskMarkdown(task), task.attachments || []).ampThreads)}
       </div>
       ${window.NRCDetailUI.renderMessagesArea({
         messagesHtml,
@@ -4305,8 +4307,9 @@ function enterDescriptionFocus() {
   descriptionFocusDraft = liveDesc;
 
   // Build a document view (like notes preview)
+  const presentation = renderNoteMarkdownPresentation(liveDesc, task.attachments || []);
   const renderedDesc = liveDesc.trim()
-    ? renderTaskMarkdownWithAttachments(liveDesc, task.attachments || [])
+    ? presentation.bodyHtml
     : '<span class="task-detail-desc-empty">No description</span>';
 
   tabContent.innerHTML = `
@@ -4314,8 +4317,7 @@ function enterDescriptionFocus() {
       ${renderTaskDocumentProperties(task)}
       <div class="agenda-preview task-detail-doc-body">${renderedDesc}</div>
     </div>
-    ${window.NRCDetailUI.renderDocumentResources({ kind: "task", attachments: task.attachments,
-      attachmentControl: taskAttachmentsControl(task), open: taskResourceOpen })}
+    ${renderTaskDocumentResources(task, presentation.ampThreads)}
   `;
 
   const descriptionBody = tabContent.querySelector(".task-detail-doc-body");
