@@ -129,10 +129,12 @@ try {
           synthetic: getComputedStyle(action, "::before").content,
           height: rect.height,
           baseline: Math.round(row.bottom - rect.bottom),
+          borders: ["Top", "Right", "Bottom", "Left"].map(side => getComputedStyle(action)[`border${side}Width`]),
         };
       }));
       for (const action of exportGeometry) {
         assert.equal(action.synthetic, "none", `${theme}/${width}/${action.label}: no synthetic OUT/OP label`);
+        assert.deepEqual(action.borders, ["1px", "1px", "1px", "1px"], `${theme}/${width}/${action.label}: complete button frame`);
       }
       assert.equal(new Set(exportGeometry.map(action => action.height)).size, 1, `${theme}/${width}: export actions share one height`);
       assert.equal(new Set(exportGeometry.map(action => action.baseline)).size, 1, `${theme}/${width}: export actions share one baseline`);
@@ -140,6 +142,12 @@ try {
         const operationHeight = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize) * 1.2);
         assert.ok(Math.abs(exportGeometry[0].height - operationHeight) < 1, `${theme}/${width}: export actions use the shared desktop operation height`);
       }
+      await page.locator(".note-share-header > .header-register-identity-row").evaluate(row => { row.scrollLeft = row.scrollWidth; });
+      assert.ok(await page.locator("#noteShareOpenNrc").evaluate(button => {
+        const rect = button.getBoundingClientRect();
+        const row = button.parentElement.getBoundingClientRect();
+        return rect.left >= row.left && rect.right <= row.right;
+      }), `${theme}/${width}: the final action's whole frame is reachable`);
       await page.locator(".note-share-header").screenshot({ path: `.amp/in/artifacts/files-share-header-${theme}-${width}.png` });
       await page.locator(".note-share-sidebar").screenshot({ path: `.amp/in/artifacts/files-share-${theme}-${width}.png` });
     }

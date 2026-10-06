@@ -825,7 +825,7 @@ body.sullivan-workbench .sullivan-submit-controls:has(#sullivanStop:not([hidden]
     border-right: var(--content-border);
 }
 
-.header-register > .header-register-identity-row > :last-child {
+.header-register > .header-register-identity-row > :last-child:not(.header-operation) {
     border-right: 0;
 }
 
