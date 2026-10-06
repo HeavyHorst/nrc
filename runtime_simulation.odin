@@ -15,6 +15,7 @@ import "core:time"
 
 import nbio_raw "nbio"
 import nbio "nbio/poly"
+import "persistence"
 import "storage_io"
 import ws "websocket"
 
@@ -26,6 +27,7 @@ when !NRC_SIMULATION {
 	_ :: time.Duration
 	_ :: nbio_raw.MAX_USER_ARGUMENTS
 	_ :: nbio.Completion
+	_ :: persistence.wal_write_with_test_faults
 	_ :: storage_io.Context
 	_ :: ws.readFrameHeader
 }
@@ -45,6 +47,7 @@ when NRC_SIMULATION {
 		Driver_Action,
 		Process_Crash,
 		File_Read,
+		File_Write,
 		Input_Turn,
 	}
 
@@ -101,6 +104,7 @@ when NRC_SIMULATION {
 		Sim_Driver_Action_Event,
 		Sim_Process_Crash_Event,
 		Sim_File_Read_Completion,
+		Sim_File_Write_Completion,
 		Sim_Input_Turn_Event,
 	}
 
@@ -229,6 +233,9 @@ when NRC_SIMULATION {
 		case Sim_Process_Crash_Event:
 		case Sim_File_Read_Completion:
 			if value.discard != nil do value.discard(value.user)
+		case Sim_File_Write_Completion:
+		// Borrowed batch only. Crash teardown releases its owner; never call
+		// a stale write callback or touch its old-process bytes here.
 		}
 	}
 
@@ -465,7 +472,7 @@ when NRC_SIMULATION {
 
 	sim_event_is_io_callback :: #force_inline proc(domain: Sim_Event_Domain) -> bool {
 		switch domain {
-		case .Timer, .Send, .Shutdown_Send, .Receive, .Close, .Fsync, .File_Read:
+		case .Timer, .Send, .Shutdown_Send, .Receive, .Close, .Fsync, .File_Read, .File_Write:
 			return true
 		case .Compaction_Job, .Compaction_Result, .Driver_Action, .Process_Crash, .Input_Turn:
 			return false
@@ -500,13 +507,21 @@ when NRC_SIMULATION {
 			storage_io.destroy_sync_snapshot(&snapshot)
 		case Sim_Compaction_Job_Event:
 			result := sim_run_shard_compaction_job(payload.job)
-			_ = sim_world_enqueue_compaction_result(world, result)
+			if result.message_remove_generation != 0 {
+				destroy_shard_compaction_result(&result, true)
+			} else {
+				_ = sim_world_enqueue_compaction_result(world, result)
+			}
 		case Sim_Compaction_Result_Event:
 			_ = process_shard_compaction_result(payload.result)
 		case Sim_Driver_Action_Event:
 			payload.callback(payload.user)
 		case Sim_Process_Crash_Event:
 			sim_world_crash(world)
+		case Sim_File_Write_Completion:
+			completion := payload
+			sim_file_write_apply(&completion)
+			completion.callback(completion.user, completion.written, completion.err)
 		case Sim_File_Read_Completion:
 			read := 0
 			err := payload.err
@@ -681,6 +696,54 @@ when NRC_SIMULATION {
 		compaction_job_event_submission: bool,
 	}
 
+	Sim_File_Write_Completion :: struct {
+		file:     ^storage_io.File,
+		buf:      []byte,
+		user:     rawptr,
+		callback: nbio_raw.On_File_Write,
+		err:      linux.Errno,
+		applied:  bool,
+		written:  int,
+	}
+
+	// Separate kernel append from callback delivery for crash interleavings.
+	sim_file_write_apply :: proc(completion: ^Sim_File_Write_Completion) {
+		if completion.applied do return
+		completion.applied = true
+		if completion.err != .NONE do return
+		err: os.Error
+		completion.written, err = persistence.wal_write_with_test_faults(completion.file, completion.buf)
+		if err != nil do completion.err = .EIO
+	}
+
+	nrc_sim_apply_next_file_write :: proc(sim: ^Sim_Runtime) -> bool {
+		index := sim_world_domain_event_index(&sim.world, .File_Write, 0)
+		if index < 0 do return false
+		completion := sim.world.events[index].payload.(Sim_File_Write_Completion)
+		sim_file_write_apply(&completion)
+		sim.world.events[index].payload = Sim_Event_Payload(completion)
+		return true
+	}
+
+	nrc_sim_capture_wal_append :: proc(sim: ^Sim_Runtime, file: ^storage_io.File, buf: []byte, user: rawptr, callback: nbio_raw.On_File_Write) {
+		_ = sim_world_enqueue_event(
+			&sim.world,
+			sim.world.now,
+			{kind = .Storage},
+			.File_Write,
+			Sim_Event_Payload(Sim_File_Write_Completion{file = file, buf = buf, user = user, callback = callback}),
+		)
+	}
+
+	nrc_sim_run_next_file_write :: proc(sim: ^Sim_Runtime, err: linux.Errno = .NONE) -> bool {
+		index := sim_world_domain_event_index(&sim.world, .File_Write, 0)
+		if index < 0 do return false
+		completion := sim.world.events[index].payload.(Sim_File_Write_Completion)
+		if err != .NONE do completion.err = err
+		sim.world.events[index].payload = Sim_Event_Payload(completion)
+		return sim_world_dispatch_event(&sim.world, index)
+	}
+
 	@(thread_local)
 	nrc_sim_runtime: ^Sim_Runtime
 
@@ -705,6 +768,7 @@ when NRC_SIMULATION {
 			_ = sim_world_cancel_event(&sim.world, sim.world.events[index].id)
 		}
 		nrc_sim_run_all_close_completions(sim)
+		for nrc_sim_run_next_file_write(sim, .EIO) {}
 		for nrc_sim_run_fsync_completion_at(sim, 0, .EIO) {}
 		for nrc_sim_run_file_read_at(sim, 0, .EIO) {}
 		for _, client in sim.clients {

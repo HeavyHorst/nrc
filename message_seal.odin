@@ -6,6 +6,41 @@ import "core:time"
 import "persistence"
 import "storage_io"
 
+EXPERIMENT_ASYNC_MESSAGE_DELETE :: #config(EXPERIMENT_ASYNC_MESSAGE_DELETE, false)
+
+// Refusal keeps the frozen holder for maintenance to retry. No worker memory
+// crosses the queue, and shutdown may safely leave the unreferenced file behind.
+enqueue_message_source_delete :: proc(store: ^Message_Store, generation: u64) -> bool {
+	context.allocator = worker_backing_allocator()
+	directory, err := strings.clone(store.directory)
+	if err != nil do return false
+	job := Shard_Compaction_Job {
+		allocator                 = context.allocator,
+		message_remove_generation = generation,
+		owner_worker              = td.thread_index,
+		shard                     = store.shard,
+		storage                   = store.storage,
+		shard_dir                 = directory,
+	}
+	when NRC_SIMULATION {
+		if nrc_sim_runtime != nil && nrc_sim_runtime.compaction_job_event_submission {
+			return(
+				sim_world_enqueue_event(
+					&nrc_sim_runtime.world,
+					nrc_sim_runtime.world.now,
+					{kind = .Storage, id = u64(store.shard)},
+					.Compaction_Job,
+					Sim_Event_Payload(Sim_Compaction_Job_Event{job = job}),
+				) !=
+				0 \
+			)
+		}
+	}
+	if chan.try_send(td.server.shard_compaction_jobs, job) do return true
+	delete(directory)
+	return false
+}
+
 frozen_message_descriptor :: proc(frozen: ^Message_Store) -> Message_Segment_Descriptor {
 	return {
 		generation = frozen.active_generation,
@@ -21,12 +56,17 @@ destroy_frozen_message_store :: proc(store: ^Message_Store, remove_source: bool)
 	frozen := store.frozen
 	if frozen == nil do return
 	assert(frozen.async_readers == 0)
-	if frozen.active_read_file != nil do storage_io.discard(frozen.active_read_file)
+	// Close before dispatch: otherwise the worker's final close can perform the
+	// eviction after the service unlinks the still-open file.
+	if frozen.active_read_file != nil {storage_io.discard(frozen.active_read_file); frozen.active_read_file = nil}
 	if remove_source {
-		path := message_store_path(store.directory, frozen.active_generation, "wal")
-		_ = storage_io.remove(store.storage, path)
-		delete(path)
-		_ = storage_io.sync_directory(store.storage, store.directory)
+		if EXPERIMENT_ASYNC_MESSAGE_DELETE && message_seal_service_available() {
+			if !enqueue_message_source_delete(store, frozen.active_generation) do return
+		} else {
+			path := message_store_path(store.directory, frozen.active_generation, "wal"); defer delete(path)
+			_ = storage_io.remove(store.storage, path)
+			_ = storage_io.sync_directory(store.storage, store.directory)
+		}
 	}
 	destroy_active_message_indexes(frozen)
 	free(frozen)

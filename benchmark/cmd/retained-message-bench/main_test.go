@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,86 @@ import (
 	"github.com/gorilla/websocket"
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
+
+func TestConnectRejectsUnsafeWorkspace(t *testing.T) {
+	for _, workspace := range []string{"", ".", "..", "a/b", "a\\b", "a?b", "a#b", "a%2Fb", "%61", "a b", "a\n", "café"} {
+		t.Run(workspace, func(t *testing.T) {
+			if _, err := connect("ws://127.0.0.1:0", "test", workspace); err == nil || !strings.Contains(err.Error(), "invalid workspace") {
+				t.Fatalf("unsafe workspace %q: %v", workspace, err)
+			}
+		})
+	}
+}
+
+// Stop at the selected role's handshake: earlier publishers ACK warmup normally.
+// This exercises run's actual flag and connection paths without a timing workload.
+func TestRunWorkspacePropagation(t *testing.T) {
+	for _, tc := range []struct {
+		name, workspace string
+		stopAt          int
+		args            []string
+	}{
+		{name: "default publisher", workspace: "retained-bench", stopAt: 1},
+		{name: "custom publisher", workspace: "Store_2.test-1", stopAt: 1, args: []string{"--workspace=Store_2.test-1"}},
+		{name: "subscriber", workspace: "Store_2.test-1", stopAt: 2, args: []string{"--workspace=Store_2.test-1", "--subscribers=1"}},
+		{name: "probe", workspace: "Store_2.test-1", stopAt: 2, args: []string{"--workspace=Store_2.test-1", "--probe"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			paths := make(chan string, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths <- r.RequestURI
+				if len(paths) == tc.stopAt {
+					http.Error(w, "stop at handshake", http.StatusForbidden)
+					return
+				}
+				conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer conn.Close()
+				ready, _ := (&protocol.Message{Opcode: protocol.S_ServerReady}).Write()
+				if err := conn.WriteMessage(websocket.BinaryMessage, ready); err != nil {
+					return
+				}
+				for {
+					_, data, err := conn.ReadMessage()
+					if err != nil {
+						return
+					}
+					msg, err := protocol.ReadMessage(data)
+					if err != nil || msg.Opcode != protocol.C_SendMessageV2 || len(msg.Data) < 28 {
+						t.Errorf("invalid publish request: %v", err)
+						return
+					}
+					payload := make([]byte, 20)
+					copy(payload, msg.Data[24:28])
+					binary.BigEndian.PutUint64(payload[4:], 1)
+					ack, _ := (&protocol.Message{Opcode: protocol.S_AckSendMessage, Data: payload}).Write()
+					if err := conn.WriteMessage(websocket.BinaryMessage, ack); err != nil {
+						return
+					}
+				}
+			}))
+			defer server.Close()
+			oldFlags, oldArgs := flag.CommandLine, os.Args
+			defer func() { flag.CommandLine, os.Args = oldFlags, oldArgs }()
+			flag.CommandLine = flag.NewFlagSet(tc.name, flag.ContinueOnError)
+			os.Args = append([]string{"retained-message-bench", "--server=ws" + strings.TrimPrefix(server.URL, "http"), "--clients=1", "--warmup=1ms"}, tc.args...)
+			if err := run(); err == nil || !strings.Contains(err.Error(), "bad handshake") {
+				t.Fatalf("expected stop at handshake, got %v", err)
+			}
+			if len(paths) != tc.stopAt {
+				t.Fatalf("connections=%d, want %d", len(paths), tc.stopAt)
+			}
+			for range tc.stopAt {
+				if path := <-paths; path != "/"+tc.workspace {
+					t.Errorf("request URI=%q, want /%s", path, tc.workspace)
+				}
+			}
+		})
+	}
+}
 
 func TestPhaseCorrelatesACKs(t *testing.T) {
 	for _, tc := range []struct {
@@ -70,6 +152,13 @@ func TestPhaseCorrelatesACKs(t *testing.T) {
 			err = worker.phase(until, 4, 4, true, nil, nil)
 			if (err != nil) != tc.wantError {
 				t.Fatalf("error = %v; want error %v", err, tc.wantError)
+			}
+			if tc.name == "missing" {
+				for _, detail := range []string{"publisher=1", "local=", "measured=true", "read_started=", "deadline=", "failed=", "pending=[1]"} {
+					if !strings.Contains(err.Error(), detail) {
+						t.Errorf("missing diagnostic %q: %v", detail, err)
+					}
+				}
 			}
 			if !tc.wantError && (worker.count != 4 || worker.hist.TotalCount() != 4) {
 				t.Fatalf("count=%d histogram=%d", worker.count, worker.hist.TotalCount())

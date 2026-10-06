@@ -4541,6 +4541,14 @@ when NRC_SIMULATION {
 		action.store.commit_pending = true
 		action.store.commit_started = {}
 		did_work, flush_ok := flush_pending_retained_message_writes(&td.message_stores)
+		if action.store.write_in_flight {
+			if !did_work || !flush_ok || action.store.high_water != 1 || action.store.wal.record_count != 0 || action.store.fsync_in_flight {
+				action.diagnostic = "semantic retained flush driver action queued state differed"
+				return
+			}
+			action.flushed = true
+			return
+		}
 		if !did_work ||
 		   !flush_ok ||
 		   action.store.high_water != 2 ||
@@ -4679,6 +4687,26 @@ when NRC_SIMULATION {
 		if observer.diagnostic != "" do return observer.diagnostic
 		if !observer.before_observed || !observer.after_observed {
 			return "global segmented deferred retained final callback observer did not run"
+		}
+		if store.write_in_flight {
+			if store.async_readers != 0 ||
+			   campaign.requester.retained_io != 1 ||
+			   store.high_water != 1 ||
+			   store.wal.write_count != 0 ||
+			   store.wal.record_count != 0 ||
+			   store.wal.durable_record_count != 0 ||
+			   len(store.pending_appends) != 1 ||
+			   td.message_stores.pending_write_count != 0 ||
+			   store.fsync_in_flight ||
+			   semantic_retained_fsync_event_count(campaign, store) != 0 ||
+			   sim_world_domain_event_index(&campaign.ctx.sim.world, .File_Write, 0) < 0 {
+				return "global segmented deferred retained callback-wave queued state differed"
+			}
+			if semantic_global_segmented_outbound_count(campaign, campaign.requester) != requester_outbound_before + 1 ||
+			   semantic_global_segmented_outbound_count(campaign, campaign.peer) != peer_outbound_before {
+				return "global segmented deferred retained callback-wave premature output"
+			}
+			return ""
 		}
 		if store.async_readers != 0 ||
 		   campaign.requester.retained_io != 0 ||
@@ -4968,7 +4996,7 @@ when NRC_SIMULATION {
 					}
 					retained_read_completed = true
 					retained_append_staged = true
-					retained_flush_completed = true
+					retained_flush_completed = !retained_store.write_in_flight
 				}
 			}
 			if event.id == fsync_action_event_id {
@@ -4982,6 +5010,20 @@ when NRC_SIMULATION {
 				if retained_flush_action.diagnostic != "" do return retained_flush_action.diagnostic
 				if !retained_flush_action.flushed || retained_flush_completed {
 					return "global segmented deferred retained flush action completion differed"
+				}
+			}
+			// Write submission is not publication. Let File_Write compete with
+			// crash, reads, sends and fsyncs in the same runnable-rank scheduler.
+			if !retained_flush_completed && retained_append_staged && retained_store.high_water == 2 && !retained_store.write_in_flight {
+				if !retained_store.fsync_in_flight ||
+				   retained_store.wal.write_count != 1 ||
+				   retained_store.wal.record_count != 1 ||
+				   retained_store.wal.durable_record_count != 0 ||
+				   retained_store.fsync_snapshot.record_count != 1 ||
+				   retained_store.fsync_snapshot.pending_bytes != retained_store.wal.pending_bytes ||
+				   retained_store.fsync_snapshot.last_hash != retained_store.wal.last_hash ||
+				   semantic_retained_fsync_event_count(&campaign, retained_store) != 1 {
+					return "global segmented deferred retained write completion snapshot differed"
 				}
 				if semantic_global_segmented_outbound_count(&campaign, campaign.requester) != requester_outbound_before + 1 ||
 				   semantic_global_segmented_outbound_count(&campaign, campaign.peer) != peer_outbound_before + 1 {
@@ -5116,6 +5158,14 @@ when NRC_SIMULATION {
 			} else if retained_append_staged &&
 			   (retained_store.high_water != 1 || len(retained_store.pending_appends) != 1 || campaign.requester.retained_io != 1) {
 				return "global segmented deferred retained staged state differs"
+			}
+			if retained_store.write_in_flight &&
+			   (retained_store.wal.record_count != 0 ||
+					   retained_store.wal.durable_record_count != 0 ||
+					   retained_store.fsync_in_flight ||
+					   td.message_stores.pending_write_count != 0 ||
+					   sim_world_domain_event_index(&campaign.ctx.sim.world, .File_Write, 0) < 0) {
+				return "global segmented deferred retained queued write state differs"
 			}
 			if !semantic_global_segmented_output_prefix_exact(&campaign) {
 				return "global segmented deferred response prefix order or semantics differed"
@@ -5267,6 +5317,9 @@ when NRC_SIMULATION {
 		retained_store.commit_pending = true
 		retained_store.commit_started = {}
 		retained_retry_work, retained_retry_ok := flush_pending_retained_message_writes(&td.message_stores)
+		// Recovery is deliberately sequential: finish the retry's write, but
+		// retain the separate fsync boundary and independently expected prefix.
+		if !simulation_test_flush_message_writes(&campaign.ctx.sim) do return "global segmented deferred retained recovery retry write failed"
 		if !retained_retry_work || !retained_retry_ok || retained_store.high_water != 2 {
 			return "global segmented deferred retained recovery retry did not publish"
 		}
@@ -5301,6 +5354,7 @@ when NRC_SIMULATION {
 		retained_store.commit_pending = true
 		retained_store.commit_started = {}
 		retained_continuation_work, retained_continuation_ok := flush_pending_retained_message_writes(&td.message_stores)
+		if !simulation_test_flush_message_writes(&campaign.ctx.sim) do return "global segmented deferred retained continuation write failed"
 		if !retained_continuation_work ||
 		   !retained_continuation_ok ||
 		   !retained_store.fsync_in_flight ||
@@ -5697,6 +5751,7 @@ when NRC_SIMULATION {
 			return "retained lifecycle seal build/publication result failed"
 		}
 		_, flush_ok := flush_pending_retained_message_writes(&td.message_stores)
+		if !simulation_test_flush_message_writes(&ctx.sim) do return "retained lifecycle seal publication write failed"
 		if !flush_ok || len(store.segments) != 1 || (cancel_after_publish && (store.frozen == nil || !store.frozen_published)) {
 			return "retained lifecycle seal publication failed"
 		}
@@ -5763,6 +5818,7 @@ when NRC_SIMULATION {
 		nrc_sim_clear_inboxes(&ctx.sim)
 		process_send_message_v2(conn, retry)
 		_, retry_ok := flush_pending_retained_message_writes(&td.message_stores)
+		if !simulation_test_flush_message_writes(&ctx.sim) do return "retained lifecycle recovered retry write failed"
 		if !retry_ok || nrc_sim_file_read_count(&ctx.sim) == 0 do return "retained lifecycle recovered retry did not enter sealed lookup"
 		for nrc_sim_run_next_file_read(&ctx.sim) {}
 		nrc_sim_run_all_send_completions(&ctx.sim)

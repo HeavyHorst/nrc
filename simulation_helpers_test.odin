@@ -393,7 +393,30 @@ when NRC_SIMULATION {
 		return true
 	}
 
+	// Model the production post-tick boundary, including input pressure and
+	// batched presence updates caused by retained-message publication.
+	simulation_test_message_write_wave :: proc(sim: ^Sim_Runtime) -> bool {
+		index := sim_world_domain_event_index(&sim.world, .File_Write, 0)
+		if index < 0 do return false
+		ids := [1]u64{sim.world.events[index].id}
+		return sim_world_dispatch_callback_wave(&sim.world, ids[:])
+	}
+
+	// Complete append syscalls without crossing any queued fsync boundary.
+	// Tests that model a specific interleaving dispatch individual writes instead.
+	simulation_test_flush_message_writes :: proc(sim: ^Sim_Runtime) -> bool {
+		for {
+			_, ok := flush_pending_retained_message_writes(&td.message_stores)
+			if !ok do return false
+			for nrc_sim_run_next_file_write(sim) {}
+			if td.message_stores.pending_write_count == 0 do break
+		}
+		for &store in td.message_stores.stores do if !message_store_enabled(&store) do return false
+		return true
+	}
+
 	simulation_test_commit_messages :: proc(sim: ^Sim_Runtime) -> bool {
+		if !simulation_test_flush_message_writes(sim) do return false
 		for nrc_sim_run_next_fsync_completion(sim) {}
 		for &store in td.message_stores.stores {
 			if !message_store_enabled(&store) do return false

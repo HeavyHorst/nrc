@@ -151,6 +151,13 @@ Op_File_Read :: struct {
 	offset:   u64,
 }
 
+Op_File_Write :: struct {
+	callback: On_File_Write,
+	fd:       linux.Fd,
+	buf:      []byte,
+	offset:   u64,
+}
+
 Op_File_Sync :: struct {
 	callback: On_File_Sync,
 	fd:       linux.Fd,
@@ -274,6 +281,7 @@ drain_unqueued :: proc(io: ^IO) {
 			}
 			writev_enqueue(io, unqueued, &op)
 		case Op_File_Read:     file_read_enqueue      (io, unqueued, &op)
+		case Op_File_Write:    file_write_enqueue     (io, unqueued, &op)
 		case Op_File_Sync:     file_sync_enqueue      (io, unqueued, &op)
 		}
 	}
@@ -352,6 +360,7 @@ run_completed_callbacks :: proc(io: ^IO) {
 		case Op_Timeout:       timeout_callback       (io, completed, &op)
 		case Op_Writev:        writev_callback        (io, completed, &op)
 		case Op_File_Read:     file_read_callback     (io, completed, &op)
+		case Op_File_Write:    file_write_callback    (io, completed, &op)
 		case Op_File_Sync:     file_sync_callback     (io, completed, &op)
 		case: unreachable()
 		}
@@ -369,6 +378,24 @@ file_read_enqueue :: proc(io: ^IO, completion: ^Completion, op: ^Op_File_Read) {
 }
 
 file_read_callback :: proc(io: ^IO, completion: ^Completion, op: ^Op_File_Read) {
+	if completion.result < 0 {
+		op.callback(completion.user_data, 0, linux.Errno(-completion.result))
+	} else {
+		op.callback(completion.user_data, int(completion.result), .NONE)
+	}
+	pool_put(&io.completion_pool, completion)
+}
+
+file_write_enqueue :: proc(io: ^IO, completion: ^Completion, op: ^Op_File_Write) {
+	sqe, err := io_uring.write(&io.ring, u64(uintptr(completion)), op.fd, op.buf, op.offset)
+	if err == .Submission_Queue_Full {queue.push_back(&io.unqueued, completion); return}
+	assert(err == .None)
+	// Force io-wq execution rather than allowing a buffered write inline.
+	sqe.flags |= u8(io_uring.IOSQE_ASYNC)
+	io.ios_queued += 1
+}
+
+file_write_callback :: proc(io: ^IO, completion: ^Completion, op: ^Op_File_Write) {
 	if completion.result < 0 {
 		op.callback(completion.user_data, 0, linux.Errno(-completion.result))
 	} else {

@@ -1656,6 +1656,7 @@ when NRC_SIMULATION {
 			if td.message_stores.pending_write_count == 0 do break
 			_, ok := flush_pending_retained_message_writes(&td.message_stores)
 			testing.expect(t, ok)
+			for nrc_sim_run_next_file_write(&ctx.sim) {}
 			for nrc_sim_run_next_fsync_completion(&ctx.sim) {}
 		}
 		testing.expect_value(t, store.high_water, u64(5))
@@ -1734,6 +1735,10 @@ when NRC_SIMULATION {
 			for wave in 1 ..= 3 {
 				_, ok := flush_pending_retained_message_writes(&td.message_stores)
 				testing.expect(t, ok)
+				when EXPERIMENT_ASYNC_MESSAGE_WRITE {
+					testing.expect(t, store.write_in_flight)
+					testing.expect(t, nrc_sim_run_next_file_write(&ctx.sim))
+				}
 				testing.expect_value(t, store.deferred_head, wave)
 				testing.expect_value(t, len(store.deferred_appends), 15)
 				testing.expect(t, raw_data(store.deferred_appends[14].dedup_key) == raw_data(tail_key))
@@ -1760,7 +1765,13 @@ when NRC_SIMULATION {
 				previous_logger := context.logger
 				context.logger = log.nil_logger()
 				_, ok := flush_pending_retained_message_writes(&td.message_stores)
+				when EXPERIMENT_ASYNC_MESSAGE_WRITE {
+					testing.expect(t, ok && store.write_in_flight)
+					testing.expect(t, nrc_sim_run_next_file_write(&ctx.sim))
+					ok = !store.poisoned
+				}
 				context.logger = previous_logger
+				testing.expect(t, persistence.wal_write_fault_triggered_for_test())
 				persistence.clear_wal_write_fault_for_test()
 				testing.expect(t, !ok && store.poisoned)
 			} else if outcome == 2 {
@@ -1778,6 +1789,7 @@ when NRC_SIMULATION {
 				testing.expect(t, schedule_retained_message_fsync(store))
 				store.active_started_hour -= 1
 				_, ok := flush_pending_retained_message_writes(&td.message_stores)
+				for nrc_sim_run_next_file_write(&ctx.sim) {}
 				testing.expect(t, ok && store.rotation_pending && store.deferred_head == 3)
 				testing.expect(t, nrc_sim_run_next_fsync_completion(&ctx.sim))
 				for round in 0 ..< 100 {
@@ -1785,6 +1797,7 @@ when NRC_SIMULATION {
 						_, ok = flush_pending_retained_message_writes(&td.message_stores)
 						testing.expect(t, ok)
 					}
+					for nrc_sim_run_next_file_write(&ctx.sim) {}
 					for nrc_sim_run_next_file_read(&ctx.sim) {}
 					for nrc_sim_run_next_fsync_completion(&ctx.sim) {}
 					for item, index in store.deferred_appends[store.deferred_head:] {
@@ -1888,6 +1901,7 @@ when NRC_SIMULATION {
 		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_ErrorResponse), 0)
 
 		did_write, write_ok := flush_pending_retained_message_writes(&td.message_stores)
+		for nrc_sim_run_next_file_write(&ctx.sim) {}
 		nrc_sim_run_all_send_completions(&ctx.sim)
 		testing.expect(t, did_write && write_ok)
 		testing.expect_value(t, store.wal.write_count, u64(1))
@@ -1918,6 +1932,7 @@ when NRC_SIMULATION {
 		)
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, conn.sock), 0)
 		did_write, write_ok = flush_pending_retained_message_writes(&td.message_stores)
+		for nrc_sim_run_next_file_write(&ctx.sim) {}
 		nrc_sim_run_all_send_completions(&ctx.sim)
 		testing.expect(t, did_write && write_ok)
 		testing.expect_value(t, store.wal.write_count, u64(1))
@@ -1947,6 +1962,7 @@ when NRC_SIMULATION {
 		testing.expect_value(t, len(store.deferred_appends), 2)
 		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_AckSendMessage), 0)
 		did_write, write_ok = flush_pending_retained_message_writes(&td.message_stores)
+		for nrc_sim_run_next_file_write(&ctx.sim) {}
 		nrc_sim_run_all_send_completions(&ctx.sim)
 		testing.expect(t, did_write && write_ok)
 		testing.expect_value(t, store.wal.write_count, u64(2))
@@ -1964,6 +1980,7 @@ when NRC_SIMULATION {
 		testing.expect_value(t, store.wal.durable_record_count, u64(2))
 		testing.expect(t, store.wal.pending_bytes > 0)
 		did_write, write_ok = flush_pending_retained_message_writes(&td.message_stores)
+		for nrc_sim_run_next_file_write(&ctx.sim) {}
 		nrc_sim_run_all_send_completions(&ctx.sim)
 		testing.expect(t, did_write && write_ok)
 		testing.expect_value(t, store.wal.write_count, u64(3))
@@ -2009,6 +2026,7 @@ when NRC_SIMULATION {
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, conn.sock), 0)
 		store.async_readers += 1
 		did_write, write_ok = flush_pending_retained_message_writes(&td.message_stores)
+		for nrc_sim_run_next_file_write(&ctx.sim) {}
 		nrc_sim_run_all_send_completions(&ctx.sim)
 		testing.expect(t, did_write && write_ok)
 		testing.expect(t, store.rotation_pending && !store.poisoned)
@@ -2017,6 +2035,7 @@ when NRC_SIMULATION {
 		retained_message_release_store_reader(store)
 		testing.expect_value(t, td.message_stores.pending_write_count, 1)
 		did_write, write_ok = flush_pending_retained_message_writes(&td.message_stores)
+		for nrc_sim_run_next_file_write(&ctx.sim) {}
 		nrc_sim_run_all_send_completions(&ctx.sim)
 		testing.expect(t, did_write && write_ok)
 		testing.expect(t, store.rotation_pending && store.fsync_in_flight)
@@ -2026,6 +2045,7 @@ when NRC_SIMULATION {
 		testing.expect(t, !store.fsync_in_flight)
 		testing.expect_value(t, td.message_stores.pending_write_count, 1)
 		did_write, write_ok = flush_pending_retained_message_writes(&td.message_stores)
+		for nrc_sim_run_next_file_write(&ctx.sim) {}
 		nrc_sim_run_all_send_completions(&ctx.sim)
 		testing.expect(t, did_write && write_ok)
 		testing.expect_value(t, store.active_generation, generation_before_rotation + 2)
@@ -2033,6 +2053,7 @@ when NRC_SIMULATION {
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, conn.sock), 0)
 		did_write, write_ok = flush_pending_retained_message_writes(&td.message_stores)
 		testing.expect(t, did_write && write_ok)
+		for nrc_sim_run_next_file_write(&ctx.sim) {}
 		testing.expect_value(t, store.wal.write_count, u64(1))
 		testing.expect_value(t, store.high_water, u64(7))
 		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_AckSendMessage), 0)
@@ -2062,6 +2083,7 @@ when NRC_SIMULATION {
 		testing.expect_value(t, len(store.pending_appends), 2)
 		testing.expect_value(t, len(store.deferred_appends), 1)
 		did_write, write_ok = flush_pending_retained_message_writes(&td.message_stores)
+		for nrc_sim_run_next_file_write(&ctx.sim) {}
 		nrc_sim_run_all_send_completions(&ctx.sim)
 		testing.expect(t, did_write && write_ok)
 		testing.expect_value(t, store.wal.write_count, u64(2))
@@ -2071,6 +2093,7 @@ when NRC_SIMULATION {
 		testing.expect_value(t, len(store.deferred_appends), 0)
 		testing.expect_value(t, td.message_stores.pending_write_count, 1)
 		did_write, write_ok = flush_pending_retained_message_writes(&td.message_stores)
+		for nrc_sim_run_next_file_write(&ctx.sim) {}
 		nrc_sim_run_all_send_completions(&ctx.sim)
 		testing.expect(t, did_write && write_ok)
 		testing.expect_value(t, store.wal.write_count, u64(3))
@@ -2103,7 +2126,13 @@ when NRC_SIMULATION {
 		previous_logger := context.logger
 		context.logger = log.nil_logger()
 		_, write_ok = flush_pending_retained_message_writes(&td.message_stores)
+		when EXPERIMENT_ASYNC_MESSAGE_WRITE {
+			testing.expect(t, write_ok && store.write_in_flight)
+			testing.expect(t, nrc_sim_run_next_file_write(&ctx.sim))
+			write_ok = !store.poisoned
+		}
 		context.logger = previous_logger
+		testing.expect(t, persistence.wal_write_fault_triggered_for_test())
 		persistence.clear_wal_write_fault_for_test()
 		testing.expect(t, !write_ok)
 		testing.expect(t, store.poisoned && !store.wal.enabled)

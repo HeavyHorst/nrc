@@ -1,5 +1,8 @@
 package main
 
+import "core:time"
+import nbio "nbio/poly"
+
 reserve_message_store_registry_capacity :: proc(registry: ^Message_Store_Registry, worker, worker_count: int) -> bool {
 	if registry == nil || len(registry.stores) != 0 do return false
 	owned_shards := 0
@@ -87,9 +90,29 @@ shutdown_message_store_registry :: proc(registry: ^Message_Store_Registry) -> bo
 	if registry == nil do return true
 	cancel_message_seals(registry)
 	ok := true
-	for registry.pending_write_count > 0 {
+	for {
 		_, flushed := flush_pending_retained_message_writes(registry)
 		if !flushed do ok = false
+		leased := false
+		for &store in registry.stores {
+			if store.wal.pending_bytes > 0 {
+				store.commit_pending = true
+				store.commit_started = {}
+				_ = schedule_retained_message_fsync(&store)
+			}
+			leased = leased || store.write_in_flight || store.fsync_in_flight
+		}
+		if !leased && registry.pending_write_count == 0 do break
+		when NRC_SIMULATION {
+			if nrc_sim_runtime != nil {
+				for nrc_sim_run_next_file_write(nrc_sim_runtime) {}
+				for nrc_sim_run_next_fsync_completion(nrc_sim_runtime) {}
+				continue
+			}
+		}
+		// Never destroy a descriptor or batch while the kernel can access it.
+		err := nbio.tick(&td.io, time.Millisecond)
+		assert(err == .NONE, "I/O failed while draining message WAL leases")
 	}
 	for &store in registry.stores {if !shutdown_message_store(&store) do ok = false}
 	delete(registry.sealed_index_cache.entries); delete(registry.sealed_wal_cache.entries); delete(registry.stores); registry^ = {}; return ok

@@ -54,7 +54,7 @@ test_receive_admission_transport_pressure_retires_send_fsync_and_close :: proc(t
 		}
 		req.client_message_id[0] = 1
 		process_send_message_v2(durable, req)
-		_, ok := flush_pending_retained_message_writes(&td.message_stores)
+		ok := simulation_test_flush_message_writes(&ctx.sim)
 		testing.expect(t, ok)
 		testing.expect(t, durable.outbox_waiting_durability)
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, durable.sock), 0)
@@ -77,8 +77,9 @@ test_receive_admission_transport_pressure_retires_send_fsync_and_close :: proc(t
 		for event in ctx.sim.world.events[:len(ctx.sim.world.events) - 1] {
 			if sim_event_is_io_callback(event.domain) do append(&ids, event.id)
 		}
+		pressure_yields_before := td.input_pressure_yields
 		testing.expect(t, sim_world_dispatch_callback_wave(&ctx.sim.world, ids[:]))
-		testing.expect_value(t, td.input_pressure_yields, 0)
+		testing.expect_value(t, td.input_pressure_yields, pressure_yields_before)
 		testing.expect_value(t, len(sender.deferred_input), 0)
 		testing.expect_value(t, td.input_frames_remaining, INPUT_FRAME_BUDGET - 2)
 		testing.expect(t, connection_get_by_handle(h) == nil)
@@ -233,14 +234,17 @@ test_receive_admission_retained_pressure_survives_turn_boundary :: proc(t: ^test
 			ids[i] = ctx.sim.world.events[len(ctx.sim.world.events) - 1].id
 		}
 		testing.expect(t, sim_world_dispatch_callback_wave(&ctx.sim.world, ids[:]))
+		for simulation_test_message_write_wave(&ctx.sim) {}
 		// Advance beyond the commit deadline and issue a real simulated fsync,
 		// but hold its completion for a finite number of input turns.
 		ctx.sim.world.now += RETAINED_COMMIT_WINDOW
 		_, maintained := maintain_message_store_registry(&td.message_stores)
 		testing.expect(t, maintained && store.fsync_in_flight)
-		for _ in 0 ..< 3 {
+		for _ in 0 ..< 16 {
+			if send_queue_len(reader) >= Max_Queue_Size / 2 do break
 			ctx.sim.world.now += 100 * time.Microsecond
 			testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, Sim_Event_Domain.Input_Turn))
+			for simulation_test_message_write_wave(&ctx.sim) {}
 			nrc_sim_run_all_send_completions(&ctx.sim)
 		}
 		testing.expect_value(t, send_queue_len(reader), Max_Queue_Size / 2)
@@ -250,6 +254,7 @@ test_receive_admission_retained_pressure_survives_turn_boundary :: proc(t: ^test
 			before := store.wal.record_count
 			ctx.sim.world.now += 100 * time.Microsecond
 			testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, Sim_Event_Domain.Input_Turn))
+			for simulation_test_message_write_wave(&ctx.sim) {}
 			if !testing.expect_value(t, store.wal.record_count - before, u64(1)) do return
 			nrc_sim_run_all_send_completions(&ctx.sim)
 			testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, reader.sock), 0)
@@ -258,12 +263,14 @@ test_receive_admission_retained_pressure_survives_turn_boundary :: proc(t: ^test
 		// Input_Turn alone deliberately does not model pre-tick maintenance.
 		for _ in 0 ..< 1000 {
 			ctx.sim.world.now += RETAINED_COMMIT_WINDOW
+			for simulation_test_message_write_wave(&ctx.sim) {}
 			_, maintained = maintain_message_store_registry(&td.message_stores)
 			testing.expect(t, maintained)
 			for nrc_sim_run_next_fsync_completion(&ctx.sim) {}
 			nrc_sim_run_all_send_completions(&ctx.sim)
 			if !sim_world_run_runnable_rank(&ctx.sim.world, 0, Sim_Event_Domain.Input_Turn) do break
 		}
+		testing.expect(t, simulation_test_commit_messages(&ctx.sim))
 		testing.expect(t, reader.state < .Will_Close)
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, reader.sock), len(publishers))
 		for c in publishers do testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, c.sock), 1)

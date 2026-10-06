@@ -498,6 +498,21 @@ _read_file_at :: proc(io: ^IO, fd: linux.Fd, buf: []byte, offset: u64, user: raw
 	return completion
 }
 
+_write_file_at :: proc(io: ^IO, fd: linux.Fd, buf: []byte, offset: u64, user: rawptr, callback: On_File_Write) -> ^Completion {
+	completion := pool_get(&io.completion_pool)
+	completion.ctx = context
+	completion.user_data = user
+	set_start_time_disabled(completion)
+	completion.operation = Op_File_Write {
+		callback = callback,
+		fd       = fd,
+		buf      = buf,
+		offset   = offset,
+	}
+	file_write_enqueue(io, completion, &completion.operation.(Op_File_Write))
+	return completion
+}
+
 _sync_file :: proc(io: ^IO, fd: linux.Fd, user: rawptr, callback: On_File_Sync) -> ^Completion {
 	completion := pool_get(&io.completion_pool)
 	completion.ctx = context

@@ -151,7 +151,7 @@ when NRC_SIMULATION {
 			}
 			req.client_message_id[0] = 1
 			process_send_message_v2(conn, req)
-			_, ok := flush_pending_retained_message_writes(&td.message_stores)
+			ok := simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok && conn.outbox_waiting_durability && !conn.is_sending)
 			testing.expect_value(t, send_queue_priority_len(conn), 1)
 			store.commit_started = {}
@@ -222,7 +222,7 @@ when NRC_SIMULATION {
 			}
 			req.client_message_id[0] = 1
 			process_send_message_v2(conn, req)
-			_, ok := flush_pending_retained_message_writes(&td.message_stores)
+			ok := simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok)
 			testing.expect_value(t, store.wal.record_count, u64(1))
 			testing.expect(t, conn.outbox_waiting_durability && peer.outbox_waiting_durability)
@@ -231,7 +231,7 @@ when NRC_SIMULATION {
 			// A duplicate and a history response must not leak the uncommitted prefix.
 			req.correlation_id = 2
 			process_send_message_v2(conn, req)
-			_, ok = flush_pending_retained_message_writes(&td.message_stores)
+			ok = simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok)
 			process_subscribe_conversations_v2(peer, pr.SubscribeConvsV2Request{conv_ids = []pr.ConversationID{42}, correlation_id = 6})
 			process_message_history(peer, pr.MessageRangeRequest{conv_id = 42, limit = 10, correlation_id = 3}, true)
@@ -242,7 +242,7 @@ when NRC_SIMULATION {
 			// Append behind the captured prefix: its ACK must need another fsync.
 			req.client_message_id[0] = 2; req.correlation_id = 4
 			process_send_message_v2(conn, req)
-			_, ok = flush_pending_retained_message_writes(&td.message_stores)
+			ok = simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok)
 			if fail_sync {
 				previous_logger := context.logger
@@ -271,7 +271,7 @@ when NRC_SIMULATION {
 				// must not be resumed, and waiting outboxes must not pin them.
 				req.client_message_id[0] = 3; req.correlation_id = 5
 				process_send_message_v2(conn, req)
-				_, ok = flush_pending_retained_message_writes(&td.message_stores)
+				ok = simulation_test_flush_message_writes(&ctx.sim)
 				testing.expect(t, ok && !store.fsync_in_flight)
 				testing.expect_value(t, peer.pending_io, u32(0))
 				peer.state = .Will_Close

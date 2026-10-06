@@ -98,6 +98,17 @@ nrc_io_sync_file :: #force_inline proc(file: ^storage_io.File, user: rawptr, cal
 	return nbio_raw.sync_file(&td.io, storage_io.fd(file), user, callback)
 }
 
+// The descriptor and buffered batch remain leased until the completion.
+nrc_io_append_wal :: proc(file: ^storage_io.File, buf: []byte, user: rawptr, callback: nbio_raw.On_File_Write) -> ^nbio_raw.Completion {
+	when NRC_SIMULATION {
+		if nrc_sim_runtime != nil {
+			nrc_sim_capture_wal_append(nrc_sim_runtime, file, buf, user, callback)
+			return nil
+		}
+	}
+	return nbio_raw.write_file_at(&td.io, storage_io.fd(file), buf, max(u64), user, callback)
+}
+
 nrc_io_read_file_at :: #force_inline proc(
 	file: ^storage_io.File,
 	buf: []byte,

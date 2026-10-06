@@ -293,10 +293,18 @@ func (w *worker) phase(until time.Time, depth, size int, measured bool, tracker 
 			break
 		}
 		for j := 0; j < sent; j++ {
-			w.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			readStarted := time.Now()
+			deadline := readStarted.Add(10 * time.Second)
+			w.conn.SetReadDeadline(deadline)
 			_, data, err := w.conn.ReadMessage()
 			if err != nil {
-				return err
+				pending := make([]uint32, 0, sent-j)
+				for i := 0; i < sent; i++ {
+					if !starts[i].IsZero() {
+						pending = append(pending, first+uint32(i))
+					}
+				}
+				return fmt.Errorf("publisher=%d local=%s measured=%t read_started=%s deadline=%s failed=%s pending=%v: %w", w.id, w.conn.LocalAddr(), measured, readStarted.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano), time.Now().Format(time.RFC3339Nano), pending, err)
 			}
 			arrived := time.Now()
 			msg, err := protocol.ReadMessage(data)
@@ -330,9 +338,24 @@ func (w *worker) phase(until time.Time, depth, size int, measured bool, tracker 
 	return nil
 }
 
-func connect(server, user string) (*websocket.Conn, error) {
+func validateWorkspace(workspace string) error {
+	if workspace == "" || workspace == "." || workspace == ".." {
+		return fmt.Errorf("invalid workspace: use a nonempty single path segment containing only ASCII letters, digits, '-', '_' or '.' (not '.' or '..')")
+	}
+	for _, c := range workspace {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+			return fmt.Errorf("invalid workspace: use only ASCII letters, digits, '-', '_' or '.'")
+		}
+	}
+	return nil
+}
+
+func connect(server, user, workspace string) (*websocket.Conn, error) {
+	if err := validateWorkspace(workspace); err != nil {
+		return nil, err
+	}
 	header := http.Header{"X-Nrc-Auth": []string{token(user)}}
-	conn, _, err := websocket.DefaultDialer.Dial(server+"/retained-bench", header)
+	conn, _, err := websocket.DefaultDialer.Dial(server+"/"+workspace, header)
 	if err != nil {
 		return nil, err
 	}
@@ -489,6 +512,7 @@ func probeLoop(conn *websocket.Conn, stop <-chan struct{}, start time.Time) (map
 
 func run() error {
 	server := flag.String("server", "ws://127.0.0.1:18089", "local benchmark server")
+	workspace := flag.String("workspace", "retained-bench", "workspace path segment (ASCII letters, digits, '-', '_' or '.'; not '.' or '..')")
 	clients := flag.Int("clients", 16, "publisher connections")
 	depth := flag.Int("depth", 1, "requests per wave per publisher (1..4)")
 	size := flag.Int("size", 256, "message content bytes")
@@ -498,14 +522,17 @@ func run() error {
 	rate := flag.Float64("rate", 0, "aggregate fixed publish messages/sec (0 is unlimited)")
 	probe := flag.Bool("probe", false, "sample same-worker ping RTT every 100ms")
 	flag.Parse()
+	if err := validateWorkspace(*workspace); err != nil {
+		return err
+	}
 	if *clients < 1 || *depth < 1 || *depth > 4 || *size < 1 || *size > protocol.MaxAllowedContentLength || *duration <= 0 || *warmup <= 0 || *subscribers < 0 || *subscribers > 1024 || *rate < 0 || *rate > 1e9 || (*subscribers > 0 && *size < payloadHeaderSize) {
 		return fmt.Errorf("invalid benchmark configuration")
 	}
 	workers := make([]worker, *clients)
 	for i := range workers {
-		c, err := connect(*server, fmt.Sprintf("retained-bench-publisher-%d", i))
+		c, err := connect(*server, fmt.Sprintf("retained-bench-publisher-%d", i), *workspace)
 		if err != nil {
-			return err
+			return fmt.Errorf("publisher=%d setup failed=%s: %w", i+1, time.Now().Format(time.RFC3339Nano), err)
 		}
 		defer c.Close()
 		workers[i] = worker{c, uint64(i + 1), 0, hdrhistogram.New(1, 10000000, 3), 0}
@@ -518,7 +545,7 @@ func run() error {
 		tracker = newDeliveryTracker(*subscribers, *size)
 		for i := range receiverConns {
 			receiverFences[i].correlation = uint32(i + 1)
-			c, err := connect(*server, fmt.Sprintf("retained-bench-subscriber-%d", i))
+			c, err := connect(*server, fmt.Sprintf("retained-bench-subscriber-%d", i), *workspace)
 			if err != nil {
 				return err
 			}
@@ -532,9 +559,13 @@ func run() error {
 			go func(n int, c *websocket.Conn) { receiverErrors <- receiverLoop(n, c, tracker, &receiverFences[n]) }(i, c)
 		}
 	}
+	var measuredPhaseStart time.Time
 	phase := func(d time.Duration, measured bool) (time.Duration, *pacer, error) {
 		var pace *pacer
 		start := time.Now()
+		if measured {
+			measuredPhaseStart = start
+		}
 		if *rate > 0 {
 			pace = &pacer{start: start, interval: time.Duration(float64(time.Second) / *rate)}
 		}
@@ -576,7 +607,7 @@ func run() error {
 	var probeConn *websocket.Conn
 	if *probe {
 		var err error
-		probeConn, err = connect(*server, "retained-bench-probe")
+		probeConn, err = connect(*server, "retained-bench-probe", *workspace)
 		if err != nil {
 			return err
 		}
@@ -621,7 +652,7 @@ func run() error {
 	if count == 0 || count != hist.TotalCount() {
 		return fmt.Errorf("invalid sample count")
 	}
-	result := map[string]any{"ops": count, "ops_per_sec": float64(count) / elapsed.Seconds(), "duration_ms": float64(elapsed) / float64(time.Millisecond), "latency_ms": map[string]float64{"p50": float64(hist.ValueAtQuantile(50)) / 1000, "p99": float64(hist.ValueAtQuantile(99)) / 1000}, "subscribers": *subscribers, "offered_rate": *rate, "achieved_publish_rate": float64(count) / elapsed.Seconds()}
+	result := map[string]any{"ops": count, "ops_per_sec": float64(count) / elapsed.Seconds(), "duration_ms": float64(elapsed) / float64(time.Millisecond), "measured_start_ns": measuredPhaseStart.UnixNano(), "measured_end_ns": measuredPhaseStart.Add(elapsed).UnixNano(), "latency_ms": map[string]float64{"p50": float64(hist.ValueAtQuantile(50)) / 1000, "p99": float64(hist.ValueAtQuantile(99)) / 1000}, "subscribers": *subscribers, "offered_rate": *rate, "achieved_publish_rate": float64(count) / elapsed.Seconds()}
 	if probeConn != nil {
 		result["probe"] = probeResult
 	}

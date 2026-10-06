@@ -2,8 +2,10 @@ package main
 
 import "core:mem"
 import "core:net"
+import "core:os"
 import "core:strings"
 import "core:sys/linux"
+import "core:sys/posix"
 import "core:time"
 
 import "byte_pool"
@@ -17,9 +19,22 @@ when !NRC_SIMULATION {
 }
 
 MAX_RETAINED_IO_PER_CONNECTION :: 4
+MAX_RETAINED_SENDS_PER_STORE :: 512
 RETAINED_PAGE_ARENA_BLOCK_BYTES :: 128 * 1024
 RETAINED_COMMIT_WINDOW :: time.Millisecond
 RETAINED_COMMIT_MAX_BYTES :: 128 * 1024
+EXPERIMENT_ASYNC_MESSAGE_WRITE :: #config(EXPERIMENT_ASYNC_MESSAGE_WRITE, false)
+
+retained_message_write_complete :: proc(user: rawptr, written: int, err: linux.Errno) {
+	store := (^Message_Store)(user)
+	assert(store.write_in_flight)
+	store.write_in_flight = false
+	write_error: os.Error
+	if err != .NONE do write_error = os.Platform_Error(posix.Errno(err))
+	write_ok := persistence.complete_deferred_write(&store.wal, written, write_error, time.diff(store.write_started, store.wal.get_time()))
+	if write_ok do _ = schedule_retained_message_fsync(store)
+	_ = retained_message_finish_staged_batch(store, write_ok)
+}
 
 Retained_Dedup_Phase :: enum {
 	Header,
@@ -33,6 +48,7 @@ Retained_Dedup_Context :: struct {
 	correlation_id:       u32,
 	sender_sock:          net.TCP_Socket,
 	sender_handle:        Connection_Handle,
+	counts_store_send:    bool,
 	segment_index:        int,
 	dedup_cutoff_ns:      i64,
 	phase:                Retained_Dedup_Phase,
@@ -62,6 +78,10 @@ retained_message_release_store_reader :: proc(store: ^Message_Store) {
 
 destroy_retained_dedup_context :: proc(ctx: ^Retained_Dedup_Context, resume_rotation := true) {
 	if ctx == nil do return
+	if ctx.counts_store_send {
+		assert(ctx.store.retained_send_count > 0)
+		ctx.store.retained_send_count -= 1
+	}
 	for duplicate in ctx.duplicates do destroy_retained_dedup_context(duplicate, resume_rotation)
 	delete(ctx.duplicates)
 	if ctx.index_file != nil do storage_io.discard(ctx.index_file)
@@ -88,6 +108,8 @@ when NRC_SIMULATION {
 		}
 		registry.pending_write_count = 0
 		for &store in registry.stores {
+			store.write_in_flight = false
+			persistence.reset_buffered_write_state(&store.wal)
 			store.write_batch_pending = false
 			delete(store.pending_dedup)
 			store.pending_dedup = nil
@@ -244,6 +266,7 @@ retained_message_finish_staged_batch :: proc(store: ^Message_Store, write_ok: bo
 
 retained_message_flush_store :: proc(store: ^Message_Store) -> bool {
 	if store == nil do return true
+	if store.write_in_flight do return true
 	if store.seal_ready && !publish_frozen_message_seal(store) {
 		// Publication is attempted before the active batch is written. Discard
 		// only that never-written suffix, then complete every staged request so
@@ -279,6 +302,14 @@ retained_message_flush_store :: proc(store: ^Message_Store) -> bool {
 		}
 		retained_message_stage_deferred(store)
 		return true
+	}
+	when EXPERIMENT_ASYNC_MESSAGE_WRITE {
+		if message_store_enabled(store) && store.wal.write_offset > 0 {
+			store.write_in_flight = true
+			store.write_started = store.wal.get_time()
+			_ = nrc_io_append_wal(store.wal.file, store.wal.write_buffer[:store.wal.write_offset], rawptr(store), retained_message_write_complete)
+			return true
+		}
 	}
 	write_ok := message_store_enabled(store) && persistence.flush_write_batch_deferred_fsync(&store.wal)
 	if write_ok do _ = schedule_retained_message_fsync(store)
@@ -359,6 +390,11 @@ flush_pending_retained_message_writes :: proc(registry: ^Message_Store_Registry)
 }
 
 retained_message_defer_append :: proc(store: ^Message_Store, ctx: ^Retained_Dedup_Context, key: string) -> bool {
+	when EXPERIMENT_ASYNC_MESSAGE_WRITE {
+		if len(store.deferred_appends) - store.deferred_head >= 256 {
+			delete(key); finish_retained_send(ctx, .Capacity, 0); return false
+		}
+	}
 	deferred_index := len(store.deferred_appends)
 	_, append_err := append(&store.deferred_appends, Message_Deferred_Append{ctx = ctx, dedup_key = key})
 	if append_err != nil {
@@ -446,6 +482,7 @@ retained_message_queue_append :: proc(ctx: ^Retained_Dedup_Context, sealed_check
 retained_message_try_stage_append :: proc(ctx: ^Retained_Dedup_Context, key: string) -> bool {
 	store := ctx.store
 	if !message_store_enabled(store) {delete(key); finish_retained_send(ctx, .Poisoned, 0); return true}
+	if store.write_in_flight do return false
 	if store.rotation_pending do return false
 	size, valid := message_record_size(&ctx.message)
 	if !valid || int(shard_for_workspace(transmute([]byte)ctx.message.workspace)) != store.shard {
@@ -649,7 +686,21 @@ process_send_message_v2 :: proc(c: ^NRC_Connection, req: pr.SendMessageV2Request
 	}
 	store := message_store_for_workspace(&td.message_stores, transmute([]byte)c.workspace_id)
 	if store == nil {send_error_response(c, .C_SendMessageV2, "message retention is disabled", req.correlation_id); return}
+	if c.retained_io >= MAX_RETAINED_IO_PER_CONNECTION {
+		send_error_response(c, .C_SendMessageV2, "too many retained message operations", req.correlation_id); return
+	}
+	when EXPERIMENT_ASYNC_MESSAGE_WRITE {
+		// Bound all admitted sends, including duplicate followers and disk lookups,
+		// before cloning payloads. Leave room beyond the 256 unique deferred IDs.
+		if store.retained_send_count >= MAX_RETAINED_SENDS_PER_STORE {
+			send_error_response(c, .C_SendMessageV2, "too many retained message sends", req.correlation_id); return
+		}
+	}
 	ctx := new(Retained_Dedup_Context); ctx.store = store; ctx.correlation_id = req.correlation_id; ctx.sender_sock = c.sock; ctx.sender_handle = c.handle
+	when EXPERIMENT_ASYNC_MESSAGE_WRITE {
+		store.retained_send_count += 1
+		ctx.counts_store_send = true
+	}
 	ctx.message.conversation_id = u64(req.conv_id); ctx.message.client_message_id = req.client_message_id
 	ctx.message.accepted_at_ns = nrc_time_unix_nanos(); ctx.message.content_type = u8(req.content_type)
 	ctx.message.workspace, _ = strings.clone(
@@ -657,9 +708,6 @@ process_send_message_v2 :: proc(c: ^NRC_Connection, req: pr.SendMessageV2Request
 	); ctx.message.sender_name, _ = strings.clone(get_connection_nickname(c)); ctx.message.sender_principal, _ = strings.clone(c.verified_username)
 	ctx.message.content = make([]byte, len(req.content)); copy(ctx.message.content, req.content)
 	ctx.dedup_cutoff_ns = message_store_dedup_cutoff(store, ctx.message.accepted_at_ns)
-	if c.retained_io >= MAX_RETAINED_IO_PER_CONNECTION {
-		send_error_response(c, .C_SendMessageV2, "too many retained message operations", req.correlation_id); destroy_retained_dedup_context(ctx); return
-	}
 	if !connection_io_pin(c) {destroy_retained_dedup_context(ctx); return}
 	ctx.io_ctx = connection_io_context_make(c); ctx.io_ctx.pinned = true
 	c.retained_io += 1

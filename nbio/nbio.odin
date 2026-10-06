@@ -183,6 +183,14 @@ zero at EOF). A short read is not an error. On error, `read` is zero.
 */
 On_File_Read :: #type proc(user: rawptr, read: int, err: linux.Errno)
 
+// One-shot file write, not write-all. The caller keeps the descriptor and buffer
+// alive until completion and handles short writes. max(u64) uses the current offset.
+On_File_Write :: #type proc(user: rawptr, written: int, err: linux.Errno)
+write_file_at :: proc(io: ^IO, fd: linux.Fd, buf: []byte, offset: u64, user: rawptr, callback: On_File_Write) -> ^Completion {
+	assert(len(buf) <= int(max(u32)))
+	return _write_file_at(io, fd, buf, offset, user, callback)
+}
+
 // The callback for a regular-file durability synchronization.
 On_File_Sync :: #type proc(user: rawptr, err: linux.Errno)
 
@@ -328,6 +336,7 @@ Operation :: union #no_nil {
 	Op_Timeout,
 	Op_Writev,
 	Op_File_Read,
+	Op_File_Write,
 	Op_File_Sync,
 }
 

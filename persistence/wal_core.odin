@@ -597,33 +597,34 @@ flush_write_batch_internal :: proc(state: ^WAL_State, sync_if_due: bool) -> bool
 	}
 
 	write_start := state.get_time()
-	batch_bytes := state.write_offset
-	batch_records := state.buffered_record_count
-	batch_last_hash := state.buffered_last_hash
 
 	// Single syscall for all pending records
 	written, write_err := wal_write_with_test_faults(state.file, state.write_buffer[:state.write_offset])
 
 	write_elapsed := time.diff(write_start, state.get_time())
+	if !complete_deferred_write(state, written, write_err, write_elapsed) do return false
+	return maybe_fsync(state) if sync_if_due else true
+}
 
-	if write_err != nil || written != batch_bytes {
-		poison_wal_after_ambiguous_write(state, written, batch_bytes, write_err)
+// The caller leases all buffered bytes and metadata until completion.
+complete_deferred_write :: proc(state: ^WAL_State, written: int, write_err: os.Error, elapsed: time.Duration) -> bool {
+	if !state.enabled || write_err != nil || written != state.write_offset {
+		poison_wal_after_ambiguous_write(state, written, state.write_offset, write_err)
 		return false
 	}
 
 	// Track metrics
-	state.total_write_latency_ns += u64(time.duration_nanoseconds(write_elapsed))
+	state.total_write_latency_ns += u64(time.duration_nanoseconds(elapsed))
 	state.write_count += 1 // Counts batches, not individual records
-	state.pending_bytes += u64(batch_bytes)
-	state.file_size_bytes += u64(batch_bytes)
+	state.pending_bytes += u64(state.write_offset)
+	state.file_size_bytes += u64(state.write_offset)
 	state.write_failures = 0
 
 	// Advance written-to-kernel state only after the entire batch succeeds.
-	state.last_hash = batch_last_hash
-	state.record_count += batch_records
+	state.last_hash = state.buffered_last_hash
+	state.record_count += state.buffered_record_count
 	reset_buffered_write_state(state)
-
-	return maybe_fsync(state) if sync_if_due else true
+	return true
 }
 
 // finalize_wal_record_buffer fills a current-format header and checksum using an

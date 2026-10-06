@@ -66,6 +66,7 @@ Shard_Compactor_Thread_Data :: struct {
 Shard_Compaction_Job :: struct {
 	allocator:                     mem.Allocator, // Thread-safe ownership across the worker/service boundary.
 	message_source_generation:     u64, // Nonzero selects immutable retained WAL sealing.
+	message_remove_generation:     u64, // Obsolete source, excluded by the durable manifest.
 	owner_worker:                  int,
 	shard:                         int,
 	storage:                       storage_io.Context,
@@ -84,6 +85,7 @@ Shard_Compaction_Job :: struct {
 Shard_Compaction_Result :: struct {
 	allocator:                     mem.Allocator,
 	message_source_generation:     u64,
+	message_remove_generation:     u64,
 	message_sealed_bytes:          u64,
 	owner_worker:                  int,
 	shard:                         int,
@@ -636,6 +638,19 @@ run_shard_compaction_job :: proc(job: Shard_Compaction_Job) -> Shard_Compaction_
 	context.allocator = allocator
 	owned_job := job
 	defer destroy_shard_compaction_job(&owned_job)
+	if job.message_remove_generation != 0 {
+		path := message_store_path(job.shard_dir, job.message_remove_generation, "wal"); defer delete(path)
+		removed := storage_io.remove(job.storage, path) == nil
+		synced := storage_io.sync_directory(job.storage, job.shard_dir) == nil
+		if !removed || !synced do log.warnf("Obsolete message WAL cleanup failed: generation=%d shard=%d", job.message_remove_generation, job.shard)
+		return {
+			allocator = allocator,
+			owner_worker = job.owner_worker,
+			shard = job.shard,
+			message_remove_generation = job.message_remove_generation,
+			ok = removed && synced,
+		}
+	}
 	if job.message_source_generation != 0 {
 		// This value contains only job-owned immutable inputs, never a pointer
 		// into the worker's live store, indexes, caches, or allocator arenas.
@@ -731,6 +746,10 @@ service_shard_compaction_job :: proc(server: ^NRC_Server) -> bool {
 	job, received := chan.try_recv(server.shard_compaction_jobs)
 	if !received do return false
 	result := run_shard_compaction_job(job)
+	if result.message_remove_generation != 0 {
+		destroy_shard_compaction_result(&result, true)
+		return true
+	}
 	if result.owner_worker >= 0 && result.owner_worker < len(server.shard_compaction_results) {
 		if spsc.try_push(server.shard_compaction_results[result.owner_worker], result) do return true
 	}

@@ -1181,6 +1181,7 @@ maintain_message_store :: proc(store: ^Message_Store, now_ns: i64 = 0, sync_wal 
 
 shutdown_message_store :: proc(store: ^Message_Store) -> bool {
 	if store == nil do return true
+	assert(!store.write_in_flight, "async write buffer still leased")
 	assert(store.async_readers == 0, "message store shutdown requires drained async readers")
 	assert(!store.fsync_in_flight, "message store shutdown requires drained async fsync")
 	assert(

@@ -152,6 +152,10 @@ test_message_seal_failure_and_shutdown_keep_source :: proc(t: ^testing.T) {
 		defer {td = old_td^; free(old_td)}
 		server: NRC_Server
 		td.server = &server
+		// Registry shutdown drains outstanding WAL fsyncs through the real I/O
+		// loop in this host-storage fixture (there is no simulation runtime).
+		testing.expect(t, nbio.init(&td.io) == .NONE)
+		defer nbio.destroy(&td.io)
 		server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
 		defer chan.destroy(server.shard_compaction_jobs)
 		dir := test_wal_path("message-seal-failure-shutdown")
@@ -423,7 +427,8 @@ when NRC_SIMULATION {
 		}
 		req.client_message_id[0] = 1
 		process_send_message_v2(conn, req)
-		_, ok := flush_pending_retained_message_writes(&td.message_stores)
+		// Complete the write, but leave its bytes unsynced for process replacement.
+		ok := simulation_test_flush_message_writes(&ctx.sim)
 		testing.expect(t, ok && store.wal.record_count == 1 && store.wal.durable_record_count == 0 && store.wal.pending_bytes > 0)
 		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_AckSendMessage), 0)
 		send_queue_drain(conn)
@@ -555,10 +560,20 @@ when NRC_SIMULATION {
 			testing.expect_value(t, result, Message_Store_Result.Appended)
 			persistence.force_fsync(&store.wal)
 		}
-		if stage == 2 {
+		if stage == 2 || stage == 4 {
 			bytes, built := cluster_message_segment_wal(&store, 1, 2)
 			testing.expect(t, built)
 			store.seal_bytes = bytes
+		}
+		if stage == 4 {
+			// Publish first, but keep the obsolete source pinned until the
+			// separate cleanup job. Recovery must ignore it even if unlink fails.
+			store.frozen.async_readers = 1
+			testing.expect(t, publish_frozen_message_seal(&store))
+			store.frozen.async_readers = 0
+			path := message_store_path(store.directory, 1, "wal"); defer delete(path)
+			exists, err := storage_io.exists(storage, path)
+			testing.expect(t, err == nil && exists)
 		}
 		if stage == 3 {
 			crash_message_store_for_test(&store)
@@ -582,6 +597,10 @@ when NRC_SIMULATION {
 			ok = publish_frozen_message_seal(&store)
 		case 3:
 			ok = init_message_store_with_storage(&store, storage, "/roll-fault", shard, time.Hour, 0)
+		case 4:
+			directory, _ := strings.clone(store.directory)
+			result := sim_run_shard_compaction_job({message_remove_generation = 1, shard = shard, storage = storage, shard_dir = directory})
+			ok = result.ok
 		}
 		context.logger = logger
 		effects := ctx.sim.world.storage.effect_count
@@ -684,7 +703,7 @@ when NRC_SIMULATION {
 
 	@(test)
 	test_message_rollover_exhaustive_storage_boundaries :: proc(t: ^testing.T) {
-		for stage in 0 ..< 4 {
+		for stage in 0 ..< 5 {
 			effects := message_rollover_fault_case(t, stage, 0)
 			testing.expect(t, effects > 0)
 			for boundary in 1 ..= effects do _ = message_rollover_fault_case(t, stage, boundary)
@@ -725,7 +744,7 @@ when NRC_SIMULATION {
 			}
 			req.client_message_id[0] = 2
 			process_send_message_v2(conn, req)
-			_, ok := flush_pending_retained_message_writes(&td.message_stores)
+			ok := simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok && store.active_generation == 3 && store.high_water == 2)
 			testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_AckSendMessage), 0)
 			testing.expect(t, simulation_test_commit_messages(&ctx.sim))
@@ -870,7 +889,7 @@ when NRC_SIMULATION {
 
 				send(conn, &ledger[2], 3)
 				for nrc_sim_run_next_file_read(&ctx.sim) {}
-				_, ok = flush_pending_retained_message_writes(&td.message_stores)
+				ok = simulation_test_flush_message_writes(&ctx.sim)
 				testing.expect(t, ok)
 				group_commit_test_now._nsec += i64(RETAINED_COMMIT_WINDOW)
 				testing.expect(t, schedule_retained_message_fsync(store))
@@ -881,7 +900,8 @@ when NRC_SIMULATION {
 				testing.expect_value(t, nrc_sim_fsync_completion_count(&ctx.sim), 1)
 				send(conn, &ledger[3], 4)
 				for nrc_sim_run_next_file_read(&ctx.sim) {}
-				_, ok = flush_pending_retained_message_writes(&td.message_stores)
+				// Complete only the write: the captured prefix fsync stays outstanding.
+				ok = simulation_test_flush_message_writes(&ctx.sim)
 				testing.expect(t, ok && store.wal.record_count == 3)
 				// This suffix has reached the active WAL but is outside the captured
 				// fsync snapshot. Fully staged (not yet written) suffixes are covered
@@ -1034,6 +1054,9 @@ when NRC_SIMULATION {
 
 		_, ok := flush_pending_retained_message_writes(&td.message_stores)
 		testing.expect(t, ok)
+		// One completed batch stages the next request. Do not drain that request
+		// yet: shutdown below must still encounter retained append pins.
+		for nrc_sim_run_next_file_write(&ctx.sim) {}
 		testing.expect_value(t, len(store.pending_appends), 1)
 		testing.expect_value(t, len(store.deferred_appends), 1)
 		testing.expect(t, !store.seal_in_flight && !store.rotation_pending)
@@ -1046,10 +1069,10 @@ when NRC_SIMULATION {
 		testing.expect(t, !conn.logical_cleanup_done && len(conn.rooms) == 1, "shutdown skips logical cleanup; final reclamation owns the room map")
 		server.closing = true
 		cancel_message_seals(&td.message_stores)
-		_, ok = flush_pending_retained_message_writes(&td.message_stores)
+		ok = simulation_test_flush_message_writes(&ctx.sim)
 		testing.expect(t, ok)
 		for nrc_sim_run_next_fsync_completion(&ctx.sim) {
-			_, ok = flush_pending_retained_message_writes(&td.message_stores)
+			ok = simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok)
 		}
 		testing.expect_value(t, sim_world_event_count(&ctx.sim.world, .Compaction_Job), 0)
@@ -1118,12 +1141,15 @@ when NRC_SIMULATION {
 		testing.expect(t, simulation_test_commit_messages(&ctx.sim))
 		testing.expect(t, store.active_generation == 5 && store.frozen.active_generation == 3 && store.high_water == 3)
 		testing.expect(t, len(store.deferred_appends) == 0 && len(store.segments) == 1)
-		testing.expect_value(t, sim_world_event_count(&ctx.sim.world, .Compaction_Job), 1)
+		testing.expect_value(t, sim_world_event_count(&ctx.sim.world, .Compaction_Job), EXPERIMENT_ASYNC_MESSAGE_DELETE ? 2 : 1)
 		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_AckSendMessage), 1)
-		// Drain the remaining immutable job before freeing its storage context.
-		testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Job))
-		testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Result))
-		_, ok = flush_pending_retained_message_writes(&td.message_stores)
+		// Drain immutable sealing and cleanup jobs before freeing storage.
+		for sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Job) {
+			// Sealing publishes a result; fire-and-forget cleanup does not.
+			for sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Result) {}
+			_, ok = flush_pending_retained_message_writes(&td.message_stores)
+			testing.expect(t, ok)
+		}
 		testing.expect(t, ok && store.frozen == nil && len(store.segments) == 2)
 	}
 
@@ -1284,7 +1310,7 @@ when NRC_SIMULATION {
 		for nrc_sim_run_next_file_read(&ctx.sim) {}
 		testing.expect_value(t, store.async_readers, u32(0))
 		for round in 0 ..< 16 {
-			_, ok = flush_pending_retained_message_writes(&td.message_stores)
+			ok = simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok)
 			for nrc_sim_run_next_fsync_completion(&ctx.sim) {}
 			if len(store.deferred_appends) == 0 && store.high_water == 4 do break
@@ -1356,7 +1382,7 @@ when NRC_SIMULATION {
 		store.wal.record_count = 0
 		ok: bool
 		for round in 0 ..< 16 {
-			_, ok = flush_pending_retained_message_writes(&td.message_stores)
+			ok = simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok)
 			for nrc_sim_run_next_fsync_completion(&ctx.sim) {}
 			if len(store.deferred_appends) == 0 && store.high_water == 2 do break

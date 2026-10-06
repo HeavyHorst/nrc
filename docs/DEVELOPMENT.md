@@ -120,6 +120,27 @@ not total TLSF heap usage. The 64 MiB buffer usage budget is a reporting
 denominator, not an allocation cap. TLSF growth caused by a transient burst is
 retained until worker exit; consider post-drain RSS as well as live buffer bytes.
 
+Retained-message experiments are opt-in build options, all disabled by default:
+
+- `EXPERIMENT_ASYNC_MESSAGE_WRITE=true` submits immutable append batches through
+  io_uring. The worker retains the batch until write completion. ACKs still wait
+  for fsync. Admission permits at most 512 live send contexts per store, including
+  duplicate retries, and at most 256 unique deferred requests. Contexts retire
+  after write completion; ACKs waiting for fsync remain in separately bounded
+  connection outboxes, outside this context limit.
+- `EXPERIMENT_ASYNC_MESSAGE_DELETE=true` moves obsolete source-WAL deletion to
+  the sealing service, after durable manifest publication and reader drain.
+  Queue refusal retries later. An accepted deletion can leave a safe,
+  unreferenced file on failure or shutdown; this does not add orphan collection.
+
+Exercise both opt-in paths explicitly; run the host and simulation suites
+sequentially:
+
+```bash
+./test/run_odin_tests.sh . -define:EXPERIMENT_ASYNC_MESSAGE_WRITE=true -define:EXPERIMENT_ASYNC_MESSAGE_DELETE=true
+./test/run_odin_tests.sh . -define:NRC_SIMULATION=true -define:EXPERIMENT_ASYNC_MESSAGE_WRITE=true -define:EXPERIMENT_ASYNC_MESSAGE_DELETE=true
+```
+
 | Path | Responsibility |
 | --- | --- |
 | `server.odin`, `worker.odin` | Startup, routing, worker lifecycle |
