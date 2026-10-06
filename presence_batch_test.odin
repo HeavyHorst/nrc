@@ -274,9 +274,7 @@ when !NRC_SIMULATION {
 		testing.expect_value(t, td.presence_batch_count, 0)
 		_, ok := worker_finish_callback_wave()
 		testing.expect(t, ok)
-		when EXPERIMENT_ASYNC_MESSAGE_WRITE {
-			testing.expect(t, simulation_test_message_write_wave(&ctx.sim))
-		}
+		testing.expect(t, simulation_test_message_write_wave(&ctx.sim))
 		// One retained page plus one batch of two departures, all durability-blocked.
 		testing.expect_value(t, send_queue_len(ctx.conns[4]), 2)
 		testing.expect(t, simulation_test_commit_messages(&ctx.sim))

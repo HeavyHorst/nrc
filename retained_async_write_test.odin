@@ -19,7 +19,7 @@ when !NRC_SIMULATION {
 	_ :: storage_io.make_directory
 }
 
-when !EXPERIMENT_ASYNC_MESSAGE_WRITE || NRC_SIMULATION {
+when NRC_SIMULATION {
 	_ :: nbio.init
 }
 
@@ -36,7 +36,7 @@ retained_async_test_queue_message :: proc(store: ^Message_Store, id: u64) {
 
 @(test)
 test_retained_async_buffer_lease :: proc(t: ^testing.T) {
-	when EXPERIMENT_ASYNC_MESSAGE_WRITE && !NRC_SIMULATION {
+	when !NRC_SIMULATION {
 		testing.expect_value(t, nbio.init(&td.io), linux.Errno.NONE); defer nbio.destroy(&td.io)
 		td.message_stores = {}; td.message_stores.enabled = true; td.message_stores.write_batch_records = 16
 		dir := test_wal_path("async-buffer-lease"); defer os.remove_all(dir)
@@ -66,7 +66,7 @@ test_retained_async_buffer_lease :: proc(t: ^testing.T) {
 	}
 }
 
-when NRC_SIMULATION && EXPERIMENT_ASYNC_MESSAGE_WRITE {
+when NRC_SIMULATION {
 	async_test_send :: proc(conn: ^NRC_Connection, id: u32) {
 		req := pr.SendMessageV2Request {
 			conv_id        = 42,

@@ -1735,10 +1735,8 @@ when NRC_SIMULATION {
 			for wave in 1 ..= 3 {
 				_, ok := flush_pending_retained_message_writes(&td.message_stores)
 				testing.expect(t, ok)
-				when EXPERIMENT_ASYNC_MESSAGE_WRITE {
-					testing.expect(t, store.write_in_flight)
-					testing.expect(t, nrc_sim_run_next_file_write(&ctx.sim))
-				}
+				testing.expect(t, store.write_in_flight)
+				testing.expect(t, nrc_sim_run_next_file_write(&ctx.sim))
 				testing.expect_value(t, store.deferred_head, wave)
 				testing.expect_value(t, len(store.deferred_appends), 15)
 				testing.expect(t, raw_data(store.deferred_appends[14].dedup_key) == raw_data(tail_key))
@@ -1765,11 +1763,9 @@ when NRC_SIMULATION {
 				previous_logger := context.logger
 				context.logger = log.nil_logger()
 				_, ok := flush_pending_retained_message_writes(&td.message_stores)
-				when EXPERIMENT_ASYNC_MESSAGE_WRITE {
-					testing.expect(t, ok && store.write_in_flight)
-					testing.expect(t, nrc_sim_run_next_file_write(&ctx.sim))
-					ok = !store.poisoned
-				}
+				testing.expect(t, ok && store.write_in_flight)
+				testing.expect(t, nrc_sim_run_next_file_write(&ctx.sim))
+				ok = !store.poisoned
 				context.logger = previous_logger
 				testing.expect(t, persistence.wal_write_fault_triggered_for_test())
 				persistence.clear_wal_write_fault_for_test()
@@ -2126,11 +2122,9 @@ when NRC_SIMULATION {
 		previous_logger := context.logger
 		context.logger = log.nil_logger()
 		_, write_ok = flush_pending_retained_message_writes(&td.message_stores)
-		when EXPERIMENT_ASYNC_MESSAGE_WRITE {
-			testing.expect(t, write_ok && store.write_in_flight)
-			testing.expect(t, nrc_sim_run_next_file_write(&ctx.sim))
-			write_ok = !store.poisoned
-		}
+		testing.expect(t, write_ok && store.write_in_flight)
+		testing.expect(t, nrc_sim_run_next_file_write(&ctx.sim))
+		write_ok = !store.poisoned
 		context.logger = previous_logger
 		testing.expect(t, persistence.wal_write_fault_triggered_for_test())
 		persistence.clear_wal_write_fault_for_test()

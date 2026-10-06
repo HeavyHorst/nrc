@@ -6,8 +6,6 @@ import "core:time"
 import "persistence"
 import "storage_io"
 
-EXPERIMENT_ASYNC_MESSAGE_DELETE :: #config(EXPERIMENT_ASYNC_MESSAGE_DELETE, false)
-
 // Refusal keeps the frozen holder for maintenance to retry. No worker memory
 // crosses the queue, and shutdown may safely leave the unreferenced file behind.
 enqueue_message_source_delete :: proc(store: ^Message_Store, generation: u64) -> bool {
@@ -60,9 +58,10 @@ destroy_frozen_message_store :: proc(store: ^Message_Store, remove_source: bool)
 	// eviction after the service unlinks the still-open file.
 	if frozen.active_read_file != nil {storage_io.discard(frozen.active_read_file); frozen.active_read_file = nil}
 	if remove_source {
-		if EXPERIMENT_ASYNC_MESSAGE_DELETE && message_seal_service_available() {
+		if message_seal_service_available() {
 			if !enqueue_message_source_delete(store, frozen.active_generation) do return
 		} else {
+			// Standalone stores have no service to take ownership of cleanup.
 			path := message_store_path(store.directory, frozen.active_generation, "wal"); defer delete(path)
 			_ = storage_io.remove(store.storage, path)
 			_ = storage_io.sync_directory(store.storage, store.directory)

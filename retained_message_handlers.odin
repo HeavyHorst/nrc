@@ -23,7 +23,6 @@ MAX_RETAINED_SENDS_PER_STORE :: 512
 RETAINED_PAGE_ARENA_BLOCK_BYTES :: 128 * 1024
 RETAINED_COMMIT_WINDOW :: time.Millisecond
 RETAINED_COMMIT_MAX_BYTES :: 128 * 1024
-EXPERIMENT_ASYNC_MESSAGE_WRITE :: #config(EXPERIMENT_ASYNC_MESSAGE_WRITE, false)
 
 retained_message_write_complete :: proc(user: rawptr, written: int, err: linux.Errno) {
 	store := (^Message_Store)(user)
@@ -303,15 +302,14 @@ retained_message_flush_store :: proc(store: ^Message_Store) -> bool {
 		retained_message_stage_deferred(store)
 		return true
 	}
-	when EXPERIMENT_ASYNC_MESSAGE_WRITE {
-		if message_store_enabled(store) && store.wal.write_offset > 0 {
-			store.write_in_flight = true
-			store.write_started = store.wal.get_time()
-			_ = nrc_io_append_wal(store.wal.file, store.wal.write_buffer[:store.wal.write_offset], rawptr(store), retained_message_write_complete)
-			return true
-		}
+	if message_store_enabled(store) && store.wal.write_offset > 0 {
+		store.write_in_flight = true
+		store.write_started = store.wal.get_time()
+		_ = nrc_io_append_wal(store.wal.file, store.wal.write_buffer[:store.wal.write_offset], rawptr(store), retained_message_write_complete)
+		return true
 	}
-	write_ok := message_store_enabled(store) && persistence.flush_write_batch_deferred_fsync(&store.wal)
+	// Committed duplicates need no write, but their ACK still needs its fence.
+	write_ok := message_store_enabled(store)
 	if write_ok do _ = schedule_retained_message_fsync(store)
 	if !write_ok do persistence.reset_buffered_write_state(&store.wal)
 	return retained_message_finish_staged_batch(store, write_ok)
@@ -390,10 +388,8 @@ flush_pending_retained_message_writes :: proc(registry: ^Message_Store_Registry)
 }
 
 retained_message_defer_append :: proc(store: ^Message_Store, ctx: ^Retained_Dedup_Context, key: string) -> bool {
-	when EXPERIMENT_ASYNC_MESSAGE_WRITE {
-		if len(store.deferred_appends) - store.deferred_head >= 256 {
-			delete(key); finish_retained_send(ctx, .Capacity, 0); return false
-		}
+	if len(store.deferred_appends) - store.deferred_head >= 256 {
+		delete(key); finish_retained_send(ctx, .Capacity, 0); return false
 	}
 	deferred_index := len(store.deferred_appends)
 	_, append_err := append(&store.deferred_appends, Message_Deferred_Append{ctx = ctx, dedup_key = key})
@@ -689,18 +685,14 @@ process_send_message_v2 :: proc(c: ^NRC_Connection, req: pr.SendMessageV2Request
 	if c.retained_io >= MAX_RETAINED_IO_PER_CONNECTION {
 		send_error_response(c, .C_SendMessageV2, "too many retained message operations", req.correlation_id); return
 	}
-	when EXPERIMENT_ASYNC_MESSAGE_WRITE {
-		// Bound all admitted sends, including duplicate followers and disk lookups,
-		// before cloning payloads. Leave room beyond the 256 unique deferred IDs.
-		if store.retained_send_count >= MAX_RETAINED_SENDS_PER_STORE {
-			send_error_response(c, .C_SendMessageV2, "too many retained message sends", req.correlation_id); return
-		}
+	// Bound all admitted sends, including duplicate followers and disk lookups,
+	// before cloning payloads. Leave room beyond the 256 unique deferred IDs.
+	if store.retained_send_count >= MAX_RETAINED_SENDS_PER_STORE {
+		send_error_response(c, .C_SendMessageV2, "too many retained message sends", req.correlation_id); return
 	}
 	ctx := new(Retained_Dedup_Context); ctx.store = store; ctx.correlation_id = req.correlation_id; ctx.sender_sock = c.sock; ctx.sender_handle = c.handle
-	when EXPERIMENT_ASYNC_MESSAGE_WRITE {
-		store.retained_send_count += 1
-		ctx.counts_store_send = true
-	}
+	store.retained_send_count += 1
+	ctx.counts_store_send = true
 	ctx.message.conversation_id = u64(req.conv_id); ctx.message.client_message_id = req.client_message_id
 	ctx.message.accepted_at_ns = nrc_time_unix_nanos(); ctx.message.content_type = u8(req.content_type)
 	ctx.message.workspace, _ = strings.clone(

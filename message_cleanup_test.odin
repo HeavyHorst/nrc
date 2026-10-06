@@ -7,7 +7,7 @@ import "core:time"
 import "spsc"
 import "storage_io"
 
-when !EXPERIMENT_ASYNC_MESSAGE_DELETE || NRC_SIMULATION {
+when NRC_SIMULATION {
 	_ :: os.remove_all
 	_ :: chan.create_buffered
 	_ :: time.Hour
@@ -17,7 +17,7 @@ when !EXPERIMENT_ASYNC_MESSAGE_DELETE || NRC_SIMULATION {
 
 @(test)
 test_message_cleanup_queue :: proc(t: ^testing.T) {
-	when EXPERIMENT_ASYNC_MESSAGE_DELETE && !NRC_SIMULATION {
+	when !NRC_SIMULATION {
 		workspace := "cleanup-queue"
 		shard := int(shard_for_workspace(transmute([]byte)workspace))
 		dir := test_wal_path("cleanup-queue"); defer os.remove_all(dir)

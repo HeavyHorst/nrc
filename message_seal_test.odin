@@ -1141,7 +1141,7 @@ when NRC_SIMULATION {
 		testing.expect(t, simulation_test_commit_messages(&ctx.sim))
 		testing.expect(t, store.active_generation == 5 && store.frozen.active_generation == 3 && store.high_water == 3)
 		testing.expect(t, len(store.deferred_appends) == 0 && len(store.segments) == 1)
-		testing.expect_value(t, sim_world_event_count(&ctx.sim.world, .Compaction_Job), EXPERIMENT_ASYNC_MESSAGE_DELETE ? 2 : 1)
+		testing.expect_value(t, sim_world_event_count(&ctx.sim.world, .Compaction_Job), 2)
 		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_AckSendMessage), 1)
 		// Drain immutable sealing and cleanup jobs before freeing storage.
 		for sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Job) {
