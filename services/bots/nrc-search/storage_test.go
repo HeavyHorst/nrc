@@ -432,6 +432,58 @@ func TestEnsureEmbeddingSchemaMigratesLegacyEmbeddings(t *testing.T) {
 	}
 }
 
+func TestEmbeddingGemma2SchemaRebuildsAssetAndTaskVectors(t *testing.T) {
+	s := newTestStorage(t)
+	oldSchema := "embeddinggemma-300m-v2-chunked"
+	if _, _, err := s.EnsureEmbeddingSchema(oldSchema); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StoreEmbedding(testStorageWorkspace, 10, StoredEmbedding{Vector: []float32{1}}); err != nil {
+		t.Fatal(err)
+	}
+	identity := taskIdentity(testStorageWorkspace, 20, 0)
+	if err := s.StoreEntityEmbedding(identity, StoredEmbedding{Vector: []float32{2}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnqueueEntity(identity, QueueEntry{Content: "pending task", Version: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRoomSync(testStorageWorkspace, 0, RoomSyncState{LastFullSync: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, previous, err := s.EnsureEmbeddingSchema(default_embedding_schema)
+	if err != nil || !migrated || previous != oldSchema {
+		t.Fatalf("schema change: migrated=%v previous=%q err=%v", migrated, previous, err)
+	}
+	legacy, err := s.LoadAllEmbeddings(testStorageWorkspace)
+	if err != nil || len(legacy) != 0 {
+		t.Fatalf("old asset vectors remain: %v err=%v", legacy, err)
+	}
+	entities, err := s.LoadAllEntityEmbeddings()
+	if err != nil || len(entities) != 0 {
+		t.Fatalf("old typed vectors remain: %v err=%v", entities, err)
+	}
+	if _, found, err := s.GetRoomSync(testStorageWorkspace, 0); err != nil || found {
+		t.Fatalf("workspace must be resynced: found=%v err=%v", found, err)
+	}
+	queued, found, err := s.GetEntityQueueEntry(identity)
+	if err != nil || !found || queued.Content != "pending task" || queued.Version != 3 {
+		t.Fatalf("pending task must survive: entry=%+v found=%v err=%v", queued, found, err)
+	}
+
+	if err := s.StoreEntityEmbedding(identity, StoredEmbedding{Vector: []float32{3}}); err != nil {
+		t.Fatal(err)
+	}
+	if migrated, _, err := s.EnsureEmbeddingSchema(default_embedding_schema); err != nil || migrated {
+		t.Fatalf("same schema must not reset: migrated=%v err=%v", migrated, err)
+	}
+	entities, err = s.LoadAllEntityEmbeddings()
+	if err != nil || len(entities) != 1 || entities[identity].Vector[0] != 3 {
+		t.Fatalf("new vectors must survive restart: %v err=%v", entities, err)
+	}
+}
+
 func TestLoadAllEmbeddingsEmpty(t *testing.T) {
 	s := newTestStorage(t)
 

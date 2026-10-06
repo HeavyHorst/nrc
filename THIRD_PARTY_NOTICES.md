@@ -49,12 +49,12 @@ manifests do not cover native libraries incorporated into Search.
 ## Search model and native libraries
 
 The Search Dockerfile downloads
-[EmbeddingGemma ONNX weights](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX).
-These are governed by the [Gemma Terms of Use](https://ai.google.dev/gemma/terms),
-not NRC's MIT license. The terms include use restrictions and downstream
-distribution requirements, including a copy of the terms and a `Notice` file
-for distributed model copies. Review the terms before offering model-containing
-images or a hosted service. The current Dockerfile is not a complete model
+[EmbeddingGemma 2 ONNX weights](https://huggingface.co/onnx-community/embeddinggemma-2-ONNX),
+released under [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0),
+not NRC's MIT license. Retain the applicable license and upstream notices when
+redistributing model-containing images. See Google's
+[model card](https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2) for
+usage and safety guidance. The current Dockerfile is not a complete model
 redistribution compliance bundle.
 
 Search also incorporates the MIT-licensed `daulet/tokenizers` wrapper and native

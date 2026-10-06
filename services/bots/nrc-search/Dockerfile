@@ -24,14 +24,16 @@ COPY services/bots/nrc-search/ .
 
 RUN CGO_ENABLED=1 CGO_LDFLAGS="-L/usr/local/lib" go build -o nrc-search .
 
+# Keep weights and tokenizer on the same tested revision.
+ARG EMBEDDING_MODEL_REVISION=daa72c51243991dfcaf9f9137d2c573d8f7790c0
 # Download ONNX model, tokenizer, and ONNX Runtime
 RUN mkdir -p /app/models && \
-    curl -L -o /app/models/model.onnx \
-    https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/main/onnx/model.onnx && \
-    curl -L -o /app/models/model.onnx_data \
-    https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/main/onnx/model.onnx_data && \
-    curl -L -o /app/models/tokenizer.json \
-    https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/main/tokenizer.json && \
+    curl -fL --retry 3 -o /app/models/model.onnx \
+    https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/${EMBEDDING_MODEL_REVISION}/onnx/model.onnx && \
+    curl -fL --retry 3 -o /app/models/model.onnx_data \
+    https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/${EMBEDDING_MODEL_REVISION}/onnx/model.onnx_data && \
+    curl -fL --retry 3 -o /app/models/tokenizer.json \
+    https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/${EMBEDDING_MODEL_REVISION}/tokenizer.json && \
     curl -L -o /tmp/onnxruntime.tar.gz \
     https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-linux-x64-1.24.1.tgz && \
     tar -xzf /tmp/onnxruntime.tar.gz -C /usr/local && \

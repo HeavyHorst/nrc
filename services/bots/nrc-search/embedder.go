@@ -33,7 +33,15 @@ func NewEmbedder(modelPath, tokenizerPath string) (*ONNXEmbedder, error) {
 		return nil, fmt.Errorf("initializing ONNX runtime: %w", err)
 	}
 
-	tok, err := tokenizers.FromFile(tokenizerPath)
+	// User text can mention media markers literally. Tokenize their spelling
+	// as ordinary text instead of injecting placeholders for absent media.
+	// Encode(text, true) still adds the model's BOS/EOS via post-processing.
+	tokenizerData, err := os.ReadFile(tokenizerPath)
+	if err != nil {
+		ort.DestroyEnvironment()
+		return nil, fmt.Errorf("reading tokenizer from %s: %w", tokenizerPath, err)
+	}
+	tok, err := tokenizers.FromBytes(tokenizerData, tokenizers.WithEncodeSpecialTokens())
 	if err != nil {
 		ort.DestroyEnvironment()
 		return nil, fmt.Errorf("loading tokenizer from %s: %w", tokenizerPath, err)
@@ -46,7 +54,7 @@ func NewEmbedder(modelPath, tokenizerPath string) (*ONNXEmbedder, error) {
 		return nil, fmt.Errorf("creating session options: %w", err)
 	}
 
-	inputNames := []string{"input_ids", "attention_mask"}
+	inputNames := []string{"input_ids", "attention_mask", "image_features", "video_features", "audio_features"}
 	outputName := "sentence_embedding"
 	slog.Info("using output", "name", outputName)
 
@@ -64,7 +72,7 @@ func NewEmbedder(modelPath, tokenizerPath string) (*ONNXEmbedder, error) {
 	return &ONNXEmbedder{
 		session:   session,
 		tokenizer: tok,
-		maxSeqLen: 2048,
+		maxSeqLen: 8192,
 		dim:       768,
 	}, nil
 }
@@ -99,6 +107,14 @@ func (e *ONNXEmbedder) Embed(text string) ([]float32, error) {
 	}
 	defer attentionMaskTensor.Destroy()
 
+	// EmbeddingGemma 2's text model accepts features from separate modality
+	// encoders. Text-only inference supplies no media tokens.
+	mediaFeatures, err := ort.NewEmptyTensor[float32](ort.Shape{0, 512})
+	if err != nil {
+		return nil, fmt.Errorf("creating empty media features tensor: %w", err)
+	}
+	defer mediaFeatures.Destroy()
+
 	outputTensor, err := ort.NewEmptyTensor[float32](ort.Shape{1, int64(e.dim)})
 	if err != nil {
 		return nil, fmt.Errorf("creating output tensor: %w", err)
@@ -106,7 +122,7 @@ func (e *ONNXEmbedder) Embed(text string) ([]float32, error) {
 	defer outputTensor.Destroy()
 
 	err = e.session.Run(
-		[]ort.Value{inputIDsTensor, attentionMaskTensor},
+		[]ort.Value{inputIDsTensor, attentionMaskTensor, mediaFeatures, mediaFeatures, mediaFeatures},
 		[]ort.Value{outputTensor},
 	)
 	if err != nil {

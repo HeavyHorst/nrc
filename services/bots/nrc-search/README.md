@@ -55,10 +55,23 @@ against the server to recover missed updates. A response with `stale: true`
 means reconciliation failed and the cached results may be out of date.
 Search data is a derived index, not a database backup.
 
-The Docker image downloads EmbeddingGemma model weights. They use the
-[Gemma Terms of Use](https://ai.google.dev/gemma/terms), not NRC's MIT license.
-Check the use and distribution requirements before offering a hosted service or
-redistributing the image. See [third-party notices](../../../THIRD_PARTY_NOTICES.md).
+The Docker image downloads revision-pinned EmbeddingGemma 2 ONNX weights under
+Apache-2.0, not NRC's MIT license. See
+[third-party notices](../../../THIRD_PARTY_NOTICES.md).
+
+Search currently uses only the text backbone: 768-dimensional normalized vectors,
+an 8,192-token input limit, and the existing document chunking and search prompts.
+Image, video and audio encoders are not downloaded or run. Files and attachments
+are not yet indexed; searching their media content requires a separate ingestion
+and modality-encoder implementation.
+
+Upgrading from EmbeddingGemma 300M changes the default embedding schema to
+`embeddinggemma-2-v1-chunked`. On startup, Search clears old derived vectors and
+sync markers, preserves queued work, and rebuilds through workspace loading and
+reconciliation. Results can be incomplete while rebuilding; source records are
+unchanged. Remove an old `EMBEDDING_SCHEMA` override or set it to the new value.
+Custom `MODEL_PATH` and `TOKENIZER_PATH` must also point to the new model and
+matching tokenizer; the old model is no longer compatible with the embedder.
 
 ## API reference
 
@@ -132,7 +145,7 @@ These are standalone defaults. Compose sets container paths and the NRC server U
 | `EMBED_ASSET_TYPES` | `1,2,4,5` | Comments, documents, workspace memos and notes |
 | `EMBED_TASKS` | `true` | Index tasks, including Done history |
 | `RECONCILE_INTERVAL` | `15m` | Reconciliation interval |
-| `EMBEDDING_SCHEMA` | `embeddinggemma-300m-v1` | Change to rebuild embeddings after model/prompt changes |
+| `EMBEDDING_SCHEMA` | `embeddinggemma-2-v1-chunked` | Change to rebuild embeddings after model/prompt changes |
 
 ## Development
 
@@ -154,7 +167,7 @@ go test -tags noembed ./...
 ```
 
 The `noembed` build cannot run real model inference or serve semantic search.
-The normal service uses EmbeddingGemma vectors and substring matches, merged
+The normal service uses EmbeddingGemma 2 vectors and substring matches, merged
 with Reciprocal Rank Fusion. It scans candidates within each workspace.
 Measure your workload rather than assume a fixed latency:
 

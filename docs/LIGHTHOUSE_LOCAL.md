@@ -40,7 +40,7 @@ curl -fL --retry 3 https://github.com/microsoft/onnxruntime/releases/download/v1
 tar -xzf .amp/lighthouse/onnxruntime.tgz -C .amp/lighthouse/lib
 # About 1.2 GiB; retain these files between rebuilds.
 for file in onnx/model.onnx onnx/model.onnx_data tokenizer.json; do
-  curl -fL --retry 3 "https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/main/$file" \
+  curl -fL --retry 3 "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/$file" \
     -o ".amp/lighthouse/models/${file##*/}"
 done
 root="$PWD"

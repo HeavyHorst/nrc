@@ -2,7 +2,7 @@ package main
 
 import "strings"
 
-const default_embedding_schema = "embeddinggemma-300m-v2-chunked"
+const default_embedding_schema = "embeddinggemma-2-v1-chunked"
 
 const (
 	embedding_gemma_query_prefix = "task: search result | query: "

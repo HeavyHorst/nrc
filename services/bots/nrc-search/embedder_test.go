@@ -132,9 +132,107 @@ func TestRealEmbedderSmoke(t *testing.T) {
 
 	var norm float64
 	for _, v := range vec {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			t.Fatalf("embedding contains non-finite value: %v", v)
+		}
 		norm += float64(v) * float64(v)
 	}
 	if math.Abs(math.Sqrt(norm)-1.0) > 1e-4 {
 		t.Fatalf("embedding norm = %.6f, want unit vector", math.Sqrt(norm))
+	}
+
+	query, err := embedder.Embed(format_query_for_embedding("Wie kann ich meine Datenbank aus einer Sicherung wiederherstellen?"))
+	if err != nil {
+		t.Fatalf("Embed query: %v", err)
+	}
+	unrelated, err := embedder.Embed(format_document_for_embedding("Garden", "Plant tomatoes in sunny soil and water them regularly."))
+	if err != nil {
+		t.Fatalf("Embed unrelated document: %v", err)
+	}
+	var relevantScore, unrelatedScore float64
+	for i, v := range query {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) || math.IsNaN(float64(unrelated[i])) || math.IsInf(float64(unrelated[i]), 0) {
+			t.Fatal("query or unrelated embedding contains non-finite values")
+		}
+		relevantScore += float64(v) * float64(vec[i])
+		unrelatedScore += float64(v) * float64(unrelated[i])
+	}
+	if relevantScore <= unrelatedScore {
+		t.Fatalf("cross-language retrieval failed: backup=%f garden=%f", relevantScore, unrelatedScore)
+	}
+	t.Logf("cross-language retrieval: backup=%.4f garden=%.4f", relevantScore, unrelatedScore)
+}
+
+func TestRealEmbedderReadsBeyondOldTokenLimit(t *testing.T) {
+	embedder := newRealEvalEmbedder(t)
+	defer embedder.Close()
+
+	// "hello" is a single token; both documents are identical through the old
+	// 2,048-token limit. Truncating there would produce identical embeddings.
+	prefix := strings.Repeat("hello ", 2200)
+	backup, err := embedder.Embed(format_document_for_embedding("", prefix+strings.Repeat("restore database backup ", 40)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	garden, err := embedder.Embed(format_document_for_embedding("", prefix+strings.Repeat("plant tomatoes garden ", 40)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var difference float64
+	for i, v := range backup {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) || math.IsNaN(float64(garden[i])) || math.IsInf(float64(garden[i]), 0) {
+			t.Fatal("long-text embedding contains non-finite values")
+		}
+		difference += math.Abs(float64(v - garden[i]))
+	}
+	if difference < 1e-5 {
+		t.Fatalf("content beyond old token limit was ignored: difference=%g", difference)
+	}
+}
+
+func TestRealEmbedderLiteralMediaMarkers(t *testing.T) {
+	embedder := newRealEvalEmbedder(t)
+	defer embedder.Close()
+
+	var firstQuery []float32
+	for _, marker := range []string{"<|image|>", "<|video|>", "<|audio|>", "<|image|><|audio|><|video|><|image|>"} {
+		for _, kind := range []string{"query", "document"} {
+			t.Run(kind+"/"+marker, func(t *testing.T) {
+				text := format_query_for_embedding("Explain the " + marker + " marker.")
+				if kind == "document" {
+					text = format_document_for_embedding("Marker "+marker, "The "+marker+" marker represents a media input.")
+				}
+				vec, err := embedder.Embed(text)
+				if err != nil {
+					t.Fatalf("Embed literal marker: %v", err)
+				}
+				if len(vec) != 768 {
+					t.Fatalf("embedding dimension = %d, want 768", len(vec))
+				}
+				var norm float64
+				for _, v := range vec {
+					if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+						t.Fatalf("embedding contains non-finite value: %v", v)
+					}
+					norm += float64(v) * float64(v)
+				}
+				if math.Abs(math.Sqrt(norm)-1) > 1e-4 {
+					t.Fatalf("embedding norm = %.6f, want unit vector", math.Sqrt(norm))
+				}
+				if kind == "query" {
+					if firstQuery == nil {
+						firstQuery = vec
+					} else {
+						var difference float64
+						for i, v := range vec {
+							difference += math.Abs(float64(v - firstQuery[i]))
+						}
+						if difference < 1e-5 {
+							t.Fatal("different literal markers must not be discarded into identical query embeddings")
+						}
+					}
+				}
+			})
+		}
 	}
 }
