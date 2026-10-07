@@ -31,6 +31,8 @@ For HTML rendered by NRC, use only these stable aliases:
 - Type: `--nrc-font-sans`, `--nrc-font-mono`
 - Browser controls: `--nrc-color-scheme`
 
+Use `--nrc-bg` for panel content and table bodies. Use `--nrc-surface` for panel headers and table headers; do not apply it to an entire section by default. Keep this distinction in both light and dark themes.
+
 Meanings are fixed:
 
 - `accent`: interaction, focus, active processing, or scanning

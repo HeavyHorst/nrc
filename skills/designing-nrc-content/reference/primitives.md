@@ -28,10 +28,11 @@ The document root should have a unique ID and the shared `nrc-doc` class:
 /* Panels and headers */
 .nrc-panel {
   min-width: 0;
-  background: var(--nrc-surface);
+  background: var(--nrc-bg);
   border: 1px solid var(--nrc-border);
 }
 .nrc-panel-header {
+  background: var(--nrc-surface);
   display: flex;
   align-items: center;
   justify-content: space-between;
