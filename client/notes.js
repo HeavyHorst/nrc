@@ -1300,6 +1300,36 @@ function renderNoteMarkdownPresentation(markdown, attachments = [], format = "ma
   const seenThreadIds = new Set();
   const cleanupCandidates = new Set();
 
+  // HTML does not autolink bare URLs like Markdown does. Turn only valid Amp
+  // references in text into anchors so extraction and deduplication stay shared.
+  if (htmlDocument) {
+    const walker = htmlDocument.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    while (walker.nextNode()) {
+      if (!walker.currentNode.parentElement.closest("a, script, style, textarea")) {
+        textNodes.push(walker.currentNode);
+      }
+    }
+    textNodes.forEach((node) => {
+      const text = node.textContent;
+      const fragment = htmlDocument.createDocumentFragment();
+      let offset = 0;
+      for (const match of text.matchAll(/https:\/\/[^\s<>"']+/gi)) {
+        const url = match[0].replace(/[),.;!?]+$/, "");
+        if (!getAmpThreadReference(url)) continue;
+        fragment.append(text.slice(offset, match.index));
+        const link = htmlDocument.createElement("a");
+        link.setAttribute("href", url);
+        link.textContent = url;
+        fragment.append(link);
+        offset = match.index + url.length;
+      }
+      if (offset === 0) return;
+      fragment.append(text.slice(offset));
+      node.replaceWith(fragment);
+    });
+  }
+
   container.querySelectorAll("a[href]").forEach((link) => {
     const thread = getAmpThreadReference(link.getAttribute("href"));
     if (!thread) return;
@@ -1312,7 +1342,7 @@ function renderNoteMarkdownPresentation(markdown, attachments = [], format = "ma
       });
       seenThreadIds.add(key);
     }
-    const block = link.closest("p, li");
+    const block = link.closest("p, li, footer");
     if (!block) {
       link.remove();
       return;

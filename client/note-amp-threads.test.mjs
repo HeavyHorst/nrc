@@ -127,7 +127,7 @@ test("HTML notes extract threads in share, preview and edit without changing sou
   await page.goto("http://nrc.test");
   await page.waitForFunction(() => window.NRCNotes && window.NRCHTMLNotes);
   const href = "https://ampcode.com/threads/T-01a05d01-383f-71a9-b9e6-c7debb8c7bd9";
-  const original = `<!doctype html><html lang="de"><head><style>.runbook { padding: 12px; color: var(--nrc-text); }</style></head><body class="runbook"><h2>HTML runbook</h2><p>Keep this content.</p><footer><p>Source: <a href="${href}?view=full#reply">Import review</a></p><p><a href="${href}">Duplicate</a></p></footer><p><a href="https://example.com">Other source</a></p><img src="att:0"><script>window.htmlNoteExecuted = true</script></body></html>`;
+  const original = `<!doctype html><html lang="de"><head><style>.runbook { padding: 12px; color: var(--nrc-text); }</style></head><body class="runbook"><h2>HTML runbook</h2><p>Keep this content.</p><footer><p>Source: <a href="${href}?view=full#reply">Import review</a></p><p><a href="${href}">Duplicate</a></p></footer><footer class="ledger">Source: ${href}</footer><p><a href="https://example.com">Other source</a></p><img src="att:0"><script>window.htmlNoteExecuted = true</script></body></html>`;
   await page.evaluate(({ original }) => {
     serverReady = true;
     currentWorkspaceId = "html-thread-test";
@@ -168,7 +168,7 @@ test("HTML notes extract threads in share, preview and edit without changing sou
       await page.frameLocator('.note-share-body iframe').getByText("Keep this content.").waitFor();
       if (process.env.NRC_SCREENSHOT_DIR) {
         fs.mkdirSync(process.env.NRC_SCREENSHOT_DIR, { recursive: true });
-        await page.locator('#noteShareContent').screenshot({ path: `${process.env.NRC_SCREENSHOT_DIR}/html-amp-share-${theme}-${width}.png` });
+        await page.locator('.note-share-amp-threads').screenshot({ path: `${process.env.NRC_SCREENSHOT_DIR}/html-amp-share-${theme}-${width}.png` });
       }
     }
   }
@@ -184,4 +184,31 @@ test("HTML notes extract threads in share, preview and edit without changing sou
   assert.equal(await page.locator('#noteDetailContent').inputValue(), original);
   assert.equal(await page.evaluate(() => htmlThreadNote.payload), original);
   assert.equal(await page.evaluate(() => window.htmlNoteExecuted), undefined);
+});
+
+test("HTML text URLs extract and deduplicate threads without consuming prose or inert content", async (t) => {
+  const { chromium } = await import("playwright");
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.setContent("<!doctype html><body></body>");
+  await page.addScriptTag({
+    content: `window.NRCAssets = { AssetType: { Note: 5 }, roomAssets: new Map() }; ${source}`,
+  });
+  const href = "https://ampcode.com/threads/T-01a0330e-a729-7219-9a29-9e546b59761a";
+  const result = await page.evaluate(({ href }) => {
+    const html = `<html><head><style>/* ${href} */</style></head><body><footer class="ledger">Source: ${href}</footer><p>Read (${href}?view=full#reply), then continue.</p><p>Source: <span>${href}</span><br>Keep next line.</p><p>Keep https://example.com and ${href}/invalid.</p><script>const source = "${href}";</script><textarea>${href}</textarea></body></html>`;
+    const presentation = renderNoteMarkdownPresentation(html, [], "html");
+    const doc = new DOMParser().parseFromString(presentation.bodyHtml, "text/html");
+    return { threads: presentation.ampThreads, footer: doc.querySelector("footer")?.outerHTML,
+      paragraphs: Array.from(doc.querySelectorAll("p"), p => p.textContent),
+      style: doc.querySelector("style").textContent, script: doc.querySelector("script").textContent,
+      textarea: doc.querySelector("textarea").textContent };
+  }, { href });
+  assert.deepEqual(result.threads, [{ id: "T-01a0330e-a729-7219-9a29-9e546b59761a", url: href, label: "T-01a0330e-a729-7219-9a29-9e546b59761a" }]);
+  assert.equal(result.footer, undefined);
+  assert.deepEqual(result.paragraphs, ["Read (), then continue.", "Keep next line.", `Keep https://example.com and ${href}/invalid.`]);
+  assert.equal(result.style, `/* ${href} */`);
+  assert.equal(result.script, `const source = "${href}";`);
+  assert.equal(result.textarea, href);
 });
