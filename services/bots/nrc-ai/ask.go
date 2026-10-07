@@ -916,6 +916,8 @@ func assetTypeName(t uint16) string {
 		return "Activity"
 	case 11:
 		return "Slice"
+	case 12:
+		return "Appointment"
 	default:
 		return fmt.Sprintf("Asset(%d)", t)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"iter"
 	"strings"
 
@@ -201,8 +202,14 @@ func (t *fantasyADKTool) SetProviderOptions(fantasy.ProviderOptions) {}
 func (t *fantasyADKTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var input map[string]any
 	if strings.TrimSpace(call.Input) != "" {
-		if err := json.Unmarshal([]byte(call.Input), &input); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(call.Input))
+		decoder.UseNumber() // Preserve uint64 identifiers instead of rounding through float64.
+		if err := decoder.Decode(&input); err != nil {
 			return fantasy.NewTextErrorResponse("invalid parameters: " + err.Error()), nil
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return fantasy.NewTextErrorResponse("invalid parameters: trailing JSON data"), nil
 		}
 	}
 	if input == nil {

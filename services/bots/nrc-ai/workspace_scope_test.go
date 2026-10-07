@@ -102,7 +102,11 @@ func TestDurableClientRejectsRoomsAndDMsBeforeSending(t *testing.T) {
 				func() error { return client.DeleteEdge(t.Context(), scope, 1) },
 				func() error { _, err := client.GetEdges(t.Context(), scope); return err },
 				func() error { _, err := client.GetAsset(t.Context(), scope, 1); return err },
-				func() error { _, err := client.ListNotes(t.Context(), scope, noteListFilter{}, 10, true); return err },
+				func() error {
+					_, err := client.ListAssetsPage(t.Context(), scope, protocol.AssetTypeNote, noteListFilter{}, 10, true, nil)
+					return err
+				},
+				func() error { _, err := client.ListTasksPage(t.Context(), scope, 0x1f, 10, nil); return err },
 				func() error { _, err := client.ListNoteProjects(t.Context(), scope); return err },
 				func() error { _, err := client.ListNoteTags(t.Context(), scope); return err },
 				func() error { _, err := client.GetGraphNeighborhood(t.Context(), scope, 1, 1, 1, 0, 0, 0); return err },

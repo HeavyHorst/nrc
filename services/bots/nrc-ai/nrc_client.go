@@ -66,6 +66,9 @@ type NRCClient struct {
 	pendingTaskUpdatesMu sync.Mutex
 	pendingTaskUpdates   map[uint32][]chan taskUpdateResult
 
+	pendingTaskPagesMu sync.Mutex
+	pendingTaskPages   map[uint32][]chan taskPageResult
+
 	pendingGraphQueriesMu sync.Mutex
 	pendingGraphQueries   map[uint32][]chan graphQueryResult
 	pendingGraphRanksMu   sync.Mutex
@@ -144,6 +147,16 @@ type assetPageResult struct {
 	Err  error
 }
 
+type assetPageCursor struct {
+	UpdatedAt int64
+	AssetID   uint64
+}
+
+type taskPageResult struct {
+	Page *protocol.TaskListPage
+	Err  error
+}
+
 type noteProjectsResult struct {
 	Projects []string
 	Err      error
@@ -177,6 +190,7 @@ func NewNRCClient(cfg Config, workspace string) *NRCClient {
 		taskSnapshots:       make(map[uint64]bool),
 		pendingTaskCreates:  make(map[uint32][]chan taskCreateResult),
 		pendingTaskUpdates:  make(map[uint32][]chan taskUpdateResult),
+		pendingTaskPages:    make(map[uint32][]chan taskPageResult),
 		pendingGraphQueries: make(map[uint32][]chan graphQueryResult),
 		pendingGraphRanks:   make(map[uint32][]chan graphRankResult),
 		pendingAssets:       make(map[assetRequestKey][]chan protocol.Asset),
@@ -403,6 +417,8 @@ func (c *NRCClient) readPump(ctx context.Context) {
 			c.handleTaskDeleted(msg.Data)
 		case protocol.S_TaskListResponse:
 			c.handleTaskListResponse(msg.Data)
+		case protocol.S_TaskListPage:
+			c.handleTaskListPage(msg.Data)
 		case protocol.S_EdgeCreated:
 			c.handleEdgeCreated(msg.Data)
 		case protocol.S_EdgeDeleted:
@@ -446,6 +462,10 @@ func (c *NRCClient) handleErrorResponse(payload []byte) {
 
 	if resp.CorrelationID != 0 && resp.OriginOpcode == protocol.C_UpdateTask {
 		c.settleTaskUpdate(resp.CorrelationID, nil, fmt.Errorf("%s", resp.ErrorMessage))
+	}
+
+	if resp.CorrelationID != 0 && resp.OriginOpcode == protocol.C_ListTasksPaged {
+		c.settleTaskPage(resp.CorrelationID, nil, fmt.Errorf("%s", resp.ErrorMessage))
 	}
 
 	if resp.CorrelationID != 0 && resp.OriginOpcode == protocol.C_GraphRank {
@@ -497,6 +517,31 @@ func (c *NRCClient) handleErrorResponse(payload []byte) {
 	}
 
 	slog.Warn("NRC server error response", "origin_opcode", resp.OriginOpcode, "correlation_id", resp.CorrelationID, "error", resp.ErrorMessage)
+}
+
+func (c *NRCClient) handleTaskListPage(payload []byte) {
+	page, err := protocol.DecodeTaskListPage(payload)
+	if err != nil {
+		if page != nil && !page.Success {
+			c.settleTaskPage(page.CorrelationID, nil, err)
+		}
+		slog.Warn("failed to decode task list page", "error", err)
+		return
+	}
+	c.settleTaskPage(page.CorrelationID, page, nil)
+}
+
+func (c *NRCClient) settleTaskPage(correlationID uint32, page *protocol.TaskListPage, err error) {
+	if correlationID == 0 {
+		return
+	}
+	c.pendingTaskPagesMu.Lock()
+	waiters := c.pendingTaskPages[correlationID]
+	delete(c.pendingTaskPages, correlationID)
+	c.pendingTaskPagesMu.Unlock()
+	for _, ch := range waiters {
+		ch <- taskPageResult{Page: page, Err: err}
+	}
 }
 
 func (c *NRCClient) handleAssetListPage(payload []byte) {
@@ -1342,7 +1387,57 @@ func (c *NRCClient) DeleteAsset(ctx context.Context, convID uint64, assetID uint
 	}
 }
 
-func (c *NRCClient) ListNotes(ctx context.Context, convID uint64, filter noteListFilter, limit uint16, includePayload bool) (*protocol.AssetListPageResponse, error) {
+// ListTasksPage requests a correlated page without changing the task snapshot cache.
+func (c *NRCClient) ListTasksPage(ctx context.Context, convID uint64, statusMask uint8, limit uint16, cursor *protocol.TaskPageCursor) (*protocol.TaskListPage, error) {
+	if convID != protocol.WorkspaceDataConvID {
+		return nil, errWorkspaceDataScope
+	}
+	c.touchAccess()
+	if !c.connected.Load() {
+		return nil, errNotConnected
+	}
+	correlationID := c.clientReqID.Add(1)
+	if correlationID == 0 {
+		correlationID = c.clientReqID.Add(1)
+	}
+	payload, err := protocol.EncodeListTasksPaged(convID, statusMask, limit, cursor, correlationID)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan taskPageResult, 1)
+	c.pendingTaskPagesMu.Lock()
+	c.pendingTaskPages[correlationID] = append(c.pendingTaskPages[correlationID], ch)
+	c.pendingTaskPagesMu.Unlock()
+	defer removePendingTaskPage(c, correlationID, ch)
+	if err := c.sendProtocolMessage(protocol.C_ListTasksPaged, payload); err != nil {
+		return nil, err
+	}
+	select {
+	case result := <-ch:
+		return result.Page, result.Err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(15 * time.Second):
+		return nil, fmt.Errorf("timeout waiting for task page for conv_id %d", convID)
+	}
+}
+
+func removePendingTaskPage(c *NRCClient, correlationID uint32, ch chan taskPageResult) {
+	c.pendingTaskPagesMu.Lock()
+	defer c.pendingTaskPagesMu.Unlock()
+	waiters := c.pendingTaskPages[correlationID]
+	for i, waiter := range waiters {
+		if waiter == ch {
+			c.pendingTaskPages[correlationID] = append(waiters[:i], waiters[i+1:]...)
+			break
+		}
+	}
+	if len(c.pendingTaskPages[correlationID]) == 0 {
+		delete(c.pendingTaskPages, correlationID)
+	}
+}
+
+func (c *NRCClient) ListAssetsPage(ctx context.Context, convID uint64, assetType uint16, filter noteListFilter, limit uint16, includePayload bool, cursor *assetPageCursor) (*protocol.AssetListPageResponse, error) {
 	if convID != protocol.WorkspaceDataConvID {
 		return nil, errWorkspaceDataScope
 	}
@@ -1352,6 +1447,9 @@ func (c *NRCClient) ListNotes(ctx context.Context, convID uint64, filter noteLis
 	}
 	if strings.TrimSpace(filter.Project) != "" && strings.TrimSpace(filter.Tag) != "" {
 		return nil, fmt.Errorf("use either project or tag, not both")
+	}
+	if assetType != protocol.AssetTypeNote && (filter.Project != "" || filter.Tag != "") {
+		return nil, fmt.Errorf("project and tag filters require notes")
 	}
 	if limit == 0 {
 		limit = 20
@@ -1372,14 +1470,19 @@ func (c *NRCClient) ListNotes(ctx context.Context, convID uint64, filter noteLis
 
 	defer removePendingAssetPage(c, correlationID, ch)
 
+	var updatedAt int64
+	var assetID uint64
+	if cursor != nil {
+		updatedAt, assetID = cursor.UpdatedAt, cursor.AssetID
+	}
 	opcode := protocol.C_ListAssetsPaged
-	payload := protocol.EncodeListAssetsPagedWithCorrelation(protocol.WorkspaceDataConvID, protocol.AssetTypeNote, includePayload, limit, false, 0, 0, correlationID)
+	payload := protocol.EncodeListAssetsPagedWithCorrelation(protocol.WorkspaceDataConvID, assetType, includePayload, limit, cursor != nil, updatedAt, assetID, correlationID)
 	if project := strings.TrimSpace(filter.Project); project != "" {
 		opcode = protocol.C_ListAssetsPagedByProject
-		payload = protocol.EncodeListAssetsPagedByProjectWithCorrelation(protocol.WorkspaceDataConvID, protocol.AssetTypeNote, includePayload, limit, false, 0, 0, project, correlationID)
+		payload = protocol.EncodeListAssetsPagedByProjectWithCorrelation(protocol.WorkspaceDataConvID, assetType, includePayload, limit, cursor != nil, updatedAt, assetID, project, correlationID)
 	} else if tag := strings.TrimSpace(filter.Tag); tag != "" {
 		opcode = protocol.C_ListAssetsPagedByTag
-		payload = protocol.EncodeListAssetsPagedByTagWithCorrelation(protocol.WorkspaceDataConvID, protocol.AssetTypeNote, includePayload, limit, false, 0, 0, tag, correlationID)
+		payload = protocol.EncodeListAssetsPagedByTagWithCorrelation(protocol.WorkspaceDataConvID, assetType, includePayload, limit, cursor != nil, updatedAt, assetID, tag, correlationID)
 	}
 
 	if err := c.sendProtocolMessage(opcode, payload); err != nil {
@@ -1395,7 +1498,7 @@ func (c *NRCClient) ListNotes(ctx context.Context, convID uint64, filter noteLis
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-time.After(15 * time.Second):
-		return nil, fmt.Errorf("timeout waiting for note list response for conv_id %d", convID)
+		return nil, fmt.Errorf("timeout waiting for asset list response for conv_id %d", convID)
 	}
 }
 
