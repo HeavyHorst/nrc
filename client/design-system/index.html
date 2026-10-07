@@ -846,7 +846,7 @@
                 <div class="catalog-subsection">
                     <div class="catalog-subhead"><h3>HTML NOTE / SANDBOX</h3><code>.note-html-frame</code></div>
                     <div class="agenda-preview note-preview-body note-html-host" id="catalogHtmlNote"></div>
-                    <p class="catalog-usage"><b>CONTRACT</b> Self-contained HTML/CSS runs in a script-free sandboxed iframe. NRC injects stable semantic theme aliases and safely regenerates the document on theme changes; network access, forms, frames, objects, links, storage and parent application access remain blocked.</p>
+                    <p class="catalog-usage"><b>CONTRACT</b> Self-contained HTML/CSS runs in a script-free sandboxed iframe. NRC injects stable semantic theme aliases and regenerates the document on theme changes. Fragment links to existing IDs scroll within the note. Absolute HTTP(S) links open in a new tab without an opener or referrer. Other link schemes, relative URLs, in-frame navigation, network access from note content, forms, frames, objects, storage and parent application access remain blocked.</p>
                 </div>
                 <div class="catalog-subsection">
                     <div class="catalog-subhead"><h3>ATTACHMENTS</h3><code>.task-attachment-item</code></div>
@@ -1167,7 +1167,7 @@ status      ← Service Worker</code></pre>
                             <tr><td>CUSTOMER WORKSPACE</td><td>Open fact register and single-rule sections, responsive contact rows with inspector selection, compact empty states, persistent activities, automatic relationship paging, archive, linked work, inspector read/edit/create, contact copy actions, unboxed company table and paged linking, guarded delete and company unlink</td><td><code>.customers-layout</code>, <code>.customer-section</code>, <code>.customer-contact</code>, <code>.customer-inspector</code>, <code>.contact-facts</code>, <code>.contact-company-table</code></td><td>customers.js / inspector.js / css/main.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>NOTE DETAIL</td><td>Same stable document as Tasks; content/format draft, header SAVE/CANCEL, metadata, section jumps, shared resources, share and script-free HTML</td><td><code>.record-document</code>, <code>.note-detail-*</code>, <code>.note-preview-*</code></td><td>notes.js / detail-ui.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>NOTE SHARE</td><td>Read-only header, export states, metadata, Markdown, attachments, linked nodes, responsive focus</td><td><code>.note-share-*</code>, <code>.agenda-preview</code></td><td>notes.js / css/main.css</td><td><b>FEATURE</b></td></tr>
-                            <tr><td>HTML NOTE</td><td>Script-free sandbox, semantic theme tokens, attachment blobs</td><td><code>.note-html-frame</code>, <code>NRCHTMLNotes</code></td><td>note-html.js / notes.js</td><td><b>CONTENT</b></td></tr>
+                            <tr><td>HTML NOTE</td><td>Script-free sandbox, local fragment jumps, isolated HTTP(S) tabs, semantic theme tokens, attachment blobs</td><td><code>.note-html-frame</code>, <code>NRCHTMLNotes</code></td><td>note-html.js / notes.js</td><td><b>CONTENT</b></td></tr>
                             <tr><td>ATTACHMENTS</td><td>Lifecycle-owned read ledger: kind, filename, size, OPEN and native DOWNLOAD. Upload progress, popover and editing remain separate.</td><td><code>&lt;nrc-attachment-list&gt;</code>, <code>.task-attachment-*</code>, <code>.attachment-popover*</code></td><td>attachments.js / css/main.css</td><td><b>COMPONENT / FEATURE</b></td></tr>
                             <tr><td>FILE ASSETS</td><td>Compact rows with OPEN and DOWNLOAD; the title opens Details. Document resource tabs own the title/count, with no nested File header. Standalone sections retain a header; share headers use the same frame and typography as attachments and links. Empty/loading/error states share context insets. Read-first Details supports EDIT/CANCEL EDIT; upload/edit use paired fields and fixed footer actions.</td><td><code>.file-assets-*</code>, <code>NRCFiles</code></td><td>files.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>INSPECTOR</td><td>Control-matrix header with inline scrollable provenance, scoped keyboard operations, persistent resize; entity-only rail in workspace registers, conversation context and selected system events</td><td><code>.inspector-*</code>, <code>.ledger-*</code></td><td>inspector.js / detail-ui.js / app.js</td><td><b>COMPOSITE</b></td></tr>
@@ -1190,7 +1190,7 @@ status      ← Service Worker</code></pre>
     <script src="../portal.js?v=20260803a"></script>
     <script src="../custom-picker.js?v=20260927appointment2"></script>
     <script src="../custom-select.js?v=20260924select1"></script>
-    <script src="../note-html.js?v=20260901a"></script>
+    <script src="../note-html.js?v=20261007fragments1"></script>
     <script src="../page-loader.js?v=20260924pager1"></script>
     <script src="catalog.js?v=20260912css1"></script>
     <script src="../attachments.js?v=20260924attachment1"></script>

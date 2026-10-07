@@ -3,7 +3,8 @@
 // =============================================================================
 // HTML notes run in a script-free sandboxed iframe. The iframe receives
 // only NRC's semantic theme tokens and parent-created attachment blob URLs; it
-// cannot access NRC state, storage, forms, navigation, or network APIs.
+// cannot access NRC state, storage, forms, or network APIs. The parent handles
+// local fragment jumps and opens HTTP(S) links in isolated tabs on user clicks.
 
 (function initHTMLNotes(global) {
   "use strict";
@@ -122,6 +123,24 @@
     return `:root{${declarations}}${BASE_STYLES}`;
   }
 
+  function fragmentTarget(doc, href) {
+    if (!href || !href.startsWith("#")) return null;
+    try {
+      return Document.prototype.getElementById.call(doc, decodeURIComponent(href.slice(1)));
+    } catch {
+      return null;
+    }
+  }
+
+  function webURL(href) {
+    try {
+      const url = new URL(href);
+      return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+    } catch {
+      return null;
+    }
+  }
+
   function buildSource(source) {
     const parsed = new DOMParser().parseFromString(String(source || ""), "text/html");
     parsed.querySelectorAll("base, meta[http-equiv], script, form, iframe, frame, object, embed").forEach((node) => node.remove());
@@ -131,10 +150,27 @@
         return;
       }
       for (const attribute of Array.from(node.attributes)) {
-        if (attribute.name.toLowerCase().startsWith("on") || attribute.localName === "href") {
+        if (attribute.name.toLowerCase().startsWith("on") || attribute.name === "data-nrc-note-href") {
           node.removeAttributeNode(attribute);
         }
       }
+    });
+    parsed.querySelectorAll("*").forEach((node) => {
+      for (const attribute of Array.from(node.attributes)) {
+        if (attribute.localName !== "href") continue;
+        const allowedLink = node.namespaceURI === "http://www.w3.org/1999/xhtml"
+          && node.localName === "a" && attribute.name === "href"
+          && (fragmentTarget(parsed, attribute.value) || webURL(attribute.value));
+        // No native navigation is possible while resources delay iframe load.
+        // Restore validated hrefs only after the parent installs its handlers.
+        if (allowedLink) node.setAttribute("data-nrc-note-href", attribute.value);
+        node.removeAttributeNode(attribute);
+      }
+      // Authored links cannot choose their browsing context or trigger downloads
+      // or tracking pings. The parent owns all link activation.
+      node.removeAttribute("target");
+      node.removeAttribute("download");
+      node.removeAttribute("ping");
     });
 
     const csp = parsed.createElement("meta");
@@ -172,6 +208,32 @@
     // embedded browsing contexts are removed or blocked.
     frame.setAttribute("sandbox", "allow-same-origin");
     frame.setAttribute("referrerpolicy", "no-referrer");
+    frame.addEventListener("load", () => {
+      const doc = frame.contentDocument;
+      // srcdoc inherits the parent's base URL. Handle fragments locally rather
+      // than letting the browser navigate to that URL inside the note frame.
+      const activateLink = (event) => {
+        if (event.type === "auxclick" && event.button !== 1) return;
+        const link = event.target.closest?.("a[href]");
+        if (!link) return;
+        event.preventDefault();
+        const href = link.getAttribute("href");
+        const target = fragmentTarget(doc, href);
+        if (target) {
+          if (event.type === "click") target.scrollIntoView();
+        } else {
+          const url = webURL(href);
+          if (url) global.open(url, "_blank", "noopener,noreferrer");
+        }
+      };
+      // Named images in authored HTML can shadow Document methods.
+      EventTarget.prototype.addEventListener.call(doc, "click", activateLink);
+      EventTarget.prototype.addEventListener.call(doc, "auxclick", activateLink);
+      Document.prototype.querySelectorAll.call(doc, "a[data-nrc-note-href]").forEach((link) => {
+        link.setAttribute("href", link.getAttribute("data-nrc-note-href"));
+        link.removeAttribute("data-nrc-note-href");
+      });
+    });
     frame._nrcHTMLNoteSource = String(source || "");
     frame._nrcHTMLNoteBlobURLs = [];
     frame.srcdoc = buildSource(frame._nrcHTMLNoteSource);
