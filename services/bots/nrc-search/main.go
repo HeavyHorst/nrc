@@ -121,7 +121,7 @@ func loadConfig() Config {
 		cfg.NRCNickname = fmt.Sprintf("search-%s", hostname)
 	}
 
-	cfg.EmbedAssetTypes = parseAssetTypes(envOrDefault("EMBED_ASSET_TYPES", "1,2,3,4,5"))
+	cfg.EmbedAssetTypes = parseAssetTypes(envOrDefault("EMBED_ASSET_TYPES", "1,2,3,4,5,8,9,10"))
 	cfg.EmbedTasks = parseBool(envOrDefault("EMBED_TASKS", "true"), true)
 
 	intervalStr := envOrDefault("RECONCILE_INTERVAL", "15m")
@@ -209,6 +209,9 @@ func (req *searchRequest) normalize() error {
 	}
 	if req.ConvID != protocol.WorkspaceDataConvID {
 		return fmt.Errorf("search is workspace-wide; conv_id must be 0")
+	}
+	if req.Filters.Customer != nil && (req.SimilarAssetID != nil || req.SimilarEntity != nil) {
+		return fmt.Errorf("customer register mode does not support similar search")
 	}
 	if req.SimilarAssetID != nil && req.SimilarEntity != nil {
 		return fmt.Errorf("similar_asset_id conflicts with similar_entity")

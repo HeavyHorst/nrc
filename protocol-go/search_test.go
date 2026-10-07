@@ -59,3 +59,26 @@ func TestSearchIDsUsePrecisionSafeStringsAndAcceptLegacyNumbers(t *testing.T) {
 		t.Fatalf("precision-safe IDs changed: %s", data)
 	}
 }
+
+func TestSearchCustomerRegisterContract(t *testing.T) {
+	var request SearchRequest
+	if err := json.Unmarshal([]byte(`{"workspace":"ws","conv_id":"0","query":"contact","top_n":100,"include_payload":true,"filters":{"entity_types":["asset"],"asset_types":[8,9],"customer":{"include_archived":true}}}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Filters.Customer == nil || !request.Filters.Customer.IncludeArchived {
+		t.Fatal("customer register filter missing")
+	}
+	preview := `{"version":1,"title":"Company","archived":true}`
+	result := SearchResult{Entity: SearchEntityIdentity{EntityType: SearchEntityAsset, EntityID: ^uint64(0)}, Preview: preview, Metadata: SearchMetadata{AssetType: 8, Customer: json.RawMessage(preview)}}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded SearchResult
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Entity.EntityID != result.Entity.EntityID || string(decoded.Metadata.Customer) != decoded.Preview {
+		t.Fatalf("customer projection contract changed: %s", data)
+	}
+}

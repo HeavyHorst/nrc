@@ -22,6 +22,7 @@ const viewPageTitles = {
   reminders: "REMINDERS",
   attention: "ATTENTION",
   calendar: "CALENDAR",
+  search: "SEARCH",
   notes: "NOTES",
   noteShare: "NOTE SHARE",
   sullivanShare: "SULLIVAN",
@@ -64,6 +65,7 @@ function setActiveView(view, options = {}) {
   const customersPanel = document.getElementById("customersPanel");
   const attentionPanel = document.getElementById("attentionPanel");
   const calendarPanel = document.getElementById("calendarPanel");
+  const searchPanel = document.getElementById("workspaceSearchPanel");
 
   // --- Teardown previous view ---
 
@@ -98,6 +100,7 @@ function setActiveView(view, options = {}) {
   if (customersPanel) customersPanel.style.display = "none";
   if (attentionPanel) attentionPanel.style.display = "none";
   if (calendarPanel) calendarPanel.style.display = "none";
+  if (searchPanel) searchPanel.style.display = "none";
 
   // Hide input panel for non-chat views. Sullivan share is still an interactive chat.
   if (inputPanel) inputPanel.style.display = view === "chat" || view === "sullivan" || view === "sullivanShare" ? "" : "none";
@@ -152,6 +155,9 @@ function setActiveView(view, options = {}) {
       notesViewActive = true;
       if (notesPanel) notesPanel.style.display = "flex";
       break;
+    case "search":
+      if (searchPanel) searchPanel.style.display = "flex";
+      break;
     case "noteShare":
       if (noteSharePanel) noteSharePanel.style.display = "flex";
       break;
@@ -161,6 +167,7 @@ function setActiveView(view, options = {}) {
       break;
   }
 
+  window.NRCWorkspaceSearch?.onViewChanged(view);
   if (view !== "noteShare" && view !== "sullivanShare" && typeof saveUIState === "function") saveUIState();
   if (typeof updateHeaderButtons === "function") updateHeaderButtons();
   if (typeof updateRoomUI === "function") updateRoomUI();

@@ -116,6 +116,7 @@ type searchGeneration struct {
 
 func openSearchGeneration(ctx context.Context, cfg Config, start time.Time, spec generationSpec, storage *Storage, embedder Embedder) (*searchGeneration, error) {
 	index := NewIndex()
+	index.storage = storage
 	embeddings, err := storage.LoadAllEntityEmbeddings()
 	if err != nil {
 		return nil, err
@@ -174,6 +175,9 @@ func (c *NRCClient) indexComplete() (bool, error) {
 
 func (c *NRCClient) indexCompleteLocked() (bool, error) {
 	if !c.IsSubscribed(0) {
+		return false, nil
+	}
+	if c.inventoryDirty[0] {
 		return false, nil
 	}
 	if epoch, inventoried := c.inventoryEpochs[0]; !inventoried || epoch != c.ReadyGeneration() {

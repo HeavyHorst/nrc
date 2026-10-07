@@ -7,7 +7,7 @@ import (
 	"github.com/heavyhorst/nrc/protocol-go"
 )
 
-const default_embedding_schema = "embeddinggemma-2-v2-attachments"
+const default_embedding_schema = "embeddinggemma-2-v3-customers"
 
 const (
 	embedding_gemma_query_prefix = "task: search result | query: "

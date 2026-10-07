@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -78,6 +79,7 @@ type SearchMetadata struct {
 	AssetType   uint16             `json:"asset_type,omitempty"`
 	Task        *TaskMetadata      `json:"task,omitempty"`
 	Attachments []AttachmentSearch `json:"attachments,omitempty"`
+	Customer    json.RawMessage    `json:"customer,omitempty"`
 }
 
 type TaskMetadata = protocol.SearchTaskMetadata
@@ -110,9 +112,10 @@ func taskEmbeddingContent(task *protocol.Task) (string, string) {
 }
 
 type SearchFilters struct {
-	EntityTypes []EntityType `json:"entity_types,omitempty"`
-	AssetTypes  []uint16     `json:"asset_types,omitempty"`
-	Task        *TaskFilters `json:"task,omitempty"`
+	EntityTypes []EntityType                    `json:"entity_types,omitempty"`
+	AssetTypes  []uint16                        `json:"asset_types,omitempty"`
+	Task        *TaskFilters                    `json:"task,omitempty"`
+	Customer    *protocol.SearchCustomerFilters `json:"customer,omitempty"`
 }
 
 type TaskFilters = protocol.SearchTaskFilters

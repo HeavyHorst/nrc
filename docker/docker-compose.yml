@@ -108,7 +108,7 @@ services:
       - SEARCH_PORT=8090
       - MODEL_PATH=/app/models/model.onnx
       - TOKENIZER_PATH=/app/models/tokenizer.json
-      - EMBED_ASSET_TYPES=1,2,3,4,5
+      - EMBED_ASSET_TYPES=1,2,3,4,5,8,9,10
       - EMBED_TASKS=true
       - FILES_URL=http://tailscale-proxy:8094
       - RECONCILE_INTERVAL=15m

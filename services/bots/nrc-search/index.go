@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ type Index struct {
 	mu       sync.RWMutex
 	entries  map[string]map[entityKey]*IndexEntry
 	byConvID map[string]map[uint64]map[entityKey]struct{}
+	storage  *Storage
 }
 
 func NewIndex() *Index {
@@ -479,6 +481,28 @@ func matchesTaskFilters(key entityKey, entry *IndexEntry, filters *TaskFilters) 
 
 func (idx *Index) collectCandidates(workspace string, convID uint64, filters SearchFilters) []candidate {
 	idx.mu.RLock()
+	storage := idx.storage
+	var customerIDs []uint64
+	for key := range idx.byConvID[workspace][convID] {
+		if key.EntityType != EntityTypeAsset || (len(filters.EntityTypes) > 0 && !slices.Contains(filters.EntityTypes, EntityTypeAsset)) {
+			continue
+		}
+		entry := idx.entries[workspace][key]
+		if entry.AssetType != protocol.AssetTypeCustomerCompany || (len(filters.AssetTypes) > 0 && !slices.Contains(filters.AssetTypes, entry.AssetType)) {
+			continue
+		}
+		customerIDs = append(customerIDs, key.EntityID)
+	}
+	idx.mu.RUnlock()
+	var inventory customerInventory
+	if storage != nil && len(customerIDs) > 0 {
+		var err error
+		inventory.Assets, err = storage.customerAssets(workspace, convID, customerIDs)
+		if err != nil {
+			slog.Error("read customer inventory", "error", err)
+		}
+	}
+	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
 	convSet := idx.byConvID[workspace][convID]
@@ -502,6 +526,17 @@ func (idx *Index) collectCandidates(workspace string, convID uint64, filters Sea
 			}
 		}
 		e := wsEntries[key]
+		if key.EntityType == EntityTypeAsset && e.AssetType == protocol.AssetTypeCustomerCompany {
+			updated := *e
+			if asset, ok := inventory.Assets[key.EntityID]; ok {
+				updated.Preview, updated.Payload = asset.Preview, asset.Payload
+				updated.PreviewLower = strings.ToLower(asset.Preview)
+				updated.PayloadLower = strings.ToLower(customerText(asset.Preview, asset.Payload) + "\n" + e.SearchText)
+				updated.Bloom = BigramBloom(updated.PreviewLower) | BigramBloom(updated.PayloadLower)
+			}
+			updated.Metadata.Customer = customerPreview(updated.Preview)
+			e = &updated
+		}
 		if key.EntityType == EntityTypeAsset && len(assetTypes) > 0 {
 			if _, ok := assetTypes[e.AssetType]; !ok {
 				continue
@@ -715,6 +750,9 @@ func (idx *Index) SearchParallel(workspace string, query string, embedder Embedd
 }
 
 func (idx *Index) SearchEntitiesParallel(workspace string, query string, embedder Embedder, convID uint64, topN int, filters SearchFilters, workers int) ([]SearchResult, error) {
+	if filters.Customer != nil {
+		return idx.searchCustomers(workspace, query, embedder, convID, topN, filters, workers)
+	}
 	candidates := idx.collectCandidates(workspace, convID, filters)
 	if len(candidates) == 0 {
 		return nil, nil

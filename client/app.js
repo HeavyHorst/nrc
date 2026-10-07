@@ -958,6 +958,13 @@ const COMMANDS = [
     execute: switchWorkspaceFromPalette,
   },
   {
+    id: "workspace.search",
+    title: "Search workspace",
+    desc: "Search records and indexed attachments",
+    group: "Workspace",
+    execute: () => window.NRCViewManager.setActiveView("search"),
+  },
+  {
     id: "messages.clear-current-room",
     title: "Clear room messages",
     desc: "Clear messages for current room",
@@ -1408,6 +1415,7 @@ async function connectWebSocket() {
       logSystem("SERVER READY; INITIALIZING SESSION", "websocket");
       await initializeSession();
       window.NRCTaskSearch?.onReconnect?.();
+      window.NRCWorkspaceSearch?.onReconnect();
       window.NRCTaskQuery?.update({ force: true });
       logSystem("SESSION READY", "websocket");
       const currentNoteShareRoute = parseNoteShareRouteFromHash();
@@ -1454,6 +1462,7 @@ async function connectWebSocket() {
       window.NRCTasks.clearPendingTaskRpcs();
     }
     window.NRCTaskSearch?.onDisconnect?.();
+    window.NRCWorkspaceSearch?.onDisconnect();
     window.NRCTransactions?.clearPendingTransactionRpc();
     if (window.NRCEdges && typeof window.NRCEdges.clearPendingEdgeRpc === "function") {
       window.NRCEdges.clearPendingEdgeRpc();
@@ -4638,6 +4647,7 @@ function saveUIState() {
       reminders: "reminders",
       attention: "attention",
       calendar: "calendar",
+      search: "search",
       notes: "notes",
       graph: "graph",
     };
@@ -6521,6 +6531,10 @@ document.getElementById("calendarBtn").addEventListener("click", () => {
   window.NRCViewManager?.setActiveView("calendar");
 });
 
+document.getElementById("searchBtn").addEventListener("click", () => {
+  window.NRCViewManager?.setActiveView("search");
+});
+
 document.getElementById("notesBtn").addEventListener("click", () => {
   if (window.NRCNotes) {
     window.NRCNotes.toggleNotesView();
@@ -6538,6 +6552,7 @@ function updateHeaderButtons() {
   const view = window.NRCViewManager ? window.NRCViewManager.getActiveView() : "chat";
   if (attentionBtn) attentionBtn.classList.toggle("active", view === "attention");
   document.getElementById("calendarBtn")?.classList.toggle("active", view === "calendar");
+  document.getElementById("searchBtn")?.classList.toggle("active", view === "search");
   document.getElementById("customersBtn")?.classList.toggle("active", view === "customers");
 
   if (sullivanBtn) {
@@ -7002,6 +7017,7 @@ window.addEventListener("hashchange", handleShareHashChange);
   initKanban(); // Initialize kanban board
   window.NRCAttention?.init?.(); // Attention register
   window.NRCCalendar?.init();
+  window.NRCWorkspaceSearch?.init();
   window.NRCReminderNotify?.init?.(); // Reminder deadline timer and NOTIFY switch
   window.NRCAppointmentNotify?.init();
   initDMUserPicker(); // Initialize DM user picker
@@ -7025,6 +7041,8 @@ window.addEventListener("hashchange", handleShareHashChange);
       window.NRCViewManager.setActiveView("attention");
     } else if (savedUIState.mode === "calendar") {
       window.NRCViewManager.setActiveView("calendar");
+    } else if (savedUIState.mode === "search") {
+      window.NRCViewManager.setActiveView("search");
     }
   }
 

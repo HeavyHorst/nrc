@@ -29,6 +29,9 @@ func noteInputFormat(preview string) string {
 }
 
 func searchableAssetContent(assetType uint16, preview, payload string) string {
+	if assetType >= protocol.AssetTypeCustomerCompany && assetType <= protocol.AssetTypeCustomerActivity {
+		return customerText(preview, payload)
+	}
 	if assetType == protocol.AssetTypeNote && noteInputFormat(preview) == noteFormatHTML {
 		return htmlNoteText(payload)
 	}

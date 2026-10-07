@@ -45,6 +45,50 @@ select tasks when `--entity` is omitted. Use `--entity task,asset` to search bot
 Results contain record identities, previews and scores, not an LLM-generated
 answer. Use `--payload` to include content.
 
+## Customer register search
+
+For nonempty register queries, `POST /search` accepts:
+
+```json
+{"workspace":"example","conv_id":"0","query":"alice@example.com","top_n":100,"include_payload":true,"filters":{"entity_types":["asset"],"asset_types":[8,9],"customer":{"include_archived":false}}}
+```
+
+The presence of `filters.customer` selects register projection: only company
+asset identities are returned. Contact matches project through asset-to-asset
+`MemberOf` edges in either direction, including multiple companies; `RelatedTo`
+is ignored. Matches aggregate by maximum fused score. Archived company targets
+are excluded and identities deduplicated before `top_n`. `entity.id` is a decimal
+string; `preview` is the authoritative encoded version-1 company preview and
+`metadata.customer` contains that same preview as a parsed JSON object. Payload
+is controlled by `include_payload` as usual.
+
+Without `filters.customer`, types `[8,9,10]` return independent raw company,
+contact and activity results. Readable JSON values (names, numbers, email, phone,
+descriptions and activity content) feed text and embedding search. Presence users
+are not indexed. Empty register queries should continue to use NRC's paged
+customer API, not Search.
+
+Membership and company previews have a separate durable inventory, updated live
+and reconciled through paged edges. Archive changes are visible to register search
+before embeddings complete. Shadow generation reconciliation includes this
+inventory. A live graph mutation during its scan aborts the scan for retry rather
+than overwriting current membership with an older snapshot.
+
+Inventory assets and edges are stored as individual durable records; live events
+write only the affected record. Raw searches read only selected company records,
+not the graph or unrelated task/note payloads. Register projection builds its
+membership adjacency once per search. Preview overlays retain indexed attachment
+text, so archive updates do not erase attachment-only lexical matches.
+Company and contact previews require version 1 and a nonempty string title;
+malformed contacts cannot project matches onto companies.
+
+Inventory persistence and generation promotion share the mutation boundary.
+A persistence failure marks the scope dirty and fences older reconciliation
+publication: searches request immediate recovery and report stale if recovery
+fails, and dirty generations cannot be promoted. Only a successful subsequent
+reconciliation clears dirty state. Network page dispatch stays outside that
+boundary, so a reconciliation waiting on a page cannot block its response.
+
 ## Limits and access
 
 Search reads workspace-wide data through its trusted bot connection. Keep its
@@ -95,7 +139,9 @@ therefore require correct reupload/assignment; see
 Never publish the private file listener's port.
 
 Upgrading changes the default embedding schema to
-`embeddinggemma-2-v2-attachments`. Search keeps the previous model and index serving
+`embeddinggemma-2-v3-customers`. The model remains Gemma 2; this index revision
+adds readable customer fields and eagerly inventories companies, contacts,
+activities and their memberships. Search keeps the previous model and index serving
 while it eagerly rebuilds every known workspace in a separate directory from the
 canonical server inventory, including File assets and attachments. Live changes
 are subscribed in both generations. Only when inventories, queues, source hashes
@@ -189,13 +235,13 @@ These are standalone defaults. Compose sets container paths and the NRC server U
 | `MODEL_PATH` | `./models/model.onnx` | ONNX model path |
 | `TOKENIZER_PATH` | `./models/tokenizer.json` | Tokenizer path |
 | `DATA_DIR` | `./data` | Persistent index directory |
-| `EMBED_ASSET_TYPES` | `1,2,3,4,5` | Comments, documents, files, workspace memos and notes |
+| `EMBED_ASSET_TYPES` | `1,2,3,4,5,8,9,10` | Comments, documents, files, workspace memos, notes, companies, contacts and activities |
 | `EMBED_TASKS` | `true` | Index tasks, including Done history |
 | `FILES_URL` | Unset | Private proxy origin; unset disables attachment ingestion |
 | `MEDIA_MODEL_DIR` | Unset | Absolute local directory with processor configs and `onnx/` media encoders |
 | `MEDIA_WORKER_PATH` | `./media_worker.mjs` | Local Node media worker |
 | `RECONCILE_INTERVAL` | `15m` | Reconciliation interval |
-| `EMBEDDING_SCHEMA` | `embeddinggemma-2-v2-attachments` | Change to rebuild embeddings after model/prompt changes |
+| `EMBEDDING_SCHEMA` | `embeddinggemma-2-v3-customers` | Change to rebuild embeddings after model/prompt/index-content changes |
 
 ## Development
 

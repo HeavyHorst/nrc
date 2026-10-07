@@ -271,3 +271,16 @@
         }
     }
 }
+
+/* Search has only one secondary filter, so it stays visible rather than
+   introducing another collapsed filter mode. Control roles match Tasks/Notes. */
+@media (max-width: 768px) {
+    .workspace-search-controls.header-register-control-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; height: auto; min-height: 0; max-height: none; gap: 8px; padding: 4px 12px; overflow: visible; }
+    .workspace-search-controls > .header-control-scroll { display: contents; }
+    .workspace-search-controls.header-register-control-row .header-filter-cell { min-width: 0; padding: 0; gap: 4px; }
+    .workspace-search-controls .filter-group-search { grid-column: 1 / -1; }
+    .workspace-search-controls .filter-group-search > .filter-label { display: none; }
+    .workspace-search-controls.header-register-control-row .filter-group-search > .filter-input { min-height: 32px; height: 32px; padding-inline: 8px; font-size: var(--mobile-font-lg); background: var(--surface-control); }
+    .workspace-search-controls .header-filter-cell .custom-select__trigger { min-height: 44px; height: 44px; font-size: var(--mobile-font-base); padding-inline: 8px; }
+    .workspace-search-controls.header-register-control-row > .header-operation { align-self: end; min-height: 44px; height: 44px; padding: 8px; font-size: var(--mobile-font-sm); }
+}

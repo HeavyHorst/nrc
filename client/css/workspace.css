@@ -270,6 +270,10 @@ body {
         --sidebar-icon: var(--icon-carbon-notes);
     }
 
+    & #searchBtn {
+        --sidebar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M21.5 20h-.8l-.3-.3a9.5 9.5 0 1 0-.7.7l.3.3v.8L27.5 29 29 27.5zM12.5 20a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z'/%3E%3C/svg%3E");
+    }
+
     & #attentionBtn {
         --sidebar-icon: var(--icon-carbon-attention);
     }

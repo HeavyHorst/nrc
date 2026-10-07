@@ -180,6 +180,7 @@
         render("READ ONLY", null);
         const body = document.createElement("div"); body.className = "customer-inspector-body";
         body.innerHTML = fileFacts(asset);
+        body.insertAdjacentHTML("beforeend", renderAttachmentPreviewStripHtml(asset.attachments, "fileInspectorAttachments"));
         const shell = document.createElement("div"); shell.className = "customer-inspector";
         shell.append(body);
         host.append(shell);

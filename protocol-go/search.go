@@ -47,6 +47,7 @@ type SearchTaskMetadata struct {
 type SearchMetadata struct {
 	AssetType uint16              `json:"asset_type,omitempty"`
 	Task      *SearchTaskMetadata `json:"task,omitempty"`
+	Customer  json.RawMessage     `json:"customer,omitempty"`
 }
 
 // SearchIDs encodes uint64 entity IDs as decimal JSON strings (and accepts
@@ -110,9 +111,14 @@ func (f SearchTaskFilters) Empty() bool {
 }
 
 type SearchFilters struct {
-	EntityTypes []SearchEntityType `json:"entity_types,omitempty"`
-	AssetTypes  []uint16           `json:"asset_types,omitempty"`
-	Task        *SearchTaskFilters `json:"task,omitempty"`
+	EntityTypes []SearchEntityType     `json:"entity_types,omitempty"`
+	AssetTypes  []uint16               `json:"asset_types,omitempty"`
+	Task        *SearchTaskFilters     `json:"task,omitempty"`
+	Customer    *SearchCustomerFilters `json:"customer,omitempty"`
+}
+
+type SearchCustomerFilters struct {
+	IncludeArchived bool `json:"include_archived"`
 }
 
 // SearchRequest is the HTTP POST /search contract. AssetTypes and

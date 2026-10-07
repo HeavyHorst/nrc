@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261007htmlheight1">
+    <link rel="stylesheet" href="../css/main.css?v=20261007search2">
     <link rel="stylesheet" href="../css/custom-select.css?v=20260926nesting1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -1126,15 +1126,40 @@ status      ← Service Worker</code></pre>
             </section>
 
             <section class="catalog-section" id="inventory">
-                <header class="catalog-section-header"><span>09</span><h2>COMPLETE INVENTORY</h2><span>34 UI-FAMILIEN / 3 SUBSYSTEME</span></header>
+                <header class="catalog-section-header"><span>09</span><h2>COMPLETE INVENTORY</h2><span>WORKSPACE SEARCH INCLUDED</span></header>
+                <div class="catalog-example">
+                    <section class="workspace-search-panel" aria-label="Workspace search example">
+                        <form class="panel-header header-register filter-register" onsubmit="return false">
+                            <div class="header-register-identity-row"><span class="header-text header-register-title">SEARCH</span><span class="header-register-state identity-scope">WORKSPACE</span><span class="filter-result-count header-register-state">2 RESULTS</span></div>
+                            <div class="workspace-search-controls header-register-control-row">
+                                <div class="header-control-scroll">
+                                    <label class="header-filter-cell filter-group-search"><span class="filter-label">QUERY</span><input class="filter-input" type="search" value="onboarding"></label>
+                                    <label class="header-filter-cell"><span class="filter-label">TYPE</span><select class="filter-select" data-custom-select data-custom-select-portal data-custom-select-search-placeholder="FILTER TYPE…"><option>ALL TYPES</option><option>TASKS</option><option>NOTES</option><option>FILES</option><option>DOCUMENTS</option><option>COMMENTS</option><option>AGENDAS</option><option>COMPANIES</option><option>CONTACTS</option><option>ACTIVITIES</option></select></label>
+                                </div>
+                                <button class="btn header-operation header-register-control" type="submit">SEARCH</button><button class="btn header-operation header-register-control" type="button">REFRESH</button>
+                            </div>
+                        </form>
+                        <div class="workspace-search-register-heading"><span>TYPE / ID</span><span>RECORD / EXCERPT / ATTACHMENTS</span><span>CONTEXT</span></div>
+                        <div class="workspace-search-results">
+                            <button type="button" class="workspace-search-row" aria-pressed="true"><span class="workspace-search-identity">TASK #184</span><span class="workspace-search-copy"><span class="workspace-search-title">Prepare onboarding pack</span><span class="workspace-search-excerpt">A checklist for the first customer meeting.</span></span><span class="workspace-search-context">TODO · Project: NRC</span></button>
+                            <button type="button" class="workspace-search-row" aria-pressed="false"><span class="workspace-search-identity">FILE #184</span><span class="workspace-search-copy"><span class="workspace-search-title">Onboarding guide</span><span class="workspace-search-excerpt">Documents for new team members.</span><span class="workspace-search-attachments">Attachments: guide.pdf · INDEXED</span></span><span class="workspace-search-context">Operations</span></button>
+                        </div>
+                        <div class="workspace-search-footer"><span>RELEVANCE ORDER · SEMANTIC + TEXT</span><span>↑/↓ NAV · ENTER OPEN</span></div>
+                        <p class="workspace-search-status" data-state="loading">Searching workspace records…</p>
+                        <p class="workspace-search-status" data-state="empty">No matching records. Try another phrase or record type.</p>
+                        <p class="workspace-search-status" data-state="warning">Cached results may be outdated: server reconciliation failed. Retry the search.</p>
+                        <p class="workspace-search-status" data-state="warning">Workspace connection is offline. Reconnect to open records.</p>
+                    </section>
+                </div>
                 <div class="catalog-inventory-tools">
                     <label><span class="filter-label">FILTER INVENTORY</span><input class="filter-input" id="inventoryFilter" type="search" placeholder="NAME, CLASS OR SOURCE..."></label>
-                    <span id="inventoryCount">35 / 35 VISIBLE</span>
+                    <span id="inventoryCount">36 / 36 VISIBLE</span>
                 </div>
                 <div class="catalog-overflow">
                     <table class="catalog-inventory-table">
                         <thead><tr><th>FAMILY</th><th>ELEMENTS</th><th>PRODUCTION HOOK</th><th>SOURCE</th><th>SCOPE</th></tr></thead>
                         <tbody id="inventoryBody">
+                            <tr><td>WORKSPACE SEARCH</td><td>Mixed relevance register for tasks and indexed assets; shared header-register query, type selector and actions. Loading/empty/error/stale states remain independent of the persistent offline notice; exact reads are blocked until reconnect. Keyboard navigation and exact-read inspector; indexed attachments enrich their owner result.</td><td><code>.workspace-search-*</code>, <code>.header-register</code></td><td>workspace-search.js / index.html / css/entities.css / css/mobile.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>INLINE METADATA</td><td>Field-local edit in task/note lists, slices and inspector. All responsibility fields use the shared searchable person picker: task/appointment assignee, slice owner and customer responsible. Choose an existing value, clear, or enter a new string. Task selection saves immediately; form-backed fields update the draft until the record SAVE. Escape/CANCEL discards the open field edit. Pending and failure stay at the field; title open and rename are separate. Description/content and attachments have independent editors.</td><td><code>&lt;nrc-inline-field&gt;</code>, <code>.inline-field-editor</code>, <code>.custom-select__*</code></td><td>detail-ui.js / custom-picker.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>PAGE LOADER</td><td>Automatic or manual next page, loading, error/retry, exhausted state, observer lifecycle; Notes and Customers</td><td><code>&lt;nrc-page-loader&gt;</code>, <code>nrc:load-more</code></td><td>page-loader.js / css/workspace.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>FOUNDATIONS</td><td>Color, type, selection, scrollbar; double workspace dividers, patterned section breaks, quiet list rules</td><td><code>:root</code>, <code>[data-theme]</code>, <code>--workspace-divider</code>, <code>--section-pattern</code>, <code>--border-list</code></td><td>css/main.css</td><td><b>CORE</b></td></tr>
@@ -1164,7 +1189,7 @@ status      ← Service Worker</code></pre>
                             <tr><td>CALENDAR</td><td>Workspace tasks, reminder deadlines and durable appointments by local date: agenda, spanning month intervals, selected-day list, shared person/project filters, appointment editor, shared inspector and live refresh</td><td><code>.calendar-*</code>, <code>.appointment-detail-panel</code></td><td>index.html / calendar.js / appointments.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>REMINDERS</td><td>Shared entity row states, column header, ID, selection marker, keyboard title, detail-only delete; deadline filters (all / local today / upcoming / overdue), hide locked, desktop-notification permission token, editor</td><td><code>.reminder-*</code>, <code>#notificationStatus</code></td><td>index.html / tasks.js / task-state.js / reminder-notify.js</td><td><b>FEATURE</b></td></tr>
                             <tr><td>NOTE LIST</td><td>Resizable header, row, selected, pagination; container-responsive two-line desktop register</td><td><code>.note-card</code>, <code>.notes-list*</code>, <code>.notes-container</code></td><td>notes.js / column-resize.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
-                            <tr><td>CUSTOMER WORKSPACE</td><td>Open fact register and single-rule sections, responsive contact rows with inspector selection, compact empty states, persistent activities, automatic relationship paging, archive, linked work, inspector read/edit/create, contact copy actions, unboxed company table and paged linking, guarded delete and company unlink</td><td><code>.customers-layout</code>, <code>.customer-section</code>, <code>.customer-contact</code>, <code>.customer-inspector</code>, <code>.contact-facts</code>, <code>.contact-company-table</code></td><td>customers.js / inspector.js / css/main.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>CUSTOMER WORKSPACE</td><td>Hybrid search projects matching contacts onto companies before the relevance limit; blank query uses the paginated NRC register. Explicit stale/limit/server-text-fallback notice; projections never replace exact records. Open fact register and single-rule sections, responsive contact rows with inspector selection, persistent activities, relationship paging, archive, linked work, inspector read/edit/create, copy actions, paged linking, guarded delete and company unlink</td><td><code>.customers-layout</code>, <code>.customer-section</code>, <code>.customer-contact</code>, <code>.customer-inspector</code>, <code>.contact-facts</code>, <code>.contact-company-table</code></td><td>customers.js / inspector.js / css/main.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>NOTE DETAIL</td><td>Same stable document as Tasks; content/format draft, header SAVE/CANCEL, metadata, section jumps, shared resources, share and script-free HTML</td><td><code>.record-document</code>, <code>.note-detail-*</code>, <code>.note-preview-*</code></td><td>notes.js / detail-ui.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>NOTE SHARE</td><td>Read-only header, export states, metadata, Markdown, attachments, linked nodes, responsive focus</td><td><code>.note-share-*</code>, <code>.agenda-preview</code></td><td>notes.js / css/main.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>HTML NOTE</td><td>Script-free sandbox, local fragment jumps, isolated HTTP(S) tabs, semantic theme tokens, attachment blobs</td><td><code>.note-html-frame</code>, <code>NRCHTMLNotes</code></td><td>note-html.js / notes.js</td><td><b>CONTENT</b></td></tr>

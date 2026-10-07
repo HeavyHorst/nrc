@@ -21,6 +21,10 @@
   let companyHasMore = false;
   let companyTotal = 0;
   let companyPageError = "";
+  const companySearchResults = new Map(); // Projections never enter the asset cache.
+  let companySearch;
+  let searchNotice = "";
+  let searchMode = "idle";
   let edgeObserver = null;
   let pendingNavigation = null;
   let detailGeneration = 0;
@@ -135,6 +139,7 @@
     el("customersPager").setState({ active: false });
     companyHasMore = false;
     ++generation; // In-flight results belong to the old query/live state.
+    companySearch?.cancel();
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => loadCompanies(true), 200);
   }
@@ -145,18 +150,60 @@
     const request = ++generation;
     const expectedRoom = room;
     const cursor = reset ? 0n : companyCursor;
+    const query = el("customersSearch").value.trim();
+    const includeArchived = el("customersArchived").checked;
+    const cancelled = () => generation !== request || room !== expectedRoom || !active() || !connected();
     let automaticSelection = null;
-    if (reset) { pendingNavigation = null; companyIds = new Set(); companyCursor = 0n; companyHasMore = false; }
+    if (reset) {
+      companySearch?.cancel();
+      companySearchResults.clear();
+      searchMode = "idle";
+      searchNotice = "";
+      pendingNavigation = null; companyIds = new Set(); companyCursor = 0n; companyHasMore = false;
+    }
     loading = true;
     error = "";
     companyPageError = "";
     render();
     try {
+      if (query && reset) {
+        companySearch ||= window.NRCSearch.createController();
+        try {
+          const data = await new Promise((resolve, reject) => companySearch.search({
+            query, top_n: 100, include_payload: true,
+            filters: { entity_types: ["asset"], asset_types: [8, 9], customer: { include_archived: includeArchived } },
+          }, { onResult: resolve, onError: reject }));
+          if (cancelled()) return;
+          for (const hit of data.results) {
+            const ref = hit.entity;
+            const asset = { assetId: typeof ref?.id === "string" && /^[1-9]\d*$/.test(ref.id) ? BigInt(ref.id) : 0n,
+              convId: expectedRoom, assetType: TYPES.company, preview: hit.preview };
+            if (ref?.type !== "asset" || ref.conv_id !== "0" || ref.workspace !== currentWorkspaceId ||
+                asset.assetId === 0n || asset.assetId > 18446744073709551615n || hit.metadata?.asset_type !== TYPES.company || !metadata(asset) ||
+                (!includeArchived && metadata(asset).archived)) {
+              throw new Error("Search returned an invalid company record.");
+            }
+            companySearchResults.set(asset.assetId, asset);
+          }
+          companyIds = new Set(companySearchResults.keys());
+          companyTotal = companyIds.size;
+          searchMode = "results";
+          searchNotice = data.stale ? "Search results may be outdated. Refresh to retry reconciliation." :
+            data.results.length === 100 ? "TOP 100 · Narrow the query to find more customers." : "";
+          if (!metadata(records.get(selected))) automaticSelection = companyIds.values().next().value ?? null;
+          return;
+        } catch (failure) {
+          if (cancelled()) return;
+          companySearchResults.clear();
+          searchMode = "fallback";
+          searchNotice = "Search service unavailable — using NRC server text search.";
+        }
+      }
       const result = await window.NRCAssets.requestCustomerPage(room, {
-        query: el("customersSearch").value.trim(), includeArchived: el("customersArchived").checked,
-        afterId: cursor, isCancelled: () => generation !== request || room !== expectedRoom || !active(),
+        query, includeArchived,
+        afterId: cursor, isCancelled: cancelled,
       });
-      if (generation !== request) return;
+      if (cancelled()) return;
       if (result.hasMore && result.nextId <= cursor) throw new Error("Customer cursor did not advance");
       for (const asset of result.assets) { records.set(asset.assetId, asset); companyIds.add(asset.assetId); }
       companyCursor = result.nextId;
@@ -297,6 +344,7 @@
     if (!enabled) {
       ++generation;
       ++detailGeneration;
+      companySearch?.cancel();
       clearTimeout(searchTimer);
       clearTimeout(detailTimer);
       records.clear();
@@ -311,6 +359,8 @@
     clearTimeout(detailTimer);
     ++generation;
     ++detailGeneration;
+    companySearch?.cancel();
+    companySearchResults.clear();
     room = 0n;
     records.clear();
     companyIds.clear();
@@ -326,6 +376,8 @@
   function onRoomSwitch() {
     ++generation;
     ++detailGeneration;
+    companySearch?.cancel();
+    companySearchResults.clear();
     edgeSession = null;
     detailLoading = false;
     detailReady = true;
@@ -340,6 +392,7 @@
   function onDisconnect() {
     ++generation;
     ++detailGeneration;
+    companySearch?.cancel();
     clearTimeout(searchTimer);
     clearTimeout(detailTimer);
     loading = false;
@@ -364,15 +417,15 @@
     edgeObserver?.disconnect();
     edgeObserver = null;
     const query = el("customersSearch").value.trim().toLocaleLowerCase();
-    const companies = [...companyIds].map(id => records.get(id)).filter(asset => asset && metadata(asset));
-    el("customersState").textContent = companyPageError ? "CUSTOMER QUERY FAILED" : loading && companies.length === 0 ? "LOADING…" : `${companies.length} / ${companyTotal} CUSTOMERS`;
+    const companies = [...companyIds].map(id => companySearchResults.get(id) || records.get(id)).filter(asset => asset && metadata(asset));
+    el("customersState").textContent = companyPageError ? "CUSTOMER QUERY FAILED" : loading && companies.length === 0 ? "LOADING…" : searchMode === "results" ? `${companies.length} RESULTS` : `${companies.length} / ${companyTotal} CUSTOMERS`;
     el("customersPager").setState({
       hasMore: companyHasMore, loading, error: companyPageError, active: active(),
       disabled: !connected(), label: "LOAD MORE CUSTOMERS",
       // The viewport respects both the desktop register and mobile panel clipping.
       root: null,
     });
-    el("customersStatus").textContent = (error !== companyPageError ? error : "") || (!connected() ? "OFFLINE — connect to load customers." : "");
+    el("customersStatus").textContent = [(error !== companyPageError ? error : "") || (!connected() ? "OFFLINE — connect to load customers." : ""), searchNotice].filter(Boolean).join(" ");
     el("customersStatus").hidden = !el("customersStatus").textContent;
     el("customerNew").disabled = !connected() || loading || !!error;
     updateHtml(el("customersList"), companies.map(a => {

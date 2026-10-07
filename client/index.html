@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico">
-    <link rel="stylesheet" href="css/main.css?v=20261007htmlheight1">
+    <link rel="stylesheet" href="css/main.css?v=20261007search2">
     <link rel="stylesheet" href="css/custom-select.css?v=20260926nesting1">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 </head>
@@ -63,6 +63,7 @@
                         </div>
                         <div class="sidebar-nav" role="group" aria-labelledby="knowledgeViewsLabel">
                             <div id="knowledgeViewsLabel" class="sidebar-section-label">KNOWLEDGE</div>
+                            <button id="searchBtn" class="btn nav-tab sidebar-nav-item" type="button">SEARCH</button>
                             <button id="notesBtn" class="btn nav-tab sidebar-nav-item" title="Toggle Notes (Ctrl+;)">NOTES</button>
                             <button id="customersBtn" class="btn nav-tab sidebar-nav-item" hidden>CUSTOMERS</button>
                         </div>
@@ -86,6 +87,22 @@
                 </div>
                 <div class="workspace-grid">
                     <div class="main-area">
+                        <section id="workspaceSearchPanel" class="workspace-search-panel" style="display:none" aria-label="Workspace search">
+                            <form id="workspaceSearchForm" class="panel-header header-register filter-register">
+                                <div class="header-register-identity-row"><span class="header-text header-register-title">SEARCH</span><span class="header-register-state identity-scope" id="workspaceSearchScope">WORKSPACE</span><span id="workspaceSearchCount" class="filter-result-count header-register-state" role="status">READY</span></div>
+                                <div class="workspace-search-controls header-register-control-row">
+                                    <div class="header-control-scroll">
+                                        <label class="header-filter-cell filter-group-search"><span class="filter-label">QUERY</span><input id="workspaceSearchQuery" class="filter-input" type="search" placeholder="SEARCH RECORDS AND ATTACHMENTS…" autocomplete="off"></label>
+                                        <label class="header-filter-cell"><span class="filter-label">TYPE</span><select id="workspaceSearchType" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-boundary=".main-area" data-custom-select-search-placeholder="FILTER TYPE…"><option value="all">ALL TYPES</option><option value="task">TASKS</option><option value="5">NOTES</option><option value="3">FILES</option><option value="2">DOCUMENTS</option><option value="1">COMMENTS</option><option value="4">AGENDAS</option><option value="8">COMPANIES</option><option value="9">CONTACTS</option><option value="10">ACTIVITIES</option></select></label>
+                                    </div>
+                                    <button class="btn header-operation header-register-control" type="submit">SEARCH</button><button id="workspaceSearchRetry" class="btn header-operation header-register-control" type="button">REFRESH</button>
+                                </div>
+                            </form>
+                            <p id="workspaceSearchStatus" class="workspace-search-status" role="status"></p>
+                            <div class="workspace-search-register-heading"><span>TYPE / ID</span><span>RECORD / EXCERPT / ATTACHMENTS</span><span>CONTEXT</span></div>
+                            <div id="workspaceSearchResults" class="workspace-search-results" aria-label="Search results"></div>
+                            <div class="workspace-search-footer"><span id="workspaceSearchLimit">RELEVANCE ORDER · SEMANTIC + TEXT</span><span>↑/↓ NAV · ENTER OPEN</span></div>
+                        </section>
                         <section id="customersPanel" class="customers-panel" style="display:none" aria-label="Customer workspace">
                             <div class="panel-header header-register filter-register">
                                 <div class="header-register-identity-row"><span class="header-register-title">CUSTOMERS</span><span id="customersState" class="header-register-state" role="status">NOT LOADED</span></div>
@@ -574,15 +591,16 @@
     <script src="assets.js?v=20260927appointment1"></script>
     <script src="transactions.js?v=20260925inline1"></script>
     <script src="edges.js?v=20260924slicelive1"></script>
-    <script src="files.js?v=20260926resources2"></script>
+    <script src="files.js?v=20261007search1"></script>
     <script src="links-ui.js?v=20260929prefetch1"></script>
-    <script src="inspector.js?v=20260929parallel1"></script>
-    <script src="view-manager.js?v=20260926calendar1"></script>
+    <script src="inspector.js?v=20261007search2"></script>
+    <script src="view-manager.js?v=20261007search1"></script>
     <script src="list-navigation.js?v=20260805b"></script>
     <script src="virtual-list.js?v=20260908a"></script>
     <script src="page-loader.js?v=20260924pager1"></script>
     <script src="task-state.js?v=20260926calendar7"></script>
     <script src="query-controller.js?v=20260914workspace1"></script>
+    <script src="workspace-search.js?v=20261007customersearch1"></script>
     <script src="task-search.js?v=20260917taskscroll1"></script>
     <script src="detail-ui.js?v=20261007people1"></script>
     <script src="column-resize.js?v=20260913tables2"></script>
@@ -600,8 +618,8 @@
     <script src="ai.js?v=20260924select1"></script>
     <script src="retained-messages.js?v=20260902a"></script>
     <script src="chat.js?v=20260923attention7"></script>
-    <script src="app.js?v=20260927appointment2"></script>
-    <script src="customers.js?v=20261007people1"></script>
+    <script src="app.js?v=20261007search1"></script>
+    <script src="customers.js?v=20261007customersearch1"></script>
     <script src="mobile-shell.js?v=20260914chats1"></script>
     <script>
         if ("serviceWorker" in navigator) {

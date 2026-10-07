@@ -1,9 +1,9 @@
 @import url("foundation.css?v=20261005danger1");
-@import url("workspace.css?v=20261005metadata4");
-@import url("entities.css?v=20261007htmlheight1");
+@import url("workspace.css?v=20261007search1");
+@import url("entities.css?v=20261007search2");
 @import url("ledger.css?v=20261006shareborder1");
 @import url("mobile-tasks.css?v=20261007people1");
-@import url("mobile.css?v=20260926nesting2");
+@import url("mobile.css?v=20261007search2");
 
 .chat-attachment {
     display: flex;
@@ -53,11 +53,11 @@ body.sullivan-workbench #chatAttach {
 
 /* Shared list states. Selection wins over hover; selection, pointer hover and
    keyboard focus outline the whole row, including child-button openers. */
-:is(.note-card, .reminder-row, .attention-row, .task-table tbody tr, .system-log-table tbody tr, .customer-row, .customer-contact, .customer-event, .slice-row, .slice-member):hover {
+:is(.workspace-search-row, .note-card, .reminder-row, .attention-row, .task-table tbody tr, .system-log-table tbody tr, .customer-row, .customer-contact, .customer-event, .slice-row, .slice-member):hover {
     background: var(--bg-hover);
 }
 
-:is(.note-card.note-selected, .reminder-row.reminder-row-selected, .task-table tbody tr.task-row-selected, .system-log-table tbody tr.system-log-row-selected, .customer-row[aria-pressed="true"], .customer-contact[aria-pressed="true"], .slice-row[aria-pressed="true"], .slice-member.slice-member-selected) {
+:is(.workspace-search-row[aria-pressed="true"], .note-card.note-selected, .reminder-row.reminder-row-selected, .task-table tbody tr.task-row-selected, .system-log-table tbody tr.system-log-row-selected, .customer-row[aria-pressed="true"], .customer-contact[aria-pressed="true"], .slice-row[aria-pressed="true"], .slice-member.slice-member-selected) {
     background: var(--selected-row-bg);
     color: var(--selected-row-text);
     box-shadow: inset 3px 0 var(--selected-row-accent);
@@ -65,7 +65,7 @@ body.sullivan-workbench #chatAttach {
     outline-offset: -1px;
 }
 
-:is(.note-card, .reminder-row, .attention-row, .task-table tbody tr, .system-log-table tbody tr, .customer-row, .customer-contact, .customer-event, .slice-row, .slice-member):is(:hover, :focus-visible, :has(.task-row-open:focus-visible, .slice-member-open:focus-visible, .task-row-status:focus-visible)) {
+:is(.workspace-search-row, .note-card, .reminder-row, .attention-row, .task-table tbody tr, .system-log-table tbody tr, .customer-row, .customer-contact, .customer-event, .slice-row, .slice-member):is(:hover, :focus-visible, :has(.task-row-open:focus-visible, .slice-member-open:focus-visible, .task-row-status:focus-visible)) {
     outline: 1px solid var(--focus-interactive);
     outline-offset: -1px;
 }

@@ -40,12 +40,18 @@ func (e *generationTestModel) Embed(text string) ([]float32, error) {
 func (e *generationTestModel) Close() { e.closed.Store(true) }
 
 func TestEagerShadowRebuildServesOldModelThenSwitchesAndRecovers(t *testing.T) {
+	for _, schema := range []string{"embeddinggemma-300m-v2-chunked", "embeddinggemma-2-v2-attachments"} {
+		t.Run(schema, func(t *testing.T) { testEagerShadowRebuild(t, schema) })
+	}
+}
+
+func testEagerShadowRebuild(t *testing.T, oldSchema string) {
+	t.Helper()
 	root := t.TempDir()
 	storage, err := NewStorage(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldSchema := "embeddinggemma-300m-v2-chunked"
 	if _, _, err := storage.EnsureEmbeddingSchema(oldSchema); err != nil {
 		t.Fatal(err)
 	}
@@ -106,15 +112,22 @@ func TestEagerShadowRebuildServesOldModelThenSwitchesAndRecovers(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	t.Setenv("PREVIOUS_MODEL_PATH", "old-model")
-	t.Setenv("PREVIOUS_TOKENIZER_PATH", "old-tokenizer")
+	legacy := strings.HasPrefix(oldSchema, "embeddinggemma-300m-")
+	previousModel, previousTokenizer := "new-model", "new-tokenizer"
+	t.Setenv("PREVIOUS_MODEL_PATH", "")
+	t.Setenv("PREVIOUS_TOKENIZER_PATH", "")
+	if legacy {
+		previousModel, previousTokenizer = "old-model", "old-tokenizer"
+		t.Setenv("PREVIOUS_MODEL_PATH", previousModel)
+		t.Setenv("PREVIOUS_TOKENIZER_PATH", previousTokenizer)
+	}
 	oldModel := &generationTestModel{vector: []float32{1, 0}}
 	newModel := &generationTestModel{vector: []float32{0, 1}, started: make(chan struct{}), release: make(chan struct{})}
 	var releaseOnce sync.Once
 	cfg := Config{DataDir: root, EmbeddingSchema: default_embedding_schema, ModelPath: "new-model", TokenizerPath: "new-tokenizer", EmbedTasks: true, ReconcileInterval: time.Hour, NRCServer: strings.Replace(server.URL, "http://", "ws://", 1)}
 	factory := func(spec generationSpec) (Embedder, error) {
-		if spec.Legacy {
-			if spec.Schema != oldSchema || spec.ModelPath != "old-model" {
+		if spec.Schema == oldSchema {
+			if spec.ModelPath != previousModel || spec.TokenizerPath != previousTokenizer || spec.Legacy != legacy {
 				t.Errorf("wrong old model: %+v", spec)
 			}
 			return oldModel, nil

@@ -75,22 +75,32 @@ type NRCClient struct {
 	pendingTaskPages       map[uint32]chan *protocol.TaskListPage
 	pendingTaskFullMu      sync.Mutex
 	pendingTaskFull        map[uint32]chan *protocol.TaskFull
+	customerMu             sync.Mutex
+	customerVersion        uint64
+	customerPages          map[uint32]chan *protocol.AllEdgeListPageResponse
 
-	embedRetries    map[embedRetryKey]int
-	embedRetriesMu  sync.Mutex
-	queueRetryArmed atomic.Bool
-	nextCorrelation atomic.Uint32
-	nextVersion     atomic.Uint64
-	taskMutationMu  sync.Mutex
-	taskMutations   map[entityKey]uint64
-	expectedHashes  map[entityKey]uint64
-	unresolvedTasks map[entityKey]uint64
-	inventoryEpochs map[uint64]uint64
-	refreshWorkers  sync.WaitGroup
-	sendMessage     func(uint16, []byte) error
+	embedRetries      map[embedRetryKey]int
+	embedRetriesMu    sync.Mutex
+	queueRetryArmed   atomic.Bool
+	nextCorrelation   atomic.Uint32
+	nextVersion       atomic.Uint64
+	taskMutationMu    sync.Mutex
+	taskMutations     map[entityKey]uint64
+	expectedHashes    map[entityKey]uint64
+	unresolvedTasks   map[entityKey]uint64
+	inventoryEpochs   map[uint64]uint64
+	inventoryFailures uint64
+	inventoryDirty    map[uint64]bool
+	refreshWorkers    sync.WaitGroup
+	sendMessage       func(uint16, []byte) error
 }
 
 func NewNRCClient(cfg Config, workspace string, storage *Storage, embedder Embedder, index *Index) (*NRCClient, error) {
+	if index != nil {
+		index.mu.Lock()
+		index.storage = storage
+		index.mu.Unlock()
+	}
 	embedTypes := make(map[uint16]bool, len(cfg.EmbedAssetTypes))
 	for _, t := range cfg.EmbedAssetTypes {
 		embedTypes[t] = true
@@ -339,6 +349,8 @@ func (c *NRCClient) readPump(ctx context.Context) {
 			c.handleAssetDeleted(msg.Data)
 		case protocol.S_AssetListPage:
 			c.handleAssetListPage(msg.Data)
+		case protocol.S_EdgeCreated, protocol.S_EdgeDeleted, protocol.S_AllEdgeListPage:
+			c.handleCustomerEdge(msg.Opcode, msg.Data)
 		case protocol.S_TaskCreated:
 			c.handleTaskCreated(msg.Data)
 		case protocol.S_TaskUpdated:
@@ -431,21 +443,29 @@ func (c *NRCClient) reusableEmbedding(existing *IndexEntry, hash uint64) bool {
 	return true
 }
 
-func (c *NRCClient) ingestAsset(asset protocol.Asset, live bool, cutoff uint64) {
+func (c *NRCClient) ingestAsset(asset protocol.Asset, live bool, cutoff uint64) error {
 	c.taskMutationMu.Lock()
 	defer c.taskMutationMu.Unlock()
 	identity := assetIdentity(c.workspace, asset.AssetID, asset.ConvID)
 	if live {
 		c.taskMutations[identity.key()] = c.nextVersion.Add(1)
 	} else if c.taskMutations[identity.key()] > cutoff {
-		return
+		return nil
+	}
+	if asset.AssetType >= protocol.AssetTypeCustomerCompany && asset.AssetType <= protocol.AssetTypeCustomerActivity {
+		err := c.storage.mutateCustomerRecord(c.workspace, asset.ConvID, 'a', asset.AssetID, asset)
+		if err != nil {
+			slog.Error("persist customer inventory", "error", err)
+			c.invalidateCustomerInventory(asset.ConvID)
+			return err
+		}
 	}
 	if !c.embedAssetTypes[asset.AssetType] {
 		delete(c.expectedHashes, identity.key())
 		c.index.Remove(c.workspace, asset.AssetID)
 		_ = c.storage.DeleteQueueEntry(c.workspace, asset.AssetID)
 		_ = c.storage.DeleteEmbedding(c.workspace, asset.AssetID)
-		return
+		return nil
 	}
 	hash := document_content_hash(asset.Preview, asset.Payload, asset.Attachments...)
 	c.expectedHashes[identity.key()] = hash
@@ -453,14 +473,18 @@ func (c *NRCClient) ingestAsset(asset protocol.Asset, live bool, cutoff uint64) 
 		// A newer mutation can return to the already-indexed content while an
 		// intermediate attachment job is pending. Cancel that stale work too.
 		_ = c.storage.DeleteQueueEntry(c.workspace, asset.AssetID)
-		return
+		return nil
 	}
 	entry := QueueEntry{ConvID: asset.ConvID, AssetType: asset.AssetType, Content: asset.Payload, Preview: asset.Preview, Attachments: append([]protocol.Attachment(nil), asset.Attachments...), Version: c.nextVersion.Add(1)}
+	if asset.AssetType == protocol.AssetTypeCustomerCompany {
+		entry.Metadata.Customer = customerPreview(asset.Preview)
+	}
 	if err := c.storage.EnqueueAsset(c.workspace, asset.AssetID, entry); err != nil {
 		slog.Error("enqueue asset", "asset_id", asset.AssetID, "error", err)
-		return
+		return err
 	}
 	c.signalPersistentQueue()
+	return nil
 }
 
 func (c *NRCClient) handleAssetDeleted(payload []byte) {
@@ -479,6 +503,10 @@ func (c *NRCClient) handleAssetDeleted(payload []byte) {
 	defer c.taskMutationMu.Unlock()
 	c.taskMutations[assetIdentity(c.workspace, assetID, convID).key()] = c.nextVersion.Add(1)
 	delete(c.expectedHashes, assetIdentity(c.workspace, assetID, convID).key())
+	if err := c.storage.mutateCustomerRecord(c.workspace, convID, 'a', assetID, nil); err != nil {
+		c.invalidateCustomerInventory(convID)
+		slog.Error("delete customer inventory", "error", err)
+	}
 	c.index.Remove(c.workspace, assetID)
 	_ = c.storage.DeleteQueueEntry(c.workspace, assetID)
 	if err := c.storage.DeleteEmbedding(c.workspace, assetID); err != nil {
@@ -938,6 +966,12 @@ func (c *NRCClient) IsSubscribed(convID uint64) bool {
 }
 
 func (c *NRCClient) NeedsReconcile(convID uint64, interval time.Duration) bool {
+	c.taskMutationMu.Lock()
+	dirty := c.inventoryDirty[convID]
+	c.taskMutationMu.Unlock()
+	if dirty {
+		return true
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	lastSync, ok := c.roomSyncTimes[convID]
@@ -1031,6 +1065,8 @@ func (c *NRCClient) cleanupReconciledScope(convID uint64, entityType EntityType,
 
 func (c *NRCClient) Reconcile(ctx context.Context, convID uint64) error {
 	c.taskMutationMu.Lock()
+	failureVersion := c.inventoryFailures
+	graphVersion := c.customerVersion
 	taskMutationCutoff := c.nextVersion.Load()
 	epoch := c.ReadyGeneration()
 	c.taskMutationMu.Unlock()
@@ -1038,6 +1074,11 @@ func (c *NRCClient) Reconcile(ctx context.Context, convID uint64) error {
 	assets, err := c.fetchReconcileAssets(ctx, convID)
 	if err != nil {
 		return err
+	}
+	if c.embedAssetTypes[protocol.AssetTypeCustomerCompany] || c.embedAssetTypes[protocol.AssetTypeCustomerContact] {
+		if err := c.reconcileCustomerEdges(ctx, convID); err != nil {
+			return err
+		}
 	}
 	var tasks []*protocol.Task
 	if c.embedTasks {
@@ -1051,10 +1092,27 @@ func (c *NRCClient) Reconcile(ctx context.Context, convID uint64) error {
 
 	for _, asset := range assets {
 		serverAssetIDs[asset.AssetID] = struct{}{}
-		c.ingestAsset(asset, false, taskMutationCutoff)
+		if err := c.ingestAsset(asset, false, taskMutationCutoff); err != nil {
+			return err
+		}
 	}
 
 	removedAssets, err := c.cleanupReconciledScope(convID, EntityTypeAsset, serverAssetIDs, taskMutationCutoff)
+	if err != nil {
+		return err
+	}
+	c.taskMutationMu.Lock()
+	_, err = c.storage.customerInventory(c.workspace, convID, func(inventory *customerInventory) {
+		for id := range inventory.Assets {
+			if _, ok := serverAssetIDs[id]; !ok && c.taskMutations[assetIdentity(c.workspace, id, convID).key()] <= taskMutationCutoff {
+				delete(inventory.Assets, id)
+			}
+		}
+	})
+	if err != nil {
+		c.invalidateCustomerInventory(convID)
+	}
+	c.taskMutationMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -1090,11 +1148,12 @@ func (c *NRCClient) Reconcile(ctx context.Context, convID uint64) error {
 	}
 
 	c.taskMutationMu.Lock()
-	if epoch != c.ReadyGeneration() {
+	if epoch != c.ReadyGeneration() || failureVersion != c.inventoryFailures || graphVersion != c.customerVersion {
 		c.taskMutationMu.Unlock()
 		return fmt.Errorf("connection changed during reconciliation")
 	}
 	c.inventoryEpochs[convID] = epoch
+	delete(c.inventoryDirty, convID)
 	c.taskMutationMu.Unlock()
 
 	now := time.Now()

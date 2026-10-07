@@ -227,6 +227,8 @@
       window.NRCAppointments?.showInspector?.(ref, stillCurrent);
     } else if (ref.type === "file") {
       window.NRCFiles?.showInspector?.(ref);
+    } else if (ref.type === "asset") {
+      window.NRCWorkspaceSearch?.showInspector(ref, stillCurrent);
     } else renderStatus(ref, "UNSUPPORTED", `Inspector does not support ${ref.type}.`);
     updateActions();
   }
@@ -577,7 +579,7 @@
   function setActiveView(view) {
     state.activeView = view;
     if (view !== "systemLog") document.body.classList.remove("system-log-inspector-empty");
-    shell()?.classList.toggle("inspector-entity-only", ["kanban", "notes", "customers", "reminders", "attention", "calendar"].includes(view));
+    shell()?.classList.toggle("inspector-entity-only", ["kanban", "notes", "customers", "reminders", "attention", "calendar", "search"].includes(view));
     const focused = view === "noteShare" || view === "sullivanShare";
     shell()?.classList.toggle("inspector-unavailable", focused);
     if (focused) setDrawer(false);
@@ -614,8 +616,8 @@
       if (event.target.closest?.(".nrc-dialog-backdrop")) return;
       const drawerOpen = document.body.classList.contains("inspector-open");
       if (event.key === "Tab" && drawerOpen) {
-        const focusable = Array.from(shell()?.querySelectorAll("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])") || [])
-          .filter((element) => element.offsetParent !== null && !element.closest("[inert]"));
+        const focusable = Array.from(shell()?.querySelectorAll("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]") || [])
+          .filter((element) => element.tabIndex >= 0 && element.offsetParent !== null && !element.closest("[inert]") && !element.matches("[disabled], [aria-disabled='true']"));
         if (focusable.length === 0) return;
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
