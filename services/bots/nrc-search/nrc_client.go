@@ -423,7 +423,7 @@ func (c *NRCClient) reusableEmbedding(existing *IndexEntry, hash uint64) bool {
 	}
 	if c.filesURL != "" {
 		for _, attachment := range existing.Metadata.Attachments {
-			if attachment.Status == "failed" || attachment.Status == "disabled" {
+			if attachment.Status == "failed" || attachment.Status == "unavailable" || attachment.Status == "disabled" {
 				return false
 			}
 		}

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,6 +29,7 @@ const maxPDFPages = 20
 const maxAudioSegments = 20 // Ten minutes, independently embedded in 30s windows.
 
 var attachmentIDPattern = regexp.MustCompile(`^att_[0-9a-f]{32}$`)
+var errAttachmentUnavailable = errors.New("attachment unavailable")
 
 type AttachmentSearch struct {
 	FileID   string `json:"file_id"`
@@ -98,6 +100,9 @@ func (c *NRCClient) downloadAttachment(a protocol.Attachment, dir string) (strin
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("%w: download status %d", errAttachmentUnavailable, resp.StatusCode)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("attachment download status %d", resp.StatusCode)
 	}
@@ -248,6 +253,9 @@ func (c *NRCClient) embedAttachments(attachments []protocol.Attachment) ([]Index
 		}()
 		if err != nil {
 			status.Status = "failed"
+			if errors.Is(err, errAttachmentUnavailable) {
+				status.Status = "unavailable"
+			}
 			status.Error = err.Error()
 			slog.Warn("attachment indexing failed", "file_id", attachment.FileId, "workspace", c.workspace, "error", err)
 		} else {

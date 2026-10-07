@@ -196,26 +196,77 @@ func TestAttachmentsDownloadExtractAndPreserveSource(t *testing.T) {
 }
 
 func TestAttachmentFailureCannotLeakBytesAndCanRetry(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "private payroll secret", 403) }))
-	defer server.Close()
-	c := newTaskClient(t, newTestStorage(t), &recordingEmbedder{})
-	c.filesURL = server.URL
-	task := &protocol.Task{ID: 1, Title: "public task", Attachments: []protocol.Attachment{{FileId: testAttachmentID, Filename: "secret.docx"}}}
-	job, err := c.ingestTask(task, true, 0, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.processEmbedJob(*job)
-	entry, _ := c.index.GetEntity(taskIdentity("ws", 1, 0))
-	if strings.Contains(entry.SearchText, "private payroll") {
-		t.Fatal("denied bytes entered index")
-	}
-	if entry.Metadata.Attachments[0].Status != "failed" {
-		t.Fatal("failure not reported")
-	}
-	job, err = c.ingestTask(task, false, c.nextVersion.Load(), false)
-	if err != nil || job == nil {
-		t.Fatal("failed attachments must retry during reconciliation")
+	for _, tc := range []struct {
+		name   string
+		code   int
+		status string
+		ready  bool
+	}{
+		{"forbidden", 403, "unavailable", true},
+		{"not found", 404, "unavailable", true},
+		{"unauthorized", 401, "failed", false},
+		{"server error", 500, "failed", false},
+		{"network error", 0, "failed", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "private payroll secret", tc.code)
+			}))
+			defer server.Close()
+			if tc.code == 0 {
+				server.Close()
+			}
+			storage := newTestStorage(t)
+			c := newTaskClient(t, storage, &recordingEmbedder{})
+			c.filesURL = server.URL
+			c.subscribedRooms[0] = true
+			c.inventoryEpochs[0] = c.ReadyGeneration()
+			task := &protocol.Task{ID: 1, Title: "public task", Attachments: []protocol.Attachment{{FileId: testAttachmentID, Filename: "secret.docx"}}}
+			job, err := c.ingestTask(task, true, 0, false)
+			if err != nil || job == nil {
+				t.Fatalf("missing initial job: %v", err)
+			}
+			c.processEmbedJob(*job)
+			identity := taskIdentity("ws", 1, 0)
+			entry, ok := c.index.GetEntity(identity)
+			if !ok || entry.Preview != "public task" || len(entry.Chunks) != 1 {
+				t.Fatal("owner text embedding lost")
+			}
+			if strings.Contains(entry.SearchText, "private payroll") {
+				t.Fatal("denied bytes entered index")
+			}
+			status := entry.Metadata.Attachments[0]
+			if status.Status != tc.status || status.Error == "" || strings.Contains(status.Error, "private payroll") {
+				t.Fatalf("unexpected failure metadata: %+v", status)
+			}
+			if ready, err := c.indexComplete(); err != nil || ready != tc.ready {
+				t.Fatalf("ready=%v err=%v want=%v", ready, err, tc.ready)
+			}
+			stored, err := storage.LoadAllEntityEmbeddings()
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.index.AddEntity(identity, indexEntryFromStoredEmbedding(stored[identity]))
+			if ready, err := c.indexComplete(); err != nil || ready != tc.ready {
+				t.Fatalf("reloaded ready=%v err=%v want=%v", ready, err, tc.ready)
+			}
+			job, err = c.ingestTask(task, false, c.nextVersion.Load(), false)
+			if err != nil || job == nil {
+				t.Fatal("unsuccessful attachments must retry during reconciliation")
+			}
+			data := officeFixture(t, map[string]string{"word/document.xml": `<document><body><p><r><t>Recovered attachment</t></r></p></body></document>`})
+			recovery := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(data) }))
+			defer recovery.Close()
+			c.filesURL = recovery.URL
+			c.processEmbedJob(*job)
+			entry, _ = c.index.GetEntity(identity)
+			if entry.Metadata.Attachments[0].Status != "indexed" || entry.Metadata.Attachments[0].Error != "" || !strings.Contains(entry.SearchText, "Recovered attachment") {
+				t.Fatalf("attachment did not recover: %+v", entry)
+			}
+			if ready, err := c.indexComplete(); err != nil || !ready {
+				t.Fatalf("recovered attachment blocks activation: %v", err)
+			}
+		})
 	}
 }
 

@@ -79,8 +79,10 @@ chunks to the owner's search result:
 Downloads are limited to 100 MiB, extracted text/XML to 16 MiB, raster images to
 16 megapixels and 8,192 pixels per side. Oversized/invalid attachments fail without
 discarding the owner's text. `metadata.attachments` exposes each file's
-`file_id`, `filename`, `status` (`indexed`, `failed`, `unsupported`, `disabled`)
-and optional error. Failed attachments are retried on later reconciliation.
+`file_id`, `filename`, `status` (`indexed`, `failed`, `unavailable`, `unsupported`,
+`disabled`) and optional error. Downloads returning HTTP 403/404 are logged and
+marked `unavailable`; they do not block index activation. Failed and unavailable
+attachments are retried on later reconciliation.
 Original record payloads remain unchanged; extracted text persists in the derived
 index for substring matching. Results identify the owning record, not an exact
 page, cell or audio timestamp. Video and other file formats are not indexed.
@@ -98,8 +100,10 @@ while it eagerly rebuilds every known workspace in a separate directory from the
 canonical server inventory, including File assets and attachments. Live changes
 are subscribed in both generations. Only when inventories, queues, source hashes
 and attachment processing are complete does it switch model and index together.
-Failed downloads/embedding jobs postpone activation and retry; unsupported formats
-are reported but do not block it. The old derived database is deleted after
+Failed downloads/embedding jobs postpone activation and retry, except for HTTP
+403/404 downloads. Unavailable files and unsupported formats are reported but
+do not block activation. HTTP 401, network errors and server errors remain blocking.
+The old derived database is deleted after
 activation and in-flight searches finish. Source records and blobs are never deleted.
 
 The durable `DATA_DIR/active-index.json` pointer selects the active generation.

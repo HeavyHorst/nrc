@@ -164,7 +164,8 @@ func (r *generationRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 // Check source hashes as well as queues: dropped jobs and failed attachments
-// must never turn an empty queue into a successful rebuild.
+// must never turn an empty queue into a successful rebuild. Unavailable files
+// (403/404) are reported and retried, but do not block activation.
 func (c *NRCClient) indexComplete() (bool, error) {
 	c.taskMutationMu.Lock()
 	defer c.taskMutationMu.Unlock()
