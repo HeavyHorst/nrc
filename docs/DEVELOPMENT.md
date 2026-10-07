@@ -138,8 +138,24 @@ two seconds or failed probes cause write-admission backpressure, reported to
 protocol clients with WebSocket close code 1013 (retry later). Concurrent lazy
 history opens reserve cache capacity; duplicate opens and descriptor exhaustion
 return a retryable capacity error rather than poisoning the store. Startup takes
-the initial sample synchronously. Rotation, manifest publication, retention
-cleanup and shutdown still contain synchronous filesystem operations.
+the initial sample synchronously.
+
+Runtime WAL rotation, segment publication and retained-message retention cleanup
+run on the storage service. Workers submit detached, backing-allocator-owned
+snapshots and gate the affected shard until the durable publication result is
+adopted. No worker indexes, arenas, connection handles or live WAL file objects
+cross this boundary. Snapshots carry buffer-free WAL metadata, not the 128 KiB
+append buffer; frozen sources carry only a segment descriptor. Job-owned
+publication lists, returned catalogs and WAL paths transfer ownership without
+another deep copy. WAL paths retain their allocator across adoption. The worker's
+still-authoritative catalog and retained segment descriptors remain detached
+copies. Rotation drains write/fsync leases before submission;
+retention also drains history readers. Sealed publication preserves already
+borrowed frozen snapshots and the active WAL's outstanding fsync boundary.
+Publication results wait for completion-queue capacity rather than being
+dropped. Shutdown never overwrites a manifest while its publication is pending.
+Startup, recovery, standalone stores without a service, and shutdown retain
+synchronous filesystem operations.
 
 The sealing service deletes obsolete source WALs after durable manifest
 publication and reader drain. Queue refusal retries later. An accepted deletion

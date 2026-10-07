@@ -133,7 +133,7 @@ shard_writer_fsync_complete :: proc(writer: ^Shard_Transaction_Writer, err: linu
 }
 
 shard_commit_due :: proc(writer: ^Shard_Transaction_Writer) -> bool {
-	if writer == nil || !writer.wal.enabled || writer.write_in_flight || writer.fsync_in_flight do return false
+	if writer == nil || !writer.wal.enabled || writer.write_in_flight || writer.fsync_in_flight || writer.lifecycle_in_flight do return false
 	bytes := writer.wal.pending_bytes + u64(writer.wal.write_offset)
 	if bytes == 0 do return false
 	return bytes >= SHARD_COMMIT_MAX_BYTES || (writer.commit_pending && time.diff(writer.commit_started, writer.wal.get_time()) >= SHARD_COMMIT_WINDOW)
@@ -189,6 +189,7 @@ shard_writer_write_complete :: proc(user: rawptr, written: int, err: linux.Errno
 
 schedule_shard_writer_fsync :: proc(writer: ^Shard_Transaction_Writer) {
 	assert(!writer.write_in_flight && !writer.fsync_in_flight)
+	if writer.lifecycle_in_flight do return
 	// Preserve preemptive rotation, but never rotate a leased or staged suffix.
 	if writer.wal.write_offset == 0 && shard_writer_should_rotate_before_async_fsync(writer) && rotate_shard_writer_for_compaction(writer) do return
 	if writer.poisoned || !writer.wal.enabled || writer.wal.pending_bytes == 0 do return

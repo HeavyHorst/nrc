@@ -1147,6 +1147,7 @@ message_store_high_water_cutoff :: proc(store: ^Message_Store, now_ns: i64 = 0) 
 
 maintain_message_store :: proc(store: ^Message_Store, now_ns: i64 = 0, sync_wal := true) -> bool {
 	if !message_store_enabled(store) do return true
+	if store.lifecycle_in_flight do return true
 	if store.frozen != nil do return true
 	if store.write_batch_pending || store.rotation_pending || len(store.pending_appends) != 0 || len(store.deferred_appends) != 0 || store.wal.write_offset != 0 do return true
 	if sync_wal && !persistence.maybe_fsync(&store.wal) {store.poisoned = true; return false}
@@ -1160,6 +1161,10 @@ maintain_message_store :: proc(store: ^Message_Store, now_ns: i64 = 0, sync_wal 
 	for segment in store.segments {if segment.max_time >= cutoff do break; remove_count += 1}
 	if remove_count == 0 do return true
 	if store.async_readers > 0 do return true
+	if storage_lifecycle_available() {
+		_ = enqueue_message_lifecycle(store, .Message_Retain, now)
+		return true
+	}
 	removed := make([]Message_Segment_Descriptor, remove_count, context.allocator)
 	defer delete(removed)
 	copy(removed, store.segments[:remove_count])
@@ -1204,7 +1209,7 @@ shutdown_message_store :: proc(store: ^Message_Store) -> bool {
 		ok = persistence.shutdown_wal(&store.wal)
 		// A failed publication may have changed the in-memory descriptor. Never
 		// replace the last authoritative manifest during fatal shutdown.
-		if !store.poisoned do ok = ok && write_message_manifest(store)
+		if !store.poisoned && !store.lifecycle_in_flight do ok = ok && write_message_manifest(store)
 	}
 	delete(store.durability_waiters)
 	destroy_frozen_message_store(store, false)

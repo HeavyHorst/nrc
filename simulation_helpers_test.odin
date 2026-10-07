@@ -416,6 +416,32 @@ when NRC_SIMULATION {
 		return true
 	}
 
+	// Dispatch only the requested lifecycle, leaving fsyncs, reads, immutable
+	// seal builds and unrelated storage work under the caller's control.
+	simulation_test_complete_message_lifecycle :: proc(sim: ^Sim_Runtime, kind: Storage_Lifecycle_Kind) -> bool {
+		for event_kind in ([2]Sim_Event_Domain{.Compaction_Job, .Compaction_Result}) {
+			found := false
+			for event, index in sim.world.events {
+				if event.domain != event_kind do continue
+				plan: ^Storage_Lifecycle
+				#partial switch payload in event.payload {
+				case Sim_Compaction_Job_Event:
+					plan = payload.job.lifecycle
+				case Sim_Compaction_Result_Event:
+					plan = payload.result.lifecycle
+				case:
+					continue
+				}
+				if plan == nil || plan.kind != kind do continue
+				if !sim_world_dispatch_event(&sim.world, index) do return false
+				found = true
+				break
+			}
+			if !found do return false
+		}
+		return true
+	}
+
 	simulation_test_commit_messages :: proc(sim: ^Sim_Runtime) -> bool {
 		if !simulation_test_flush_message_writes(sim) do return false
 		for nrc_sim_run_next_fsync_completion(sim) {}

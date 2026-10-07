@@ -1,5 +1,6 @@
 package storage_io
 
+import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:sys/linux"
@@ -26,8 +27,9 @@ when NRC_SIMULATION {
 	}
 
 	File :: struct {
+		allocator:   mem.Allocator,
 		real:        ^os.File,
-		read_fd:     Maybe(linux.Fd), // Read-only descriptor adopted after async open.
+		read_fd:     Maybe(linux.Fd), // Raw descriptor; also used by WAL writers.
 		virtual_fs:  ^Virtual_FS,
 		inode:       ^Virtual_Inode,
 		incarnation: u64,
@@ -52,8 +54,9 @@ when NRC_SIMULATION {
 	}
 
 	File :: struct {
-		real:    ^os.File,
-		read_fd: Maybe(linux.Fd),
+		allocator: mem.Allocator,
+		real:      ^os.File,
+		read_fd:   Maybe(linux.Fd),
 	}
 
 	Sync_Snapshot :: struct {}
@@ -95,13 +98,28 @@ open :: proc(storage: Context, path: string, flags: os.File_Flags = {.Read}, per
 	real, err := os.open(path, flags, perm)
 	if err != nil do return nil, err
 	file := new(File)
+	file.allocator = context.allocator
 	file.real = real
 	return file, nil
+}
+
+// WAL descriptors can be closed asynchronously without retaining an os.File.
+open_wal :: proc(storage: Context, path: string) -> (^File, os.Error) {
+	when NRC_SIMULATION {
+		if storage.backend == .Virtual do return open(storage, path, {.Write, .Create, .Append}, os.perm(0o644))
+	}
+	if !context_is_host(storage) do return nil, invalid_context_error()
+	cpath := strings.clone_to_cstring(path, context.temp_allocator)
+	if cpath == nil do return nil, os.Platform_Error(linux.Errno.ENOMEM)
+	handle, err := linux.open(cpath, {.WRONLY, .CREAT, .APPEND, .CLOEXEC, .NOCTTY}, transmute(linux.Mode)u32(0o644))
+	if err != .NONE do return nil, os.Platform_Error(err)
+	return read_file_from_fd(handle), nil
 }
 
 // Takes ownership without os.new_file's synchronous /proc descriptor lookup.
 read_file_from_fd :: proc(handle: linux.Fd) -> ^File {
 	file := new(File)
+	file.allocator = context.allocator
 	file.read_fd = handle
 	return file
 }
@@ -110,7 +128,7 @@ close :: proc(file: ^File) -> os.Error {
 	if file == nil do return nil
 	if handle, ok := file.read_fd.?; ok {
 		err := linux.close(handle)
-		free(file)
+		free(file, file.allocator)
 		if err != .NONE do return os.Platform_Error(err)
 		return nil
 	}
@@ -121,7 +139,7 @@ close :: proc(file: ^File) -> os.Error {
 	}
 	err := os.close(file.real)
 	file.real = nil
-	free(file)
+	free(file, file.allocator)
 	return err
 }
 
@@ -129,7 +147,7 @@ discard :: proc(file: ^File) {
 	if file == nil do return
 	if handle, ok := file.read_fd.?; ok {
 		_ = linux.close(handle)
-		free(file)
+		free(file, file.allocator)
 		return
 	}
 	when NRC_SIMULATION {
@@ -140,10 +158,17 @@ discard :: proc(file: ^File) {
 	}
 	if file.real != nil do _ = os.close(file.real)
 	file.real = nil
-	free(file)
+	free(file, file.allocator)
 }
 
 write :: proc(file: ^File, data: []byte) -> (int, os.Error) {
+	if file != nil {
+		if handle, ok := file.read_fd.?; ok {
+			n, err := linux.write(handle, data)
+			if err != .NONE do return n, os.Platform_Error(err)
+			return n, nil
+		}
+	}
 	when NRC_SIMULATION {
 		if file_is_virtual(file) do return virtual_write(file, data)
 	}
@@ -167,6 +192,12 @@ read_at :: proc(file: ^File, out: []byte, offset: int) -> (int, os.Error) {
 }
 
 sync :: proc(file: ^File) -> os.Error {
+	if file != nil {
+		if handle, ok := file.read_fd.?; ok {
+			if err := linux.fsync(handle); err != .NONE do return os.Platform_Error(err)
+			return nil
+		}
+	}
 	when NRC_SIMULATION {
 		if file_is_virtual(file) do return virtual_sync(file)
 	}
@@ -177,7 +208,7 @@ sync :: proc(file: ^File) -> os.Error {
 capture_sync_snapshot :: proc(file: ^File) -> (Sync_Snapshot, os.Error) {
 	when NRC_SIMULATION {
 		if file_is_virtual(file) do return virtual_capture_sync_snapshot(file)
-		if file == nil || file.real == nil do return {}, os.Platform_Error(linux.Errno.EBADF)
+		if file == nil || fd(file) < 0 do return {}, os.Platform_Error(linux.Errno.EBADF)
 		return Sync_Snapshot{host_file = file}, nil
 	}
 	return {}, os.Platform_Error(linux.Errno.ENOSYS)
@@ -201,6 +232,13 @@ destroy_sync_snapshot :: proc(snapshot: ^Sync_Snapshot) {
 }
 
 truncate :: proc(file: ^File, size: int) -> os.Error {
+	if file != nil {
+		if handle, ok := file.read_fd.?; ok {
+			if size < 0 do return os.Platform_Error(linux.Errno.EINVAL)
+			if err := linux.ftruncate(handle, i64(size)); err != .NONE do return os.Platform_Error(err)
+			return nil
+		}
+	}
 	when NRC_SIMULATION {
 		if file_is_virtual(file) do return virtual_truncate(file, size)
 	}

@@ -142,7 +142,7 @@ when NRC_SIMULATION {
 	virtual_fs_destroy :: proc(fs: ^Virtual_FS) {
 		if fs == nil do return
 		for file in fs.open_files {
-			if file != nil do free(file)
+			if file != nil do free(file, file.allocator)
 		}
 		delete(fs.open_files)
 		virtual_entries_destroy(&fs.volatile_entries)
@@ -247,6 +247,7 @@ when NRC_SIMULATION {
 			inode.volatile_version += 1
 		}
 		file := new(File)
+		file.allocator = context.allocator
 		file.virtual_fs = fs
 		file.inode = inode
 		file.incarnation = fs.incarnation
@@ -263,16 +264,18 @@ when NRC_SIMULATION {
 		valid := virtual_file_valid(file)
 		fs := file.virtual_fs
 		if fs != nil do virtual_untrack_file(fs, file)
+		allocator := file.allocator
 		file^ = {}
-		free(file)
+		free(file, allocator)
 		return nil if valid else virtual_error(.ESTALE)
 	}
 
 	virtual_discard :: proc(file: ^File) {
 		if file == nil do return
 		if file.virtual_fs != nil do virtual_untrack_file(file.virtual_fs, file)
+		allocator := file.allocator
 		file^ = {}
-		free(file)
+		free(file, allocator)
 	}
 
 	virtual_write :: proc(file: ^File, data: []byte) -> (int, os.Error) {

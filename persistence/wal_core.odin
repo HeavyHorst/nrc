@@ -15,7 +15,7 @@ import "../storage_io"
 
 cleanup_init_wal_state :: proc(state: ^WAL_State) {
 	if len(state.path) > 0 {
-		delete(state.path)
+		delete(state.path, state.path_allocator)
 		state.path = ""
 	}
 }
@@ -46,12 +46,13 @@ init_wal_with_storage :: proc(
 		return false
 	}
 	state^ = WAL_State {
-		storage      = storage,
-		path         = cloned_path,
-		magic        = magic,
-		version      = version,
-		thread_index = thread_index,
-		get_time     = get_time,
+		storage        = storage,
+		path           = cloned_path,
+		path_allocator = context.allocator,
+		magic          = magic,
+		version        = version,
+		thread_index   = thread_index,
+		get_time       = get_time,
 	}
 
 	// Create data directory if it doesn't exist
@@ -75,7 +76,7 @@ init_wal_with_storage :: proc(
 	}
 
 	// Open the manifest-selected WAL for appending.
-	handle, open_err := storage_io.open(storage, path, {.Write, .Create, .Append}, os.perm(0o644))
+	handle, open_err := storage_io.open_wal(storage, path)
 	if open_err != nil {
 		log.errorf("[T%d] Failed to open WAL for writing: %v", thread_index, open_err)
 		cleanup_init_wal_state(state)
@@ -126,7 +127,7 @@ shutdown_wal :: proc(state: ^WAL_State) -> bool {
 	state.enabled = false
 
 	if len(state.path) > 0 {
-		delete(state.path)
+		delete(state.path, state.path_allocator)
 		state.path = ""
 	}
 	return ok

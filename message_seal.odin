@@ -90,6 +90,14 @@ roll_message_store :: proc(store: ^Message_Store, now_ns: i64) -> bool {
 	_ = storage_io.remove(store.storage, path)
 	if !create_empty_message_wal_with_storage(store.storage, path) do return false
 	if !persistence.init_wal_with_storage(&store.wal, store.storage, path, MESSAGE_WAL_MAGIC, MESSAGE_WAL_VERSION, store.shard, nrc_wal_time_now) do return false
+	freeze_message_store_active(store, next, now_ns)
+	if !write_message_manifest(store) do return false
+	store.rotation_pending = false
+	resume_durable_outboxes(&store.durability_waiters)
+	return true
+}
+
+freeze_message_store_active :: proc(store: ^Message_Store, next: u64, now_ns: i64) {
 	frozen := new(Message_Store)
 	frozen^ = {
 		directory           = store.directory,
@@ -120,10 +128,6 @@ roll_message_store :: proc(store: ^Message_Store, now_ns: i64) -> bool {
 	store.active_dedup = nil; store.active_offsets = nil
 	store.active_started_hour = now_ns / i64(time.Hour)
 	store.fsync_snapshot = {}; store.commit_pending = false
-	if !write_message_manifest(store) do return false
-	store.rotation_pending = false
-	resume_durable_outboxes(&store.durability_waiters)
-	return true
 }
 
 // B's writer and durability state are untouched. Old history snapshots retain
@@ -179,12 +183,27 @@ cancel_message_seals :: proc(registry: ^Message_Store_Registry) {
 		// Job-owned paths survive store destruction; unreferenced output is safe
 		// to leave for recovery, which trusts only the old manifest.
 		retained_message_fail_deferred(&store)
+		if store.lifecycle_in_flight {
+			assert(!store.write_in_flight && store.wal.write_offset == 0)
+			// Only duplicate completions can enter the batch under this gate.
+			// Release their pins without treating ordinary shutdown as corruption.
+			for pending in store.pending_appends {
+				assert(pending.duplicate && len(pending.dedup_key) == 0)
+				finish_retained_send((^Retained_Dedup_Context)(pending.ctx), .Poisoned, 0)
+			}
+			clear(&store.pending_appends)
+		}
 	}
 }
 
 // One seal per store; queue rejection is retried while B continues appending.
 enqueue_message_seal :: proc(store: ^Message_Store, now_ns: i64) -> bool {
 	if store.seal_in_flight do return true
+	if storage_lifecycle_available() && store.frozen == nil {
+		// A full queue retains A and the rotation gate for maintenance to retry.
+		_ = enqueue_message_lifecycle(store, .Message_Roll, now_ns)
+		return true
+	}
 	if store.frozen == nil && !roll_message_store(store, now_ns) {
 		store.poisoned = true
 		return false

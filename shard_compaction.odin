@@ -65,6 +65,7 @@ Shard_Compactor_Thread_Data :: struct {
 
 Shard_Compaction_Job :: struct {
 	allocator:                     mem.Allocator, // Thread-safe ownership across the worker/service boundary.
+	lifecycle:                     ^Storage_Lifecycle,
 	storage_space_probe:           bool,
 	message_source_generation:     u64, // Nonzero selects immutable retained WAL sealing.
 	message_remove_generation:     u64, // Obsolete source, excluded by the durable manifest.
@@ -81,10 +82,12 @@ Shard_Compaction_Job :: struct {
 	raw_backlog_priority:          bool,
 	expected_source_floors:        Shard_High_Water_Requirements,
 	active_reservation_generation: u64,
+	active_reservation_requested:  bool,
 }
 
 Shard_Compaction_Result :: struct {
 	allocator:                     mem.Allocator,
+	lifecycle:                     ^Storage_Lifecycle,
 	storage_space_probe:           bool,
 	available_disk_bytes:          u64,
 	space_checked_at:              time.Time,
@@ -108,6 +111,7 @@ destroy_shard_compaction_job :: proc(job: ^Shard_Compaction_Job) {
 	allocator := context.allocator
 	if job.allocator.procedure != nil do allocator = job.allocator
 	context.allocator = allocator
+	destroy_storage_lifecycle(job.lifecycle)
 	if job.shard_dir != "" do delete(job.shard_dir)
 	if job.source_present do destroy_shard_segment_clean_source(&job.source)
 	job^ = {}
@@ -118,6 +122,7 @@ destroy_shard_compaction_result :: proc(result: ^Shard_Compaction_Result, remove
 	allocator := context.allocator
 	if result.allocator.procedure != nil do allocator = result.allocator
 	context.allocator = allocator
+	destroy_storage_lifecycle(result.lifecycle)
 	if result.active_reservation_path != "" {
 		if remove_reservation do _ = storage_io.remove(result.active_reservation_storage, result.active_reservation_path)
 		delete(result.active_reservation_path)
@@ -286,6 +291,9 @@ accept_shard_active_reservation :: proc(writer: ^Shard_Transaction_Writer, resul
 }
 
 rotate_shard_writer_for_compaction :: proc(writer: ^Shard_Transaction_Writer) -> bool {
+	if storage_lifecycle_available() && writer != nil && writer.batch_writes {
+		return enqueue_shard_lifecycle(writer, .Shard_Rotate)
+	}
 	rotation_started := ulid.time_now()
 	if writer == nil ||
 	   !writer.managed ||
@@ -500,6 +508,7 @@ shard_compaction_cleaning_plan :: proc(
 
 enqueue_shard_compaction_job :: proc(server: ^NRC_Server, writer: ^Shard_Transaction_Writer) -> bool {
 	if server == nil || writer == nil || !writer.managed do return false
+	if writer.lifecycle_in_flight || writer.pending_publication != nil do return false
 	context.allocator = worker_backing_allocator()
 	legacy_sealed := writer.manifest.sealed_present && writer.compaction == .Sealed
 	catalog_ready := shard_writer_catalog_cleaning_ready(writer)
@@ -508,20 +517,29 @@ enqueue_shard_compaction_job :: proc(server: ^NRC_Server, writer: ^Shard_Transac
 	if !source_ok do return false
 	source_owned := true
 	defer if source_owned do destroy_shard_segment_clean_source(&source)
-	clean_start, source_max_bytes, raw_backlog_priority, plan_ok := shard_compaction_cleaning_plan(
-		writer.storage,
-		writer.shard_dir,
-		source,
-		writer.clean_cursor,
-		writer.manifest.segmented,
-	)
-	if !plan_ok do return false
-	checkpoint_generation, generation_ok := shard_compaction_next_file_generation(writer.storage, writer.shard_dir, writer.manifest)
-	if !generation_ok do return false
+	prepare_on_service := storage_lifecycle_available() && writer.batch_writes
+	clean_start := writer.clean_cursor
+	source_max_bytes: u64
+	raw_backlog_priority := writer.manifest.segmented
+	checkpoint_generation: u64
 	reservation_generation: u64
 	reservation_owned := false
-	if raw_backlog_priority && writer.prepared_active_generation == 0 {
-		reservation_generation, reservation_owned = reserve_shard_active_generation(writer.storage, writer.shard_dir, checkpoint_generation)
+	if !prepare_on_service {
+		plan_ok: bool
+		clean_start, source_max_bytes, raw_backlog_priority, plan_ok = shard_compaction_cleaning_plan(
+			writer.storage,
+			writer.shard_dir,
+			source,
+			writer.clean_cursor,
+			writer.manifest.segmented,
+		)
+		if !plan_ok do return false
+		generation_ok: bool
+		checkpoint_generation, generation_ok = shard_compaction_next_file_generation(writer.storage, writer.shard_dir, writer.manifest)
+		if !generation_ok do return false
+		if raw_backlog_priority && writer.prepared_active_generation == 0 {
+			reservation_generation, reservation_owned = reserve_shard_active_generation(writer.storage, writer.shard_dir, checkpoint_generation)
+		}
 	}
 	defer if reservation_owned do remove_shard_active_reservation(writer.storage, writer.shard_dir, reservation_generation)
 	cloned_dir, clone_err := strings.clone(writer.shard_dir)
@@ -541,6 +559,7 @@ enqueue_shard_compaction_job :: proc(server: ^NRC_Server, writer: ^Shard_Transac
 		raw_backlog_priority          = raw_backlog_priority,
 		expected_source_floors        = writer.catalog_floors,
 		active_reservation_generation = reservation_generation,
+		active_reservation_requested  = prepare_on_service && writer.prepared_active_generation == 0,
 	}
 	submitted_as_event := false
 	when NRC_SIMULATION {
@@ -637,12 +656,18 @@ when NRC_SIMULATION {
 	}
 }
 
-run_shard_compaction_job :: proc(job: Shard_Compaction_Job) -> Shard_Compaction_Result {
+run_shard_compaction_job :: proc(input: Shard_Compaction_Job) -> Shard_Compaction_Result {
+	job := input
 	allocator := context.allocator
 	if job.allocator.procedure != nil do allocator = job.allocator
 	context.allocator = allocator
 	owned_job := job
 	defer destroy_shard_compaction_job(&owned_job)
+	if job.lifecycle != nil {
+		run_storage_lifecycle(job.lifecycle)
+		owned_job.lifecycle = nil
+		return {allocator = allocator, owner_worker = job.owner_worker, shard = job.shard, lifecycle = job.lifecycle, ok = job.lifecycle.ok}
+	}
 	if job.storage_space_probe {
 		space, err := storage_io.storage_space(job.storage, job.shard_dir)
 		return {
@@ -692,6 +717,24 @@ run_shard_compaction_job :: proc(job: Shard_Compaction_Job) -> Shard_Compaction_
 		shard                 = job.shard,
 		manifest_generation   = job.manifest.manifest_generation,
 		checkpoint_generation = job.checkpoint_generation,
+	}
+	if job.checkpoint_generation == 0 {
+		plan_ok: bool
+		job.clean_start, job.source_max_bytes, job.raw_backlog_priority, plan_ok = shard_compaction_cleaning_plan(
+			job.storage,
+			job.shard_dir,
+			job.source,
+			job.clean_start,
+			job.raw_backlog_priority,
+		)
+		if !plan_ok do return result
+		generation_ok: bool
+		job.checkpoint_generation, generation_ok = shard_compaction_next_file_generation(job.storage, job.shard_dir, job.manifest)
+		if !generation_ok do return result
+		result.checkpoint_generation = job.checkpoint_generation
+		if job.raw_backlog_priority && job.active_reservation_requested {
+			job.active_reservation_generation, _ = reserve_shard_active_generation(job.storage, job.shard_dir, job.checkpoint_generation)
+		}
 	}
 	injected_write_failure := shard_compaction_fault_hit(.Checkpoint_Write)
 	injected_sync_failure := shard_compaction_fault_hit(.Checkpoint_Sync)
@@ -769,6 +812,14 @@ service_shard_compaction_job :: proc(server: ^NRC_Server) -> bool {
 	}
 	if result.owner_worker >= 0 && result.owner_worker < len(server.shard_compaction_results) {
 		if spsc.try_push(server.shard_compaction_results[result.owner_worker], result) do return true
+		// Publication results are authoritative and cannot be dropped when the
+		// queue is full. Shutdown is safe: owners then never rewrite manifests.
+		if result.lifecycle != nil {
+			for !sync.atomic_load(&server.closing) {
+				if spsc.try_push(server.shard_compaction_results[result.owner_worker], result) do return true
+				time.sleep(time.Millisecond)
+			}
+		}
 	}
 	destroy_shard_compaction_result(&result, true)
 	return true
@@ -962,6 +1013,7 @@ process_shard_compaction_result :: proc(result: Shard_Compaction_Result) -> bool
 	owned_result := result
 	defer destroy_shard_compaction_result(&owned_result, false)
 	if td.server == nil do return false
+	if result.lifecycle != nil do return process_storage_lifecycle_result(&owned_result)
 	if result.message_source_generation != 0 do return process_message_seal_result(result)
 	if result.shard < 0 || result.shard >= len(td.shard_writers.writer_index) {
 		log.errorf("[T%d] Invalid shard %d in checkpoint result; shutting down", td.thread_index, result.shard)
@@ -981,6 +1033,13 @@ process_shard_compaction_result :: proc(result: Shard_Compaction_Result) -> bool
 			writer.available_disk_bytes = result.available_disk_bytes
 			writer.space_checked_at = result.space_checked_at
 		}
+		return true
+	}
+	if storage_lifecycle_available() && writer.batch_writes {
+		assert(writer.pending_publication == nil)
+		writer.pending_publication = new(Shard_Compaction_Result, result.allocator)
+		writer.pending_publication^ = owned_result
+		owned_result = {}
 		return true
 	}
 	if !publish_shard_compaction_result(writer, result) {
@@ -1021,6 +1080,16 @@ schedule_shard_compaction_work :: proc() -> bool {
 	index := td.shard_writers.compaction_cursor % len(td.shard_writers.writers)
 	td.shard_writers.compaction_cursor = (index + 1) % len(td.shard_writers.writers)
 	writer := &td.shard_writers.writers[index]
+	if writer.lifecycle_in_flight do return false
+	if writer.pending_publication != nil {
+		if writer.wal.write_offset > 0 && !writer.write_in_flight {
+			submit_shard_writer_write(writer)
+			return true
+		}
+		if enqueue_shard_lifecycle(writer, .Shard_Publish) do return true
+		if writer.poisoned do server_shutdown_after_storage_error(td.server)
+		return false
+	}
 	soft_pressure := shard_writer_soft_storage_pressure(writer)
 	if writer.compaction == .Sealed {
 		return enqueue_shard_compaction_job(td.server, writer)

@@ -142,14 +142,15 @@ when NRC_SIMULATION {
 			return false
 		}
 		state^ = WAL_State {
-			file         = nil,
-			path         = cloned_path,
-			enabled      = true,
-			magic        = magic,
-			version      = version,
-			thread_index = thread_index,
-			get_time     = get_time,
-			virtual_file = rawptr(file),
+			file           = nil,
+			path           = cloned_path,
+			path_allocator = context.allocator,
+			enabled        = true,
+			magic          = magic,
+			version        = version,
+			thread_index   = thread_index,
+			get_time       = get_time,
+			virtual_file   = rawptr(file),
 		}
 
 		now := get_time()

@@ -265,8 +265,16 @@ retained_message_finish_staged_batch :: proc(store: ^Message_Store, write_ok: bo
 
 retained_message_flush_store :: proc(store: ^Message_Store) -> bool {
 	if store == nil do return true
-	if store.write_in_flight do return true
-	if store.seal_ready && !publish_frozen_message_seal(store) {
+	if store.write_in_flight || store.lifecycle_in_flight do return true
+	if store.seal_ready && storage_lifecycle_available() {
+		// Drain any staged B suffix first; the manifest snapshot must describe
+		// completed writes, never bytes still leased to the kernel.
+		if len(store.pending_appends) == 0 {
+			_ = enqueue_message_lifecycle(store, .Message_Seal)
+			return true
+		}
+	}
+	if store.seal_ready && !storage_lifecycle_available() && !publish_frozen_message_seal(store) {
 		// Publication is attempted before the active batch is written. Discard
 		// only that never-written suffix, then complete every staged request so
 		// fatal shutdown cannot strand its context or connection pins.
@@ -292,6 +300,7 @@ retained_message_flush_store :: proc(store: ^Message_Store) -> bool {
 		} else {
 			ok = rotate_message_store(store, now_ns)
 		}
+		if storage_lifecycle_available() && store.frozen == nil do return ok
 		store.rotation_pending = false
 		if !ok {
 			store.poisoned = true
@@ -352,6 +361,7 @@ retained_message_commit_due :: proc(store: ^Message_Store) -> bool {
 
 schedule_retained_message_fsync :: proc(store: ^Message_Store) -> bool {
 	if store == nil || !message_store_enabled(store) do return false
+	if store.lifecycle_in_flight do return false
 	// Only a suffix behind an in-flight snapshot starts the next window.
 	if store.wal.pending_bytes > store.fsync_snapshot.pending_bytes && !store.commit_pending {
 		store.commit_pending = true
@@ -459,6 +469,11 @@ retained_message_queue_append :: proc(ctx: ^Retained_Dedup_Context, sealed_check
 		if append_err != nil do finish_retained_send(ctx, .Poisoned, 0)
 		return
 	}
+	if store.lifecycle_in_flight && !sealed_checked {
+		// Protocol dispatch normally gates new lookups before admission.
+		delete(key); finish_retained_send(ctx, .Capacity, 0)
+		return
+	}
 	if !sealed_checked && message_store_next_dedup_segment(store, len(store.segments) - 1, ctx.dedup_cutoff_ns, &ctx.message) >= 0 {
 		delete(key)
 		store.async_readers += 1
@@ -478,7 +493,7 @@ retained_message_queue_append :: proc(ctx: ^Retained_Dedup_Context, sealed_check
 retained_message_try_stage_append :: proc(ctx: ^Retained_Dedup_Context, key: string) -> bool {
 	store := ctx.store
 	if !message_store_enabled(store) {delete(key); finish_retained_send(ctx, .Poisoned, 0); return true}
-	if store.write_in_flight do return false
+	if store.write_in_flight || store.lifecycle_in_flight do return false
 	if store.rotation_pending do return false
 	size, valid := message_record_size(&ctx.message)
 	if !valid || int(shard_for_workspace(transmute([]byte)ctx.message.workspace)) != store.shard {
@@ -1495,6 +1510,10 @@ process_message_history :: proc(c: ^NRC_Connection, req: pr.MessageRangeRequest,
 	store := message_store_for_workspace(&td.message_stores, transmute([]byte)c.workspace_id)
 	if store ==
 	   nil {send_error_response(c, ascending ? .C_ReplayMessagesAfter : .C_ListMessagesBefore, "message retention is disabled", req.correlation_id); return}
+	if store.lifecycle_in_flight {
+		send_error_response(c, ascending ? .C_ReplayMessagesAfter : .C_ListMessagesBefore, "message storage maintenance; retry", req.correlation_id)
+		return
+	}
 	ctx := new(Retained_History_Context); ctx.store = store; ctx.conversation_id = u64(req.conv_id); ctx.correlation_id = req.correlation_id
 	when NRC_SIMULATION {
 		if retained_history_profile_enabled {

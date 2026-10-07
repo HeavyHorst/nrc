@@ -5737,7 +5737,10 @@ when NRC_SIMULATION {
 		}
 		nrc_sim_clear_inboxes(&ctx.sim)
 		store.rotation_pending = true
-		if !retained_message_flush_store(store) || store.frozen == nil || !store.seal_in_flight {
+		if !retained_message_flush_store(store) ||
+		   !simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll) ||
+		   store.frozen == nil ||
+		   !store.seal_in_flight {
 			return "retained lifecycle rollover did not enter sealing"
 		}
 
@@ -5759,6 +5762,7 @@ when NRC_SIMULATION {
 		}
 		_, flush_ok := flush_pending_retained_message_writes(&td.message_stores)
 		if !simulation_test_flush_message_writes(&ctx.sim) do return "retained lifecycle seal publication write failed"
+		if !simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Seal) do return "retained lifecycle seal publication dispatch failed"
 		if !flush_ok || len(store.segments) != 1 || (cancel_after_publish && (store.frozen == nil || !store.frozen_published)) {
 			return "retained lifecycle seal publication failed"
 		}

@@ -72,6 +72,7 @@ maintain_message_store_registry :: proc(registry: ^Message_Store_Registry) -> (d
 		// Read failures also poison stores. They must trigger fatal shutdown,
 		// not leave durability-gated outboxes waiting on an inactive store.
 		if store.poisoned || !store.wal.enabled do return did_work, false
+		if store.lifecycle_in_flight do continue
 		if store.frozen_published && store.frozen.async_readers == 0 do destroy_frozen_message_store(&store, true)
 		if store.frozen != nil && !store.frozen_published && !store.seal_in_flight {
 			if !enqueue_message_seal(&store, nrc_time_unix_nanos()) do return did_work, false

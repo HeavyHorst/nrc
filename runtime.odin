@@ -162,7 +162,7 @@ nrc_io_finish_file_open :: proc(ctx: ^NRC_File_Open_Context, file: ^storage_io.F
 nrc_io_discard_read_file :: proc(file: ^storage_io.File) {
 	if file == nil do return
 	if fd, ok := file.read_fd.?; ok {
-		free(file)
+		free(file, file.allocator)
 		_ = nbio_raw.close(&td.io, fd)
 	} else {
 		// Virtual and standalone synchronous read handles have no kernel lease.

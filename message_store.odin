@@ -156,7 +156,9 @@ Message_History_Plan :: struct {
 	cutoff_ns:  i64,
 }
 
-Message_Store :: struct {
+// Storage metadata shared with detached lifecycle snapshots; no live indexes,
+// caches, readers, append buffers or connection-owned requests.
+Message_Storage_State :: struct {
 	enabled:             bool,
 	poisoned:            bool,
 	shard:               int,
@@ -166,19 +168,23 @@ Message_Store :: struct {
 	quota_bytes:         u64,
 	directory:           string,
 	storage:             storage_io.Context,
-	wal:                 persistence.WAL_State,
 	active_generation:   u64,
 	active_started_hour: i64,
 	active_first_seq:    u64,
 	active_min_time:     i64,
 	active_max_time:     i64,
 	active_bytes:        u64,
-	active_read_file:    ^storage_io.File,
-	active_open_pending: bool,
-	async_readers:       u32,
 	high_water:          u64,
 	purge_floor_ns:      i64,
 	total_bytes:         u64,
+}
+
+Message_Store :: struct {
+	using state:         Message_Storage_State,
+	wal:                 persistence.WAL_State,
+	active_read_file:    ^storage_io.File,
+	active_open_pending: bool,
+	async_readers:       u32,
 	// Heap-stable arena controls: map allocators retain these pointers when a
 	// generation's indexes transfer to the frozen holder.
 	active_index_arena:  ^virtual.Arena,
@@ -201,6 +207,7 @@ Message_Store :: struct {
 	write_batch_pending: bool,
 	write_in_flight:     bool,
 	write_started:       time.Time,
+	lifecycle_in_flight: bool,
 	rotation_pending:    bool,
 	frozen:              ^Message_Store,
 	frozen_published:    bool,

@@ -344,7 +344,10 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	}
 	defer shard_protocol_dispatch_context = previous_dispatch
 	writer := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)c.workspace_id)
-	if writer != nil && writer.write_in_flight || c.deferred_shard_requests > 0 && !shard_protocol_replay_active {
+	store := message_store_for_workspace(&td.message_stores, transmute([]byte)c.workspace_id)
+	if writer != nil &&
+		   (writer.write_in_flight || writer.lifecycle_in_flight || writer.pending_publication != nil || store != nil && store.lifecycle_in_flight) ||
+	   c.deferred_shard_requests > 0 && !shard_protocol_replay_active {
 		if writer != nil && defer_current_shard_protocol_request(writer) do return
 		send_websocket_close_frame_and_close(c, 1013, "Server too busy")
 		return

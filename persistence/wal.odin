@@ -23,6 +23,7 @@ package persistence
 
 import "core:crypto/sha2"
 import "core:hash/xxhash"
+import "core:mem"
 import "core:os"
 import "core:time"
 
@@ -55,11 +56,12 @@ WRITE_BATCH_MAX_BYTES :: 128 * 1024 // 128KB max batch size
 // Types
 // ============================================================================
 
-// WAL_State holds the state for a single WAL instance
-WAL_State :: struct {
+// Buffer-free state shared by the owner and detached lifecycle snapshots.
+WAL_Metadata :: struct {
 	file:                   ^storage_io.File,
 	storage:                storage_io.Context,
 	path:                   string,
+	path_allocator:         mem.Allocator,
 	pending_bytes:          u64,
 	last_fsync:             time.Time,
 	enabled:                bool,
@@ -85,7 +87,6 @@ WAL_State :: struct {
 	file_size_bytes:        u64,
 
 	// Write batching
-	write_buffer:           [WRITE_BATCH_MAX_BYTES]byte, // Contiguous buffer for pending records
 	write_offset:           int, // Current offset in write_buffer
 	buffered_last_hash:     [32]byte, // Last record staged in write_buffer
 	buffered_record_count:  u64, // Records staged in write_buffer
@@ -98,6 +99,12 @@ WAL_State :: struct {
 	// Simulation-only append target. Always rawptr so production builds do not need
 	// the simulation file type; production code leaves this nil.
 	virtual_file:           rawptr,
+}
+
+// The large append buffer never needs to cross a drained lifecycle boundary.
+WAL_State :: struct {
+	using metadata: WAL_Metadata,
+	write_buffer:   [WRITE_BATCH_MAX_BYTES]byte,
 }
 
 WAL_Fsync_Snapshot :: struct {

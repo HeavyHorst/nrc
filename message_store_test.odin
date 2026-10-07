@@ -2697,6 +2697,7 @@ when NRC_SIMULATION {
 
 		store.rotation_pending = true
 		testing.expect(t, retained_message_flush_store(store))
+		testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll))
 		testing.expect(t, store.frozen != nil && store.seal_in_flight)
 		b_cached_bytes, b_valid := message_record_size(&messages[2])
 		if !testing.expect(t, b_valid) do return
@@ -2722,6 +2723,7 @@ when NRC_SIMULATION {
 		testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Job))
 		testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Result))
 		_, ok := flush_pending_retained_message_writes(&td.message_stores)
+		testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Seal))
 		testing.expect(t, ok && store.frozen_published)
 
 		// A reader created after publication sees only the published segment plus

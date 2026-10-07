@@ -37,6 +37,8 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	old_td^ = td
 	td = {}
 	defer {td = old_td^; free(old_td, service_context.allocator)}
+	testing.expect(t, nbio.init(&td.io) == .NONE)
+	defer nbio.destroy(&td.io)
 	server: NRC_Server
 	td.server = &server
 	server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
@@ -70,7 +72,19 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	// A full queue must not build inline or poison the store.
 	testing.expect(t, chan.try_send(server.shard_compaction_jobs, Shard_Compaction_Job{}))
 	testing.expect(t, retained_message_flush_store(store))
-	testing.expect(t, !store.rotation_pending && store.frozen != nil && !store.seal_in_flight && !store.poisoned)
+	testing.expect(t, store.rotation_pending && store.frozen == nil && !store.lifecycle_in_flight && !store.poisoned)
+	_, _ = chan.try_recv(server.shard_compaction_jobs)
+	testing.expect(t, retained_message_flush_store(store) && store.lifecycle_in_flight)
+	testing.expect_value(t, store.active_generation, u64(1))
+	roll_job, roll_queued := chan.try_recv(server.shard_compaction_jobs)
+	assert(roll_queued)
+	testing.expect(t, !worker_heap_contains_for_test(&heap, roll_job.lifecycle.store))
+	testing.expect(t, !worker_heap_contains_for_test(&heap, raw_data(roll_job.lifecycle.store.wal.path)))
+	assert(chan.try_send(server.shard_compaction_jobs, roll_job))
+	worker := thread.create_and_start_with_poly_data(&server, proc(s: ^NRC_Server) {_ = service_shard_compaction_job(s)}, service_context)
+	thread.join(worker); thread.destroy(worker)
+	testing.expect(t, process_shard_compaction_results())
+	testing.expect(t, !store.rotation_pending && store.frozen != nil && store.seal_in_flight && !store.poisoned)
 	second := test_retained_message(workspace, 42, 2, now)
 	result, _ = append_or_deduplicate_message(store, &second)
 	testing.expect_value(t, result, Message_Store_Result.Appended)
@@ -89,7 +103,6 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	testing.expect(t, !outbox_item_message_is_durable(&ack_b))
 	persistence.force_fsync(&store.wal)
 	testing.expect(t, outbox_item_message_is_durable(&ack_b))
-	_, _ = chan.try_recv(server.shard_compaction_jobs)
 	_, maintained := maintain_message_store_registry(&td.message_stores)
 	testing.expect(t, maintained)
 	_, flushed := flush_pending_retained_message_writes(&td.message_stores)
@@ -115,12 +128,16 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	testing.expect_value(t, result, Message_Store_Result.Capacity)
 	store.active_started_hour += 1
 	testing.expect_value(t, store.wal.write_offset, 0)
-	worker := thread.create_and_start_with_poly_data(&server, proc(s: ^NRC_Server) {_ = service_shard_compaction_job(s)}, service_context)
+	worker = thread.create_and_start_with_poly_data(&server, proc(s: ^NRC_Server) {_ = service_shard_compaction_job(s)}, service_context)
 	thread.join(worker)
 	thread.destroy(worker)
 	testing.expect(t, process_shard_compaction_results())
 	testing.expect(t, store.seal_ready)
 	_, flushed = flush_pending_retained_message_writes(&td.message_stores)
+	testing.expect(t, flushed && store.lifecycle_in_flight && !store.frozen_published)
+	worker = thread.create_and_start_with_poly_data(&server, proc(s: ^NRC_Server) {_ = service_shard_compaction_job(s)}, service_context)
+	thread.join(worker); thread.destroy(worker)
+	testing.expect(t, process_shard_compaction_results())
 	testing.expect(t, flushed && store.active_generation == 3 && store.frozen_published)
 	result, _ = append_message_after_sealed_lookup(store, &third)
 	testing.expect_value(t, result, Message_Store_Result.Appended)
@@ -170,6 +187,11 @@ test_message_seal_failure_and_shutdown_keep_source :: proc(t: ^testing.T) {
 		result, _ := append_or_deduplicate_message(store, &seed)
 		testing.expect_value(t, result, Message_Store_Result.Appended)
 		store.rotation_pending = true
+		testing.expect(t, retained_message_flush_store(store) && store.lifecycle_in_flight)
+		roll_job, roll_received := chan.try_recv(server.shard_compaction_jobs)
+		assert(roll_received)
+		rolled := run_shard_compaction_job(roll_job)
+		testing.expect(t, rolled.ok && process_shard_compaction_result(rolled))
 		testing.expect(t, retained_message_flush_store(store) && store.seal_in_flight)
 		job, received := chan.try_recv(server.shard_compaction_jobs)
 		testing.expect(t, received)
@@ -204,7 +226,12 @@ test_message_seal_failure_and_shutdown_keep_source :: proc(t: ^testing.T) {
 			testing.expect(t, os.make_directory(path) == nil)
 			testing.expect(t, os.write_entire_file(blocker, []byte{1}) == nil)
 			_, ok := flush_pending_retained_message_writes(&td.message_stores)
-			testing.expect(t, !ok && store.poisoned && server.fatal_storage_error)
+			testing.expect(t, ok && store.lifecycle_in_flight)
+			publication_job, queued := chan.try_recv(server.shard_compaction_jobs)
+			assert(queued)
+			published := run_shard_compaction_job(publication_job)
+			testing.expect(t, !published.ok && !process_shard_compaction_result(published))
+			testing.expect(t, store.poisoned && server.fatal_storage_error)
 			// Removing the fault before shutdown catches accidental publication
 			// of the partially updated in-memory descriptor during teardown.
 			testing.expect(t, os.remove_all(path) == nil)
@@ -267,7 +294,7 @@ when NRC_SIMULATION {
 		store.wal.file = nil
 		store.wal.enabled = false
 		persistence.reset_buffered_write_state(&store.wal)
-		if len(store.wal.path) > 0 do delete(store.wal.path)
+		if len(store.wal.path) > 0 do delete(store.wal.path, store.wal.path_allocator)
 		store.wal.path = ""
 		if store.active_read_file != nil do storage_io.discard(store.active_read_file)
 		destroy_frozen_message_store(store, false)
@@ -737,6 +764,7 @@ when NRC_SIMULATION {
 			testing.expect_value(t, result, Message_Store_Result.Appended)
 			store.rotation_pending = true
 			testing.expect(t, retained_message_flush_store(store))
+			testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll))
 			req := pr.SendMessageV2Request {
 				conv_id        = 42,
 				correlation_id = 2,
@@ -762,6 +790,7 @@ when NRC_SIMULATION {
 					testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Job))
 					testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Result))
 					_, ok = flush_pending_retained_message_writes(&td.message_stores); testing.expect(t, ok)
+					testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Seal))
 				}
 				nrc_sim_clear_inboxes(&ctx.sim)
 				req_a.content = seed.content
@@ -857,7 +886,9 @@ when NRC_SIMULATION {
 				testing.expect_value(t, result, Message_Store_Result.Appended)
 				persistence.force_fsync(&store.wal)
 				store.rotation_pending = true
-				testing.expect(t, retained_message_flush_store(store) && store.frozen != nil && store.seal_in_flight)
+				testing.expect(t, retained_message_flush_store(store))
+				testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll))
+				testing.expect(t, store.frozen != nil && store.seal_in_flight)
 				store.wal.get_time = group_commit_test_clock
 
 				send := proc(conn: ^NRC_Connection, message: ^Retained_Message, correlation: u32) {
@@ -919,6 +950,9 @@ when NRC_SIMULATION {
 				if publication_fails do context.logger = log.nil_logger()
 				compaction_ran := sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Result)
 				_, publication_ok := flush_pending_retained_message_writes(&td.message_stores)
+				testing.expect(t, publication_ok && store.seal_ready)
+				testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Seal))
+				publication_ok = !store.poisoned
 				context.logger = previous_logger
 				testing.expect(t, compaction_ran)
 				testing.expect_value(t, publication_ok, !publication_fails)
@@ -1115,6 +1149,7 @@ when NRC_SIMULATION {
 		testing.expect_value(t, result, Message_Store_Result.Appended)
 		store.rotation_pending = true
 		testing.expect(t, retained_message_flush_store(store))
+		testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll))
 		seed.client_message_id[0] = 2
 		result, _ = append_or_deduplicate_message(store, &seed)
 		testing.expect_value(t, result, Message_Store_Result.Appended)
@@ -1136,6 +1171,14 @@ when NRC_SIMULATION {
 		_, ok = flush_pending_retained_message_writes(&td.message_stores)
 		testing.expect(t, ok)
 		// Rollover staged the deferred request; the next worker tick writes it.
+		testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Seal))
+		_, ok = flush_pending_retained_message_writes(&td.message_stores)
+		testing.expect(t, ok)
+		// B's durable boundary must finish before its roll can be submitted.
+		testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+		_, ok = flush_pending_retained_message_writes(&td.message_stores)
+		testing.expect(t, ok)
+		testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll))
 		_, ok = flush_pending_retained_message_writes(&td.message_stores)
 		testing.expect(t, ok)
 		testing.expect(t, simulation_test_commit_messages(&ctx.sim))
@@ -1151,6 +1194,109 @@ when NRC_SIMULATION {
 			testing.expect(t, ok)
 		}
 		testing.expect(t, ok && store.frozen == nil && len(store.segments) == 2)
+	}
+
+	@(test)
+	test_message_seal_publication_negative_lookup_dedup :: proc(t: ^testing.T) {
+		for scenario in 0 ..< 5 {
+			ctx: Sim_Test_Context
+			simulation_test_begin(&ctx, 0)
+			defer simulation_test_end(&ctx)
+			ctx.sim.compaction_job_event_submission = true
+			server: NRC_Server; td.server = &server
+			testing.expect(t, nbio.init(&td.io) == .NONE); defer nbio.destroy(&td.io)
+			workspace := "seal-negative-dedup"
+			conn := simulation_test_install_client(&ctx.sim, 1, workspace, "alice", init_send_queue = true)
+			ctx.conns[1] = conn
+			storage := sim_world_storage_context(&ctx.sim.world)
+			testing.expect(t, storage_io.make_directory(storage, "/seal-negative") == nil)
+			shard := int(shard_for_workspace(transmute([]byte)workspace))
+			append(&td.message_stores.stores, Message_Store{})
+			store := &td.message_stores.stores[0]
+			testing.expect(t, init_message_store_with_storage(store, storage, "/seal-negative", shard, 24 * time.Hour, 0))
+			td.message_stores.enabled = true; td.message_stores.store_index[shard] = 0
+			defer shutdown_message_store_registry(&td.message_stores)
+			now := nrc_time_unix_nanos()
+			seed := test_retained_message(workspace, 42, 1, now)
+			result, _ := append_or_deduplicate_message(store, &seed)
+			testing.expect_value(t, result, Message_Store_Result.Appended)
+			testing.expect(t, rotate_message_store(store, now))
+			seed.client_message_id[0] = 2
+			result, _ = append_message_after_sealed_lookup(store, &seed)
+			testing.expect_value(t, result, Message_Store_Result.Appended)
+			store.rotation_pending = true
+			testing.expect(t, retained_message_flush_store(store))
+			testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll))
+			for &word in store.segments[0].dedup_filter do word = max(u64)
+			req := pr.SendMessageV2Request {
+				conv_id        = 42,
+				correlation_id = 11,
+				content        = transmute([]byte)string("same payload"),
+			}
+			req.client_message_id[0] = 3
+			process_send_message_v2(conn, req)
+			ctx.sim.world.now += time.Nanosecond
+			req.correlation_id = 12
+			if scenario == 1 do req.content = transmute([]byte)string("conflicting payload")
+			process_send_message_v2(conn, req)
+			testing.expect_value(t, store.async_readers, u32(2))
+			if scenario >= 2 {
+				// Hold the oldest lookup while the second request reaches active C.
+				for len(store.pending_appends) == 0 && nrc_sim_run_file_read_at(&ctx.sim, 1) {}
+				testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+				testing.expect_value(t, store.high_water, u64(3))
+				testing.expect_value(t, store.async_readers, u32(1))
+			}
+			testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Job))
+			testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Result))
+			_, ok := flush_pending_retained_message_writes(&td.message_stores)
+			testing.expect(t, ok && store.lifecycle_in_flight)
+			for nrc_sim_run_next_file_read(&ctx.sim) {}
+			// Consume any scheduled duplicate flush while publication still gates it.
+			_, ok = flush_pending_retained_message_writes(&td.message_stores)
+			testing.expect(t, ok && store.lifecycle_in_flight)
+			if scenario >= 3 {
+				testing.expect_value(t, len(store.pending_appends), 1)
+				if scenario == 3 {
+					storage_io.virtual_set_fail_stop_after_effect_for_test(&ctx.sim.world.storage, 1)
+					testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Seal))
+					testing.expect(t, store.poisoned)
+				} else {
+					td.state = .Closing
+					cancel_message_seals(&td.message_stores)
+					testing.expect(t, !store.poisoned && store.lifecycle_in_flight)
+				}
+				nrc_sim_run_all_send_completions(&ctx.sim)
+				testing.expect(t, len(store.pending_appends) == 0 && len(store.deferred_appends) == 0)
+				testing.expect_value(t, store.retained_send_count, 0)
+				testing.expect_value(t, conn.retained_io, u8(0))
+				testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_AckSendMessage), 1)
+				sock, handle := conn.sock, conn.handle
+				connection_close(conn, true)
+				nrc_sim_run_all_send_completions(&ctx.sim)
+				nrc_sim_run_all_close_completions(&ctx.sim)
+				testing.expect(t, connection_get_by_handle(handle) == nil)
+				testing.expect_value(t, td.retained_connection_count, 0)
+				ctx.conns[1] = nil
+				connection_test_mark_removed(sock)
+				continue
+			}
+			testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Seal))
+			testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+			testing.expect_value(t, store.high_water, u64(3))
+			testing.expect_value(t, store.wal.record_count, u64(1))
+			testing.expect(t, store.async_readers == 0 && len(store.pending_appends) == 0 && len(store.deferred_appends) == 0)
+			testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_AckSendMessage), scenario == 1 ? 1 : 2)
+			testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_ErrorResponse), scenario == 1 ? 1 : 0)
+			for index in 0 ..< nrc_sim_client_frame_count(&ctx.sim, conn.sock) {
+				payload, valid := nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&ctx.sim, conn.sock, index))
+				if !valid do continue
+				ack, err := pr.parseAckSendMessageMessage(payload)
+				if err != nil do continue
+				testing.expect_value(t, u64(ack.assigned_seq), u64(3))
+				testing.expect_value(t, ack.timestamp, now + 1)
+			}
+		}
 	}
 
 	@(test)
@@ -1187,7 +1333,9 @@ when NRC_SIMULATION {
 		if result == .Lookup_Required do result, _ = append_message_after_sealed_lookup(store, &seed)
 		testing.expect_value(t, result, Message_Store_Result.Appended)
 		store.rotation_pending = true
-		testing.expect(t, retained_message_flush_store(store) && store.seal_in_flight)
+		testing.expect(t, retained_message_flush_store(store))
+		testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll))
+		testing.expect(t, store.seal_in_flight)
 		page, page_ok := retained_history_simulation_page(conn, {conv_id = 42, limit = 10}, true)
 		testing.expect(t, page_ok && len(page.messages) == 2)
 		testing.expect(t, store.seal_in_flight && !store.seal_ready)
@@ -1216,6 +1364,7 @@ when NRC_SIMULATION {
 		testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Job))
 		testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Result))
 		_, ok = flush_pending_retained_message_writes(&td.message_stores)
+		testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Seal))
 		testing.expect(t, ok && store.frozen_published && !store.seal_in_flight && store.active_generation == 5)
 		fourth := test_retained_message(workspace, 42, 4, now)
 		result, _ = append_message_after_sealed_lookup(store, &fourth)
@@ -1313,6 +1462,7 @@ when NRC_SIMULATION {
 			ok = simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok)
 			for nrc_sim_run_next_fsync_completion(&ctx.sim) {}
+			_ = simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll)
 			if len(store.deferred_appends) == 0 && store.high_water == 4 do break
 		}
 		testing.expect(t, simulation_test_commit_messages(&ctx.sim))
@@ -1385,6 +1535,7 @@ when NRC_SIMULATION {
 			ok = simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok)
 			for nrc_sim_run_next_fsync_completion(&ctx.sim) {}
+			_ = simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll)
 			if len(store.deferred_appends) == 0 && store.high_water == 2 do break
 		}
 		testing.expect(t, simulation_test_commit_messages(&ctx.sim))

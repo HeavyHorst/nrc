@@ -40,21 +40,9 @@ Shard_Sweep_Metrics :: struct {
 	metadata_written_bytes: u64,
 }
 
-Shard_Transaction_Writer :: struct {
-	wal:                        persistence.WAL_State,
+// Shared durable state excludes worker-owned I/O leases and request queues.
+Shard_Storage_State :: struct {
 	storage:                    storage_io.Context,
-	write_in_flight:            bool,
-	write_started:              time.Time,
-	oversized_write:            []byte,
-	fsync_in_flight:            bool,
-	fsync_snapshot:             persistence.WAL_Fsync_Snapshot,
-	fsync_started:              time.Time,
-	// Registry-owned writers batch writes; standalone writers retain immediate writes.
-	batch_writes:               bool,
-	commit_pending:             bool,
-	commit_started:             time.Time,
-	durability_generation:      u64,
-	durability_waiters:         [dynamic]Connection_Handle,
 	shard:                      int,
 	owner_worker:               int,
 	worker_count:               int,
@@ -73,15 +61,34 @@ Shard_Transaction_Writer :: struct {
 	raw_catalog_segments:       int,
 	active_wal_append_only:     bool,
 	prepared_active_generation: u64,
-	deferred_requests:          [dynamic]Shard_Deferred_Request,
-	deferred_request_bytes:     int,
-	available_disk_bytes:       u64,
-	space_known:                bool,
-	space_checked_at:           time.Time,
-	space_refresh_started:      time.Time,
+	durability_generation:      u64,
 	compaction:                 Shard_Compaction_Status,
 	compaction_floors:          Shard_High_Water_Requirements,
-	sweep_metrics:              Shard_Sweep_Metrics,
+}
+
+Shard_Transaction_Writer :: struct {
+	using state:            Shard_Storage_State,
+	wal:                    persistence.WAL_State,
+	write_in_flight:        bool,
+	write_started:          time.Time,
+	oversized_write:        []byte,
+	fsync_in_flight:        bool,
+	fsync_snapshot:         persistence.WAL_Fsync_Snapshot,
+	fsync_started:          time.Time,
+	lifecycle_in_flight:    bool,
+	pending_publication:    ^Shard_Compaction_Result,
+	// Registry-owned writers batch writes; standalone writers retain immediate writes.
+	batch_writes:           bool,
+	commit_pending:         bool,
+	commit_started:         time.Time,
+	durability_waiters:     [dynamic]Connection_Handle,
+	deferred_requests:      [dynamic]Shard_Deferred_Request,
+	deferred_request_bytes: int,
+	available_disk_bytes:   u64,
+	space_known:            bool,
+	space_checked_at:       time.Time,
+	space_refresh_started:  time.Time,
+	sweep_metrics:          Shard_Sweep_Metrics,
 }
 
 Shard_Append_Failure :: enum u8 {
@@ -496,8 +503,13 @@ shutdown_shard_transaction_writer :: proc(writer: ^Shard_Transaction_Writer) -> 
 	assert(!writer.fsync_in_flight, "shard writer shutdown requires drained async fsync")
 	discard_shard_deferred_requests(writer)
 	delete(writer.durability_waiters)
+	if writer.pending_publication != nil {
+		allocator := writer.pending_publication.allocator
+		destroy_shard_compaction_result(writer.pending_publication, false)
+		free(writer.pending_publication, allocator)
+	}
 	ok := persistence.shutdown_wal(&writer.wal)
-	if writer.prepared_active_generation != 0 {
+	if writer.prepared_active_generation != 0 && !writer.lifecycle_in_flight {
 		if !remove_shard_active_reservation(writer.storage, writer.shard_dir, writer.prepared_active_generation) do ok = false
 		if storage_io.sync_directory(writer.storage, writer.shard_dir) != nil do ok = false
 	}
@@ -510,7 +522,7 @@ shutdown_shard_transaction_writer :: proc(writer: ^Shard_Transaction_Writer) -> 
 append_shard_transaction :: proc(writer: ^Shard_Transaction_Writer, tx: ^Shard_Transaction) -> bool {
 	shard_append_failure = .None
 	if writer == nil || tx == nil || writer.poisoned || !writer.wal.enabled do return false
-	if writer.write_in_flight {
+	if writer.write_in_flight || writer.lifecycle_in_flight || writer.pending_publication != nil {
 		shard_append_failure = defer_current_shard_protocol_request(writer) ? .Deferred : .Backpressure
 		return false
 	}
@@ -547,6 +559,10 @@ append_shard_transaction :: proc(writer: ^Shard_Transaction_Writer, tx: ^Shard_T
 		}
 		if !rotate_shard_writer_for_compaction(writer) {
 			if !writer.poisoned do shard_append_failure = .Backpressure
+			return false
+		}
+		if writer.lifecycle_in_flight {
+			shard_append_failure = defer_current_shard_protocol_request(writer) ? .Deferred : .Backpressure
 			return false
 		}
 		if shard_writer_backpressured(writer) {
