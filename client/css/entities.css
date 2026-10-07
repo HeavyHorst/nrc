@@ -2984,21 +2984,6 @@ dialog.nrc-dialog-backdrop::backdrop { background: transparent; }
         min-width: 0;
     }
 
-    /* An HTML note keeps its own page: in the wide composition the sandboxed
-       frame fills the document column and scrolls inside itself. */
-    .agenda-content .note-detail-tab-content > .note-html-host {
-        flex: 1;
-        min-height: 0;
-        display: flex;
-        overflow: hidden;
-    }
-
-    .agenda-content .note-detail-tab-content > .note-html-host > .note-html-frame {
-        flex: 1 1 auto;
-        height: 100%;
-        min-height: 0;
-    }
-
     .record-messages {
         grid-column: 2;
         grid-row: 1;
@@ -5806,6 +5791,23 @@ nrc-inline-field {
     overflow: visible;
     padding: 0.5rem 0.75rem 0.75rem;
     line-height: 1.6;
+}
+/* HTML pages fill the space below the title in every inspector width.
+   Scrolling belongs to the sandbox, not the outer document. */
+.record-document > .record-document-scroll:has(> .note-html-host) {
+    overflow: hidden;
+}
+.record-document > .note-preview-body.note-html-host {
+    display: flex;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+}
+.record-document > .note-html-host > .note-html-frame {
+    flex: 1 1 0;
+    height: 100%;
+    min-height: 0;
 }
 .record-document :is(.note-detail-textarea, .task-detail-textarea) {
     box-sizing: border-box;

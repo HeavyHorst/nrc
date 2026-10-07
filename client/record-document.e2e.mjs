@@ -285,6 +285,32 @@ try {
   });
   await page.locator(".note-html-frame").waitFor();
   assert.equal(await page.locator(".note-html-frame").getAttribute("sandbox"), "allow-same-origin", "existing script-free sandbox is unchanged");
+  for (const [width, height, railWidth] of [[1600, 1200, 660], [2200, 1000, 1100], [390, 844, 0], [1600, 600, 440]]) {
+    await page.setViewportSize({ width, height });
+    await page.locator("#inspector").evaluate((el, railWidth) => el.style.width = railWidth ? `${railWidth}px` : "", railWidth);
+    await page.evaluate(async () => {
+      await NRCInspector.close();
+      await NRCInspector.openEntity({ roomId: 0n, type: "note", id: 4826n });
+    });
+    for (const theme of ["lupine", "matte-black"]) {
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      await page.evaluate(() => {
+        currentDetailNote.payload = `<h1>HTML document</h1>${"<p>Sandboxed content: the document scrolls inside the frame.</p>".repeat(80)}`;
+        showNotePreviewPanel(currentDetailNote);
+      });
+      const frame = await geometry(".note-html-frame");
+      const column = await geometry(".record-document-scroll");
+      const title = await geometry(".note-preview-title");
+      assert.ok(Math.abs(frame.y - (title.y + title.height)) < 2, "HTML starts directly below the title");
+      assert.ok(Math.abs(frame.y + frame.height - (column.y + column.height)) < 2, "HTML fills the document column, including tall and short viewports");
+      assert.ok(await page.locator(".record-document-scroll").evaluate(el => el.scrollHeight <= el.clientHeight + 1), "outer document has no second scroll area");
+      await page.waitForFunction(() => {
+        const doc = document.querySelector(".note-html-frame").contentDocument;
+        return doc?.scrollingElement?.scrollHeight > doc.scrollingElement.clientHeight;
+      });
+      await capture(`html-note-${width}x${height}-${theme}`);
+    }
+  }
   await page.locator("#noteDetailEdit").click();
   assert.equal(await emptyThreads.locator('[data-resource-count]').textContent(), '0', 'HTML edit also retains the empty tab');
   assert.equal(await page.locator("#noteDetailFormat").inputValue(), "html");
