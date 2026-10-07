@@ -1131,10 +1131,10 @@ function renderSharedNoteView(statusText = "") {
   const projectHtml = project
     ? `<span class="note-share-project">${escapeHtml(project)}</span>`
     : '<span class="note-share-empty-token">NO PROJECT</span>';
-  const markdownPresentation = sharedNoteAsset.payload && format === "markdown"
-    ? renderNoteMarkdownPresentation(sharedNoteAsset.payload, sharedNoteAsset.attachments || [])
+  const markdownPresentation = sharedNoteAsset.payload
+    ? renderNoteMarkdownPresentation(sharedNoteAsset.payload, sharedNoteAsset.attachments || [], format)
     : null;
-  const bodyHtml = markdownPresentation
+  const bodyHtml = markdownPresentation && format === "markdown"
     ? markdownPresentation.bodyHtml
     : sharedNoteAsset.payload ? "" : '<em>Empty note.</em>';
 
@@ -1175,7 +1175,7 @@ function renderSharedNoteView(statusText = "") {
   if (shareBody && format === "html" && sharedNoteAsset.payload) {
     mountHTMLNote(
       shareBody,
-      sharedNoteAsset.payload,
+      markdownPresentation.bodyHtml,
       sharedNoteAsset.attachments || [],
       title || `Note #${sharedNoteAsset.assetId}`,
     );
@@ -1288,9 +1288,14 @@ function cleanupAmpThreadSourceLines(block) {
   });
 }
 
-function renderNoteMarkdownPresentation(markdown, attachments = []) {
-  const container = document.createElement("div");
-  container.innerHTML = renderNoteMarkdownWithAttachments(markdown, attachments);
+function renderNoteMarkdownPresentation(markdown, attachments = [], format = "markdown") {
+  // Parse full HTML documents inertly so their head, styles and body attributes
+  // survive extraction. Only the sandbox renderer mounts the resulting HTML.
+  const htmlDocument = format === "html"
+    ? new DOMParser().parseFromString(String(markdown || ""), "text/html")
+    : null;
+  const container = htmlDocument?.body || document.createElement("div");
+  if (!htmlDocument) container.innerHTML = renderNoteMarkdownWithAttachments(markdown, attachments);
   const ampThreads = [];
   const seenThreadIds = new Set();
   const cleanupCandidates = new Set();
@@ -1328,7 +1333,10 @@ function renderNoteMarkdownPresentation(markdown, attachments = []) {
     if (list && !list.querySelector("li")) list.remove();
   });
 
-  return { bodyHtml: container.innerHTML, ampThreads };
+  return {
+    bodyHtml: htmlDocument ? `<!doctype html>\n${htmlDocument.documentElement.outerHTML}` : container.innerHTML,
+    ampThreads,
+  };
 }
 
 function renderNoteAmpThreads(ampThreads) {
@@ -2166,8 +2174,8 @@ function showNoteDetailPanel(note) {
 function showNotePreviewPanel(note) {
   const { title, project, tags, format } = parseNotePreview(note.preview);
   const noteMarkdown = getNoteMarkdown(note);
-  const markdownPresentation = noteMarkdown && format === "markdown"
-    ? renderNoteMarkdownPresentation(noteMarkdown, note.attachments || [])
+  const markdownPresentation = noteMarkdown
+    ? renderNoteMarkdownPresentation(noteMarkdown, note.attachments || [], format)
     : null;
   const ampThreads = markdownPresentation?.ampThreads || [];
   currentDetailNote = note;
@@ -2220,7 +2228,7 @@ function showNotePreviewPanel(note) {
   if (previewBody) {
     if (noteMarkdown) {
       if (format === "html") {
-        mountHTMLNote(previewBody, noteMarkdown, note.attachments || [], title || `Note #${note.assetId}`);
+        mountHTMLNote(previewBody, markdownPresentation.bodyHtml, note.attachments || [], title || `Note #${note.assetId}`);
       } else {
         previewBody.innerHTML = markdownPresentation.bodyHtml;
         addNoteSectionJumpLedger(previewBody, previewBody.closest(".record-document-scroll") || previewBody);
@@ -2410,7 +2418,7 @@ function showNoteEditPanel(note) {
           </div>
         </section>
         </div>
-        ${renderNoteDocumentResources(note, format === "markdown" ? renderNoteMarkdownPresentation(note.payload || "", note.attachments || []).ampThreads : [])}
+        ${renderNoteDocumentResources(note, renderNoteMarkdownPresentation(note.payload || "", note.attachments || [], format).ampThreads)}
       </div>
       ${noteMessagesAreaHtml(note)}
     </div>
