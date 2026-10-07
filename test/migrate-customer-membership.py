@@ -16,7 +16,7 @@ Run it only after the updated server and client are deployed, because the old
 read path only recognizes `related-to` membership. Dry-run is the default; pass
 `--apply` to mutate.
 
-    nrc customer company list --all      # sanity check the target workspace first
+    nrc customer list --all              # sanity check the target workspace first
     python3 test/migrate-customer-membership.py            # dry run
     python3 test/migrate-customer-membership.py --apply    # migrate
 """
@@ -48,7 +48,8 @@ def cli_json(args):
 
 
 def register_ids(kind):
-    page = cli_json(["customer", kind, "list", "--all", "--fields", "id"])
+    command = "customer" if kind == COMPANY else kind
+    page = cli_json([command, "list", "--all", "--fields", "id"])
     return {int(entry["id"]) for entry in page["entries"]}
 
 

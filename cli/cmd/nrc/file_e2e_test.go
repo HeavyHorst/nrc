@@ -137,7 +137,7 @@ func TestFileCLIEndToEnd(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatal(all)
 	}
-	company := run(true, "customer", "company", "create", "--title", "Customer")
+	company := run(true, "customer", "create", "--title", "Customer")
 	run(true, "customer", "link", string(company["id"]), "asset", id)
 	read := run(true, "file", "get", id)
 	if string(read["attachments"]) != before {

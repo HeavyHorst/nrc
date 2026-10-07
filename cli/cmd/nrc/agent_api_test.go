@@ -13,7 +13,7 @@ import (
 )
 
 func TestRoomFlagIsOnlyForChatAndPresence(t *testing.T) {
-	for _, name := range []string{"task", "asset", "note", "customer", "file", "edge", "graph", "agenda", "reminder", "appointment", "search", "retrieve"} {
+	for _, name := range []string{"task", "asset", "note", "customer", "contact", "activity", "file", "edge", "graph", "agenda", "reminder", "appointment", "search", "retrieve"} {
 		cmd, _, err := rootCmd.Find([]string{name})
 		if err != nil || cmd == rootCmd {
 			t.Fatalf("missing data command %s: %v", name, err)

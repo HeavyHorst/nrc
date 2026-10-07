@@ -34,6 +34,32 @@ Health alone does not prove that your provider can complete requests.
 
 ## Use
 
+Ask exposes read-only `search_customers(query, limit, include_archived)` for the
+company register. Query must be nonblank; limit defaults to 6 and caps at 12.
+It sends typed-v1 asset filters `[8,9]` plus `customer.include_archived` (false
+by default). Search folds matching contacts into companies before top-N and
+returns companies only. Results contain decimal-string `asset_id` and complete
+structured `customer` metadata, not clipped preview JSON.
+
+`search_assets` remains raw semantic asset search: company/contact/activity,
+their plurals and CustomerCompany/CustomerContact/CustomerActivity aliases are
+supported; selecting `[8,9,10]` does not enable company-register semantics.
+Both tools preserve `stale` and an explicit warning on reconciliation failure.
+`complete=false` means ranked evidence is not an inventory; `limit_reached`
+indicates possible additional matches, not a known total. Use exact listing tools
+for inventory. Legacy Search/Similar consumers remain unchanged. These Ask tools
+require the Search server's typed-v1 response header.
+
+Customer results in `list_assets` and `get_asset` also expose complete structured
+metadata without losing fields to the clipped display preview. In the new
+`customer` object, numeric metadata values (including nested arrays/objects) are
+exact decimal strings to avoid ADK's float64 rounding; only the fixed `version:1`
+remains numeric. Booleans, nulls and strings retain their types. Stored NRC
+metadata and CLI JSON are unchanged. Malformed raw
+customer records remain available with `metadata_warning`; only the company
+register requires valid metadata. Search traces/progress and citation titles use
+the same integration as the existing tools. Customer mutation tools are not added.
+
 - **Paste-to-Task:** paste unstructured text, edit the extracted task and confirm.
   The browser creates the task through its own WebSocket connection.
 - **Paste-to-Note:** preview a cleaned-up note and optional extracted tasks.

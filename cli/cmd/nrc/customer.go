@@ -300,11 +300,11 @@ func customerWrite(kind uint16, action string) *cobra.Command {
 
 func customerList(kind uint16) *cobra.Command {
 	c := &cobra.Command{Use: "list", Short: "List one page; --all follows live cursors (not a snapshot)", Args: cobra.NoArgs}
-	c.Flags().Int("page-size", 50, "Page size, 1–250 (server may return fewer due to byte limit)")
+	c.Flags().Int("page-size", 50, "Page size or hybrid search result limit, 1–250")
 	c.Flags().Bool("all", false, "Follow all pages")
 	c.Flags().String("cursor", "", "Resume from next_cursor with identical filters")
 	if kind == protocol.AssetTypeCustomerCompany {
-		c.Flags().String("search", "", "Search company or linked contact fields")
+		c.Flags().String("search", "", "Hybrid company/linked-contact search; blank uses NRC listing; incompatible with --all/--cursor")
 		c.Flags().Bool("archived", false, "Include archived companies")
 	}
 	c.Run = customerRun(func(cmd *cobra.Command, _ []string, s *conn.Session) error {
@@ -316,6 +316,13 @@ func customerList(kind uint16) *cobra.Command {
 		cursor, _ := cmd.Flags().GetString("cursor")
 		query, _ := cmd.Flags().GetString("search")
 		archived, _ := cmd.Flags().GetBool("archived")
+		query = strings.TrimSpace(query)
+		if kind == protocol.AssetTypeCustomerCompany && query != "" {
+			if all || cursor != "" {
+				return &conn.InvalidArgumentError{Err: fmt.Errorf("hybrid --search returns ranked top-N results, not cursor pages; omit --all/--cursor and use --page-size to set the limit")}
+			}
+			return searchCustomerCompanies(s, query, size, archived)
+		}
 		entries := []customerRecord{}
 		var total uint32
 		var more bool
@@ -404,6 +411,85 @@ func customerList(kind uint16) *cobra.Command {
 		return nil
 	})
 	return c
+}
+
+func customerSearchCommand() *cobra.Command {
+	c := &cobra.Command{Use: "search <query>", Short: "Hybrid company/linked-contact search (ranked results, not a complete inventory)", Args: cobra.ExactArgs(1)}
+	c.Flags().Int("limit", 50, "Maximum ranked results, 1–250")
+	c.Flags().Bool("archived", false, "Include archived companies")
+	c.Run = customerRun(func(cmd *cobra.Command, args []string, s *conn.Session) error {
+		limit, _ := cmd.Flags().GetInt("limit")
+		archived, _ := cmd.Flags().GetBool("archived")
+		return searchCustomerCompanies(s, strings.TrimSpace(args[0]), limit, archived)
+	})
+	return c
+}
+
+func searchCustomerCompanies(s *conn.Session, query string, limit int, archived bool) error {
+	if query == "" || limit < 1 || limit > 250 {
+		return &conn.InvalidArgumentError{Err: fmt.Errorf("hybrid customer search requires nonblank query and limit 1–250")}
+	}
+	response, err := runSearch(searchRequest{Query: query, TopN: limit, Filters: &protocol.SearchFilters{
+		EntityTypes: []protocol.SearchEntityType{protocol.SearchEntityAsset},
+		AssetTypes:  []uint16{protocol.AssetTypeCustomerCompany, protocol.AssetTypeCustomerContact},
+		Customer:    &protocol.SearchCustomerFilters{IncludeArchived: archived},
+	}}, "")
+	if err != nil {
+		return err
+	}
+	entries := make([]customerRecord, 0, len(response.Results))
+	seen := make(map[uint64]bool)
+	for _, result := range response.Results {
+		ref := result.Entity
+		if ref.EntityType != protocol.SearchEntityAsset || ref.EntityID == 0 || ref.ConvID != 0 || ref.Workspace != s.Config.WorkspaceID ||
+			result.Metadata.AssetType != protocol.AssetTypeCustomerCompany {
+			return fmt.Errorf("search returned an invalid company result")
+		}
+		if seen[ref.EntityID] {
+			continue
+		}
+		seen[ref.EntityID] = true
+		asset, err := customerAsset(s, ref.EntityID, protocol.AssetTypeCustomerCompany)
+		if err != nil {
+			return err
+		}
+		if asset.AssetID != ref.EntityID || asset.ConvID != 0 {
+			return fmt.Errorf("NRC returned an invalid company record")
+		}
+		entry, err := customerResource(asset, false)
+		if err != nil {
+			return err
+		}
+		var isArchived bool
+		if raw, ok := entry.Metadata["archived"]; ok {
+			if err := json.Unmarshal(raw, &isArchived); err != nil {
+				return fmt.Errorf("invalid company archived field: %w", err)
+			}
+		}
+		if isArchived && !archived {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	if output.Human() {
+		if response.Stale {
+			fmt.Fprintln(os.Stderr, "Warning: search index reconciliation failed; matches may be stale (records were loaded from NRC)")
+		}
+		for _, entry := range entries {
+			fmt.Printf("%d\t%s\t%s\n", entry.ID, entry.Type, entry.Metadata["title"])
+		}
+		fmt.Printf("Loaded %d ranked results (limit %d; not a complete inventory)\n", len(entries), limit)
+	} else {
+		output.OutputJSON(struct {
+			Entries      []customerRecord `json:"entries"`
+			Query        string           `json:"query"`
+			Limit        int              `json:"limit"`
+			LimitReached bool             `json:"limit_reached"`
+			Complete     bool             `json:"complete"`
+			Stale        bool             `json:"stale"`
+		}{entries, query, limit, len(response.Results) >= limit, false, response.Stale})
+	}
+	return nil
 }
 
 func customerEdgePage(s *conn.Session, company uint64, size int, after uint64) (*protocol.EdgeListPageResponse, error) {
@@ -571,10 +657,15 @@ func customerUnlink() *cobra.Command {
 }
 
 func init() {
-	customer := &cobra.Command{Use: "customer", Short: "Manage companies, contacts, activity history and linked work"}
-	customer.AddCommand(customerLinks(), customerLink(), customerUnlink())
+	customer := &cobra.Command{Use: "customer", Short: "Manage customer companies and linked work", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
+	}
+	customer.AddCommand(customerLinks(), customerLink(), customerUnlink(), customerSearchCommand())
 	for _, kind := range []uint16{protocol.AssetTypeCustomerCompany, protocol.AssetTypeCustomerContact, protocol.AssetTypeCustomerActivity} {
-		group := &cobra.Command{Use: assetTypeName(kind), Short: "Manage customer " + assetTypeName(kind) + " assets"}
+		group := customer
+		if kind != protocol.AssetTypeCustomerCompany {
+			group = &cobra.Command{Use: assetTypeName(kind), Short: "Manage " + assetTypeName(kind) + " records", Args: cobra.NoArgs, RunE: customer.RunE}
+		}
 		get := &cobra.Command{Use: "get <id>", Short: "Get metadata and full record body", Args: cobra.ExactArgs(1)}
 		get.Run = customerRun(func(cmd *cobra.Command, args []string, s *conn.Session) error {
 			id, err := customerID(args[0])
@@ -600,8 +691,9 @@ func init() {
 		group.AddCommand(customerList(kind), get, customerWrite(kind, "create"), customerWrite(kind, "update"), customerWrite(kind, "delete"))
 		if kind == protocol.AssetTypeCustomerCompany {
 			group.AddCommand(customerWrite(kind, "archive"), customerWrite(kind, "restore"))
+		} else {
+			rootCmd.AddCommand(group)
 		}
-		customer.AddCommand(group)
 	}
 	rootCmd.AddCommand(customer)
 }

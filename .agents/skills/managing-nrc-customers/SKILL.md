@@ -5,13 +5,15 @@ description: Manages NRC companies, contacts, durable customer activities and li
 
 # Managing NRC Customers
 
-Use the `nrc customer` CLI to read and maintain the same customer assets and edges
-as the NRC customer workspace. Do not invent a separate CRM database or metadata
-field for membership.
+Use `nrc customer` for companies, `nrc contact` for contacts and `nrc activity`
+for durable activities. These read and maintain the same assets and edges as the
+NRC customer workspace. Do not invent a separate CRM database or metadata field
+for membership. Commands are flat; there are no nested compatibility aliases.
 
 ## Establish scope and available commands
 
-1. Use the installed `nrc` executable. Run `nrc customer --help` or
+1. Use the installed `nrc` executable. Run `nrc customer --help`,
+   `nrc contact --help`, `nrc activity --help` or
    `nrc capabilities` if the command contract is uncertain. If unavailable in a
    development checkout, build from `cli/` with `go build -o /tmp/nrc ./cmd/nrc`
    and use `/tmp/nrc`. Do not silently reconfigure a user's server or workspace.
@@ -29,34 +31,45 @@ field for membership.
 
 ## Read only what the question needs
 
-- Exact company: `nrc customer company get <id>`.
-- Find companies: `nrc customer company list --search 'text'`.
-  Server search includes company metadata and linked contact fields. Archived
-  companies are excluded unless `--archived` is set (which includes both states).
+- Exact company: `nrc customer get <id>`.
+- Find companies: `nrc customer search 'text' --limit 20` or
+  `nrc customer list --search 'text' --page-size 20`. Both use the hybrid search
+  service; company metadata and matching linked contacts contribute to company
+  results. Archived companies are excluded unless `--archived` is set (which
+  includes both states). Matches are loaded fresh from NRC; unavailable or
+  incompatible search returns an error, not a different fallback search.
 - Read one company's relationships: `nrc customer links <company-id>`.
   This reads only incident edges in both directions, not the whole workspace graph.
 - For each relevant edge, take the endpoint opposite the company. An `asset`
   endpoint can be fetched with `nrc asset get <id>`; `type` identifies `company`,
-  `contact`, `activity`, `note`, etc. Use `customer contact get` or
-  `customer activity get` for parsed `metadata` and decoded `body` once its type
+  `contact`, `activity`, `note`, etc. Use `nrc contact get` or
+  `nrc activity get` for parsed `metadata` and decoded `body` once its type
   is known. For a task endpoint, use
   `nrc task get <id>`.
 - Contacts and activities belong to a company through `member-of` asset edges
   (member → company) in either direction. Other relations, including `related-to`,
   may describe work but are not contact or activity membership. Deduplicate
   endpoint IDs if multiple edges reach them.
-- `customer contact list` and `customer activity list` are **workspace-wide typed
+- `nrc contact list` and `nrc activity list` are **workspace-wide typed
   registers**, not company-filtered lists. Prefer the incident-edge workflow for
   one company. Do not load all workspace assets, tasks or edges for that question.
 
 ### Pagination and completeness
 
-`company/contact/activity list` returns `entries`, `total_count`, `has_more`,
+`nrc customer list` without search text, `nrc contact list` and `nrc activity list`
+return `entries`, `total_count`, `has_more`,
 and `next_cursor`. It defaults to one page of up to 50 records. Use `--page-size`
 from 1 to 250; the byte limit can yield fewer records. Resume with
-`--cursor '<next_cursor>'` and identical type and search/archive filters.
-Company search sorts by ascending company ID; typed contact/activity lists sort
+`--cursor '<next_cursor>'` and identical type/archive filters.
+The company register sorts by ascending company ID; typed contact/activity lists sort
 by descending `(updated_at, asset_id)`.
+
+Nonblank company search returns ranked `entries`, `query`, `limit`,
+`limit_reached`, `complete:false` and `stale`, not an inventory count or cursor.
+`limit_reached` only indicates possible additional matches. Report stale evidence
+when `stale=true`; never treat relevance results as a complete list. Nonblank
+`list --search` rejects `--all`/`--cursor`. Blank/whitespace `--search` uses the
+ordinary NRC register and supports pagination as above.
 
 `customer links` returns `edges`, `total_count`, `has_more`, and `next_edge_id`.
 Resume with `--after <next_edge_id>` for the same company. Edges sort by ascending
@@ -75,12 +88,12 @@ Perform only the mutations the user requested or approved. Resolve ambiguous
 company names before writing. IDs below are placeholders; use actual returned IDs.
 
 ```bash
-nrc customer company create --title 'Example GmbH' --number 'C-104' --city 'Berlin'
-nrc customer contact create --company <company-id> --title 'Alex Example' --role 'Technical contact' --email 'alex@example.test'
-nrc customer activity create --company <company-id> --title 'API decision' --kind Decision --body 'Keep the existing API through the next release.'
-nrc customer company update <company-id> --assignee 'alex'
-nrc customer contact update <contact-id> --phone ''
-nrc customer activity update <activity-id> --body-file ./record.txt
+nrc customer create --title 'Example GmbH' --number 'C-104' --city 'Berlin'
+nrc contact create --company <company-id> --title 'Alex Example' --role 'Technical contact' --email 'alex@example.test'
+nrc activity create --company <company-id> --title 'API decision' --kind Decision --body 'Keep the existing API through the next release.'
+nrc customer update <company-id> --assignee 'alex'
+nrc contact update <contact-id> --phone ''
+nrc activity update <activity-id> --body-file ./record.txt
 ```
 
 - Company fields: `--title`, `--number`, `--sector`, `--account-type`, `--city`,
@@ -158,8 +171,8 @@ nrc customer link <company-id> asset <file-asset-id>
 nrc customer link <company-id> asset <contact-or-note-id>
 nrc customer link <company-id> task <task-id> --relation related-to
 nrc customer unlink <company-id> <edge-id>
-nrc customer company archive <company-id>
-nrc customer company restore <company-id>
+nrc customer archive <company-id>
+nrc customer restore <company-id>
 ```
 
 `link` defaults to `member-of` for contacts and activities and `related-to`
@@ -176,8 +189,9 @@ Contacts can belong to multiple companies.
 
 Prefer archiving a company over deletion unless permanent removal was requested.
 Archive is a flag, not a write lock: the CLI can still edit/link archived records.
-For deliberate permanent removal use `customer company|contact|activity delete
-<id>`. Deleting an asset removes its incident edges but does not recursively
+For deliberate permanent removal use `nrc customer delete <id>`,
+`nrc contact delete <id>` or `nrc activity delete <id>`.
+Deleting an asset removes its incident edges but does not recursively
 delete linked contacts, activities or tasks. Do not delete shared records merely
 to remove a company association.
 

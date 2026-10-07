@@ -65,7 +65,9 @@ drafts before retrying; creation is not idempotent and is never automatically re
 nrc task list
 nrc note list
 nrc slice list
-nrc customer company list
+nrc customer list
+nrc contact list
+nrc activity list
 nrc file list
 nrc appointment list --from 2026-09-01T00:00:00Z --to 2026-10-01T00:00:00Z
 nrc search query "release checklist"
@@ -108,7 +110,34 @@ without deleting it. Use `slice close` when the outcome is reached; task complet
 does not close the slice automatically. Use `slice reopen` to reopen it.
 
 To connect the work to a customer, first find the company ID with
-`nrc customer company list`. Replace `7` below with that ID:
+`nrc customer list`. Replace `7` below with that ID:
+
+For relevance-ranked discovery use `nrc customer search "Acme" --limit 20`
+or `nrc customer list --search "Acme" --page-size 20`.
+Both use nrc-search's hybrid text/vector company register: matching linked
+contacts contribute to company matches, companies are deduplicated, and archived
+companies are excluded unless `--archived` is set. Returned records are loaded
+fresh from NRC. Search requires the typed search service; unavailable search
+returns an error, not a silently different search.
+
+Blank/whitespace `--search` still lists the complete NRC register with normal
+cursor pagination. Nonblank `--search` cannot be combined with `--all` or
+`--cursor`: ranked search returns `entries`, `query`, `limit`, `limit_reached`,
+`complete:false`, and `stale`, not an inventory count or pagination cursor.
+`limit_reached` signals possible additional matches, not an exact total.
+
+Companies use `nrc customer`, contacts use `nrc contact`, and durable activities
+use `nrc activity`, with `list`, `get`, `create`, `update`, and `delete` directly
+under each. Only customers support `archive`, `restore`, and company-register
+`search`. Contact/activity creation requires `--company <id>`; their lists are
+workspace-wide. The previous nested command paths are removed without aliases.
+
+```sh
+nrc customer create --title "Example GmbH" --city "Berlin"
+nrc contact create --company 7 --title "Anna Beispiel" --email "anna@example.test"
+nrc contact update 81 --phone "+49 30 123456"
+nrc activity create --company 7 --title "Angebot besprochen" --kind Call --body "Angebot bis Freitag senden."
+```
 
 ```sh
 nrc customer link 7 task 42
@@ -119,7 +148,7 @@ nrc customer links 7
 
 Customer work links default to `related-to`. Contacts and activities default to
 `member-of`. `customer links` lists edges; use `task get`, `note get`, `file get`
-or `customer company get` to read the records. To remove a company link, use
+or `customer get` to read the records. To remove a company link, use
 `customer unlink <company-id> <edge-id>`; both records remain.
 
 ## Edges and graph queries

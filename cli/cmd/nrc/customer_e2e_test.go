@@ -57,8 +57,8 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 		if err := json.Unmarshal(data, &result); err != nil {
 			t.Fatalf("%v invalid JSON: %s", args, data)
 		}
-		if ok && len(args) > 2 && args[0] == "customer" {
-			if operation, exists := map[string]string{"create": "created", "update": "updated", "delete": "deleted", "archive": "archived", "restore": "restored"}[args[2]]; exists && string(result["operation"]) != strconv.Quote(operation) {
+		if ok && len(args) > 1 && (args[0] == "customer" || args[0] == "contact" || args[0] == "activity") {
+			if operation, exists := map[string]string{"create": "created", "update": "updated", "delete": "deleted", "archive": "archived", "restore": "restored"}[args[1]]; exists && string(result["operation"]) != strconv.Quote(operation) {
 				t.Fatalf("incorrect mutation operation: %s", data)
 			}
 		}
@@ -72,11 +72,17 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 		}
 		return value
 	}
-	company := id(run(true, "customer", "company", "create", "--title", "First", "--city", "Berlin"))
-	other := id(run(true, "customer", "company", "create", "--title", "Second"))
-	contact := id(run(true, "customer", "contact", "create", "--company", company, "--title", "Alice", "--email", "rare@example.test"))
-	activity := id(run(true, "customer", "activity", "create", "--company", company, "--title", "Decision", "--kind", "Decision", "--body", "Keep the existing API."))
-	contact2 := id(run(true, "customer", "contact", "create", "--company", other, "--title", "Bob"))
+	company := id(run(true, "customer", "create", "--title", "First", "--city", "Berlin"))
+	other := id(run(true, "customer", "create", "--title", "Second"))
+	contact := id(run(true, "contact", "create", "--company", company, "--title", "Alice", "--email", "rare@example.test"))
+	activity := id(run(true, "activity", "create", "--company", company, "--title", "Decision", "--kind", "Decision", "--body", "Keep the existing API."))
+	contact2 := id(run(true, "contact", "create", "--company", other, "--title", "Bob"))
+	for _, kind := range []string{"company", "contact", "activity"} {
+		failure := run(false, "customer", kind, "get", company)
+		if !strings.Contains(string(failure["error"]), "invalid_argument") {
+			t.Fatalf("legacy nested command was not rejected: %s", failure)
+		}
+	}
 	readEntries := func(result map[string]json.RawMessage) []customerRecord {
 		t.Helper()
 		var entries []customerRecord
@@ -85,23 +91,35 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 		}
 		return entries
 	}
-	page := run(true, "customer", "company", "list", "--page-size", "1")
+	page := run(true, "customer", "list", "--page-size", "1")
 	if len(readEntries(page)) != 1 || string(page["has_more"]) != "true" || string(page["total_count"]) != "2" {
 		t.Fatalf("company page: %s", page)
 	}
 	var cursor string
 	_ = json.Unmarshal(page["next_cursor"], &cursor)
-	if next := run(true, "customer", "company", "list", "--page-size", "1", "--cursor", cursor); len(readEntries(next)) != 1 || string(next["has_more"]) != "false" {
+	if next := run(true, "customer", "list", "--page-size", "1", "--cursor", cursor); len(readEntries(next)) != 1 || string(next["has_more"]) != "false" {
 		t.Fatalf("company cursor: %s", next)
 	}
-	if all := run(true, "customer", "company", "list", "--page-size", "1", "--all"); len(readEntries(all)) != 2 {
+	if all := run(true, "customer", "list", "--page-size", "1", "--all"); len(readEntries(all)) != 2 {
 		t.Fatalf("company all: %s", all)
 	}
-	search := readEntries(run(true, "customer", "company", "list", "--search", "rare@example.test"))
-	if len(search) != 1 || strconv.FormatUint(search[0].ID, 10) != company {
-		t.Fatalf("contact search: %+v", search)
+	// This fixture has no search sidecar. Hybrid routing is covered by the
+	// HTTP/WebSocket contract test; blank search must remain a paginated NRC list.
+	search := readEntries(run(true, "customer", "list", "--search", "   ", "--page-size", "1", "--all"))
+	if len(search) != 2 {
+		t.Fatalf("blank search register: %+v", search)
 	}
-	if all := readEntries(run(true, "customer", "contact", "list", "--all", "--page-size", "1")); len(all) != 2 {
+	for _, flag := range []string{"--all", "--cursor"} {
+		args := []string{"customer", "list", "--search", "rare@example.test", flag}
+		if flag == "--cursor" {
+			args = append(args, cursor)
+		}
+		failure := run(false, args...)
+		if !strings.Contains(string(failure["error"]), "invalid_argument") {
+			t.Fatalf("ranked query accepted paging flag: %s", failure)
+		}
+	}
+	if all := readEntries(run(true, "contact", "list", "--all", "--page-size", "1")); len(all) != 2 {
 		t.Fatalf("typed paging: %+v", all)
 	}
 	links := run(true, "customer", "links", company, "--page-size", "1")
@@ -117,37 +135,37 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 		t.Fatalf("edge cursor: %s", page)
 	}
 	// A metadata-only activity edit must not clear its durable record body.
-	run(true, "customer", "activity", "update", activity, "--title", "Renamed")
-	got := run(true, "customer", "activity", "get", activity)
+	run(true, "activity", "update", activity, "--title", "Renamed")
+	got := run(true, "activity", "get", activity)
 	if string(got["body"]) != `"Keep the existing API."` {
 		t.Fatalf("body lost: %s", got)
 	}
-	run(true, "customer", "company", "archive", company)
-	if list := readEntries(run(true, "customer", "company", "list")); len(list) != 1 || strconv.FormatUint(list[0].ID, 10) != other {
+	run(true, "customer", "archive", company)
+	if list := readEntries(run(true, "customer", "list")); len(list) != 1 || strconv.FormatUint(list[0].ID, 10) != other {
 		t.Fatalf("archive visibility: %+v", list)
 	}
-	if list := readEntries(run(true, "customer", "company", "list", "--archived")); len(list) != 2 {
+	if list := readEntries(run(true, "customer", "list", "--archived")); len(list) != 2 {
 		t.Fatal("archived record missing")
 	}
-	run(true, "customer", "company", "restore", company)
+	run(true, "customer", "restore", company)
 	// Reverse direction membership must work, and unlink must retain its endpoint.
 	reverse := id(run(true, "edge", "create", "--source-type", "asset", "--source-id", company, "--target-type", "asset", "--target-id", contact2, "--relation", "member-of"))
 	run(false, "customer", "unlink", other, reverse)
 	run(true, "customer", "unlink", company, reverse)
-	run(true, "customer", "contact", "get", contact2)
+	run(true, "contact", "get", contact2)
 	link := id(run(true, "customer", "link", other, "asset", contact))
 	run(true, "customer", "unlink", other, link)
 	// Partial edit preserves extension metadata, including integers beyond float64.
 	preview := `{"version":1,"title":"Extended","custom":18446744073709551615,"city":"Berlin"}`
 	run(true, "asset", "update", company, preview, "private payload")
-	run(true, "customer", "company", "update", company, "--city", "")
-	got = run(true, "customer", "company", "get", company)
+	run(true, "customer", "update", company, "--city", "")
+	got = run(true, "customer", "get", company)
 	var metadata map[string]json.RawMessage
 	_ = json.Unmarshal(got["metadata"], &metadata)
 	if string(metadata["custom"]) != "18446744073709551615" || string(metadata["city"]) != `""` || string(got["body"]) != `"private payload"` {
 		t.Fatalf("partial edit lost data: %s", got)
 	}
-	projected := run(true, "customer", "company", "get", company, "--fields", "metadata,updated_at")
+	projected := run(true, "customer", "get", company, "--fields", "metadata,updated_at")
 	if !bytes.Equal(projected["metadata"], got["metadata"]) || !bytes.Equal(projected["updated_at"], got["updated_at"]) {
 		t.Fatalf("projection changed numeric values: %s", projected)
 	}
@@ -163,7 +181,7 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run(true, "customer", "company", "update", company, "--city", "Concurrent")
+	run(true, "customer", "update", company, "--city", "Concurrent")
 	patch, err := protocol.EncodeTransactionAssetPatch(protocol.TransactionAssetPatch{ConvID: 2, Asset: protocol.Existing(protocol.TransactionEntityAsset, companyID), IfUpdatedAt: before.UpdatedAt, Present: protocol.TransactionAssetPatchPreview, Preview: []byte(before.Preview)})
 	if err != nil {
 		t.Fatal(err)
@@ -171,18 +189,18 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 	if _, err := customerTransaction(s, []protocol.TransactionOperation{{Type: protocol.TransactionOpAssetPatch, Body: patch}}); err == nil {
 		t.Fatal("stale update committed")
 	}
-	got = run(true, "customer", "company", "get", company)
+	got = run(true, "customer", "get", company)
 	_ = json.Unmarshal(got["metadata"], &metadata)
 	if string(metadata["city"]) != `"Concurrent"` || string(got["body"]) != `"private payload"` {
 		t.Fatalf("concurrent writer lost: %s", got)
 	}
 	// A company vanishing after validation must reject both create and link.
-	doomed := id(run(true, "customer", "company", "create", "--title", "Temporary"))
+	doomed := id(run(true, "customer", "create", "--title", "Temporary"))
 	doomedID, _ := strconv.ParseUint(doomed, 10, 64)
 	if _, err := customerAsset(s, doomedID, protocol.AssetTypeCustomerCompany); err != nil {
 		t.Fatal(err)
 	}
-	run(true, "customer", "company", "delete", doomed)
+	run(true, "customer", "delete", doomed)
 	create, err := protocol.EncodeTransactionAssetCreate(protocol.TransactionAssetCreate{ConvID: 2, AssetType: protocol.AssetTypeCustomerContact, Preview: []byte(`{"version":1,"title":"Must not exist"}`)})
 	if err != nil {
 		t.Fatal(err)
@@ -194,17 +212,17 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 	if _, err := customerTransaction(s, []protocol.TransactionOperation{{Type: protocol.TransactionOpAssetCreate, Body: create}, {Type: protocol.TransactionOpEdgeCreate, Body: edge}}); err == nil {
 		t.Fatal("missing company transaction committed")
 	}
-	if entries := readEntries(run(true, "customer", "contact", "list", "--all")); len(entries) != 2 {
+	if entries := readEntries(run(true, "contact", "list", "--all")); len(entries) != 2 {
 		t.Fatalf("orphan contact: %+v", entries)
 	}
-	run(false, "customer", "contact", "update", company, "--title", "wrong type")
-	run(false, "customer", "activity", "create", "--company", company, "--title", "Blank", "--body", " ")
-	run(false, "customer", "company", "list", "--page-size", "251")
-	run(false, "customer", "company", "create", "--title", "projected", "--fields", "id")
-	run(true, "customer", "activity", "delete", activity)
-	run(true, "customer", "contact", "delete", contact)
-	run(true, "customer", "company", "delete", company)
-	run(true, "customer", "company", "delete", other)
-	run(true, "customer", "contact", "get", contact2) // Deleting a company does not delete shared contacts.
-	t.Log("PASS customer CRUD, contact search, cursor/all paging, incident/reverse edges, archive/restore, partial edits and unlink retention")
+	run(false, "contact", "update", company, "--title", "wrong type")
+	run(false, "activity", "create", "--company", company, "--title", "Blank", "--body", " ")
+	run(false, "customer", "list", "--page-size", "251")
+	run(false, "customer", "create", "--title", "projected", "--fields", "id")
+	run(true, "activity", "delete", activity)
+	run(true, "contact", "delete", contact)
+	run(true, "customer", "delete", company)
+	run(true, "customer", "delete", other)
+	run(true, "contact", "get", contact2) // Deleting a company does not delete shared contacts.
+	t.Log("PASS customer CRUD, blank-search cursor/all paging, ranked paging rejection, incident/reverse edges, archive/restore, partial edits and unlink retention")
 }
