@@ -1,8 +1,13 @@
 package main
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
 
-const default_embedding_schema = "embeddinggemma-2-v1-chunked"
+	"github.com/heavyhorst/nrc/protocol-go"
+)
+
+const default_embedding_schema = "embeddinggemma-2-v2-attachments"
 
 const (
 	embedding_gemma_query_prefix = "task: search result | query: "
@@ -24,6 +29,11 @@ func format_document_for_embedding(preview, content string) string {
 	return embedding_gemma_doc_prefix + title + embedding_gemma_text_prefix + trimmedContent
 }
 
-func document_content_hash(preview, content string) uint64 {
-	return contentHash([]byte(format_document_for_embedding(preview, content)))
+func document_content_hash(preview, content string, attachments ...protocol.Attachment) uint64 {
+	text := []byte(format_document_for_embedding(preview, content))
+	if len(attachments) > 0 {
+		metadata, _ := json.Marshal(attachments)
+		text = append(append(text, 0), metadata...)
+	}
+	return contentHash(text)
 }

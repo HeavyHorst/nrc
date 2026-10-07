@@ -15,6 +15,10 @@ func NewEmbedder(modelPath, tokenizerPath string) (Embedder, error) {
 	return nil, fmt.Errorf("embedder not available: built with noembed tag")
 }
 
+func newGenerationEmbedder(modelPath, tokenizerPath string, legacy bool) (Embedder, error) {
+	return NewEmbedder(modelPath, tokenizerPath)
+}
+
 func (e *stubEmbedder) Embed(text string) ([]float32, error) {
 	return nil, fmt.Errorf("embedder not available: built with noembed tag")
 }

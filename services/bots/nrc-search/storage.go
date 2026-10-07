@@ -8,18 +8,22 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"time"
 
+	"github.com/heavyhorst/nrc/protocol-go"
 	"go.etcd.io/bbolt"
 )
 
 type QueueEntry struct {
-	ConvID    uint64
-	AssetType uint16
-	Content   string
-	Preview   string
-	Metadata  SearchMetadata
-	Version   uint64
+	ConvID      uint64
+	AssetType   uint16
+	Content     string
+	Preview     string
+	Metadata    SearchMetadata
+	Version     uint64
+	Attachments []protocol.Attachment
 }
 
 type StoredEmbedding struct {
@@ -31,6 +35,7 @@ type StoredEmbedding struct {
 	Preview     string
 	Payload     string
 	Metadata    SearchMetadata
+	SearchText  string
 }
 
 type StoredChunkEmbedding struct {
@@ -302,6 +307,60 @@ func (s *Storage) workspaceBucketRead(tx *bbolt.Tx, parent []byte, workspace str
 	return p.Bucket([]byte(workspace))
 }
 
+func (s *Storage) EmbeddingSchema() (string, error) {
+	var schema string
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		schema = string(tx.Bucket(bucketMeta).Get(metaEmbeddingSchema))
+		return nil
+	})
+	return schema, err
+}
+
+// Empty queue buckets also retain workspaces that are empty or have only pending
+// work. Never discover rebuild scope solely from nonempty vector buckets.
+func (s *Storage) RegisterWorkspace(workspace string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		_, err := s.workspaceBucket(tx, bucketQueue, workspace)
+		return err
+	})
+}
+
+func (s *Storage) Workspaces() ([]string, error) {
+	set := make(map[string]bool)
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		for _, name := range [][]byte{bucketEmbeddings, bucketEntityEmbeddings, bucketQueue, bucketEntityQueue, bucketRoomSync} {
+			if err := tx.Bucket(name).ForEach(func(key, value []byte) error {
+				if value == nil {
+					set[string(key)] = true
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	var workspaces []string
+	for workspace := range set {
+		workspaces = append(workspaces, workspace)
+	}
+	sort.Strings(workspaces)
+	return workspaces, err
+}
+
+func (s *Storage) QueuesEmpty(workspace string) (bool, error) {
+	empty := true
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		for _, name := range [][]byte{bucketQueue, bucketEntityQueue} {
+			if bucket := s.workspaceBucketRead(tx, name, workspace); bucket != nil && bucket.Stats().KeyN != 0 {
+				empty = false
+			}
+		}
+		return nil
+	})
+	return empty, err
+}
+
 func (s *Storage) EnqueueAsset(workspace string, assetID uint64, entry QueueEntry) error {
 	val, err := gobEncode(entry)
 	if err != nil {
@@ -469,6 +528,28 @@ func (s *Storage) DeleteEntityState(identity EntityIdentity) error {
 		return err
 	}
 	return s.db.Update(func(tx *bbolt.Tx) error {
+		if identity.EntityType == EntityTypeAsset {
+			for _, name := range [][]byte{bucketQueue, bucketEmbeddings} {
+				legacy := s.workspaceBucketRead(tx, name, identity.Workspace)
+				if legacy == nil {
+					continue
+				}
+				legacyKey := uint64ToKey(identity.EntityID)
+				value := legacy.Get(legacyKey)
+				if value == nil {
+					continue
+				}
+				var scope struct{ ConvID uint64 }
+				if err := gobDecode(value, &scope); err != nil {
+					return err
+				}
+				if scope.ConvID == identity.ConvID {
+					if err := legacy.Delete(legacyKey); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		queue := s.workspaceBucketRead(tx, bucketEntityQueue, identity.Workspace)
 		if queue != nil {
 			if err := queue.Delete(key); err != nil {
@@ -490,10 +571,6 @@ func (s *Storage) CommitEntityEmbedding(identity EntityIdentity, entry QueueEntr
 	if err := identity.Validate(); err != nil {
 		return false, err
 	}
-	queueValue, err := gobEncode(entry)
-	if err != nil {
-		return false, fmt.Errorf("encode entity queue entry: %w", err)
-	}
 	emb.ConvID = identity.ConvID
 	embValue, err := gobEncode(emb)
 	if err != nil {
@@ -506,7 +583,20 @@ func (s *Storage) CommitEntityEmbedding(identity EntityIdentity, entry QueueEntr
 	committed := false
 	err = s.db.Update(func(tx *bbolt.Tx) error {
 		queue := s.workspaceBucketRead(tx, bucketEntityQueue, identity.Workspace)
-		if queue == nil || !bytes.Equal(queue.Get(key), queueValue) {
+		queueKey := key
+		if identity.EntityType == EntityTypeAsset && (queue == nil || queue.Get(key) == nil) {
+			queue = s.workspaceBucketRead(tx, bucketQueue, identity.Workspace)
+			queueKey = uint64ToKey(identity.EntityID)
+		}
+		if queue == nil || queue.Get(queueKey) == nil {
+			return nil
+		}
+		var current QueueEntry
+		if err := gobDecode(queue.Get(queueKey), &current); err != nil {
+			return err
+		}
+		// Gob schemas evolve; compare values, not their encoded type definitions.
+		if !reflect.DeepEqual(current, entry) {
 			return nil
 		}
 		embeddings, err := s.workspaceBucket(tx, bucketEntityEmbeddings, identity.Workspace)
@@ -516,7 +606,16 @@ func (s *Storage) CommitEntityEmbedding(identity EntityIdentity, entry QueueEntr
 		if err := embeddings.Put(key, embValue); err != nil {
 			return err
 		}
-		if err := queue.Delete(key); err != nil {
+		if identity.EntityType == EntityTypeAsset {
+			legacy, err := s.workspaceBucket(tx, bucketEmbeddings, identity.Workspace)
+			if err != nil {
+				return err
+			}
+			if err := legacy.Put(uint64ToKey(identity.EntityID), embValue); err != nil {
+				return err
+			}
+		}
+		if err := queue.Delete(queueKey); err != nil {
 			return err
 		}
 		committed = true
@@ -819,6 +918,25 @@ func (s *Storage) GetEntityQueueEntry(identity EntityIdentity) (entry QueueEntry
 func (s *Storage) EntityQueueIdentities(workspace string, entityType EntityType, convID uint64) ([]EntityIdentity, error) {
 	var identities []EntityIdentity
 	err := s.db.View(func(tx *bbolt.Tx) error {
+		if entityType == EntityTypeAsset {
+			if legacy := s.workspaceBucketRead(tx, bucketQueue, workspace); legacy != nil {
+				if err := legacy.ForEach(func(key, value []byte) error {
+					if value == nil {
+						return nil
+					}
+					var entry QueueEntry
+					if err := gobDecode(value, &entry); err != nil {
+						return err
+					}
+					if entry.ConvID == convID {
+						identities = append(identities, assetIdentity(workspace, keyToUint64(key), convID))
+					}
+					return nil
+				}); err != nil {
+					return err
+				}
+			}
+		}
 		bucket := s.workspaceBucketRead(tx, bucketEntityQueue, workspace)
 		if bucket == nil {
 			return nil
@@ -865,14 +983,21 @@ func (s *Storage) DeleteEntityQueueEntryIfCurrent(identity EntityIdentity, entry
 	if err != nil {
 		return false, err
 	}
-	value, err := gobEncode(entry)
-	if err != nil {
-		return false, err
-	}
 	deleted := false
 	err = s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := s.workspaceBucketRead(tx, bucketEntityQueue, identity.Workspace)
-		if bucket == nil || !bytes.Equal(bucket.Get(key), value) {
+		if identity.EntityType == EntityTypeAsset && (bucket == nil || bucket.Get(key) == nil) {
+			bucket = s.workspaceBucketRead(tx, bucketQueue, identity.Workspace)
+			key = uint64ToKey(identity.EntityID)
+		}
+		if bucket == nil || bucket.Get(key) == nil {
+			return nil
+		}
+		var current QueueEntry
+		if err := gobDecode(bucket.Get(key), &current); err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(current, entry) {
 			return nil
 		}
 		deleted = true

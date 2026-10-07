@@ -87,6 +87,11 @@ to the configured LLM provider. Private workspace membership does not prevent
 operator/bot access or external LLM processing. Use a suitably configured local
 provider if data must stay local.
 
+Search downloads attachments from the proxy's separate private listener on 8094,
+using the bot credential and an explicit stored workspace grant for each blob.
+Never publish this port. Old unscoped blobs require correct reupload/assignment
+before Search can index them, even when public file access is tailnet-open.
+
 Optional Publish has a separate public listener for approved articles and files.
 Only that listener (port 8093) may be exposed through public HTTPS. Keep its review
 interface and API (port 8094) private. The Tailscale proxy's agent gateway checks
@@ -117,7 +122,12 @@ docker compose --env-file .env -f docker/docker-compose.yml --profile metrics up
 
 You can combine profiles. See [AI](../services/bots/nrc-ai/README.md),
 [Search](../services/bots/nrc-search/README.md), [Metrics](../services/bots/nrc-metrics/README.md).
-Search's image downloads roughly 1.2 GiB of model data and includes native libraries.
+Search's image downloads roughly 4 GiB of model data and includes native libraries,
+image/audio encoders, the previous 300M model, FFmpeg and Poppler. Model upgrades
+eagerly rebuild known workspaces in a shadow index while the old model/index serve
+requests, then switch together and delete only the retired derived index. Allow
+disk space for both indexes and RAM for both models plus media inference;
+see Search's migration, format and resource limits before enabling it on a small host.
 The `registry` profile is only a local image registry; it is not needed to run NRC.
 
 To stop AI, run `docker compose --env-file .env -f docker/docker-compose.yml stop ai`.

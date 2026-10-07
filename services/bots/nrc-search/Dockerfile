@@ -1,3 +1,8 @@
+FROM node:24-bookworm-slim AS media-builder
+WORKDIR /app
+COPY services/bots/nrc-search/package.json services/bots/nrc-search/package-lock.json ./
+RUN npm ci --omit=dev
+
 # Build stage
 FROM golang:1.26-bookworm AS builder
 
@@ -41,6 +46,25 @@ RUN mkdir -p /app/models && \
     ldconfig && \
     rm /tmp/onnxruntime.tar.gz
 
+# Only media encoders and processor configuration; no second text backbone.
+RUN mkdir -p /app/models/onnx && \
+    for file in config.json processor_config.json preprocessor_config.json tokenizer_config.json \
+        onnx/vision_encoder.onnx onnx/vision_encoder.onnx_data \
+        onnx/audio_encoder.onnx onnx/audio_encoder.onnx_data; do \
+        curl -fL --retry 3 -o /app/models/$file \
+        https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/${EMBEDDING_MODEL_REVISION}/$file || exit 1; \
+    done
+
+# Retain the previous model for serving existing 300M indexes during migration.
+ARG LEGACY_MODEL_REVISION=5090578d9565bb06545b4552f76e6bc2c93e4a66
+RUN mkdir -p /app/models/legacy && \
+    for file in model.onnx model.onnx_data; do \
+        curl -fL --retry 3 -o /app/models/legacy/$file \
+        https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/${LEGACY_MODEL_REVISION}/onnx/$file || exit 1; \
+    done && \
+    curl -fL --retry 3 -o /app/models/legacy/tokenizer.json \
+    https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/${LEGACY_MODEL_REVISION}/tokenizer.json
+
 # Runtime stage
 FROM debian:bookworm-slim
 
@@ -49,12 +73,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libstdc++6 \
     libgomp1 \
+    ffmpeg \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --no-create-home nrcsearch
 
 COPY --from=builder /app/nrc-search /app/nrc-search
 COPY --from=builder /app/models /app/models
+COPY --from=builder /app/media_worker.mjs /app/media_worker.mjs
+COPY --from=media-builder /usr/local/bin/node /usr/local/bin/node
+COPY --from=media-builder /app/node_modules /app/node_modules
 COPY --from=builder /usr/local/onnxruntime-linux-x64-1.24.1/lib /usr/local/lib/onnxruntime
 
 RUN mkdir -p /app/data && chown -R nrcsearch:nrcsearch /app/data /app/models && \
@@ -64,6 +93,7 @@ RUN mkdir -p /app/data && chown -R nrcsearch:nrcsearch /app/data /app/models && 
     ldconfig
 
 WORKDIR /app
+ENV MEDIA_MODEL_DIR=/app/models MEDIA_WORKER_PATH=/app/media_worker.mjs
 USER nrcsearch
 EXPOSE 8090
 

@@ -369,6 +369,7 @@ func TestDelayedTaskRefreshCannotResurrectDeletion(t *testing.T) {
 	client.taskMutationMu.Lock()
 	expectedVersion := client.nextVersion.Add(1)
 	client.taskMutations[identity.key()] = expectedVersion
+	client.unresolvedTasks[identity.key()] = expectedVersion
 	client.taskMutationMu.Unlock()
 	requestStarted := make(chan struct{})
 	releaseResponse := make(chan struct{})

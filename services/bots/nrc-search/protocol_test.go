@@ -429,14 +429,14 @@ func TestEnvOrDefault(t *testing.T) {
 	})
 }
 
-func TestLoadConfigIndexesTasksWithoutChangingAssetDefaults(t *testing.T) {
+func TestLoadConfigIndexesTasksAndFiles(t *testing.T) {
 	t.Setenv("EMBED_TASKS", "")
 	t.Setenv("EMBED_ASSET_TYPES", "")
 	cfg := loadConfig()
 	if !cfg.EmbedTasks {
 		t.Fatal("tasks should be indexed by default")
 	}
-	want := []uint16{1, 2, 4, 5}
+	want := []uint16{1, 2, 3, 4, 5}
 	if len(cfg.EmbedAssetTypes) != len(want) {
 		t.Fatalf("asset defaults = %v, want %v", cfg.EmbedAssetTypes, want)
 	}

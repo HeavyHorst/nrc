@@ -224,7 +224,7 @@ func (idx *Index) StaleEntityIdentities(workspace string, convID uint64, entityT
 			continue
 		}
 		entry := wsEntries[key]
-		if entry == nil || (!entry.IndexedAt.IsZero() && entry.IndexedAt.After(indexedBefore)) {
+		if entry == nil || (!indexedBefore.IsZero() && !entry.IndexedAt.IsZero() && entry.IndexedAt.After(indexedBefore)) {
 			continue
 		}
 		if _, exists := serverIDs[key.EntityID]; !exists {

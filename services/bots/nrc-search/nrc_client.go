@@ -47,6 +47,7 @@ type NRCClient struct {
 	workspace string
 	nickname  string
 	botSecret string
+	filesURL  string
 
 	embedAssetTypes   map[uint16]bool
 	embedTasks        bool
@@ -68,8 +69,6 @@ type NRCClient struct {
 	embedCh         chan EmbedJob
 	diskSignal      chan struct{}
 
-	pendingReconcileMu     sync.Mutex
-	pendingReconcile       map[uint64]chan []protocol.Asset
 	pendingReconcilePageMu sync.Mutex
 	pendingReconcilePage   map[uint64]chan *protocol.AssetListPageResponse
 	pendingTaskPagesMu     sync.Mutex
@@ -84,6 +83,10 @@ type NRCClient struct {
 	nextVersion     atomic.Uint64
 	taskMutationMu  sync.Mutex
 	taskMutations   map[entityKey]uint64
+	expectedHashes  map[entityKey]uint64
+	unresolvedTasks map[entityKey]uint64
+	inventoryEpochs map[uint64]uint64
+	refreshWorkers  sync.WaitGroup
 	sendMessage     func(uint16, []byte) error
 }
 
@@ -98,6 +101,7 @@ func NewNRCClient(cfg Config, workspace string, storage *Storage, embedder Embed
 		workspace:            workspace,
 		nickname:             cfg.NRCNickname,
 		botSecret:            cfg.NRCBotSecret,
+		filesURL:             cfg.FilesURL,
 		embedAssetTypes:      embedTypes,
 		embedTasks:           cfg.EmbedTasks,
 		reconcileInterval:    cfg.ReconcileInterval,
@@ -110,12 +114,14 @@ func NewNRCClient(cfg Config, workspace string, storage *Storage, embedder Embed
 		ready:                make(chan struct{}),
 		embedCh:              make(chan EmbedJob, 256),
 		diskSignal:           make(chan struct{}, 1),
-		pendingReconcile:     make(map[uint64]chan []protocol.Asset),
 		pendingReconcilePage: make(map[uint64]chan *protocol.AssetListPageResponse),
 		pendingTaskPages:     make(map[uint32]chan *protocol.TaskListPage),
 		pendingTaskFull:      make(map[uint32]chan *protocol.TaskFull),
 		embedRetries:         make(map[embedRetryKey]int),
 		taskMutations:        make(map[entityKey]uint64),
+		expectedHashes:       make(map[entityKey]uint64),
+		unresolvedTasks:      make(map[entityKey]uint64),
+		inventoryEpochs:      make(map[uint64]uint64),
 	}, nil
 }
 
@@ -141,6 +147,16 @@ func (c *NRCClient) resetReady() {
 	closeReadyChannel(oldReady)
 }
 
+func (c *NRCClient) invalidateConnection() {
+	c.taskMutationMu.Lock()
+	defer c.taskMutationMu.Unlock()
+	c.resetReady()
+	c.inventoryEpochs = make(map[uint64]uint64)
+	c.mu.Lock()
+	c.subscribedRooms = make(map[uint64]bool)
+	c.mu.Unlock()
+}
+
 func (c *NRCClient) closeReady() {
 	c.readyMu.Lock()
 	ready := c.ready
@@ -162,22 +178,22 @@ func closeReadyChannel(ch chan struct{}) {
 func (c *NRCClient) Run(ctx context.Context) {
 	backoff := 1 * time.Second
 	const maxBackoff = 30 * time.Second
+	c.invalidateConnection()
 
 	for {
-		c.resetReady()
-
-		c.mu.Lock()
-		c.subscribedRooms = make(map[uint64]bool)
-		c.mu.Unlock()
-
+		if ctx.Err() != nil {
+			return
+		}
 		if err := c.connect(ctx); err != nil {
 			slog.Error("NRC client connect failed", "error", err)
 		} else {
 			backoff = 1 * time.Second
 			pingCtx, cancelPing := context.WithCancel(ctx)
-			go c.pingLoop(pingCtx)
+			pingDone := make(chan struct{})
+			go func() { defer close(pingDone); c.pingLoop(pingCtx) }()
 			c.readPump(ctx)
 			cancelPing()
+			<-pingDone
 		}
 
 		select {
@@ -220,13 +236,18 @@ func (c *NRCClient) connect(ctx context.Context) error {
 		return fmt.Errorf("dial %s: %w", url, err)
 	}
 
-	c.conn = conn
-
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		return nil
 	})
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if ctx.Err() != nil {
+		conn.Close()
+		return ctx.Err()
+	}
+	c.conn = conn
 
 	slog.Info("connected to NRC server", "url", url)
 	return nil
@@ -257,6 +278,11 @@ func (c *NRCClient) sendProtocolMessage(opcode uint16, payload []byte) error {
 	}
 
 	c.writeMu.Lock()
+	if c.conn == nil {
+		c.writeMu.Unlock()
+		return fmt.Errorf("NRC connection unavailable")
+	}
+	c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	err = c.conn.WriteMessage(websocket.BinaryMessage, buf)
 	c.writeMu.Unlock()
 	return err
@@ -269,15 +295,20 @@ func (c *NRCClient) sendPing() {
 }
 
 func (c *NRCClient) readPump(ctx context.Context) {
+	c.writeMu.Lock()
+	conn := c.conn
+	c.writeMu.Unlock()
+	defer conn.Close()
+	defer c.invalidateConnection()
 	for {
 		select {
 		case <-ctx.Done():
-			c.conn.Close()
+			conn.Close()
 			return
 		default:
 		}
 
-		_, data, err := c.conn.ReadMessage()
+		_, data, err := conn.ReadMessage()
 		if err != nil {
 			select {
 			case <-ctx.Done():
@@ -287,7 +318,7 @@ func (c *NRCClient) readPump(ctx context.Context) {
 			return
 		}
 
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
 		msg, err := protocol.ReadMessage(data)
 		if err != nil {
@@ -306,8 +337,6 @@ func (c *NRCClient) readPump(ctx context.Context) {
 			c.handleAssetUpdated(msg.Data)
 		case protocol.S_AssetDeleted:
 			c.handleAssetDeleted(msg.Data)
-		case protocol.S_AssetList:
-			c.handleAssetList(msg.Data)
 		case protocol.S_AssetListPage:
 			c.handleAssetListPage(msg.Data)
 		case protocol.S_TaskCreated:
@@ -376,39 +405,7 @@ func (c *NRCClient) handleAssetCreated(payload []byte) {
 		slog.Warn("failed to decode asset created", "error", err)
 		return
 	}
-	asset := resp.Asset
-	if !c.embedAssetTypes[asset.AssetType] {
-		if _, ok := c.index.Get(c.workspace, asset.AssetID); ok {
-			c.index.Remove(c.workspace, asset.AssetID)
-			if err := c.storage.DeleteEmbedding(c.workspace, asset.AssetID); err != nil {
-				slog.Error("failed to delete embedding for non-embedded asset type", "asset_id", asset.AssetID, "asset_type", asset.AssetType, "error", err)
-			}
-		}
-		return
-	}
-
-	slog.Debug("asset created", "asset_id", asset.AssetID, "type", asset.AssetType, "conv_id", asset.ConvID)
-
-	entry := QueueEntry{
-		ConvID:    asset.ConvID,
-		AssetType: asset.AssetType,
-		Content:   asset.Payload,
-		Preview:   asset.Preview,
-	}
-	if err := c.storage.EnqueueAsset(c.workspace, asset.AssetID, entry); err != nil {
-		slog.Error("failed to enqueue created asset", "asset_id", asset.AssetID, "error", err)
-		return
-	}
-
-	select {
-	case c.embedCh <- EmbedJob{Workspace: c.workspace, AssetID: asset.AssetID, Entry: entry}:
-	default:
-		slog.Warn("embed channel full, asset queued to storage only", "asset_id", asset.AssetID)
-		select {
-		case c.diskSignal <- struct{}{}:
-		default:
-		}
-	}
+	c.ingestAsset(resp.Asset, true, 0)
 }
 
 func (c *NRCClient) handleAssetUpdated(payload []byte) {
@@ -417,48 +414,53 @@ func (c *NRCClient) handleAssetUpdated(payload []byte) {
 		slog.Warn("failed to decode asset updated", "error", err)
 		return
 	}
-	asset := resp.Asset
-	if !c.embedAssetTypes[asset.AssetType] {
-		if _, ok := c.index.Get(c.workspace, asset.AssetID); ok {
-			c.index.Remove(c.workspace, asset.AssetID)
-			if err := c.storage.DeleteEmbedding(c.workspace, asset.AssetID); err != nil {
-				slog.Error("failed to delete embedding for non-embedded updated asset type", "asset_id", asset.AssetID, "asset_type", asset.AssetType, "error", err)
+	c.ingestAsset(resp.Asset, true, 0)
+}
+
+func (c *NRCClient) reusableEmbedding(existing *IndexEntry, hash uint64) bool {
+	if existing.ContentHash != hash {
+		return false
+	}
+	if c.filesURL != "" {
+		for _, attachment := range existing.Metadata.Attachments {
+			if attachment.Status == "failed" || attachment.Status == "disabled" {
+				return false
 			}
 		}
+	}
+	return true
+}
+
+func (c *NRCClient) ingestAsset(asset protocol.Asset, live bool, cutoff uint64) {
+	c.taskMutationMu.Lock()
+	defer c.taskMutationMu.Unlock()
+	identity := assetIdentity(c.workspace, asset.AssetID, asset.ConvID)
+	if live {
+		c.taskMutations[identity.key()] = c.nextVersion.Add(1)
+	} else if c.taskMutations[identity.key()] > cutoff {
 		return
 	}
-
-	newHash := document_content_hash(asset.Preview, asset.Payload)
-
-	if existing, ok := c.index.Get(c.workspace, asset.AssetID); ok {
-		if existing.ContentHash == newHash {
-			slog.Debug("asset unchanged, skipping", "asset_id", asset.AssetID)
-			return
-		}
+	if !c.embedAssetTypes[asset.AssetType] {
+		delete(c.expectedHashes, identity.key())
+		c.index.Remove(c.workspace, asset.AssetID)
+		_ = c.storage.DeleteQueueEntry(c.workspace, asset.AssetID)
+		_ = c.storage.DeleteEmbedding(c.workspace, asset.AssetID)
+		return
 	}
-
-	slog.Debug("asset updated", "asset_id", asset.AssetID, "type", asset.AssetType, "conv_id", asset.ConvID)
-
-	entry := QueueEntry{
-		ConvID:    asset.ConvID,
-		AssetType: asset.AssetType,
-		Content:   asset.Payload,
-		Preview:   asset.Preview,
+	hash := document_content_hash(asset.Preview, asset.Payload, asset.Attachments...)
+	c.expectedHashes[identity.key()] = hash
+	if existing, ok := c.index.GetEntity(identity); ok && c.reusableEmbedding(existing, hash) {
+		// A newer mutation can return to the already-indexed content while an
+		// intermediate attachment job is pending. Cancel that stale work too.
+		_ = c.storage.DeleteQueueEntry(c.workspace, asset.AssetID)
+		return
 	}
+	entry := QueueEntry{ConvID: asset.ConvID, AssetType: asset.AssetType, Content: asset.Payload, Preview: asset.Preview, Attachments: append([]protocol.Attachment(nil), asset.Attachments...), Version: c.nextVersion.Add(1)}
 	if err := c.storage.EnqueueAsset(c.workspace, asset.AssetID, entry); err != nil {
-		slog.Error("failed to enqueue updated asset", "asset_id", asset.AssetID, "error", err)
+		slog.Error("enqueue asset", "asset_id", asset.AssetID, "error", err)
 		return
 	}
-
-	select {
-	case c.embedCh <- EmbedJob{Workspace: c.workspace, AssetID: asset.AssetID, Entry: entry}:
-	default:
-		slog.Warn("embed channel full, asset queued to storage only", "asset_id", asset.AssetID)
-		select {
-		case c.diskSignal <- struct{}{}:
-		default:
-		}
-	}
+	c.signalPersistentQueue()
 }
 
 func (c *NRCClient) handleAssetDeleted(payload []byte) {
@@ -473,7 +475,12 @@ func (c *NRCClient) handleAssetDeleted(payload []byte) {
 
 	slog.Debug("asset deleted", "asset_id", assetID, "conv_id", convID)
 
+	c.taskMutationMu.Lock()
+	defer c.taskMutationMu.Unlock()
+	c.taskMutations[assetIdentity(c.workspace, assetID, convID).key()] = c.nextVersion.Add(1)
+	delete(c.expectedHashes, assetIdentity(c.workspace, assetID, convID).key())
 	c.index.Remove(c.workspace, assetID)
+	_ = c.storage.DeleteQueueEntry(c.workspace, assetID)
 	if err := c.storage.DeleteEmbedding(c.workspace, assetID); err != nil {
 		slog.Error("failed to delete embedding", "asset_id", assetID, "error", err)
 	}
@@ -491,10 +498,14 @@ func storedEmbeddingFromEntry(entry *IndexEntry) StoredEmbedding {
 		ConvID: entry.ConvID, ContentHash: entry.ContentHash, Vector: entry.Vector,
 		Chunks: storedChunksFromIndex(entry.Chunks), AssetType: entry.AssetType,
 		Preview: entry.Preview, Payload: entry.Payload, Metadata: entry.Metadata,
+		SearchText: entry.SearchText,
 	}
 }
 
 func (c *NRCClient) persistTaskMetadata(identity EntityIdentity, metadata SearchMetadata) bool {
+	if existing, ok := c.index.GetEntity(identity); ok {
+		metadata.Attachments = existing.Metadata.Attachments
+	}
 	_, found, err := c.storage.UpdateEntityEmbeddingMetadataAndCancelQueue(identity, metadata)
 	if err != nil {
 		slog.Error("failed to persist task metadata", "identity", identity, "error", err)
@@ -529,6 +540,8 @@ func (c *NRCClient) ingestTask(task *protocol.Task, live bool, reconcileCutoff u
 
 func (c *NRCClient) ingestTaskLocked(task *protocol.Task, identity EntityIdentity, signal bool) (*EmbedJob, error) {
 	if !c.embedTasks {
+		delete(c.expectedHashes, identity.key())
+		delete(c.unresolvedTasks, identity.key())
 		c.index.RemoveEntity(identity)
 		_ = c.storage.DeleteEntityState(identity)
 		return nil, nil
@@ -536,19 +549,23 @@ func (c *NRCClient) ingestTaskLocked(task *protocol.Task, identity EntityIdentit
 
 	preview, content := taskEmbeddingContent(task)
 	metadata := taskMetadata(task)
-	hash := document_content_hash(preview, content)
-	if existing, ok := c.index.GetEntity(identity); ok && existing.ContentHash == hash {
+	hash := document_content_hash(preview, content, task.Attachments...)
+	c.expectedHashes[identity.key()] = hash
+	if existing, ok := c.index.GetEntity(identity); ok && c.reusableEmbedding(existing, hash) {
 		if c.persistTaskMetadata(identity, metadata) {
+			delete(c.unresolvedTasks, identity.key())
 			return nil, nil
 		}
 	}
 	entry := QueueEntry{
 		ConvID: identity.ConvID, Content: content, Preview: preview,
 		Metadata: metadata, Version: c.nextVersion.Add(1),
+		Attachments: append([]protocol.Attachment(nil), task.Attachments...),
 	}
 	if err := c.storage.EnqueueEntity(identity, entry); err != nil {
 		return nil, fmt.Errorf("enqueue task %v: %w", identity, err)
 	}
+	delete(c.unresolvedTasks, identity.key())
 	if signal {
 		c.signalPersistentQueue()
 	}
@@ -590,8 +607,9 @@ func (c *NRCClient) handleTaskMoved(ctx context.Context, payload []byte) {
 	if _, queued, queueErr := c.storage.GetEntityQueueEntry(identity); queueErr != nil {
 		slog.Error("failed to inspect queued moved task", "identity", identity, "error", queueErr)
 	} else if queued {
+		c.unresolvedTasks[identity.key()] = version
 		c.taskMutationMu.Unlock()
-		go c.refreshTask(ctx, identity, version)
+		c.startTaskRefresh(ctx, identity, version)
 		return
 	}
 	if existing, ok := c.index.GetEntity(identity); ok && existing.Metadata.Task != nil {
@@ -603,12 +621,14 @@ func (c *NRCClient) handleTaskMoved(ctx context.Context, payload []byte) {
 		copy.CompletedBy = response.CompletedBy
 		metadata.Task = &copy
 		if c.persistTaskMetadata(identity, metadata) {
+			delete(c.unresolvedTasks, identity.key())
 			c.taskMutationMu.Unlock()
 			return
 		}
 	}
+	c.unresolvedTasks[identity.key()] = version
 	c.taskMutationMu.Unlock()
-	go c.refreshTask(ctx, identity, version)
+	c.startTaskRefresh(ctx, identity, version)
 }
 
 func (c *NRCClient) handleTaskDeleted(payload []byte) {
@@ -627,6 +647,8 @@ func (c *NRCClient) handleTaskDeleted(payload []byte) {
 		return
 	}
 	c.index.RemoveEntity(identity)
+	delete(c.expectedHashes, identity.key())
+	delete(c.unresolvedTasks, identity.key())
 }
 
 func (c *NRCClient) handleTaskListPage(payload []byte) {
@@ -660,48 +682,6 @@ func (c *NRCClient) handleTaskFull(payload []byte) {
 		channel <- response
 	} else if err != nil {
 		slog.Warn("task full request failed", "error", err)
-	}
-}
-
-func (c *NRCClient) handleAssetList(payload []byte) {
-	resp, err := protocol.DecodeAssetListResponse(payload)
-	if err != nil {
-		convID := uint64(0)
-		if len(payload) >= 8 {
-			convID = binary.BigEndian.Uint64(payload[0:8])
-		}
-		slog.Error("failed to decode asset list", "conv_id", convID, "error", err)
-
-		if len(payload) >= 8 {
-			c.pendingReconcileMu.Lock()
-			ch, ok := c.pendingReconcile[convID]
-			if ok {
-				delete(c.pendingReconcile, convID)
-			}
-			c.pendingReconcileMu.Unlock()
-
-			if ok {
-				close(ch)
-			}
-		}
-		return
-	}
-
-	convID := resp.ConvID
-	assets := resp.Assets
-	fullContent := resp.FullContent
-
-	slog.Debug("asset list received", "conv_id", convID, "count", len(assets), "full_content", fullContent)
-
-	c.pendingReconcileMu.Lock()
-	ch, ok := c.pendingReconcile[convID]
-	if ok {
-		delete(c.pendingReconcile, convID)
-	}
-	c.pendingReconcileMu.Unlock()
-
-	if ok {
-		ch <- assets
 	}
 }
 
@@ -755,13 +735,6 @@ func (c *NRCClient) sendSubscribeConvs(convIDs []uint64) {
 	}
 }
 
-func (c *NRCClient) sendListAssets(convID uint64, filterByType bool, assetType uint16, fullContent bool) {
-	payload := protocol.EncodeListAssetsWithCorrelation(int64(convID), filterByType, assetType, fullContent, 0)
-	if err := c.sendProtocolMessage(protocol.C_ListAssets, payload); err != nil {
-		slog.Error("failed to send list assets", "error", err)
-	}
-}
-
 func (c *NRCClient) sendListAssetsPaged(convID uint64, assetType uint16, fullContent bool, limit uint16, hasCursor bool, cursorUpdatedAt int64, cursorAssetID uint64) {
 	payload := protocol.EncodeListAssetsPagedWithCorrelation(int64(convID), assetType, fullContent, limit, hasCursor, cursorUpdatedAt, cursorAssetID, 0)
 	if err := c.sendProtocolMessage(protocol.C_ListAssetsPaged, payload); err != nil {
@@ -771,38 +744,10 @@ func (c *NRCClient) sendListAssetsPaged(convID uint64, assetType uint16, fullCon
 
 const reconcileListTimeout = 30 * time.Second
 
-// Full note payloads can approach the protocol's 64 KiB per-asset limit, while
-// NRC WebSocket frames are capped at 128 KiB. Fetch one note per page so a
+// Full asset payloads can approach the protocol's 64 KiB per-asset limit, while
+// NRC WebSocket frames are capped at 128 KiB. Fetch one asset per page so a
 // reconciliation response cannot exceed the frame limit.
-const reconcileNotesPageLimit = 1
-
-func (c *NRCClient) requestAssetList(ctx context.Context, convID uint64, filterByType bool, assetType uint16, fullContent bool) ([]protocol.Asset, error) {
-	ch := make(chan []protocol.Asset, 1)
-
-	c.pendingReconcileMu.Lock()
-	c.pendingReconcile[convID] = ch
-	c.pendingReconcileMu.Unlock()
-
-	c.sendListAssets(convID, filterByType, assetType, fullContent)
-
-	select {
-	case assets, ok := <-ch:
-		if !ok {
-			return nil, fmt.Errorf("asset list request aborted for conv_id %d", convID)
-		}
-		return assets, nil
-	case <-ctx.Done():
-		c.pendingReconcileMu.Lock()
-		delete(c.pendingReconcile, convID)
-		c.pendingReconcileMu.Unlock()
-		return nil, ctx.Err()
-	case <-time.After(reconcileListTimeout):
-		c.pendingReconcileMu.Lock()
-		delete(c.pendingReconcile, convID)
-		c.pendingReconcileMu.Unlock()
-		return nil, fmt.Errorf("asset list request timeout for conv_id %d", convID)
-	}
-}
+const reconcileAssetPageLimit = 1
 
 func (c *NRCClient) requestAssetListPage(ctx context.Context, convID uint64, assetType uint16, fullContent bool, limit uint16, hasCursor bool, cursorUpdatedAt int64, cursorAssetID uint64) (*protocol.AssetListPageResponse, error) {
 	ch := make(chan *protocol.AssetListPageResponse, 1)
@@ -841,31 +786,22 @@ func (c *NRCClient) fetchReconcileAssets(ctx context.Context, convID uint64) ([]
 
 	assets := make([]protocol.Asset, 0)
 	for _, assetType := range embedTypes {
-		if assetType == protocol.AssetTypeNote {
-			hasCursor := false
-			var cursorUpdatedAt int64
-			var cursorAssetID uint64
-			for {
-				page, err := c.requestAssetListPage(ctx, convID, protocol.AssetTypeNote, true, reconcileNotesPageLimit, hasCursor, cursorUpdatedAt, cursorAssetID)
-				if err != nil {
-					return nil, fmt.Errorf("list note assets paged failed: %w", err)
-				}
-				assets = append(assets, page.Assets...)
-				if !page.HasMore {
-					break
-				}
-				hasCursor = true
-				cursorUpdatedAt = page.NextCursorUpdatedAt
-				cursorAssetID = page.NextCursorAssetID
+		hasCursor := false
+		var cursorUpdatedAt int64
+		var cursorAssetID uint64
+		for {
+			page, err := c.requestAssetListPage(ctx, convID, assetType, true, reconcileAssetPageLimit, hasCursor, cursorUpdatedAt, cursorAssetID)
+			if err != nil {
+				return nil, fmt.Errorf("list assets type %d paged failed: %w", assetType, err)
 			}
-			continue
+			assets = append(assets, page.Assets...)
+			if !page.HasMore {
+				break
+			}
+			hasCursor = true
+			cursorUpdatedAt = page.NextCursorUpdatedAt
+			cursorAssetID = page.NextCursorAssetID
 		}
-
-		typedAssets, err := c.requestAssetList(ctx, convID, true, assetType, true)
-		if err != nil {
-			return nil, fmt.Errorf("list assets failed for type %d: %w", assetType, err)
-		}
-		assets = append(assets, typedAssets...)
 	}
 
 	return assets, nil
@@ -987,7 +923,7 @@ func (c *NRCClient) refreshTask(ctx context.Context, identity EntityIdentity, ex
 	}
 	c.taskMutationMu.Lock()
 	defer c.taskMutationMu.Unlock()
-	if c.taskMutations[identity.key()] != expectedVersion {
+	if version, pending := c.unresolvedTasks[identity.key()]; !pending || version != expectedVersion || c.taskMutations[identity.key()] != expectedVersion {
 		return
 	}
 	if _, err := c.ingestTaskLocked(task, identity, true); err != nil {
@@ -1047,10 +983,56 @@ func (c *NRCClient) SubscribeAndReconcile(ctx context.Context, convID uint64) er
 	return err
 }
 
+// Enumeration and deletion share the commit lock: a recovered queue job cannot
+// slip into the index between the two inventories. Only live events newer than
+// the server snapshot preserve absent records, not recent embedding timestamps.
+func (c *NRCClient) cleanupReconciledScope(convID uint64, entityType EntityType, serverIDs map[uint64]struct{}, cutoff uint64) (int, error) {
+	c.taskMutationMu.Lock()
+	defer c.taskMutationMu.Unlock()
+	stale := make(map[entityKey]EntityIdentity)
+	for _, identity := range c.index.StaleEntityIdentities(c.workspace, convID, entityType, serverIDs, time.Time{}) {
+		stale[identity.key()] = identity
+	}
+	queued, err := c.storage.EntityQueueIdentities(c.workspace, entityType, convID)
+	if err != nil {
+		return 0, fmt.Errorf("enumerate stale queue: %w", err)
+	}
+	addAbsent := func(key entityKey) {
+		if key.ConvID == convID && key.EntityType == entityType {
+			if _, exists := serverIDs[key.EntityID]; !exists {
+				stale[key] = EntityIdentity{Workspace: c.workspace, EntityType: entityType, ConvID: convID, EntityID: key.EntityID}
+			}
+		}
+	}
+	for _, identity := range queued {
+		addAbsent(identity.key())
+	}
+	for key := range c.expectedHashes {
+		addAbsent(key)
+	}
+	for key := range c.unresolvedTasks {
+		addAbsent(key)
+	}
+	removed := 0
+	for key, identity := range stale {
+		if c.taskMutations[key] > cutoff {
+			continue
+		}
+		if err := c.storage.DeleteEntityState(identity); err != nil {
+			return removed, fmt.Errorf("delete stale record %v: %w", identity, err)
+		}
+		c.index.RemoveEntity(identity)
+		delete(c.expectedHashes, key)
+		delete(c.unresolvedTasks, key)
+		removed++
+	}
+	return removed, nil
+}
+
 func (c *NRCClient) Reconcile(ctx context.Context, convID uint64) error {
-	reconcileStart := time.Now()
 	c.taskMutationMu.Lock()
 	taskMutationCutoff := c.nextVersion.Load()
+	epoch := c.ReadyGeneration()
 	c.taskMutationMu.Unlock()
 
 	assets, err := c.fetchReconcileAssets(ctx, convID)
@@ -1069,55 +1051,12 @@ func (c *NRCClient) Reconcile(ctx context.Context, convID uint64) error {
 
 	for _, asset := range assets {
 		serverAssetIDs[asset.AssetID] = struct{}{}
-
-		if !c.embedAssetTypes[asset.AssetType] {
-			if _, ok := c.index.Get(c.workspace, asset.AssetID); ok {
-				slog.Debug("reconcile: removing asset with non-embedded type", "asset_id", asset.AssetID, "asset_type", asset.AssetType)
-				c.index.Remove(c.workspace, asset.AssetID)
-				if err := c.storage.DeleteEmbedding(c.workspace, asset.AssetID); err != nil {
-					slog.Error("reconcile: failed to delete embedding for non-embedded asset type", "asset_id", asset.AssetID, "error", err)
-				}
-			}
-			continue
-		}
-
-		hash := document_content_hash(asset.Preview, asset.Payload)
-
-		if existing, ok := c.index.GetEntity(assetIdentity(c.workspace, asset.AssetID, asset.ConvID)); ok {
-			if existing.ContentHash == hash {
-				continue
-			}
-		}
-
-		entry := QueueEntry{
-			ConvID:    asset.ConvID,
-			AssetType: asset.AssetType,
-			Content:   asset.Payload,
-			Preview:   asset.Preview,
-		}
-		if err := c.storage.EnqueueAsset(c.workspace, asset.AssetID, entry); err != nil {
-			slog.Error("reconcile: failed to enqueue asset", "asset_id", asset.AssetID, "error", err)
-			continue
-		}
-
-		select {
-		case c.embedCh <- EmbedJob{Workspace: c.workspace, AssetID: asset.AssetID, Entry: entry}:
-		default:
-			slog.Warn("reconcile: embed channel full", "asset_id", asset.AssetID)
-		}
+		c.ingestAsset(asset, false, taskMutationCutoff)
 	}
 
-	// Remove locally-stored assets not present on server, but skip entries
-	// indexed after reconciliation started (they arrived via handleAssetCreated
-	// after the server snapshot was taken).
-	toRemove := c.index.StaleAssetIDs(c.workspace, convID, serverAssetIDs, reconcileStart)
-
-	for _, id := range toRemove {
-		slog.Debug("reconcile: removing stale asset", "asset_id", id, "conv_id", convID)
-		c.index.Remove(c.workspace, id)
-		if err := c.storage.DeleteEmbedding(c.workspace, id); err != nil {
-			slog.Error("reconcile: failed to delete embedding", "asset_id", id, "error", err)
-		}
+	removedAssets, err := c.cleanupReconciledScope(convID, EntityTypeAsset, serverAssetIDs, taskMutationCutoff)
+	if err != nil {
+		return err
 	}
 
 	serverTaskIDs := make(map[uint64]struct{}, len(tasks))
@@ -1130,42 +1069,33 @@ func (c *NRCClient) Reconcile(ctx context.Context, convID uint64) error {
 		if job == nil {
 			continue
 		}
+		if len(job.Entry.Attachments) > 0 {
+			// Like assets, attachment-bearing tasks enrich asynchronously. Never
+			// put downloads/media inference on a search request's reconciliation path.
+			c.signalPersistentQueue()
+			continue
+		}
 		if !c.processEmbedJob(*job) {
 			c.signalPersistentQueue()
 			return fmt.Errorf("embed reconciled task %d", task.ID)
 		}
 		entry, ok := c.index.GetEntity(job.Identity)
-		if !ok || entry.ContentHash != document_content_hash(job.Entry.Preview, job.Entry.Content) {
+		if !ok || entry.ContentHash != document_content_hash(job.Entry.Preview, job.Entry.Content, job.Entry.Attachments...) {
 			return fmt.Errorf("commit reconciled task %d", task.ID)
 		}
 	}
-	staleTasks := c.index.StaleEntityIdentities(c.workspace, convID, EntityTypeTask, serverTaskIDs, reconcileStart)
-	queuedTasks, err := c.storage.EntityQueueIdentities(c.workspace, EntityTypeTask, convID)
+	removedTasks, err := c.cleanupReconciledScope(convID, EntityTypeTask, serverTaskIDs, taskMutationCutoff)
 	if err != nil {
-		return fmt.Errorf("list queued tasks for stale cleanup: %w", err)
+		return err
 	}
-	staleSet := make(map[entityKey]EntityIdentity, len(staleTasks)+len(queuedTasks))
-	for _, identity := range staleTasks {
-		staleSet[identity.key()] = identity
-	}
-	for _, identity := range queuedTasks {
-		if _, exists := serverTaskIDs[identity.EntityID]; !exists {
-			staleSet[identity.key()] = identity
-		}
-	}
-	removedTasks := 0
-	for _, identity := range staleSet {
-		c.taskMutationMu.Lock()
-		if c.taskMutations[identity.key()] <= taskMutationCutoff {
-			if err := c.storage.DeleteEntityState(identity); err != nil {
-				slog.Error("reconcile: failed to delete stale task state", "identity", identity, "error", err)
-			} else {
-				c.index.RemoveEntity(identity)
-				removedTasks++
-			}
-		}
+
+	c.taskMutationMu.Lock()
+	if epoch != c.ReadyGeneration() {
 		c.taskMutationMu.Unlock()
+		return fmt.Errorf("connection changed during reconciliation")
 	}
+	c.inventoryEpochs[convID] = epoch
+	c.taskMutationMu.Unlock()
 
 	now := time.Now()
 	c.mu.Lock()
@@ -1179,7 +1109,7 @@ func (c *NRCClient) Reconcile(ctx context.Context, convID uint64) error {
 	slog.Info("reconcile complete",
 		"conv_id", convID,
 		"server_assets", len(assets),
-		"removed", len(toRemove),
+		"removed", removedAssets,
 		"server_tasks", len(tasks),
 		"removed_tasks", removedTasks,
 	)
@@ -1190,6 +1120,9 @@ func (c *NRCClient) Reconcile(ctx context.Context, convID uint64) error {
 func (c *NRCClient) DrainEmbedQueue(ctx context.Context) {
 	// Drain persistent queues from previous runs (peek + process + delete).
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		identity, entityEntry, entityOK, entityErr := c.storage.PeekEntityQueueEntry(c.workspace)
 		if entityErr != nil {
 			slog.Error("failed to peek persistent entity queue", "error", entityErr)
@@ -1230,6 +1163,19 @@ func (c *NRCClient) DrainEmbedQueue(ctx context.Context) {
 			c.drainPersistentQueue()
 		}
 	}
+}
+
+func (c *NRCClient) closeConnection() {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.conn != nil {
+		c.conn.Close()
+	}
+}
+
+func (c *NRCClient) startTaskRefresh(ctx context.Context, identity EntityIdentity, version uint64) {
+	c.refreshWorkers.Add(1)
+	go func() { defer c.refreshWorkers.Done(); c.refreshTask(ctx, identity, version) }()
 }
 
 func (c *NRCClient) drainPersistentQueue() {
@@ -1290,14 +1236,14 @@ func (c *NRCClient) processEmbedJob(job EmbedJob) bool {
 	// Hash the source payload, not only extracted HTML text. Styling and script
 	// changes must still refresh the stored canonical payload even when they do
 	// not change the text sent to the embedder.
-	documentText := format_document_for_embedding(job.Entry.Preview, job.Entry.Content)
-	hash := contentHash([]byte(documentText))
+	hash := document_content_hash(job.Entry.Preview, job.Entry.Content, job.Entry.Attachments...)
 
 	if identity.EntityType == EntityTypeTask {
 		c.taskMutationMu.Lock()
-		if existing, ok := c.index.GetEntity(identity); ok && existing.ContentHash == hash {
+		if existing, ok := c.index.GetEntity(identity); ok && c.reusableEmbedding(existing, hash) {
 			embedding := storedEmbeddingFromEntry(existing)
 			embedding.Metadata = job.Entry.Metadata
+			embedding.Metadata.Attachments = existing.Metadata.Attachments
 			committed, err := c.storage.CommitEntityEmbedding(identity, job.Entry, embedding)
 			if err != nil {
 				c.taskMutationMu.Unlock()
@@ -1305,7 +1251,7 @@ func (c *NRCClient) processEmbedJob(job EmbedJob) bool {
 				return false
 			}
 			if committed {
-				c.index.UpdateEntityMetadata(identity, job.Entry.Metadata, time.Now())
+				c.index.UpdateEntityMetadata(identity, embedding.Metadata, time.Now())
 			}
 			c.taskMutationMu.Unlock()
 			c.clearRetries(job)
@@ -1313,9 +1259,9 @@ func (c *NRCClient) processEmbedJob(job EmbedJob) bool {
 		}
 		c.taskMutationMu.Unlock()
 	} else if existing, ok := c.index.GetEntity(identity); ok {
-		if existing.ContentHash == hash {
+		if c.reusableEmbedding(existing, hash) {
 			slog.Debug("skipping already-indexed asset", "asset_id", job.AssetID)
-			if err := c.storage.DeleteQueueEntry(job.Workspace, job.AssetID); err != nil {
+			if _, err := c.storage.DeleteEntityQueueEntryIfCurrent(identity, job.Entry); err != nil {
 				slog.Error("failed to delete queue entry", "asset_id", job.AssetID, "error", err)
 			}
 			c.clearRetries(job)
@@ -1330,12 +1276,8 @@ func (c *NRCClient) processEmbedJob(job EmbedJob) bool {
 		if retries >= maxEmbedRetries {
 			slog.Error("embedding failed, max retries exceeded, dropping from queue",
 				"asset_id", job.AssetID, "retries", retries, "error", err)
-			if identity.EntityType == EntityTypeTask {
-				if _, deleteErr := c.storage.DeleteEntityQueueEntryIfCurrent(identity, job.Entry); deleteErr != nil {
-					slog.Error("failed to delete task queue entry", "identity", identity, "error", deleteErr)
-				}
-			} else if err := c.storage.DeleteQueueEntry(job.Workspace, job.AssetID); err != nil {
-				slog.Error("failed to delete queue entry", "asset_id", job.AssetID, "error", err)
+			if _, deleteErr := c.storage.DeleteEntityQueueEntryIfCurrent(identity, job.Entry); deleteErr != nil {
+				slog.Error("failed to delete queue entry", "identity", identity, "error", deleteErr)
 			}
 			c.clearRetries(job)
 			return true
@@ -1345,6 +1287,19 @@ func (c *NRCClient) processEmbedJob(job EmbedJob) bool {
 		return false
 	}
 
+	attachmentChunks, attachmentText, attachmentStatuses := c.embedAttachments(job.Entry.Attachments)
+	chunks = append(chunks, attachmentChunks...)
+	for i := range chunks {
+		chunks[i].Index = i
+	}
+	if len(attachmentChunks) > 0 {
+		vec = aggregateChunkVectors(chunks)
+	}
+	if attachmentText != "" {
+		searchableContent += "\n" + attachmentText
+	}
+	metadata := job.Entry.Metadata
+	metadata.Attachments = attachmentStatuses
 	slog.Info("embedded asset", "asset_id", job.AssetID, "chunks", len(chunks), "content_len", len(job.Entry.Content), "duration", time.Since(start).Round(time.Millisecond))
 
 	emb := StoredEmbedding{
@@ -1355,69 +1310,26 @@ func (c *NRCClient) processEmbedJob(job EmbedJob) bool {
 		AssetType:   job.Entry.AssetType,
 		Preview:     job.Entry.Preview,
 		Payload:     job.Entry.Content,
-		Metadata:    job.Entry.Metadata,
+		Metadata:    metadata,
+		SearchText:  searchableContent,
 	}
-	if identity.EntityType == EntityTypeTask {
-		c.taskMutationMu.Lock()
-		committed, err := c.storage.CommitEntityEmbedding(identity, job.Entry, emb)
-		if err != nil {
-			c.taskMutationMu.Unlock()
-			slog.Error("failed to store task embedding", "identity", identity, "error", err)
-			return false
-		}
-		if !committed {
-			c.taskMutationMu.Unlock()
-			c.clearRetries(job)
-			c.signalPersistentQueue()
-			return true
-		}
-		payloadLower := strings.ToLower(job.Entry.Content)
-		previewLower := strings.ToLower(job.Entry.Preview)
-		if err := c.index.AddEntity(identity, &IndexEntry{
-			Vector: vec, Chunks: chunks, ContentHash: hash, ConvID: job.Entry.ConvID,
-			Preview: job.Entry.Preview, Payload: job.Entry.Content,
-			PreviewLower: previewLower, PayloadLower: payloadLower,
-			Bloom:    BigramBloom(payloadLower) | BigramBloom(previewLower),
-			Metadata: job.Entry.Metadata, IndexedAt: time.Now(),
-		}); err != nil {
-			c.taskMutationMu.Unlock()
-			slog.Error("failed to add task to index", "identity", identity, "error", err)
-			return false
-		}
-		c.taskMutationMu.Unlock()
-	} else if err := c.storage.StoreEmbedding(job.Workspace, job.AssetID, emb); err != nil {
-		slog.Error("failed to store embedding, dropping from queue", "asset_id", job.AssetID, "error", err)
-		if err := c.storage.DeleteQueueEntry(job.Workspace, job.AssetID); err != nil {
-			slog.Error("failed to delete queue entry", "asset_id", job.AssetID, "error", err)
-		}
+	c.taskMutationMu.Lock()
+	defer c.taskMutationMu.Unlock()
+	committed, err := c.storage.CommitEntityEmbedding(identity, job.Entry, emb)
+	if err != nil {
+		slog.Error("commit embedding", "identity", identity, "error", err)
+		return false
+	}
+	if !committed {
 		c.clearRetries(job)
+		c.signalPersistentQueue()
 		return true
 	}
-
-	payloadLower := strings.ToLower(searchableContent)
-	previewLower := strings.ToLower(job.Entry.Preview)
-	indexEntry := &IndexEntry{
-		Vector:       vec,
-		Chunks:       chunks,
-		ContentHash:  hash,
-		AssetType:    job.Entry.AssetType,
-		ConvID:       job.Entry.ConvID,
-		Preview:      job.Entry.Preview,
-		Payload:      job.Entry.Content,
-		PreviewLower: previewLower,
-		PayloadLower: payloadLower,
-		Bloom:        BigramBloom(payloadLower) | BigramBloom(previewLower),
-		Metadata:     job.Entry.Metadata,
-		IndexedAt:    time.Now(),
-	}
-	if identity.EntityType == EntityTypeAsset {
-		c.index.Add(job.Workspace, job.AssetID, indexEntry)
-	}
-
-	if identity.EntityType == EntityTypeAsset {
-		if err := c.storage.DeleteQueueEntry(job.Workspace, job.AssetID); err != nil {
-			slog.Error("failed to delete queue entry", "asset_id", job.AssetID, "error", err)
-		}
+	indexEntry := indexEntryFromStoredEmbedding(emb)
+	indexEntry.IndexedAt = time.Now()
+	if err := c.index.AddEntity(identity, indexEntry); err != nil {
+		slog.Error("publish embedding", "identity", identity, "error", err)
+		return false
 	}
 
 	c.clearRetries(job)

@@ -75,8 +75,9 @@ func resultIdentity(identity EntityIdentity, legacyAssetID uint64) EntityIdentit
 }
 
 type SearchMetadata struct {
-	AssetType uint16        `json:"asset_type,omitempty"`
-	Task      *TaskMetadata `json:"task,omitempty"`
+	AssetType   uint16             `json:"asset_type,omitempty"`
+	Task        *TaskMetadata      `json:"task,omitempty"`
+	Attachments []AttachmentSearch `json:"attachments,omitempty"`
 }
 
 type TaskMetadata = protocol.SearchTaskMetadata

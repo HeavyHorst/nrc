@@ -34,6 +34,8 @@ services:
       - TS_AUTHKEY=${TS_AUTHKEY:-}
       - NRC_JWT_SECRET=${NRC_JWT_SECRET:?Set NRC_JWT_SECRET in .env}
       - NRC_BOT_SECRET=${NRC_BOT_SECRET:?Set NRC_BOT_SECRET in .env}
+      # Private bridge-network listener; never publish this port.
+      - NRC_SEARCH_FILES_ADDR=:8094
     depends_on:
       - nginx
     restart: unless-stopped
@@ -106,14 +108,16 @@ services:
       - SEARCH_PORT=8090
       - MODEL_PATH=/app/models/model.onnx
       - TOKENIZER_PATH=/app/models/tokenizer.json
-      - EMBED_ASSET_TYPES=1,2,4,5
+      - EMBED_ASSET_TYPES=1,2,3,4,5
       - EMBED_TASKS=true
+      - FILES_URL=http://tailscale-proxy:8094
       - RECONCILE_INTERVAL=15m
       - DATA_DIR=/app/data
     volumes:
       - search-data:/app/data
     depends_on:
       - websocket-server
+      - tailscale-proxy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 10s

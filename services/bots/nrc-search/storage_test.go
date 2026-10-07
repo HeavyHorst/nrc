@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/heavyhorst/nrc/protocol-go"
+	"go.etcd.io/bbolt"
 )
 
 const testStorageWorkspace = "test-ws"
@@ -605,5 +607,68 @@ func TestDeleteEmbeddingsByConvIDNoMatch(t *testing.T) {
 	}
 	if len(loaded) != 1 {
 		t.Errorf("expected 1 embedding to remain, got %d", len(loaded))
+	}
+}
+
+func TestPreAttachmentQueueSchemaConditionalConsumption(t *testing.T) {
+	// Exact field shapes before attachments were added, not the current schema.
+	type oldMetadata struct {
+		AssetType uint16
+		Task      *TaskMetadata
+	}
+	type oldQueue struct {
+		ConvID           uint64
+		AssetType        uint16
+		Content, Preview string
+		Metadata         oldMetadata
+		Version          uint64
+	}
+	for _, kind := range []EntityType{EntityTypeAsset, EntityTypeTask} {
+		for _, commit := range []bool{false, true} {
+			t.Run(string(kind)+fmt.Sprint(commit), func(t *testing.T) {
+				s := newTestStorage(t)
+				identity := EntityIdentity{Workspace: "ws", EntityType: kind, EntityID: 12, ConvID: 7}
+				data, err := gobEncode(oldQueue{ConvID: 7, Content: "old content", Preview: "old title", Version: 1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var entry QueueEntry
+				if err := gobDecode(data, &entry); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.db.Update(func(tx *bbolt.Tx) error {
+					name := bucketEntityQueue
+					key, _ := entityStorageKey(identity)
+					if kind == EntityTypeAsset {
+						name = bucketQueue
+						key = uint64ToKey(12)
+					}
+					bucket, err := s.workspaceBucket(tx, name, "ws")
+					if err != nil {
+						return err
+					}
+					return bucket.Put(key, data)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				consume := func(e QueueEntry) (bool, error) {
+					if commit {
+						return s.CommitEntityEmbedding(identity, e, StoredEmbedding{Vector: []float32{1}, Payload: e.Content})
+					}
+					return s.DeleteEntityQueueEntryIfCurrent(identity, e)
+				}
+				wrong := entry
+				wrong.Content = "different content, same version"
+				if consumed, err := consume(wrong); err != nil || consumed {
+					t.Fatalf("superseded job consumed: %v %v", consumed, err)
+				}
+				if consumed, err := consume(entry); err != nil || !consumed {
+					t.Fatalf("old-schema job not consumed: %v %v", consumed, err)
+				}
+				if consumed, err := consume(entry); err != nil || consumed {
+					t.Fatalf("job consumed twice: %v %v", consumed, err)
+				}
+			})
+		}
 	}
 }

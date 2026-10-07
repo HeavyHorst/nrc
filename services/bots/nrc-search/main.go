@@ -32,10 +32,14 @@ type IndexEntry struct {
 	IndexedAt    time.Time
 	Bloom        uint64
 	Metadata     SearchMetadata
+	SearchText   string
 }
 
 func indexEntryFromStoredEmbedding(emb StoredEmbedding) *IndexEntry {
 	payloadLower := strings.ToLower(searchableAssetContent(emb.AssetType, emb.Preview, emb.Payload))
+	if emb.SearchText != "" {
+		payloadLower = strings.ToLower(emb.SearchText)
+	}
 	previewLower := strings.ToLower(emb.Preview)
 	return &IndexEntry{
 		Vector:       emb.Vector,
@@ -49,6 +53,7 @@ func indexEntryFromStoredEmbedding(emb StoredEmbedding) *IndexEntry {
 		PayloadLower: payloadLower,
 		Bloom:        BigramBloom(payloadLower) | BigramBloom(previewLower),
 		Metadata:     emb.Metadata,
+		SearchText:   emb.SearchText,
 	}
 }
 
@@ -92,6 +97,7 @@ type Config struct {
 	NRCNickname       string
 	NRCBotSecret      string
 	DataDir           string
+	FilesURL          string
 }
 
 func loadConfig() Config {
@@ -102,6 +108,7 @@ func loadConfig() Config {
 		TokenizerPath:   envOrDefault("TOKENIZER_PATH", "./models/tokenizer.json"),
 		EmbeddingSchema: envOrDefault("EMBEDDING_SCHEMA", default_embedding_schema),
 		DataDir:         envOrDefault("DATA_DIR", "./data"),
+		FilesURL:        os.Getenv("FILES_URL"),
 	}
 
 	cfg.NRCBotSecret = envOrDefault("NRC_BOT_SECRET", "")
@@ -114,7 +121,7 @@ func loadConfig() Config {
 		cfg.NRCNickname = fmt.Sprintf("search-%s", hostname)
 	}
 
-	cfg.EmbedAssetTypes = parseAssetTypes(envOrDefault("EMBED_ASSET_TYPES", "1,2,4,5"))
+	cfg.EmbedAssetTypes = parseAssetTypes(envOrDefault("EMBED_ASSET_TYPES", "1,2,3,4,5"))
 	cfg.EmbedTasks = parseBool(envOrDefault("EMBED_TASKS", "true"), true)
 
 	intervalStr := envOrDefault("RECONCILE_INTERVAL", "15m")
@@ -288,11 +295,15 @@ type WorkspaceManager struct {
 	embedder Embedder
 	index    *Index
 	ctx      context.Context
+	cancel   context.CancelFunc
+	workers  sync.WaitGroup
+	closed   bool
 }
 
 const clientReadyTimeout = 45 * time.Second
 
 func NewWorkspaceManager(ctx context.Context, cfg Config, storage *Storage, embedder Embedder, index *Index) *WorkspaceManager {
+	ctx, cancel := context.WithCancel(ctx)
 	return &WorkspaceManager{
 		clients:  make(map[string]*NRCClient),
 		cfg:      cfg,
@@ -300,17 +311,26 @@ func NewWorkspaceManager(ctx context.Context, cfg Config, storage *Storage, embe
 		embedder: embedder,
 		index:    index,
 		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
 func (wm *WorkspaceManager) GetOrCreateClient(workspace string) (*NRCClient, error) {
 	wm.mu.Lock()
+	if wm.closed {
+		wm.mu.Unlock()
+		return nil, fmt.Errorf("search generation stopped")
+	}
 	isNew := false
 	var client *NRCClient
 
 	if existing, ok := wm.clients[workspace]; ok {
 		client = existing
 	} else {
+		if err := wm.storage.RegisterWorkspace(workspace); err != nil {
+			wm.mu.Unlock()
+			return nil, err
+		}
 		var err error
 		client, err = NewNRCClient(wm.cfg, workspace, wm.storage, wm.embedder, wm.index)
 		if err != nil {
@@ -318,8 +338,9 @@ func (wm *WorkspaceManager) GetOrCreateClient(workspace string) (*NRCClient, err
 			return nil, err
 		}
 
-		go client.Run(wm.ctx)
-		go client.DrainEmbedQueue(wm.ctx)
+		wm.workers.Add(2)
+		go func() { defer wm.workers.Done(); client.Run(wm.ctx) }()
+		go func() { defer wm.workers.Done(); client.DrainEmbedQueue(wm.ctx) }()
 
 		wm.clients[workspace] = client
 		isNew = true
@@ -333,6 +354,20 @@ func (wm *WorkspaceManager) GetOrCreateClient(workspace string) (*NRCClient, err
 
 	slog.Info("NRC client ready", "workspace", workspace)
 	return client, nil
+}
+
+func (wm *WorkspaceManager) Close() {
+	wm.mu.Lock()
+	wm.closed = true
+	wm.cancel()
+	for _, client := range wm.clients {
+		client.closeConnection()
+	}
+	wm.mu.Unlock()
+	wm.workers.Wait()
+	for _, client := range wm.clients {
+		client.refreshWorkers.Wait()
+	}
 }
 
 func waitForClientReady(ctx context.Context, client *NRCClient, timeout time.Duration, workspace string) error {
@@ -446,69 +481,30 @@ func main() {
 		"embed_tasks", cfg.EmbedTasks,
 	)
 
-	// 1. Storage (bbolt)
-	storage, err := NewStorage(cfg.DataDir)
-	if err != nil {
-		slog.Error("failed to initialize storage", "error", err)
-		os.Exit(1)
-	}
-	defer storage.Close()
-	slog.Info("storage initialized", "data_dir", cfg.DataDir)
-
-	migrated, previousSchema, err := storage.EnsureEmbeddingSchema(cfg.EmbeddingSchema)
-	if err != nil {
-		slog.Error("failed to ensure embedding schema", "error", err)
-		os.Exit(1)
-	}
-	if migrated {
-		if previousSchema == "" {
-			previousSchema = "legacy"
-		}
-		slog.Info("cleared persisted embeddings after embedding schema change",
-			"from", previousSchema,
-			"to", cfg.EmbeddingSchema,
-		)
-	}
-
-	// 2. Embedder (ONNX model)
-	embedder, err := NewEmbedder(cfg.ModelPath, cfg.TokenizerPath)
-	if err != nil {
-		slog.Error("failed to initialize embedder", "error", err)
-		os.Exit(1)
-	}
-	defer embedder.Close()
-	slog.Info("embedder initialized", "model", cfg.ModelPath)
-
-	// 3. Index — in-memory vector index, populated from storage
-	index := NewIndex()
-
-	allEmbs, err := storage.LoadAllEntityEmbeddings()
-	if err != nil {
-		slog.Error("failed to load embeddings from storage", "error", err)
-		os.Exit(1)
-	}
-	for identity, emb := range allEmbs {
-		// Rebuild public data from the server's canonical scope. Never relabel
-		// cached room or DM records as workspace data during a local upgrade.
-		if identity.ConvID != protocol.WorkspaceDataConvID {
-			continue
-		}
-		if err := index.AddEntity(identity, indexEntryFromStoredEmbedding(emb)); err != nil {
-			slog.Error("failed to add persisted entity to index", "identity", identity, "error", err)
-			os.Exit(1)
-		}
-	}
-	slog.Info("index initialized", "entries", index.Count())
-
-	// 4. Workspace manager — lazily creates NRC clients per workspace
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	wm := NewWorkspaceManager(ctx, cfg, storage, embedder, index)
+	router, err := startGenerationRouter(ctx, cfg, startTime, loadGenerationModel)
+	if err != nil {
+		slog.Error("failed to open active search generation", "error", err)
+		os.Exit(1)
+	}
+	rebuildDone := make(chan struct{})
+	if router.active.spec.Schema != cfg.EmbeddingSchema {
+		go func() { defer close(rebuildDone); router.rebuild(ctx, cfg, startTime) }()
+	} else {
+		close(rebuildDone)
+	}
+	defer func() {
+		cancel()
+		<-rebuildDone
+		router.mu.Lock()
+		defer router.mu.Unlock()
+		router.active.Close()
+	}()
 
 	server := &http.Server{
 		Addr:    ":" + cfg.SearchPort,
-		Handler: newHTTPHandler(cfg, startTime, wm, index, embedder),
+		Handler: router,
 	}
 
 	// Graceful shutdown

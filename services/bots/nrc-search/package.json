@@ -1,0 +1,13 @@
+{
+  "name": "nrc-search-media-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test media_worker.test.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "onnxruntime-node": "1.30.0",
+    "sharp": "0.35.5"
+  }
+}

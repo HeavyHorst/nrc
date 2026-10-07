@@ -230,6 +230,24 @@ func main() {
 	}
 	defer fileStorageLock.Close()
 
+	if addr := os.Getenv("NRC_SEARCH_FILES_ADDR"); addr != "" {
+		secret := os.Getenv("NRC_BOT_SECRET")
+		if secret == "" {
+			log.Fatal("NRC_SEARCH_FILES_ADDR requires NRC_BOT_SECRET")
+		}
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			log.Fatalf("private search file listener: %v", err)
+		}
+		server := &http.Server{Handler: searchFilesHandler(secret), ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 60 * time.Second}
+		defer server.Close()
+		go func() {
+			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("private search file server: %v", err)
+			}
+		}()
+	}
+
 	// Initialize Tailscale tsnet server
 	ts := &tsnet.Server{
 		Hostname: "nrc",

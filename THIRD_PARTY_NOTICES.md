@@ -57,12 +57,27 @@ redistributing model-containing images. See Google's
 usage and safety guidance. The current Dockerfile is not a complete model
 redistribution compliance bundle.
 
+The migration image also retains pinned
+[EmbeddingGemma 300M ONNX weights](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX)
+to serve existing indexes until their replacement is complete. These legacy
+weights are governed by Google's [Gemma Terms of Use](https://ai.google.dev/gemma/terms)
+and associated use restrictions, not Apache-2.0. Including them in an image
+requires compliance with those terms and redistribution notices as well.
+
 Search also incorporates the MIT-licensed `daulet/tokenizers` wrapper and native
 tokenizer dependencies, including Apache-2.0 Hugging Face tokenizers. ONNX Runtime
 uses MIT and ships additional
 [third-party notices](https://github.com/microsoft/onnxruntime/blob/v1.24.1/ThirdPartyNotices.txt).
 Retain the release's license and notice files, not just its shared libraries,
 when packaging it. The full native dependency inventory remains to be verified.
+
+Media preprocessing uses Apache-2.0 Transformers.js, MIT onnxruntime-node and
+Apache-2.0 sharp, with its separately licensed native dependencies (including
+LGPL-2.1-or-later libvips). The Search image also runs FFmpeg and Poppler as
+separate programs. Debian's FFmpeg build includes GPL components; Poppler uses
+GPL-2.0-or-later. Retain the installed package copyright notices and satisfy
+applicable corresponding-source requirements when redistributing that image.
+These programs do not by themselves relicense NRC's Go source.
 
 ## Container images
 

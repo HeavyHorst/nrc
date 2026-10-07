@@ -11,7 +11,7 @@ step() {
 }
 
 step "Installing missing system packages"
-packages=(build-essential ca-certificates clang containerd.io curl docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin git jq libopus-dev libzstd-dev libnginx-mod-http-brotli-static linux-perf llvm nginx procps psmisc python3 strace unzip)
+packages=(build-essential ca-certificates clang containerd.io curl docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin ffmpeg git jq libopus-dev libzstd-dev libnginx-mod-http-brotli-static linux-perf llvm nginx poppler-utils procps psmisc python3 strace unzip)
 missing=()
 for package in "${packages[@]}"; do
 	if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq 'install ok installed'; then
@@ -145,6 +145,9 @@ done < <(find "$repo_root" -name go.mod -not -path '*/.git/*' -print | sort)
 
 step "Installing benchmark Node dependencies"
 npm ci --prefix "$repo_root/benchmark/socketjs" --no-audit --no-fund
+
+step "Installing Search media dependencies"
+npm ci --prefix "$repo_root/services/bots/nrc-search" --no-audit --no-fund
 
 step "Installing browser test dependencies"
 (

@@ -31,6 +31,18 @@ together. Without workspace restrictions, authenticated users share file access.
 With restrictions, a file is readable through any one of its authorized workspaces.
 Unreferenced blobs are handled by [offline attachment GC](../../../docs/ATTACHMENT_GC.md).
 
+### Private Search downloads
+
+`NRC_SEARCH_FILES_ADDR` enables a separate HTTP listener (Compose uses `:8094`).
+Search uses its private origin as `FILES_URL` and authenticates
+`GET /files/ID?workspace=NAME` with `Authorization: Bearer NRC_BOT_SECRET`.
+The secret must be configured; every download also requires an explicit stored
+grant for exactly that workspace. Unscoped legacy blobs are denied even in open
+mode. This endpoint is never mounted on the public Tailscale mux and must not be
+published on the host or routed through Nginx. Leave the address unset to disable
+it in standalone deployments. Search indexes file contents locally; its API
+continues to enforce access through the public gateway.
+
 ## Existing files in any workspace
 
 Old blobs have no trustworthy workspace information. With any restricted
