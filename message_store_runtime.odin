@@ -201,19 +201,19 @@ message_get_u16 :: proc(buf: []byte) -> u16 {value, _ := endian.get_u16(buf, .Li
 message_get_u32 :: proc(buf: []byte) -> u32 {value, _ := endian.get_u32(buf, .Little); return value}
 message_get_u64 :: proc(buf: []byte) -> u64 {value, _ := endian.get_u64(buf, .Little); return value}
 
-message_dedup_filter_hashes :: proc(workspace_hash, principal_hash: u64, client_id: [16]byte) -> (u64, u64) {
+// The first 32 bytes of a serialized dedup entry are already the hash key.
+message_dedup_filter_hashes :: proc(serialized_key: []byte) -> (u64, u64) {
 	key: [40]byte
-	message_put_u64(key[:], workspace_hash)
-	message_put_u64(key[8:], principal_hash)
-	for value, i in client_id do key[16 + i] = value
+	assert(len(serialized_key) == 32)
+	copy(key[:32], serialized_key)
 	first := xxhash.XXH64(key[:32])
 	message_put_u64(key[32:], 0x9e3779b97f4a7c15)
 	return first, xxhash.XXH64(key[:]) | 1
 }
 
-message_dedup_filter_add :: proc(filter: []u64, workspace_hash, principal_hash: u64, client_id: [16]byte) {
+message_dedup_filter_add :: proc(filter: []u64, serialized_key: []byte) {
 	if len(filter) == 0 do return
-	first, step := message_dedup_filter_hashes(workspace_hash, principal_hash, client_id)
+	first, step := message_dedup_filter_hashes(serialized_key)
 	bit_count := u64(len(filter) * 64)
 	for i in 0 ..< MESSAGE_DEDUP_FILTER_HASH_COUNT {
 		bit := (first + u64(i) * step) % bit_count
@@ -223,7 +223,11 @@ message_dedup_filter_add :: proc(filter: []u64, workspace_hash, principal_hash: 
 
 message_dedup_filter_maybe_contains :: proc(filter: []u64, workspace, principal: string, client_id: [16]byte) -> bool {
 	if len(filter) == 0 do return true
-	first, step := message_dedup_filter_hashes(message_string_hash(workspace), message_string_hash(principal), client_id)
+	key: [32]byte
+	message_put_u64(key[:], message_string_hash(workspace))
+	message_put_u64(key[8:], message_string_hash(principal))
+	for value, i in client_id do key[16 + i] = value
+	first, step := message_dedup_filter_hashes(key[:])
 	bit_count := u64(len(filter) * 64)
 	for i in 0 ..< MESSAGE_DEDUP_FILTER_HASH_COUNT {
 		bit := (first + u64(i) * step) % bit_count
@@ -465,12 +469,12 @@ load_message_segment_index_metadata :: proc(store: ^Message_Store, segment: ^Mes
 	for i in 0 ..< count {
 		if !load_dedup do break
 		entry := data[dedup_offset + i * MESSAGE_DEDUP_ENTRY_SIZE:]
-		client_id: [16]byte; copy(client_id[:], entry[16:32])
-		message_dedup_filter_add(filter, message_get_u64(entry), message_get_u64(entry[8:]), client_id)
+		message_dedup_filter_add(filter, entry[:32])
 	}
-	delete(segment.dedup_filter)
+	delete(segment.dedup_filter, segment.dedup_filter_allocator)
 	delete(segment.conversation_ranges)
 	segment.dedup_filter = filter
+	segment.dedup_filter_allocator = context.allocator
 	segment.conversation_ranges = ranges
 	ranges = nil
 	cache_message_segment_index(store, segment, data[MESSAGE_INDEX_HEADER_SIZE:dedup_offset])
@@ -611,7 +615,7 @@ destroy_message_segment_metadata :: proc(store: ^Message_Store, segments: []Mess
 		assert(segment.readers == 0, "sealed message WAL destruction requires drained readers")
 		release_message_segment_index_cache(store, &segment)
 		release_message_segment_read_file(store, &segment)
-		delete(segment.dedup_filter)
+		delete(segment.dedup_filter, segment.dedup_filter_allocator)
 		delete(segment.conversation_ranges)
 		segment.dedup_filter = nil
 		segment.conversation_ranges = nil
@@ -954,7 +958,7 @@ publish_message_seal :: proc(store: ^Message_Store, now_ns: i64, sealed_bytes: u
 	if data == nil || !load_message_segment_index_metadata(store, &descriptor, true, data) {store.poisoned = true; return false}
 	if _, err := append(&store.segments, descriptor); err != nil {
 		release_message_segment_index_cache(store, &descriptor)
-		delete(descriptor.dedup_filter)
+		delete(descriptor.dedup_filter, descriptor.dedup_filter_allocator)
 		delete(descriptor.conversation_ranges)
 		store.poisoned = true
 		return false
@@ -1155,7 +1159,8 @@ maintain_message_store :: proc(store: ^Message_Store, now_ns: i64 = 0, sync_wal 
 	cutoff := max(store.purge_floor_ns, now - i64(store.retention)); store.purge_floor_ns = cutoff
 	dedup_cutoff := message_store_dedup_cutoff(store, now)
 	for &segment in store.segments {
-		if segment.max_time < dedup_cutoff && len(segment.dedup_filter) > 0 {delete(segment.dedup_filter); segment.dedup_filter = nil}
+		if segment.max_time < dedup_cutoff &&
+		   len(segment.dedup_filter) > 0 {delete(segment.dedup_filter, segment.dedup_filter_allocator); segment.dedup_filter = nil}
 	}
 	remove_count := 0
 	for segment in store.segments {if segment.max_time >= cutoff do break; remove_count += 1}

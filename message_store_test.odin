@@ -368,7 +368,10 @@ test_message_dedup_filter_has_no_false_negatives_and_rejects_new_ids :: proc(t: 
 	principal_hash := message_string_hash(principal)
 	for marker in 1 ..= 1_000 {
 		id: [16]byte; message_put_u64(id[:], u64(marker))
-		message_dedup_filter_add(filter, workspace_hash, principal_hash, id)
+		key: [32]byte
+		message_put_u64(key[:], workspace_hash); message_put_u64(key[8:], principal_hash)
+		copy(key[16:], id[:])
+		message_dedup_filter_add(filter, key[:])
 	}
 	for marker in 1 ..= 1_000 {
 		id: [16]byte; message_put_u64(id[:], u64(marker))
@@ -380,6 +383,28 @@ test_message_dedup_filter_has_no_false_negatives_and_rejects_new_ids :: proc(t: 
 		if !message_dedup_filter_maybe_contains(filter, workspace, principal, id) do rejected += 1
 	}
 	testing.expect(t, rejected >= 950)
+}
+
+@(test)
+test_message_dedup_serialized_key_preserves_filter_bits :: proc(t: ^testing.T) {
+	actual, expected: [157]u64
+	for marker in 0 ..< 1000 {
+		// Independently reconstruct the old 40-byte hash input, including
+		// nonzero high halves and all 16 client ID bytes.
+		key: [40]byte
+		message_put_u64(key[:], 0x123456789abcdef0 + u64(marker))
+		message_put_u64(key[8:], 0xfedcba9876543210 - u64(marker))
+		for i in 16 ..< 32 do key[i] = byte((marker * 37 + i * 13) % 256)
+		first := xxhash.XXH64(key[:32])
+		message_put_u64(key[32:], 0x9e3779b97f4a7c15)
+		step := xxhash.XXH64(key[:]) | 1
+		for i in 0 ..< 7 {
+			bit := (first + u64(i) * step) % u64(len(expected) * 64)
+			expected[bit / 64] |= u64(1) << (bit % 64)
+		}
+		message_dedup_filter_add(actual[:], key[:32])
+	}
+	for word, i in expected do testing.expect_value(t, actual[i], word)
 }
 
 @(test)

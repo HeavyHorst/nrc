@@ -137,7 +137,17 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	testing.expect(t, flushed && store.lifecycle_in_flight && !store.frozen_published)
 	worker = thread.create_and_start_with_poly_data(&server, proc(s: ^NRC_Server) {_ = service_shard_compaction_job(s)}, service_context)
 	thread.join(worker); thread.destroy(worker)
-	testing.expect(t, process_shard_compaction_results())
+	seal_result, seal_received := spsc.try_pop(server.shard_compaction_results[0]); assert(seal_received)
+	sealed := seal_result.lifecycle.store.segments[len(seal_result.lifecycle.store.segments) - 1]
+	testing.expect(t, len(sealed.dedup_filter) > 0 && len(sealed.conversation_ranges) == 1)
+	testing.expect(t, !worker_heap_contains_for_test(&heap, raw_data(sealed.dedup_filter)))
+	testing.expect(t, !worker_heap_contains_for_test(&heap, raw_data(sealed.conversation_ranges)))
+	testing.expect_value(t, sealed.dedup_filter_allocator, service_context.allocator)
+	testing.expect(t, len(store.segments) == 0, "service must not mutate owner metadata")
+	testing.expect(t, process_shard_compaction_result(seal_result))
+	testing.expect(t, raw_data(store.segments[0].dedup_filter) == raw_data(sealed.dedup_filter))
+	testing.expect(t, raw_data(store.segments[0].conversation_ranges) == raw_data(sealed.conversation_ranges))
+	testing.expect(t, message_dedup_filter_maybe_contains(store.segments[0].dedup_filter, workspace, seed.sender_principal, seed.client_message_id))
 	testing.expect(t, flushed && store.active_generation == 3 && store.frozen_published)
 	result, _ = append_message_after_sealed_lookup(store, &third)
 	testing.expect_value(t, result, Message_Store_Result.Appended)
@@ -152,6 +162,16 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	// Duplicate/stale failures cannot poison or delete a published generation.
 	testing.expect(t, process_message_seal_result({owner_worker = 0, shard = shard, message_source_generation = 1, ok = false}))
 	testing.expect(t, !store.poisoned && os.exists(sealed_path))
+	// Expiry is a separate cross-allocator free site. Keep ranges/history,
+	// retain the filter at the inclusive boundary, then expire one ns later.
+	store.dedup_window = time.Minute
+	expiry := store.segments[0].max_time + i64(time.Minute)
+	testing.expect(t, maintain_message_store(store, expiry, sync_wal = false))
+	testing.expect(t, raw_data(store.segments[0].dedup_filter) == raw_data(sealed.dedup_filter))
+	testing.expect(t, maintain_message_store(store, expiry + 1, sync_wal = false))
+	testing.expect_value(t, len(store.segments), 1)
+	testing.expect_value(t, len(store.segments[0].dedup_filter), 0)
+	testing.expect(t, raw_data(store.segments[0].conversation_ranges) == raw_data(sealed.conversation_ranges))
 	testing.expect(t, shutdown_message_store(store))
 	testing.expect(t, init_message_store(store, dir, shard, 24 * time.Hour, 0))
 	testing.expect(t, store.active_generation == 3 && store.high_water == 3)
@@ -162,7 +182,7 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 
 @(test)
 test_message_seal_failure_and_shutdown_keep_source :: proc(t: ^testing.T) {
-	for scenario in 0 ..< 3 {
+	for scenario in 0 ..< 4 {
 		old_td := new(Server_Thread)
 		old_td^ = td
 		td = {}
@@ -218,7 +238,7 @@ test_message_seal_failure_and_shutdown_keep_source :: proc(t: ^testing.T) {
 			built := run_shard_compaction_job(job)
 			testing.expect(t, built.ok)
 			testing.expect(t, process_message_seal_result(built))
-		} else {
+		} else if scenario == 2 {
 			built := run_shard_compaction_job(job)
 			testing.expect(t, built.ok && process_message_seal_result(built))
 			path := fmt.aprintf("%s/manifest.tmp", store.directory)
@@ -237,6 +257,20 @@ test_message_seal_failure_and_shutdown_keep_source :: proc(t: ^testing.T) {
 			testing.expect(t, os.remove_all(path) == nil)
 			delete(blocker); delete(path)
 			testing.expect(t, shutdown_message_store_registry(&td.message_stores))
+		} else {
+			built := run_shard_compaction_job(job)
+			testing.expect(t, built.ok && process_message_seal_result(built))
+			_, ok := flush_pending_retained_message_writes(&td.message_stores)
+			testing.expect(t, ok && store.lifecycle_in_flight)
+			publication_job, queued := chan.try_recv(server.shard_compaction_jobs); assert(queued)
+			published := run_shard_compaction_job(publication_job)
+			testing.expect(t, published.ok)
+			sealed := published.lifecycle.store.segments[len(published.lifecycle.store.segments) - 1]
+			testing.expect(t, len(sealed.dedup_filter) > 0 && len(sealed.conversation_ranges) > 0)
+			// A completed service result can outlive its owner. Discard must
+			// release both prepared buffers even when there is no adoption.
+			testing.expect(t, shutdown_message_store_registry(&td.message_stores))
+			testing.expect(t, !process_shard_compaction_result(published))
 		}
 		recovered: Message_Store
 		testing.expect(t, init_message_store(&recovered, dir, shard, 24 * time.Hour, 0))

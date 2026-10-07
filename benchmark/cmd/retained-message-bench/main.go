@@ -521,9 +521,16 @@ func run() error {
 	subscribers := flag.Int("subscribers", 0, "broadcast receiver connections")
 	rate := flag.Float64("rate", 0, "aggregate fixed publish messages/sec (0 is unlimited)")
 	probe := flag.Bool("probe", false, "sample same-worker ping RTT every 100ms")
+	probeWorkspace := flag.String("probe-workspace", "", "probe workspace (empty uses publication workspace; enable with -probe)")
 	flag.Parse()
 	if err := validateWorkspace(*workspace); err != nil {
 		return err
+	}
+	if *probeWorkspace == "" {
+		*probeWorkspace = *workspace
+	}
+	if err := validateWorkspace(*probeWorkspace); err != nil {
+		return fmt.Errorf("probe workspace: %w", err)
 	}
 	if *clients < 1 || *depth < 1 || *depth > 4 || *size < 1 || *size > protocol.MaxAllowedContentLength || *duration <= 0 || *warmup <= 0 || *subscribers < 0 || *subscribers > 1024 || *rate < 0 || *rate > 1e9 || (*subscribers > 0 && *size < payloadHeaderSize) {
 		return fmt.Errorf("invalid benchmark configuration")
@@ -607,7 +614,7 @@ func run() error {
 	var probeConn *websocket.Conn
 	if *probe {
 		var err error
-		probeConn, err = connect(*server, "retained-bench-probe", *workspace)
+		probeConn, err = connect(*server, "retained-bench-probe", *probeWorkspace)
 		if err != nil {
 			return err
 		}
@@ -654,6 +661,9 @@ func run() error {
 	}
 	result := map[string]any{"ops": count, "ops_per_sec": float64(count) / elapsed.Seconds(), "duration_ms": float64(elapsed) / float64(time.Millisecond), "measured_start_ns": measuredPhaseStart.UnixNano(), "measured_end_ns": measuredPhaseStart.Add(elapsed).UnixNano(), "latency_ms": map[string]float64{"p50": float64(hist.ValueAtQuantile(50)) / 1000, "p99": float64(hist.ValueAtQuantile(99)) / 1000}, "subscribers": *subscribers, "offered_rate": *rate, "achieved_publish_rate": float64(count) / elapsed.Seconds()}
 	if probeConn != nil {
+		probeResult["workspace"] = *probeWorkspace
+		probeResult["sample_count"] = len(probeResult["samples"].([]map[string]float64))
+		probeResult["interval_ms"] = 100
 		result["probe"] = probeResult
 	}
 	if pace != nil {

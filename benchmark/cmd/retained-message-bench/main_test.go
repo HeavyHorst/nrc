@@ -31,14 +31,15 @@ func TestConnectRejectsUnsafeWorkspace(t *testing.T) {
 // This exercises run's actual flag and connection paths without a timing workload.
 func TestRunWorkspacePropagation(t *testing.T) {
 	for _, tc := range []struct {
-		name, workspace string
-		stopAt          int
-		args            []string
+		name, workspace, probeWorkspace string
+		stopAt                          int
+		args                            []string
 	}{
 		{name: "default publisher", workspace: "retained-bench", stopAt: 1},
 		{name: "custom publisher", workspace: "Store_2.test-1", stopAt: 1, args: []string{"--workspace=Store_2.test-1"}},
 		{name: "subscriber", workspace: "Store_2.test-1", stopAt: 2, args: []string{"--workspace=Store_2.test-1", "--subscribers=1"}},
 		{name: "probe", workspace: "Store_2.test-1", stopAt: 2, args: []string{"--workspace=Store_2.test-1", "--probe"}},
+		{name: "separate probe", workspace: "Store_2.test-1", probeWorkspace: "Idle_3", stopAt: 2, args: []string{"--workspace=Store_2.test-1", "--probe", "--probe-workspace=Idle_3"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			paths := make(chan string, 2)
@@ -88,9 +89,13 @@ func TestRunWorkspacePropagation(t *testing.T) {
 			if len(paths) != tc.stopAt {
 				t.Fatalf("connections=%d, want %d", len(paths), tc.stopAt)
 			}
-			for range tc.stopAt {
-				if path := <-paths; path != "/"+tc.workspace {
-					t.Errorf("request URI=%q, want /%s", path, tc.workspace)
+			for i := range tc.stopAt {
+				workspace := tc.workspace
+				if tc.probeWorkspace != "" && i == tc.stopAt-1 {
+					workspace = tc.probeWorkspace
+				}
+				if path := <-paths; path != "/"+workspace {
+					t.Errorf("request URI=%q, want /%s", path, workspace)
 				}
 			}
 		})

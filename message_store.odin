@@ -77,18 +77,21 @@ Message_Conversation_Range :: struct {
 }
 
 Message_Segment_Descriptor :: struct {
-	generation:           u64,
-	first_seq:            u64,
-	last_seq:             u64,
-	min_time:             i64,
-	max_time:             i64,
-	bytes:                u64,
-	dedup_filter:         []u64,
-	conversation_ranges:  [dynamic]Message_Conversation_Range,
-	cached_message_index: []byte,
-	read_file:            ^storage_io.File,
-	read_open_pending:    bool,
-	readers:              int,
+	generation:             u64,
+	first_seq:              u64,
+	last_seq:               u64,
+	min_time:               i64,
+	max_time:               i64,
+	bytes:                  u64,
+	dedup_filter:           []u64,
+	// Unlike dynamic ranges, slices do not retain their allocator. Sealed
+	// filters may transfer from the storage service to the owning worker.
+	dedup_filter_allocator: mem.Allocator,
+	conversation_ranges:    [dynamic]Message_Conversation_Range,
+	cached_message_index:   []byte,
+	read_file:              ^storage_io.File,
+	read_open_pending:      bool,
+	readers:                int,
 }
 
 Message_Offset_Entry :: struct {

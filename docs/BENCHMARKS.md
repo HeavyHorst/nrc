@@ -19,6 +19,184 @@ This document lists the benchmarks currently in this repository, what they measu
 7. Disk, network, and concurrent workloads use explicit stopwatches because their multi-phase boundaries do not fit a single microbenchmark callback. Their output must state warm/cold cache and durability semantics.
 8. Allocation counts are separate runs with explicit tracking allocators. Do not compare allocator-instrumented timing with normal timing.
 
+## Asynchronous Storage Lifecycle: Owner Costs
+
+`storage_owner_benchmark.odin` contains two opt-in workloads for lifecycle
+handoffs and seal-metadata CPU costs:
+
+- `main.benchmark_storage_owner_lifecycle`: real snapshot enqueue, buffered
+  channel/SPSC transfer, result adoption and destruction for shard rotation and
+  message retention, with 8 and 4,096 descriptors. Service results are synthetic
+  successes and **both queue endpoints run on one thread**. There is no service
+  execution, thread scheduling, disk I/O, fsync or ACK latency. The message case
+  includes restoring the descriptor list for the next iteration: its timing is
+  an upper-bound workload, not a pure adoption timer. Empty waiters/deferred
+  requests exclude the cost of resuming real pending traffic.
+- `main.benchmark_storage_owner_seal_metadata`: production serialized, validated
+  indexes; unequal conversation populations with reused IDs across two workspaces.
+  Measures range construction, optional dedup filter construction and metadata
+  destruction using worker TLSF. Serialization, validation/checksum, sorting,
+  disk I/O and the optional index cache are outside timing. Fixture boundaries
+  and filter words reconstructed from source records are checked before timing;
+  measured operations contribute a checked output checksum. Runtime seal
+  publication now builds ranges and the filter on the storage service with its
+  thread-safe backing allocator. This TLSF workload remains a comparable CPU
+  microbenchmark, **not the current worker-adoption path or service latency**.
+
+Build once, then run independent processes; root builds must remain sequential:
+
+```bash
+export HEGEL_LIBHEGEL_PATH="$(./test/fetch_libhegel.sh)"
+odin build . -build-mode:test -o:speed -out:/tmp/nrc-owner-bench \
+  -define:HEGEL_REQUIRED=true -define:ODIN_TEST_THREADS=1 \
+  -define:ODIN_TEST_TRACK_MEMORY=false \
+  -define:ODIN_TEST_NAMES=main.benchmark_storage_owner_lifecycle,main.benchmark_storage_owner_seal_metadata
+for sample in $(seq 1 10); do
+  BENCH_STORAGE_OWNER=1 BENCH_STORAGE_OWNER_MS=900 /tmp/nrc-owner-bench
+done
+# Separate allocator-instrumented run, not a timing result:
+BENCH_STORAGE_OWNER=1 BENCH_STORAGE_OWNER_ALLOC=1 /tmp/nrc-owner-bench
+# High conversation cardinality / larger index, without repeating lifecycle cases:
+for sample in $(seq 1 10); do
+  BENCH_STORAGE_OWNER=1 BENCH_STORAGE_OWNER_MS=900 \
+    BENCH_STORAGE_OWNER_RECORDS=1000000 BENCH_STORAGE_OWNER_CONVERSATIONS=4096 \
+    /tmp/nrc-owner-bench -tests:main.benchmark_storage_owner_seal_metadata
+done
+rm /tmp/nrc-owner-bench
+```
+
+`BENCH_STORAGE_OWNER_MS` targets 750 ms by default after untimed calibration.
+`BENCH_STORAGE_OWNER_RECORDS` defaults to 100,000 (12 through the production
+maximum); `BENCH_STORAGE_OWNER_CONVERSATIONS` defaults to 4 (a multiple of 4,
+at most record count / 3). `OWNER_ALLOC` reports allocator calls, cumulative
+requested bytes and peak **additional live requested bytes** for one operation.
+These exclude instrumentation bookkeeping, retained TLSF pools, owner fixtures
+and the already-loaded serialized index; they are **not process RSS**.
+
+2026-10-07 measurement: optimized pinned Odin `dev-2026-09-nightly:a2fb372`,
+Linux x86-64, shared two-vCPU orb, unpinned, host power policy unavailable.
+Ten independent processes per configuration, warm fixtures/allocator pools,
+900 ms target; measured intervals 0.615–1.504 s. Median (min–max) below means
+the distribution of **process averages**, not per-operation tail latency.
+Timing and explicit allocation instrumentation were separate.
+
+| Owner workload | µs/op median (min–max) | Calls/op | Peak extra bytes |
+|---|---:|---:|---:|
+| Shard handoff, 8 descriptors | 0.738 (0.712–0.849) | 5 | 1,576 |
+| Message retention handoff, 8 descriptors | 0.453 (0.428–0.492) | 5 | 2,770 |
+| Shard handoff, 4,096 descriptors | 6.416 (6.293–7.406) | 5 | 66,984 |
+| Message retention handoff, 4,096 descriptors | 50.969 (43.930–235.900) | 5 | 591,442 |
+| Seal: 100,000 records / 4 conversations, ranges only | 199.213 (191.807–291.556) | 1 | 256 |
+| Seal: 100,000 records / 4 conversations, with dedup | 6,360.159 (6,214.103–6,887.228) | 2 | 125,256 |
+| Seal: 100,000 records / 4,096 conversations, ranges only | 227.506 (211.111–271.603) | 10 | 131,072 |
+| Seal: 100,000 records / 4,096 conversations, with dedup | 6,394.392 (6,185.458–6,954.221) | 11 | 256,072 |
+| Seal: 1,000,000 records / 4,096 conversations, ranges only | 5,231.536 (5,019.981–5,557.423) | 10 | 131,072 |
+| Seal: 1,000,000 records / 4,096 conversations, with dedup | 78,661.196 (77,136.588–80,728.591) | 11 | 1,381,072 |
+
+Serialized input occupies 12,000,080 bytes for 100,000 records and 120,000,080
+bytes for 1,000,000 records, **in addition** to the metadata peaks above.
+These initial measurements preceded the serialized-key optimization and service
+metadata preparation. They exposed dedup-filter construction as the dominant
+remaining owner CPU cost, not a real-network stall timer. Raw output, checksums,
+allocation results, source/binary hashes and environment metadata are retained in
+`.amp/in/artifacts/storage-owner-benchmarks.json`.
+
+The subsequent bit-identical serialized-key optimization avoids decoding and
+reconstructing keys already present in the index. A fresh comparison using the
+same environment and flags (1,000,000 records / 4,096 conversations, ten processes
+per binary, warm TLSF, 900 ms target) measured combined range/filter construction
+and destruction at 78.582 ms median (76.262–95.814) before versus 66.782 ms
+(65.409–70.842) afterward: approximately 15% less CPU time. These sequential
+campaigns ran on a shared orb, so this is not a hardware-independent guarantee.
+Filter sizing, hashes and seven bit positions per key are unchanged.
+
+Runtime publication now transfers prepared ranges and filter buffers without
+rebuilding or copying them on the owner. The optional index-cache copy and frozen
+holder cleanup remain owner work; this is **not a claim of zero publication
+latency**. The filter records its allocating allocator for correct cross-thread
+destruction; this adds one allocator (16 bytes on this x86-64 target) per segment,
+not per message. Raw comparison output is in
+`.amp/in/artifacts/seal-dedup-optimization.json`.
+
+## Asynchronous Storage Lifecycle: Same-Worker Responsiveness
+
+`benchmark/retained-commit/responsiveness.py` uses the existing retained-message
+client with `-probe-workspace` to ping an unloaded workspace on the **same single
+worker** while a different workspace publishes retained messages. Empty
+`-probe-workspace` preserves the client's original same-workspace behavior.
+
+Cases are a low-rate no-seal control (100 messages/s), roll/seal, retention
+(5 s retention / 1 s dedup window), and optionally concurrent shard compaction
+from the existing create-only asset workload. Maintenance cases offer 20,000
+messages/s by default: 64 publishers, depth 1, 4,096-byte content, no subscribers.
+The control is **not matched offered load**, so its RTT difference cannot isolate
+the cost of maintenance. All cases retain fsync-before-ACK semantics.
+
+The runner uses a fresh disposable directory and Amp-supervised server for every
+attempt, alternates case order, saves correlated probe samples and reports median
+and min–max of per-run p99/max RTT. Its activity checks require transitions inside
+the client's timed interval, excluding connection setup, warmup and post-measurement
+cleanup. Paced catch-up and publisher ACK drain are included in this interval:
+
+- Seal: a new index must enter the published message manifest; staged/frozen
+  indexes alone are insufficient.
+- Retention: a previously published index must actually disappear from disk;
+  removing its manifest reference alone is insufficient.
+- Compaction: an observed checkpoint-bearing shard manifest changes to a
+  checkpoint generation distinct from the active WAL generation. Rotation alone
+  sets these equal and does not satisfy this condition.
+
+Compaction publication proves activity, **not coordinator queue residency**.
+The 100 ms sequential probe includes client/transport/scheduling time and can
+miss ticks while delayed. A spike is not proof of a particular worker-side cause.
+Missing activity, failed asset operations, incomplete publishing or cleanup
+failures reject an attempt; there are no flaky latency ceilings in CI.
+
+```bash
+# Build root binaries sequentially; the runner never compiles Odin.
+odin build . -o:speed -out:/tmp/nrc-responsiveness-server
+go -C benchmark build -o /tmp/retained-message-bench ./cmd/retained-message-bench
+go -C benchmark build -o /tmp/asset-kv-bench ./cmd/asset-kv-bench
+python3 -B benchmark/retained-commit/responsiveness.py \
+  --server /tmp/nrc-responsiveness-server --client /tmp/retained-message-bench \
+  --asset-client /tmp/asset-kv-bench --output /tmp/nrc-responsiveness-results \
+  --repetitions 10 --seconds 60 --rate 20000 --asset-ops 300000 \
+  --durability 'production defaults; fsync-before-ACK; 1ms/128KiB shard group commit; default message batching; no build defines'
+python3 -B -m unittest discover -s benchmark/retained-commit -p test_responsiveness.py
+```
+
+Omit `--asset-client` to skip concurrent compaction. Production thresholds are
+256 MiB message segments and 500 MiB shard WALs, so the workload intentionally
+needs substantial traffic; do not accept a short run that never crosses them.
+Sixty-second runs nominally produce about 600 probes each. Shorter runs are useful
+for checking the harness, but individual p99 values have limited tail resolution.
+
+2026-10-07 campaign on the same shared two-vCPU orb, production-default optimized
+server with no threshold overrides: 10 fresh processes per case, 1 s warmup and
+12 s offered traffic. All 30 control/roll-seal/retention attempts passed the
+publication/deletion and complete-publishing checks: 4,812,000 acknowledged
+messages, 3,793 correlated probes, 60 observed timed index publications and 20
+physical index deletions. These short per-run p99 values are descriptive; the
+recommended 60 s duration provides better tail resolution. ACK-backpressure can
+extend the measured phase past its 12 s offering window.
+
+| Case | Probe samples | Per-run p99 ms median (min–max) | Per-run maximum ms median (min–max) |
+|---|---:|---:|---:|
+| Low-rate no-seal control | 1,190 | 0.371 (0.246–1.331) | 0.391 (0.247–4.743) |
+| Roll/seal at 20,000 offered messages/s | 1,297 | 26.887 (11.399–58.527) | 57.503 (22.575–106.623) |
+| Retention at 20,000 offered messages/s | 1,306 | 19.687 (14.311–71.551) | 58.143 (30.799–86.975) |
+
+The separate concurrent-compaction pilot was **rejected**, not added to these
+summaries: its asset workload reported 202,968 failed operations out of 300,000,
+and the server logged persistent asset-create rejections due to shard storage
+backpressure, closing connections. This demonstrates an unsuccessful stress
+workload, not successful compaction latency or proven queue residency. The exact
+admission branch is unverified; do not attribute it to a specific stale-space
+probe, rotation failure or queue limit without further runtime evidence. Server
+runtime behavior was left unchanged. Raw accepted samples, timed activity evidence,
+environment/hashes and the rejected pilot are stored separately in
+`.amp/in/artifacts/storage-responsiveness-benchmarks.json`.
+
 ## WAL Replay CPU Scaling
 
 [`WAL_REPLAY_BENCHMARK.md`](WAL_REPLAY_BENCHMARK.md) describes the task-only,

@@ -60,6 +60,10 @@ destroy_storage_lifecycle :: proc(plan: ^Storage_Lifecycle) {
 		storage_io.discard(plan.store.wal.file)
 		delete(plan.store.wal.path, plan.store.wal.path_allocator)
 		delete(plan.store.directory)
+		// Snapshots have no metadata; only the newly sealed descriptor can own it.
+		if plan.kind == .Message_Seal && len(plan.store.segments) > 0 {
+			destroy_message_segment_metadata(nil, plan.store.segments[len(plan.store.segments) - 1:])
+		}
 		delete(plan.store.segments)
 		free(plan.store)
 	}
@@ -211,9 +215,15 @@ run_storage_lifecycle :: proc(plan: ^Storage_Lifecycle) {
 		descriptor := plan.store.frozen; descriptor.generation += 1
 		plan.index_data = read_validated_message_segment_index(&store, descriptor)
 		if plan.index_data != nil && store.seal_bytes == descriptor.bytes {
-			append(&store.segments, descriptor)
-			store.frozen_published = true
-			plan.ok = write_message_manifest(&store)
+			if _, err := append(&store.segments, descriptor); err == nil {
+				// Service allocations use the job's thread-safe backing allocator.
+				// Build once here; the owner only transfers the resulting metadata.
+				sealed := &store.segments[len(store.segments) - 1]
+				if load_message_segment_index_metadata(&store, sealed, true, plan.index_data) {
+					store.frozen_published = true
+					plan.ok = write_message_manifest(&store)
+				}
+			}
 		}
 	case .Message_Retain:
 		plan.ok = maintain_message_store(&store, plan.now_ns, sync_wal = false)
@@ -307,8 +317,11 @@ process_storage_lifecycle_result :: proc(result: ^Shard_Compaction_Result) -> bo
 		resume_durable_outboxes(&s.durability_waiters)
 		_ = enqueue_message_seal(s, plan.now_ns)
 	case .Message_Seal:
-		descriptor := plan.store.segments[len(plan.store.segments) - 1]
-		if !load_message_segment_index_metadata(s, &descriptor, true, plan.index_data) do unreachable()
+		sealed := &plan.store.segments[len(plan.store.segments) - 1]
+		descriptor := sealed^
+		sealed.dedup_filter = nil; sealed.conversation_ranges = nil
+		dedup_offset := int(message_get_u64(plan.index_data[40:]))
+		cache_message_segment_index(s, &descriptor, plan.index_data[MESSAGE_INDEX_HEADER_SIZE:dedup_offset])
 		assert(len(s.segments) < cap(s.segments))
 		append(&s.segments, descriptor)
 		s.frozen_published = true; s.seal_in_flight = false; s.seal_ready = false
