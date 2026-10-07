@@ -127,7 +127,6 @@
     }
 
     .slice-create-row > .filter-input,
-    .slice-owner-input,
     .slice-outcome-input {
         font-size: var(--mobile-font-lg);
     }

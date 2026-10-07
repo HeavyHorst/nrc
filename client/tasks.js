@@ -3362,11 +3362,10 @@ let descriptionFocusMode = false;
 let descriptionFocusDraft = null;
 
 // =============================================================================
-// USER AUTOCOMPLETE
+// USER DIRECTORY
 // =============================================================================
 //
-// One implementation for every field that takes a person's name: the task
-// assignee and the slice owner. The directory comes from /api/users; the open
+// Every person picker shares the directory from /api/users; the open
 // room's presence is the fallback before it loads.
 
 let allUsers = [];
@@ -3397,87 +3396,6 @@ function userDirectory() {
     if (presence) return Array.from(presence.keys());
   }
   return [];
-}
-
-// attachUserAutocomplete binds an input to its dropdown element and owns
-// filtering, highlighting, selection and the keyboard contract. The caller owns
-// the markup and the dismissal on outside clicks, because that is the one part
-// that depends on where the field lives.
-function attachUserAutocomplete({ input, dropdown, onInput, onSelect }) {
-  if (!input || !dropdown) return null;
-
-  const state = { visible: false, index: -1, matches: [] };
-
-  const hide = () => {
-    dropdown.classList.add("hidden");
-    state.visible = false;
-    state.index = -1;
-  };
-
-  const highlight = (index) => {
-    state.index = index;
-    dropdown.querySelectorAll(".assignee-option").forEach((option, position) => {
-      option.classList.toggle("highlighted", position === index);
-    });
-  };
-
-  const select = (user) => {
-    input.value = user;
-    hide();
-    onSelect?.(user);
-  };
-
-  const show = () => {
-    const query = input.value.toLowerCase().trim();
-    const matches = userDirectory().filter((user) => user.toLowerCase().includes(query));
-    state.matches = matches;
-    state.index = -1;
-    if (!matches.length) {
-      hide();
-      return;
-    }
-    dropdown.replaceChildren(...matches.map((user, index) => {
-      const option = document.createElement("div");
-      option.className = "assignee-option";
-      option.textContent = user;
-      option.addEventListener("click", () => select(user));
-      option.addEventListener("mouseenter", () => highlight(index));
-      return option;
-    }));
-    dropdown.classList.remove("hidden");
-    state.visible = true;
-  };
-
-  input.addEventListener("input", () => {
-    onInput?.();
-    show();
-  });
-  input.addEventListener("focus", show);
-
-  // A field that needs the directory should not wait for another panel to ask
-  // for it first, and the list should appear without a second focus once it
-  // arrives.
-  fetchUsersList().then(() => {
-    if (state.visible || document.activeElement === input) show();
-  });
-  input.addEventListener("keydown", (event) => {
-    if (!state.visible) return;
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      if (state.index + 1 < state.matches.length) highlight(state.index + 1);
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      if (state.index - 1 >= 0) highlight(state.index - 1);
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      if (state.index >= 0) select(state.matches[state.index]);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      hide();
-    }
-  });
-
-  return { show, hide, select, isVisible: () => state.visible };
 }
 
 // Build HTML options for blocked-by select
@@ -3993,9 +3911,7 @@ function formatCommentTime(nanos) {
 
 // The panel replaces its own markup on every render, but `.agenda-content`
 // itself persists. Panel-level handlers are therefore bound once, on the first
-// render, and resolve the fields they guard at event time: a handler bound per
-// render keeps a reference to a detached input and dismisses the assignee
-// dropdown on a click inside the live one.
+// render, and resolve the fields they guard at event time.
 let taskDetailPanelHandlersBound = false;
 
 function bindTaskDetailPanelHandlers(agendaContent) {
@@ -4027,20 +3943,6 @@ function bindTaskDetailPanelHandlers(agendaContent) {
   agendaContent.addEventListener("change", (e) => {
     if (e.target.id && dirtyFieldIds.has(e.target.id)) {
       setTaskDetailDirty(true);
-    }
-  });
-
-  // Close the assignee dropdown when a click lands outside it. The field and
-  // its dropdown are rebuilt on every render, so they are resolved here.
-  agendaContent.addEventListener("click", (e) => {
-    const assigneeField = document.getElementById("taskDetailAssignee");
-    const dropdown = document.getElementById("detailAssigneeDropdown");
-    if (
-      assigneeField &&
-      !assigneeField.contains(e.target) &&
-      !dropdown?.contains(e.target)
-    ) {
-      detailAssigneeAutocomplete?.hide();
     }
   });
 
@@ -4228,9 +4130,6 @@ function showTaskDetailPanel(task, { view = true } = {}) {
     },
     focusPending: pendingCommentFocusAssetId != null,
   });
-
-  // Fetch users list for assignee autocomplete
-  fetchUsersList();
 
   // Initialize field stats with current values
   updateDetailFieldStats();
@@ -4461,14 +4360,9 @@ function updateDetailFieldStats() {
   updateStat("taskDetailAssignee", "taskDetailAssigneeStats", 32);
 }
 
-// The task assignee field. Rebound on every detail render, because the panel
-// replaces its markup; the old handle dies with the elements it held.
-let detailAssigneeAutocomplete = null;
-
 function hideTaskDetailPanel() {
   // Clear the current detail task
   currentDetailTask = null;
-  detailAssigneeAutocomplete?.hide();
 
   // Clear the Inspector entity view.
   const agendaPanel = document.querySelector(".agenda-panel");
@@ -4603,6 +4497,7 @@ function handleTaskEdgeChanged(edge, action) {
 // =============================================================================
 
 function initTasks() {
+  fetchUsersList();
   initTaskDetailPanel();
   document.addEventListener("keydown", handleTaskListKeyboardNavigation);
   document.addEventListener("keydown", handleRemindersKeyboardNavigation);
@@ -4664,7 +4559,6 @@ window.NRCTasks = {
   ReminderState,
   toggleMyTasksFilter,
   initFilterState,
-  attachUserAutocomplete,
   getFieldChoices: taskFieldChoices,
   fieldControl,
   openField,

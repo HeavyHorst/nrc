@@ -90,8 +90,61 @@ try {
   await page.waitForTimeout(250);
   assert.equal(await page.evaluate(() => window.__sends.length), 1, "one save request per Enter");
 
+  // Customer responsibility uses the same picker, while retaining the form's
+  // explicit persistence boundary and stale/offline protection.
+  await page.route("http://nrc.test/api/features", route => route.fulfill({ json: { customers: true } }));
+  await page.reload();
+  await page.waitForFunction(() => window.NRCCustomers?.isEnabled() && userDirectory().length === 4);
+  await page.evaluate(async () => {
+    serverReady = true;
+    currentWorkspaceId = "person-forms";
+    currentRoomId = 7n;
+    window.company = { convId: 0n, assetId: 88n, assetType: 8, owner: "tester", createdAt: 1n, updatedAt: 1n,
+      preview: JSON.stringify({ version: 1, title: "Example company", assignee: "" }), payload: "", attachments: [] };
+    NRCAssets.roomAssets.set(0n, new Map([[88n, company]]));
+    NRCAssets.requestAsset = (_room, _id, options) => { options.onSuccess({ asset: company }); return 1; };
+    window.companyWrites = [];
+    NRCAssets.sendUpdateAsset = (...args) => { companyWrites.push(args); return 1; };
+    await NRCInspector.openEntity({ roomId: 0n, type: "company", id: 88n, subview: "edit" });
+  });
+  const responsible = () => page.getByRole("button", { name: /^Edit RESPONSIBLE:/ });
+  for (const theme of ["white", "matte-black"]) {
+    for (const width of [1600, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      await page.evaluate(() => NRCInspector.openEntity(NRCInspector.current()));
+      await responsible().click();
+      assert.deepEqual(await options(), ["— CLEAR", "anna", "ben", "rene", "tester"]);
+      if (process.env.NRC_PERSON_SCREENSHOTS) await dropdown().screenshot({ path: `${process.env.NRC_PERSON_SCREENSHOTS}/customer-responsible-${theme}-${width}.png` });
+      await page.keyboard.press("Escape");
+    }
+  }
+  await responsible().click();
+  await assignee.fill("be");
+  await dropdown().getByRole("option", { name: "ben", exact: true }).click();
+  assert.equal(await page.locator('input[name="assignee"]').inputValue(), "ben");
+  assert.equal(await responsible().textContent(), "ben");
+  assert.equal(await page.locator("#inspectorHeader .detail-save-state").textContent(), "UNSAVED");
+  assert.equal(await page.evaluate(() => companyWrites.length), 0, "selection does not persist before the form SAVE");
+  await responsible().click();
+  await assignee.fill("cancelled");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator('input[name="assignee"]').inputValue(), "ben");
+  await page.locator("#customerSave").click();
+  assert.equal(await page.evaluate(() => JSON.parse(companyWrites[0][2]).assignee), "ben", "the existing form SAVE includes the chosen person");
+  assert.equal(await responsible().isDisabled(), true, "a pending record save locks the person field");
+  await page.evaluate(() => companyWrites[0].at(-1).onError({ message: "Test rejection" }));
+  await page.waitForFunction(() => document.getElementById("customerEditorError")?.textContent === "Test rejection");
+  await responsible().click();
+  await page.evaluate(() => NRCCustomers.onDisconnect());
+  await assignee.fill("must-not-save");
+  await dropdown().getByRole("button", { name: "SAVE", exact: true }).click();
+  assert.equal(await page.locator('input[name="assignee"]').inputValue(), "ben", "an editor opened before disconnect cannot mutate the now-locked form");
+  assert.match(await dropdown().locator(".inline-field-state").textContent(), /RECORD CHANGED/);
+  await page.keyboard.press("Escape");
+
   assert.deepEqual(errors, [], "no page errors");
-  console.log("PASS: task assignee picker survives panel re-renders, filtering, dismissal and Enter");
+  console.log("PASS: shared task/customer person picker, draft/save boundary, both themes and widths, and offline protection");
 } finally {
   await browser.close();
 }

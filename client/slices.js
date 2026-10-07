@@ -99,7 +99,6 @@
   // answered with the same list, so the announcement below has to be about a
   // change or it would have that view ask again, forever.
   let listSignature = null;
-  let ownerAutocomplete = null;
   let detailGeneration = 0;
   let detailLoading = false;
   let selectionGeneration = 0;
@@ -1450,21 +1449,16 @@
       syncFilterControls();
       return;
     }
-    const previousOwner = document.getElementById("sliceOwner");
     updateHtml(record, renderRecord(fields), { preserveSections: paintedFields?.sliceId === slice?.sliceId });
     // The fields are painted with the record's own values; what the reader typed
     // over them is put back, and remembered for the next render to read again.
     paintedFields = fields;
     applyDraft(draft);
 
-    // Retained fields already have their autocomplete listeners.
-    const owner = document.getElementById("sliceOwner");
-    if (owner !== previousOwner || !ownerAutocomplete) {
-      ownerAutocomplete = window.NRCTasks?.attachUserAutocomplete?.({
-        input: owner,
-        dropdown: document.getElementById("sliceOwnerDropdown"),
-      }) ?? null;
-    }
+    window.NRCDetailUI?.bindSuggestedInput(document.getElementById("sliceOwner"), {
+      name: "OWNER",
+      suggestions: () => window.NRCTasks?.getFieldChoices?.("assignee", 0n) || [],
+    });
 
     // The filter controls are painted from the state on every render, so a
     // listing that arrived with new owners offers them without a second path.
@@ -1548,11 +1542,8 @@
       </div>
       <div class="slice-record-fields">
         <div class="slice-field slice-field--owner">
-          <label class="slice-note" for="sliceOwner">OWNER</label>
-          <div class="slice-owner-wrapper">
-            <input class="filter-input slice-owner-input" id="sliceOwner" type="text" maxlength="${MAX_OWNER_LENGTH}" placeholder="UNASSIGNED" value="${escape(owner)}" autocomplete="off">
-            <div id="sliceOwnerDropdown" class="assignee-dropdown hidden"></div>
-          </div>
+          <span class="slice-note">OWNER</span>
+          <div><input id="sliceOwner" type="hidden" maxlength="${MAX_OWNER_LENGTH}" value="${escape(owner)}"></div>
         </div>
         <div class="slice-field slice-field--outcome">
           <label class="slice-note" for="sliceOutcome">OUTCOME</label>
@@ -1812,13 +1803,6 @@
     if (!view) return;
 
     view.addEventListener("click", (event) => {
-      // The owner dropdown belongs to the field, not to the view: a click
-      // anywhere else dismisses it before the click is interpreted.
-      const ownerField = document.getElementById("sliceOwner");
-      if (ownerField && !ownerField.contains(event.target) &&
-          !document.getElementById("sliceOwnerDropdown")?.contains(event.target)) {
-        ownerAutocomplete?.hide();
-      }
       const row = event.target.closest("[data-slice-name]");
       if (row) {
         selectGuarded(row.dataset.sliceName);

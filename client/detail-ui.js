@@ -246,6 +246,34 @@
     return inlineField({ key: `attachments-${entity.id ? "task" : "note"}-${entity.convId}-${entity.id ?? entity.assetId}`, label: "", name: "ATTACHMENTS", display: "+ ATTACH", type: "attachments", current, save });
   }
 
+  // Form-backed fields use the same editor as immediate-save metadata, but
+  // commit into the form draft. Its own SAVE still owns the persistence write.
+  function bindSuggestedInput(input, { name, suggestions }) {
+    if (!input) return;
+    input.type = "hidden";
+    const spec = {
+      name, value: input.value, suggestions,
+      save(value) {
+        if (!input.isConnected || input.readOnly || input.disabled || input.closest("[inert]")) {
+          throw new Error("RECORD CHANGED OR IS SAVING · CLOSE AND REOPEN THIS FIELD");
+        }
+        if (input.maxLength >= 0 && value.length > input.maxLength) throw new Error(`EXCEEDS ${input.maxLength} CHARACTERS`);
+        input.value = value;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+    };
+    let host = input.nextElementSibling;
+    if (host?.tagName !== "NRC-INLINE-FIELD") {
+      input.insertAdjacentHTML("afterend", inlineField(spec));
+      host = input.nextElementSibling;
+    }
+    host.spec = spec;
+    const button = host.querySelector("button");
+    button.textContent = input.value || "—";
+    button.setAttribute("aria-label", `Edit ${name}: ${input.value || "empty"}`);
+    button.disabled = input.readOnly || input.disabled;
+  }
+
   function openAttachments(spec) {
     let pending = false;
     const modal = window.NRCModal.create({ title: "ATTACHMENTS", closeButton: true });
@@ -760,6 +788,7 @@
     renderMetadataLedger,
     setSaveState,
     inlineField,
+    bindSuggestedInput,
     attachmentControl,
   };
 })();

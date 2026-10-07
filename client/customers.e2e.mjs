@@ -71,7 +71,10 @@ try {
   await page.fill('[name="city"]', "Hamburg");
   await page.fill('[name="sector"]', "Maschinenbau");
   await page.fill('[name="address"]', "Werkstraße 18, Hamburg");
-  await page.fill('[name="assignee"]', "rene");
+  await page.getByRole("button", { name: "Edit RESPONSIBLE: empty", exact: true }).click();
+  await page.locator(".inline-field-editor input").fill("rene");
+  await page.locator(".inline-field-editor").getByRole("button", { name: "SAVE", exact: true }).click();
+  assert.equal(await page.locator('[name="assignee"]').inputValue(), "rene", "the person picker updates the customer form draft");
   await capture("company-editor");
   await save();
   const companyId = await page.locator(".customer-row").getAttribute("data-company");

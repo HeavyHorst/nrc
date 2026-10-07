@@ -17,6 +17,7 @@ try {
     try { await route.fulfill({ path: fileURLToPath(new URL(`.${path === "/" ? "/index.html" : path}`, import.meta.url)) }); }
     catch { await route.fulfill({ status: 404, body: "Not found" }); }
   });
+  await page.route("http://nrc.test/api/users", route => route.fulfill({ json: ["anna", "tester", ...Array.from({ length: 35 }, (_, i) => `person-${String(i).padStart(2, "0")}`)] }));
   await page.goto("http://nrc.test");
   await page.waitForFunction(() => window.NRCAssets && window.NRCViewManager && window.NRCSlices);
 
@@ -152,9 +153,40 @@ try {
   assert.deepEqual(await page.locator("#sliceRecord .slice-facts dt").allTextContents(),
     ["TASKS", "OPEN", "BLOCKED", "DONE", "NOTES", "FILES", "OLDEST OPEN", "LAST MOVED"]);
   assert.equal(await page.locator("#sliceRecord .slice-identity").innerText().then(text => text.includes("OWNER")), false);
-  assert.equal(await page.locator('#sliceRecord label[for="sliceOwner"]').textContent(), "OWNER");
+  assert.equal(await page.locator('#sliceRecord .slice-field--owner .slice-note').textContent(), "OWNER");
   assert.equal(await page.locator('#sliceRecord label[for="sliceOutcome"]').textContent(), "OUTCOME");
   assert.equal(await page.locator("#sliceRecord .slice-record-shape .slice-mark").count(), 3);
+
+  // The owner uses the same searchable person editor as task assignees, but
+  // commits to the slice draft, not the server. Many names must scroll rather
+  // than shrink; test both themes and the phone composition.
+  const ownerButton = () => page.locator("#sliceRecord .slice-field--owner nrc-inline-field button");
+  const personEditor = () => page.locator(".inline-field-editor");
+  const personSearch = () => personEditor().locator("input");
+  await page.waitForFunction(() => userDirectory().length === 37);
+  await ownerButton().click();
+  await personSearch().fill("ann");
+  assert.deepEqual(await personEditor().getByRole("option").allTextContents(), ["— CLEAR", "anna"]);
+  await personEditor().getByRole("option", { name: "anna", exact: true }).click();
+  assert.equal(await page.locator("#sliceOwner").inputValue(), "anna");
+  assert.equal(await page.evaluate(() => NRCSlices.recordDirty()), true);
+  assert.equal(await page.evaluate(() => JSON.parse(NRCAssets.roomAssets.get(0n).get(5n).preview).owner ?? ""), "", "selection does not persist the slice before SAVE");
+  await page.evaluate(() => NRCSlices.render());
+  assert.equal(await ownerButton().textContent(), "anna", "a refresh retains the form draft and its visible value");
+  await ownerButton().click();
+  await personSearch().fill("new-owner");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#sliceOwner").inputValue(), "anna", "cancel keeps the committed form draft");
+  await ownerButton().click();
+  await personSearch().fill("new-owner");
+  await page.keyboard.press("Enter");
+  assert.equal(await page.locator("#sliceOwner").inputValue(), "new-owner", "free-form names remain supported");
+  await ownerButton().click();
+  await personEditor().getByRole("option", { name: "— CLEAR", exact: true }).click();
+  assert.equal(await page.locator("#sliceOwner").inputValue(), "");
+  await ownerButton().click();
+  await personSearch().fill("tester");
+  await personEditor().getByRole("option", { name: "tester", exact: true }).click();
 
   // A head is a grid of its own, so every label must still sit over the column
   // the rows below it fill: a label that drifts is a value read as another field.
@@ -258,10 +290,11 @@ try {
   assert.deepEqual(await activeMember(), { open: "file:302", entity: "file:302" }, "the files table holds at its last row");
 
   // The record's own fields and the register keep their own arrows.
-  await page.locator("#sliceOwner").focus();
+  await ownerButton().click();
   await page.keyboard.press("ArrowDown");
-  assert.equal(await page.evaluate(() => document.activeElement?.id), "sliceOwner", "a field keeps the arrow keys");
+  assert.equal(await personSearch().evaluate(input => input === document.activeElement), true, "the picker keeps the arrow keys");
   assert.equal(await selectedSlice(), "Alpha", "a field never moves the register");
+  await page.keyboard.press("Escape");
   await page.locator("#sliceRecord .slice-member[data-member-task='3'] .slice-member-open").focus();
   await page.keyboard.press("ArrowDown");
   await page.waitForTimeout(100);
@@ -315,8 +348,10 @@ try {
   await page.keyboard.press("ArrowDown");
   await page.waitForTimeout(150);
   assert.equal(await page.evaluate(() => String(window.NRCInspector.current()?.id)), "1", "the modal keeps the arrows while it is open");
-  // The narrow record opens its messages block; Escape collapses that before
+  // Open the messages block explicitly; empty records start collapsed. Escape
+  // collapses the expanded block before
   // closing the inspector. Both stages must preserve the member selection.
+  await page.locator('#inspector [data-messages-toggle]').click();
   assert.equal(await page.locator('#inspector [data-messages-area]').getAttribute("data-messages-open"), "true");
   await page.keyboard.press("Escape");
   await page.waitForFunction(() => document.querySelector('#inspector [data-messages-area]')?.dataset.messagesOpen === "false");
@@ -329,6 +364,26 @@ try {
   await page.waitForFunction(() => window.NRCInspector.current()?.id === 2n);
   assert.equal((await activeMember()).entity, "task:2", "the phone drill-in still walks the member tables");
   assert.equal(await selectedSlice(), "Alpha", "the drilled-past register does not move");
+  await page.evaluate(() => NRCInspector.close());
+  for (const theme of ["white", "matte-black"]) {
+    for (const width of [1600, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      await ownerButton().click();
+      await personSearch().fill("");
+      assert.equal(await personEditor().getByRole("option").count(), 38);
+      await personEditor().locator(".custom-select__options").evaluate(list => { list.scrollTop = 0; });
+      const geometry = await personEditor().evaluate(panel => {
+        const list = panel.querySelector(".custom-select__options");
+        return { overflow: list.scrollHeight > list.clientHeight,
+          rowsFit: [...list.children].every(row => row.getBoundingClientRect().height >= parseFloat(getComputedStyle(row).lineHeight)),
+          fits: panel.getBoundingClientRect().right <= innerWidth && panel.getBoundingClientRect().left >= 0 };
+      });
+      assert.deepEqual(geometry, { overflow: true, rowsFit: true, fits: true });
+      if (process.env.NRC_PERSON_SCREENSHOTS) await personEditor().screenshot({ path: `${process.env.NRC_PERSON_SCREENSHOTS}/slice-owner-${theme}-${width}.png` });
+      await page.keyboard.press("Escape");
+    }
+  }
   assert.deepEqual(errors, []);
   console.log("PASS: register and member/note/file arrows walk and open, boundaries hold, fields and the register keep their keys, and a walk belongs to the slice it was opened in");
 } finally {

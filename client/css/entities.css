@@ -945,68 +945,6 @@ body.sullivan-share-focused .chat-header {
     TASK DETAIL CONTROLS
     ============================================================================= */
 
-.task-detail-assignee-wrapper {
-    position: relative;
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-}
-
-.task-detail-assignee-wrapper .task-detail-input {
-    flex: 1;
-    min-width: 0;
-}
-
-.assignee-dropdown {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: var(--bg-primary);
-    border: 1px solid var(--border-primary);
-    border-top: none;
-    max-height: 12.5rem;
-    overflow-y: auto;
-    z-index: 1000;
-    font-size: var(--font-sm);
-    box-shadow: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    padding: 0;
-    margin-top: -0.0625rem;
-}
-
-.assignee-dropdown.hidden {
-    display: none;
-}
-
-.assignee-option {
-    padding: 0 0.375rem;
-    height: 1.5rem;
-    line-height: 1.5rem;
-    cursor: pointer;
-    border-bottom: 1px solid var(--border-subtle);
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.assignee-option:last-child {
-    border-bottom: none;
-}
-
-.assignee-option:hover,
-.assignee-option.highlighted {
-    background: var(--bg-primary);
-    color: var(--accent-highlight);
-    box-shadow: inset 3px 0 0 var(--accent-highlight);
-}
-
 .task-modal-btn {
     padding: 0.125rem 0.5rem;
     text-align: center;
@@ -3246,7 +3184,6 @@ dialog.nrc-dialog-backdrop::backdrop { background: transparent; }
     .note-detail-input:not(.custom-select--hidden)
 ),
 .detail-edit-field > .custom-select .custom-select__trigger,
-.detail-edit-field > .task-detail-assignee-wrapper .task-detail-input,
 .detail-edit-field--with-action > .task-detail-btn-clear {
     box-sizing: border-box;
     height: var(--detail-control-height);
@@ -3341,8 +3278,7 @@ dialog.nrc-dialog-backdrop::backdrop { background: transparent; }
 .detail-edit-field > .task-detail-input,
 .detail-edit-field > .task-detail-select,
 .detail-edit-field > .note-detail-input,
-.detail-edit-field > .custom-select,
-.detail-edit-field > .task-detail-assignee-wrapper {
+.detail-edit-field > .custom-select {
     width: 100%;
     max-width: none;
     min-width: 0;
@@ -5184,8 +5120,7 @@ nrc-link-picker {
     min-width: 0;
 }
 
-.slice-outcome-input,
-.slice-owner-input {
+.slice-outcome-input {
     display: block;
     width: 100%;
     min-height: 2rem;
@@ -5196,13 +5131,6 @@ nrc-link-picker {
 .slice-outcome-input {
     field-sizing: content;
     resize: vertical;
-}
-
-/* The owner field carries an option list, so the wrapper owns the width the
-   field and the list share: an absolutely positioned list that spans the record
-   instead of the field reads as a different control. */
-.slice-owner-wrapper {
-    position: relative;
 }
 
 .slice-members {

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261006shareborder1">
+    <link rel="stylesheet" href="../css/main.css?v=20261007people1">
     <link rel="stylesheet" href="../css/custom-select.css?v=20260926nesting1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -1050,11 +1050,8 @@ status      ← Service Worker</code></pre>
                         </div>
                         <div class="slice-record-fields">
                             <div class="slice-field slice-field--owner">
-                                <label class="slice-note" for="catalogSliceOwner">OWNER</label>
-                                <div class="slice-owner-wrapper">
-                                    <input class="filter-input slice-owner-input" id="catalogSliceOwner" type="text" maxlength="32" placeholder="UNASSIGNED" value="RENE" autocomplete="off">
-                                    <div id="catalogSliceOwnerDropdown" class="assignee-dropdown hidden"></div>
-                                </div>
+                                <span class="slice-note">OWNER</span>
+                                <div><input id="catalogSliceOwner" type="hidden" maxlength="32" value="RENE"></div>
                             </div>
                             <div class="slice-field slice-field--outcome">
                                 <label class="slice-note" for="catalogSliceOutcome">OUTCOME</label>
@@ -1138,7 +1135,7 @@ status      ← Service Worker</code></pre>
                     <table class="catalog-inventory-table">
                         <thead><tr><th>FAMILY</th><th>ELEMENTS</th><th>PRODUCTION HOOK</th><th>SOURCE</th><th>SCOPE</th></tr></thead>
                         <tbody id="inventoryBody">
-                            <tr><td>INLINE METADATA</td><td>Field-local edit in task/note lists, slices and inspector. Suggested text uses the shared searchable picker: choose an existing value, clear, or enter a new string. Selection saves immediately; Escape/CANCEL discards. Pending and failure stay at the field; title open and rename are separate. Description/content and attachments have independent editors.</td><td><code>&lt;nrc-inline-field&gt;</code>, <code>.inline-field-editor</code>, <code>.custom-select__*</code></td><td>detail-ui.js / custom-picker.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>INLINE METADATA</td><td>Field-local edit in task/note lists, slices and inspector. All responsibility fields use the shared searchable person picker: task/appointment assignee, slice owner and customer responsible. Choose an existing value, clear, or enter a new string. Task selection saves immediately; form-backed fields update the draft until the record SAVE. Escape/CANCEL discards the open field edit. Pending and failure stay at the field; title open and rename are separate. Description/content and attachments have independent editors.</td><td><code>&lt;nrc-inline-field&gt;</code>, <code>.inline-field-editor</code>, <code>.custom-select__*</code></td><td>detail-ui.js / custom-picker.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>PAGE LOADER</td><td>Automatic or manual next page, loading, error/retry, exhausted state, observer lifecycle; Notes and Customers</td><td><code>&lt;nrc-page-loader&gt;</code>, <code>nrc:load-more</code></td><td>page-loader.js / css/workspace.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>FOUNDATIONS</td><td>Color, type, selection, scrollbar; double workspace dividers, patterned section breaks, quiet list rules</td><td><code>:root</code>, <code>[data-theme]</code>, <code>--workspace-divider</code>, <code>--section-pattern</code>, <code>--border-list</code></td><td>css/main.css</td><td><b>CORE</b></td></tr>
                             <tr><td>APP SHELL</td><td>Desktop sidebar; mobile room switcher, bottom views, full-screen inspector with collapsed metadata, always-visible compact search, keyboard viewport</td><td><code>.app-shell</code>, <code>.content-shell</code>, <code>.mobile-mast</code>, <code>.mobile-bottom</code>, <code>.mobile-inspector-navigation</code>, <code>.mobile-metadata-toggle</code></td><td>index.html / mobile-shell.js / css/mobile.css / css/mobile-tasks.css</td><td><b>LAYOUT</b></td></tr>
@@ -1198,8 +1195,11 @@ status      ← Service Worker</code></pre>
     <script src="catalog.js?v=20260912css1"></script>
     <script src="../attachments.js?v=20260924attachment1"></script>
     <script>window.NRCAssets = { MAX_PAYLOAD_LENGTH: 65535 };</script>
-    <script src="../detail-ui.js?v=20260927appointment2"></script>
+    <script src="../detail-ui.js?v=20261007people1"></script>
     <script>
+        NRCDetailUI.bindSuggestedInput(document.getElementById("catalogSliceOwner"), {
+            name: "OWNER", suggestions: () => ["ANKE", "FLORIAN", "RENE"],
+        });
         const inlineExample = document.createElement("article");
         inlineExample.className = "catalog-card";
         document.getElementById("forms").append(inlineExample);

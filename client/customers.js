@@ -477,6 +477,9 @@
   }
 
   function field(name, label, value = "", required = false, type = "text") {
+    if (name === "assignee") {
+      return `<div class="task-detail-row detail-edit-field"><span class="detail-edit-label">${label}</span><div><input name="assignee" type="hidden" value="${escape(value)}" maxlength="200"></div></div>`;
+    }
     return `<label class="task-detail-row detail-edit-field"><span class="detail-edit-label">${label}</span><input class="task-detail-input" name="${name}" type="${type}" value="${escape(value)}" maxlength="200" ${required ? "required" : ""}></label>`;
   }
 
@@ -510,6 +513,10 @@
       if (control.tagName === "SELECT") control.disabled = blocked;
       else control.readOnly = blocked;
     }
+    window.NRCDetailUI.bindSuggestedInput(el("customerFields")?.querySelector('input[name="assignee"]'), {
+      name: "RESPONSIBLE",
+      suggestions: () => window.NRCTasks?.getFieldChoices?.("assignee", 0n) || [],
+    });
     window.NRCDetailUI.setSaveState(editorBusy ? "SAVING…" : editorStale ? "STALE" : editorDirty ? "UNSAVED" : inspection?.subview === "edit" ? "SAVED" : "READ", el("inspectorHeader"));
   }
 
