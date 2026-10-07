@@ -943,6 +943,99 @@ test_retained_parallel_read_error_waits_for_all_callbacks :: proc(t: ^testing.T)
 }
 
 @(test)
+test_retained_async_open_error_and_stale_event_release_reader :: proc(t: ^testing.T) {
+	when !NRC_SIMULATION {
+		return
+	} else {
+		ctx: Sim_Test_Context
+		simulation_test_begin(&ctx, 135)
+		defer simulation_test_end(&ctx)
+		storage := sim_world_storage_context(&ctx.sim.world)
+		outcomes := [4]linux.Errno{.EIO, .EMFILE, .ENFILE, .NONE}
+		for fault, index in outcomes {
+			stale := index == 3
+			store := Message_Store {
+				storage       = storage,
+				async_readers = 1,
+			}
+			history := new(Retained_History_Context)
+			history.store = &store
+			history.holds_store_reader = true
+			history.active_wal_source = &store
+			store.active_open_pending = true
+			pool_before := td.spool.live_allocs
+			nrc_io_open_read_file(storage, "/missing-history.wal", history, retained_history_on_active_open, retained_history_read_discard_raw)
+			testing.expect_value(t, store.async_readers, u32(1))
+			testing.expect(t, !store.poisoned, "open must not complete synchronously")
+			testing.expect_value(t, td.spool.live_allocs, pool_before + 1)
+			// A second cache miss must not open a duplicate descriptor.
+			second := new(Retained_History_Context)
+			second.store = &store; second.holds_store_reader = true
+			store.async_readers += 1
+			append(&second.specs, Retained_Read_Spec{length = 100})
+			retained_history_submit_active_batch(second)
+			testing.expect_value(t, nrc_sim_file_read_count(&ctx.sim), 1)
+			testing.expect_value(t, store.async_readers, u32(1))
+			if stale do sim_world_crash(&ctx.sim.world)
+			testing.expect(t, nrc_sim_run_next_file_read(&ctx.sim, fault))
+			testing.expect_value(t, store.async_readers, u32(0))
+			testing.expect_value(t, store.poisoned, index == 0)
+			testing.expect(t, !store.active_open_pending)
+			testing.expect_value(t, td.spool.live_allocs, pool_before)
+			storage = sim_world_storage_context(&ctx.sim.world)
+		}
+	}
+}
+
+@(test)
+test_retained_sealed_open_reserves_capacity_and_releases_on_failure :: proc(t: ^testing.T) {
+	when !NRC_SIMULATION {
+		return
+	} else {
+		ctx: Sim_Test_Context
+		simulation_test_begin(&ctx, 136)
+		defer simulation_test_end(&ctx)
+		cache := Message_Sealed_WAL_Cache {
+			limit = 1,
+		}
+		defer delete(cache.entries)
+		store := Message_Store {
+			storage          = sim_world_storage_context(&ctx.sim.world),
+			sealed_wal_cache = &cache,
+		}
+		append(&store.segments, Message_Segment_Descriptor{generation = 1})
+		defer delete(store.segments)
+		append(&store.segments[0].conversation_ranges, Message_Conversation_Range{workspace_hash = message_string_hash(""), conversation_id = 42, end = 1})
+		defer delete(store.segments[0].conversation_ranges)
+		for _ in 0 ..< 2 {
+			history := new(Retained_History_Context)
+			history.store = &store; history.holds_store_reader = true
+			history.sealed_count = 1; history.segment_step = -1
+			history.conversation_id = 42
+			store.async_readers += 1
+			retained_history_open_sealed(history)
+		}
+		testing.expect_value(t, cache.opening, 1)
+		testing.expect_value(t, store.async_readers, u32(1))
+		testing.expect_value(t, nrc_sim_file_read_count(&ctx.sim), 1)
+		testing.expect(t, nrc_sim_run_next_file_read(&ctx.sim, .EMFILE))
+		testing.expect(t, !store.poisoned && !store.segments[0].read_open_pending)
+		testing.expect_value(t, cache.opening, 0)
+		testing.expect_value(t, store.async_readers, u32(0))
+		// A fully reserved cache rejects before submitting another open.
+		cache.opening = 1
+		history := new(Retained_History_Context)
+		history.store = &store; history.holds_store_reader = true
+		history.sealed_count = 1; history.segment_step = -1
+		history.conversation_id = 42; store.async_readers = 1
+		retained_history_open_sealed(history)
+		testing.expect_value(t, nrc_sim_file_read_count(&ctx.sim), 0)
+		testing.expect_value(t, store.async_readers, u32(0))
+		cache.opening = 0
+	}
+}
+
+@(test)
 test_retained_parallel_read_stale_discard_releases_only_after_last_event :: proc(t: ^testing.T) {
 	store: Message_Store
 	store.enabled = true
@@ -1347,15 +1440,21 @@ test_message_store_sealed_wal_cache_is_bounded_and_does_not_evict_pinned_reader 
 		paths[i] = fmt.aprintf("%s/%d.wal", dir, i + 1)
 		testing.expect(t, os.write_entire_file(paths[i], nil) == nil)
 	}
-	file, owned, capacity := open_message_segment_read_file(stores[0], &stores[0].segments[0], paths[0])
+	opened, open_err := storage_io.open(stores[0].storage, paths[0])
+	testing.expect(t, open_err == nil)
+	file, owned, capacity := cache_message_segment_read_file(stores[0], &stores[0].segments[0], opened)
 	testing.expect(t, file != nil && !owned && !capacity)
 	testing.expect_value(t, len(cache.entries), 1)
-	fallback, fallback_owned, fallback_capacity := open_message_segment_read_file(stores[1], &stores[1].segments[0], paths[1])
+	opened, open_err = storage_io.open(stores[1].storage, paths[1])
+	testing.expect(t, open_err == nil)
+	fallback, fallback_owned, fallback_capacity := cache_message_segment_read_file(stores[1], &stores[1].segments[0], opened)
 	testing.expect(t, fallback == nil && !fallback_owned && fallback_capacity)
 	testing.expect(t, stores[1].segments[0].read_file == nil)
 	testing.expect_value(t, len(cache.entries), 1)
 	release_message_segment_read_borrow(&stores[0].segments[0])
-	file, owned, capacity = open_message_segment_read_file(stores[1], &stores[1].segments[0], paths[1])
+	opened, open_err = storage_io.open(stores[1].storage, paths[1])
+	testing.expect(t, open_err == nil)
+	file, owned, capacity = cache_message_segment_read_file(stores[1], &stores[1].segments[0], opened)
 	testing.expect(t, file != nil && !owned && !capacity)
 	testing.expect(t, stores[0].segments[0].read_file == nil)
 	testing.expect(t, stores[1].segments[0].read_file != nil)

@@ -13,12 +13,14 @@ import "core:strings"
 import "core:testing"
 
 import "btree"
+import "byte_pool"
 import hgl "hegel"
 import "persistence"
 import pr "protocol"
 
 when !NRC_SIMULATION {
 	_ :: btree.count
+	_ :: byte_pool.release
 	_ :: fmt.eprintf
 	_ :: virtual.arena_init_growing
 	_ :: os.remove
@@ -1486,6 +1488,7 @@ when NRC_SIMULATION {
 		storage := writer.storage
 		persistence.force_fsync(&writer.wal)
 		if !writer.wal.enabled || writer.wal.durable_record_count != writer.wal.record_count do return false
+		if writer.oversized_write != nil do byte_pool.release(td.spool, writer.oversized_write)
 		persistence.simulate_wal_crash_for_test(&writer.wal)
 		persistence.cleanup_init_wal_state(&writer.wal)
 		discard_shard_deferred_requests(writer)

@@ -88,6 +88,7 @@ Op_Accept :: struct {
 Op_Close :: struct {
 	callback: On_Close,
 	fd:       linux.Fd,
+	file:     bool,
 }
 
 Op_Shutdown :: struct {
@@ -149,6 +150,11 @@ Op_File_Read :: struct {
 	fd:       linux.Fd,
 	buf:      []byte,
 	offset:   u64,
+}
+
+Op_File_Open :: struct {
+	callback: On_File_Open,
+	path:     cstring,
 }
 
 Op_File_Write :: struct {
@@ -281,6 +287,7 @@ drain_unqueued :: proc(io: ^IO) {
 			}
 			writev_enqueue(io, unqueued, &op)
 		case Op_File_Read:     file_read_enqueue      (io, unqueued, &op)
+		case Op_File_Open:     file_open_enqueue      (io, unqueued, &op)
 		case Op_File_Write:    file_write_enqueue     (io, unqueued, &op)
 		case Op_File_Sync:     file_sync_enqueue      (io, unqueued, &op)
 		}
@@ -360,6 +367,7 @@ run_completed_callbacks :: proc(io: ^IO) {
 		case Op_Timeout:       timeout_callback       (io, completed, &op)
 		case Op_Writev:        writev_callback        (io, completed, &op)
 		case Op_File_Read:     file_read_callback     (io, completed, &op)
+		case Op_File_Open:     file_open_callback     (io, completed, &op)
 		case Op_File_Write:    file_write_callback    (io, completed, &op)
 		case Op_File_Sync:     file_sync_callback     (io, completed, &op)
 		case: unreachable()
@@ -368,12 +376,30 @@ run_completed_callbacks :: proc(io: ^IO) {
 	// odinfmt: enable
 }
 
+file_open_enqueue :: proc(io: ^IO, completion: ^Completion, op: ^Op_File_Open) {
+	sqe, err := io_uring.openat(&io.ring, u64(uintptr(completion)), linux.AT_FDCWD, op.path, 0, u32(linux.Open_Flags{.CLOEXEC}))
+	if err == .Submission_Queue_Full {queue.push_back(&io.unqueued, completion); return}
+	assert(err == .None)
+	sqe.flags |= u8(io_uring.IOSQE_ASYNC)
+	io.ios_queued += 1
+}
+
+file_open_callback :: proc(io: ^IO, completion: ^Completion, op: ^Op_File_Open) {
+	if completion.result < 0 {
+		op.callback(completion.user_data, -1, linux.Errno(-completion.result))
+	} else {
+		op.callback(completion.user_data, linux.Fd(completion.result), .NONE)
+	}
+	pool_put(&io.completion_pool, completion)
+}
+
 file_read_enqueue :: proc(io: ^IO, completion: ^Completion, op: ^Op_File_Read) {
-	_, err := io_uring.read(&io.ring, u64(uintptr(completion)), op.fd, op.buf, op.offset)
+	sqe, err := io_uring.read(&io.ring, u64(uintptr(completion)), op.fd, op.buf, op.offset)
 	if err == .Submission_Queue_Full {
 		queue.push_back(&io.unqueued, completion)
 		return
 	}
+	sqe.flags |= u8(io_uring.IOSQE_ASYNC)
 	io.ios_queued += 1
 }
 
@@ -620,12 +646,13 @@ accept_callback :: proc(io: ^IO, completion: ^Completion, op: ^Op_Accept) {
 }
 
 close_enqueue :: proc(io: ^IO, completion: ^Completion, op: ^Op_Close) {
-	_, err := io_uring.close(&io.ring, u64(uintptr(completion)), op.fd)
+	sqe, err := io_uring.close(&io.ring, u64(uintptr(completion)), op.fd)
 	if err == .Submission_Queue_Full {
 		queue.push_back(&io.unqueued, completion)
 		return
 	}
 
+	if op.file do sqe.flags |= u8(io_uring.IOSQE_ASYNC)
 	io.ios_queued += 1
 }
 

@@ -17,14 +17,17 @@ import (
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
 
-func TestOutsideInENOSPCRecoversAcknowledgedPrefixAndContinues(t *testing.T) {
-	if _, err := exec.LookPath("strace"); err != nil {
-		t.Skip("strace is required for outside-in ENOSPC injection")
+func TestOutsideInWALWriteErrorRecoversAcknowledgedPrefixAndContinues(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("outside-in WAL rejection requires Linux RLIMIT_FSIZE semantics")
+	}
+	if _, err := exec.LookPath("prlimit"); err != nil {
+		t.Skip("prlimit is required for outside-in WAL rejection")
 	}
 
 	serverWorkDir := t.TempDir()
 	serverEnv := map[string]string{"NRC_THREAD_COUNT": "1"}
-	workspace := fmt.Sprintf("e2e-enospc-%d", time.Now().UnixNano())
+	workspace := fmt.Sprintf("e2e-wal-error-%d", time.Now().UnixNano())
 	shard := xxhash.Sum64String(workspace) % 256
 	walPath := filepath.Join(
 		serverWorkDir,
@@ -34,13 +37,15 @@ func TestOutsideInENOSPCRecoversAcknowledgedPrefixAndContinues(t *testing.T) {
 		"active.wal",
 	)
 
-	server, tracePath := startServerWithInjectedWALErrno(t, serverWorkDir, walPath, 4, serverEnv)
+	// strace write(2) injection cannot reach writes performed by io_uring.
+	// A kernel-enforced size limit rejects the next append with EFBIG instead.
+	server := startServerIgnoringFileSizeSignal(t, serverWorkDir, serverEnv)
 	servers := []*serverProcess{server}
 	t.Cleanup(func() { cleanupFaultTestServers(t, servers) })
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, "e2e-enospc-writer"))
+	conn, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, "e2e-wal-error-writer"))
 	if err != nil {
-		t.Fatalf("connect ENOSPC writer: %v", err)
+		t.Fatalf("connect WAL-error writer: %v", err)
 	}
 	defer conn.Close()
 	mustSetReadDeadline(t, conn, 10*time.Second)
@@ -50,8 +55,8 @@ func TestOutsideInENOSPCRecoversAcknowledgedPrefixAndContinues(t *testing.T) {
 	expected := make(map[uint64]protocol.Task, 3)
 	for index := 0; index < 3; index++ {
 		correlationID := uint32(0xE0050000 + index)
-		title := fmt.Sprintf("acknowledged before ENOSPC %d", index)
-		if err := sendProtocolMessage(conn, protocol.C_CreateTask, protocol.EncodeTaskCreateWithCorrelation(roomID, title, "kernel-accepted prefix before disk exhaustion", 1, correlationID)); err != nil {
+		title := fmt.Sprintf("acknowledged before WAL error %d", index)
+		if err := sendProtocolMessage(conn, protocol.C_CreateTask, protocol.EncodeTaskCreateWithCorrelation(roomID, title, "kernel-accepted prefix before write rejection", 1, correlationID)); err != nil {
 			t.Fatalf("send acknowledged prefix create %d: %v", index, err)
 		}
 		payload := mustReadUntilOpcode(t, conn, protocol.S_TaskCreated, 12)
@@ -65,43 +70,57 @@ func TestOutsideInENOSPCRecoversAcknowledgedPrefixAndContinues(t *testing.T) {
 		expected[created.Task.ID] = *created.Task
 	}
 
-	const failedTitle = "must not survive ENOSPC"
+	prefixInfo, err := os.Stat(walPath)
+	if err != nil {
+		t.Fatalf("stat acknowledged WAL prefix: %v", err)
+	}
+	limit := strconv.FormatInt(prefixInfo.Size(), 10)
+	if output, err := exec.Command("prlimit", "--pid", strconv.Itoa(server.cmd.Process.Pid), "--fsize="+limit+":"+limit).CombinedOutput(); err != nil {
+		t.Fatalf("set server WAL file-size limit: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+	const failedTitle = "must not survive WAL rejection"
 	const failedCorrelationID = uint32(0xE00500FF)
-	if err := sendProtocolMessage(conn, protocol.C_CreateTask, protocol.EncodeTaskCreateWithCorrelation(roomID, failedTitle, "injected disk-full write", 1, failedCorrelationID)); err != nil {
-		t.Fatalf("send ENOSPC create: %v", err)
+	if err := sendProtocolMessage(conn, protocol.C_CreateTask, protocol.EncodeTaskCreateWithCorrelation(roomID, failedTitle, "kernel-rejected write", 1, failedCorrelationID)); err != nil {
+		t.Fatalf("send rejected create: %v", err)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	if payload, readErr := readUntilOpcode(conn, protocol.S_TaskCreated, 12); readErr == nil {
 		created, decodeErr := protocol.DecodeTaskCreated(payload)
-		t.Fatalf("ENOSPC mutation was acknowledged: response=%+v decode_err=%v", created, decodeErr)
+		t.Fatalf("rejected mutation was acknowledged: response=%+v decode_err=%v", created, decodeErr)
 	}
 	_ = conn.Close()
-	waitForFatalStorageServerExit(t, server, workspace, "ENOSPC", 10*time.Second)
-	waitForInjectedErrnoTrace(t, tracePath, walPath, "ENOSPC", 3, 5*time.Second)
+	waitForFatalStorageServerExit(t, server, workspace, "EFBIG", 10*time.Second)
+	if logs := server.logs.String(); !strings.Contains(logs, "WAL poisoned after ambiguous append: wrote 0/") || !strings.Contains(logs, "err=EFBIG") {
+		t.Fatalf("server did not observe the kernel's EFBIG rejection:\n%s", logs)
+	}
+	rejectedInfo, err := os.Stat(walPath)
+	if err != nil || rejectedInfo.Size() != prefixInfo.Size() {
+		t.Fatalf("rejected write changed the WAL prefix: info=%v err=%v", rejectedInfo, err)
+	}
 
 	server = startServerInWorkDirWithEnv(t, serverWorkDir, serverEnv)
 	servers = append(servers, server)
-	recovered, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, "e2e-enospc-recovered"))
+	recovered, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, "e2e-wal-error-recovered"))
 	if err != nil {
-		t.Fatalf("connect after ENOSPC restart: %v", err)
+		t.Fatalf("connect after WAL-error restart: %v", err)
 	}
 	defer recovered.Close()
 	mustSetReadDeadline(t, recovered, 10*time.Second)
 	mustExpectServerReady(t, recovered)
 	mustRequireExactTaskState(t, recovered, roomID, expected)
 
-	const continuedTitle = "write after ENOSPC recovery"
+	const continuedTitle = "write after WAL-error recovery"
 	const continuedCorrelationID = uint32(0xE0050100)
 	if err := sendProtocolMessage(recovered, protocol.C_CreateTask, protocol.EncodeTaskCreateWithCorrelation(roomID, continuedTitle, "storage capacity restored", 2, continuedCorrelationID)); err != nil {
-		t.Fatalf("send continued write after ENOSPC: %v", err)
+		t.Fatalf("send continued write after WAL-error: %v", err)
 	}
 	continuedPayload := mustReadUntilOpcode(t, recovered, protocol.S_TaskCreated, 12)
 	continued, err := protocol.DecodeTaskCreated(continuedPayload)
 	if err != nil {
-		t.Fatalf("decode continued write after ENOSPC: %v", err)
+		t.Fatalf("decode continued write after WAL-error: %v", err)
 	}
 	if continued.CorrelationID != continuedCorrelationID || continued.Task.Title != continuedTitle {
-		t.Fatalf("continued write after ENOSPC mismatch: %+v", continued)
+		t.Fatalf("continued write after WAL-error mismatch: %+v", continued)
 	}
 	expected[continued.Task.ID] = *continued.Task
 	_ = recovered.Close()
@@ -109,9 +128,9 @@ func TestOutsideInENOSPCRecoversAcknowledgedPrefixAndContinues(t *testing.T) {
 	server.killAndWait(t)
 	server = startServerInWorkDirWithEnv(t, serverWorkDir, serverEnv)
 	servers = append(servers, server)
-	finalConn, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, "e2e-enospc-final"))
+	finalConn, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, "e2e-wal-error-final"))
 	if err != nil {
-		t.Fatalf("connect after final ENOSPC recovery restart: %v", err)
+		t.Fatalf("connect after final WAL-error recovery restart: %v", err)
 	}
 	defer finalConn.Close()
 	mustSetReadDeadline(t, finalConn, 10*time.Second)
@@ -341,13 +360,19 @@ func TestOutsideInNonWritableShardDirectoryDefersRotationAndRecovers(t *testing.
 	if err := sendProtocolMessage(conn, protocol.C_UpdateTask, protocol.EncodeTaskUpdateWithCorrelation(roomID, int64(expected.ID), failedTitle, longDescription, int32(protocol.TaskStatusDone), 3, 0, failedCorrelationID)); err != nil {
 		t.Fatalf("send permission-blocked rotation update: %v", err)
 	}
-	if err := sendProtocolMessage(conn, protocol.C_GetTasks, protocol.EncodeGetTasks(roomID)); err != nil {
-		t.Fatalf("send task-list fence after permission-blocked rotation: %v", err)
+	_, busyErr := readUntilOpcode(conn, protocol.S_TaskUpdated, 12)
+	var closeErr *websocket.CloseError
+	if !errors.As(busyErr, &closeErr) || closeErr.Code != websocket.CloseTryAgainLater {
+		t.Fatalf("permission-blocked mutation must receive an explicit busy close: %v", busyErr)
 	}
-	blockedTasks := mustReadTaskListRejectingUpdate(t, conn, failedCorrelationID)
-	if len(blockedTasks) != 1 || blockedTasks[0].ID != expected.ID || blockedTasks[0].Title != expected.Title {
-		t.Fatalf("permission-blocked rotation changed visible state: got=%+v want=%+v", blockedTasks, expected)
+	fenceConn, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, "e2e-rotation-permission-fence"))
+	if err != nil {
+		t.Fatalf("connect read fence after busy close: %v", err)
 	}
+	mustSetReadDeadline(t, fenceConn, 10*time.Second)
+	mustExpectServerReady(t, fenceConn)
+	mustRequireExactTaskState(t, fenceConn, roomID, map[uint64]protocol.Task{expected.ID: expected})
+	_ = fenceConn.Close()
 	blockedInfo, err := os.Stat(walPath)
 	if err != nil {
 		t.Fatalf("stat WAL after permission-blocked rotation: %v", err)
@@ -378,7 +403,7 @@ func TestOutsideInNonWritableShardDirectoryDefersRotationAndRecovers(t *testing.
 	_ = recoveredConn.Close()
 
 	server.killAndWait(t)
-	if !strings.Contains(server.logs.String(), "deferred by shard storage backpressure for workspace "+workspace) {
+	if !strings.Contains(server.logs.String(), "rejected by shard storage backpressure for workspace "+workspace) {
 		t.Fatalf("server did not report rotation backpressure:\n%s", server.logs.String())
 	}
 	server = startServerInWorkDirWithEnv(t, serverWorkDir, serverEnv)
@@ -391,44 +416,6 @@ func TestOutsideInNonWritableShardDirectoryDefersRotationAndRecovers(t *testing.
 	mustSetReadDeadline(t, finalConn, 10*time.Second)
 	mustExpectServerReady(t, finalConn)
 	mustRequireExactTaskState(t, finalConn, roomID, map[uint64]protocol.Task{expected.ID: expected})
-}
-
-func mustReadTaskListRejectingUpdate(t *testing.T, conn *websocket.Conn, rejectedCorrelationID uint32) []*protocol.Task {
-	t.Helper()
-	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		t.Fatalf("set task-list fence deadline: %v", err)
-	}
-	for reads := 0; reads < 24; reads++ {
-		frameType, wireData, err := conn.ReadMessage()
-		if err != nil {
-			t.Fatalf("read task-list fence: %v", err)
-		}
-		if frameType != websocket.BinaryMessage {
-			continue
-		}
-		message, err := protocol.ReadMessage(wireData)
-		if err != nil {
-			t.Fatalf("decode task-list fence message: %v", err)
-		}
-		if message.Opcode == protocol.S_TaskUpdated {
-			updated, decodeErr := protocol.DecodeTaskUpdated(message.Data)
-			if decodeErr != nil {
-				t.Fatalf("decode unexpected permission-blocked update: %v", decodeErr)
-			}
-			if updated.CorrelationID == rejectedCorrelationID {
-				t.Fatalf("permission-blocked rotation update was acknowledged: %+v", updated)
-			}
-		}
-		if message.Opcode == protocol.S_TaskListResponse {
-			response, decodeErr := protocol.DecodeTaskListResponse(message.Data)
-			if decodeErr != nil {
-				t.Fatalf("decode task-list fence response: %v", decodeErr)
-			}
-			return response.Tasks
-		}
-	}
-	t.Fatal("task-list fence response not received")
-	return nil
 }
 
 func startServerIgnoringFileSizeSignal(t *testing.T, workDir string, extraEnv map[string]string) *serverProcess {
@@ -463,56 +450,6 @@ func startServerIgnoringFileSizeSignal(t *testing.T, workDir string, extraEnv ma
 	return proc
 }
 
-func startServerWithInjectedWALErrno(
-	t *testing.T,
-	workDir, walPath string,
-	matchingWrite int,
-	extraEnv map[string]string,
-) (*serverProcess, string) {
-	t.Helper()
-	stopSharedServerIfRunning()
-	if err := initializeEmptyShardedLayout(workDir); err != nil {
-		t.Fatalf("initialize ENOSPC test layout: %v", err)
-	}
-
-	tracePath := filepath.Join(workDir, "strace-enospc.log")
-	injection := fmt.Sprintf("inject=write:error=ENOSPC:when=%d", matchingWrite)
-	cmd := exec.Command(
-		"strace",
-		"-D",
-		"-f",
-		"-y",
-		"-qq",
-		"-o", tracePath,
-		"-P", walPath,
-		"-e", "trace=write",
-		"-e", injection,
-		buildServerBinaryOnce(t),
-	)
-	cmd.Dir = workDir
-	cmd.Env = append(
-		os.Environ(),
-		"NRC_JWT_SECRET="+e2eJWTSecret,
-		"NRC_BOT_SECRET="+metricsBotSecret,
-		"NRC_PORT="+strconv.Itoa(serverPort),
-	)
-	for key, value := range extraEnv {
-		cmd.Env = append(cmd.Env, key+"="+value)
-	}
-
-	proc := &serverProcess{cmd: cmd}
-	cmd.Stdout = &proc.logs
-	cmd.Stderr = &proc.logs
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start server under ENOSPC injector: %v", err)
-	}
-	if err := waitForServerReady(proc.cmd, 10*time.Second); err != nil {
-		stopServerProcess(proc)
-		t.Fatalf("ENOSPC server did not become ready: %v\nlogs:\n%s", err, proc.logs.String())
-	}
-	return proc, tracePath
-}
-
 func waitForFatalStorageServerExit(t *testing.T, server *serverProcess, workspace, fault string, timeout time.Duration) {
 	t.Helper()
 	done := make(chan error, 1)
@@ -525,11 +462,11 @@ func waitForFatalStorageServerExit(t *testing.T, server *serverProcess, workspac
 			t.Fatalf("server did not use fatal-storage exit status 1 after %s: err=%v\nlogs:\n%s", fault, err, server.logs.String())
 		}
 		expectedLog := "Persistent task create rejected by WAL for workspace " + workspace
-		// A buffered mutation fails in the worker's commit sweep; an immediate
-		// oversized append can still fail inside the request handler.
+		// Submission and completion failures have separate diagnostics.
 		batchFailure := "Shard WAL durability sync failed; shutting down"
+		writeFailure := "Shard WAL async write failed; shutting down"
 		logs := server.logs.String()
-		if !strings.Contains(logs, expectedLog) && !strings.Contains(logs, batchFailure) {
+		if !strings.Contains(logs, expectedLog) && !strings.Contains(logs, batchFailure) && !strings.Contains(logs, writeFailure) {
 			t.Fatalf("server did not log a fatal WAL rejection or batch failure:\n%s", logs)
 		}
 	case <-time.After(timeout):
@@ -538,59 +475,4 @@ func waitForFatalStorageServerExit(t *testing.T, server *serverProcess, workspac
 		server.exited = true
 		t.Fatalf("server did not shut down after %s within %s\nlogs:\n%s", fault, timeout, server.logs.String())
 	}
-}
-
-func waitForInjectedErrnoTrace(
-	t *testing.T,
-	tracePath, walPath, errno string,
-	expectedSuccessfulWrites int,
-	timeout time.Duration,
-) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		trace, err := os.ReadFile(tracePath)
-		if err == nil {
-			if validationErr := validateInjectedErrnoTrace(string(trace), walPath, errno, expectedSuccessfulWrites); validationErr == nil {
-				return
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	trace, err := os.ReadFile(tracePath)
-	if err != nil {
-		t.Fatalf("read ENOSPC injection trace: %v", err)
-	}
-	if validationErr := validateInjectedErrnoTrace(string(trace), walPath, errno, expectedSuccessfulWrites); validationErr != nil {
-		t.Fatalf("invalid injected %s trace: %v\n%s", errno, validationErr, strings.TrimSpace(string(trace)))
-	}
-}
-
-func validateInjectedErrnoTrace(trace, walPath, errno string, expectedSuccessfulWrites int) error {
-	writes := make([]string, 0, expectedSuccessfulWrites+1)
-	for _, line := range strings.Split(trace, "\n") {
-		if strings.Contains(line, "write(") {
-			writes = append(writes, line)
-		}
-	}
-	if len(writes) != expectedSuccessfulWrites+1 {
-		return fmt.Errorf("got %d matching WAL writes, want %d", len(writes), expectedSuccessfulWrites+1)
-	}
-	pathAnnotation := "<" + walPath + ">"
-	for index, line := range writes {
-		if !strings.Contains(line, pathAnnotation) {
-			return fmt.Errorf("write %d does not resolve to owning WAL %q: %s", index+1, walPath, line)
-		}
-		injected := strings.Contains(line, "(INJECTED)")
-		if index < expectedSuccessfulWrites {
-			if injected || strings.Contains(line, "= -1") {
-				return fmt.Errorf("preceding WAL write %d did not succeed: %s", index+1, line)
-			}
-			continue
-		}
-		if !injected || !strings.Contains(line, "= -1 "+errno) {
-			return fmt.Errorf("final WAL write is not the injected %s failure: %s", errno, line)
-		}
-	}
-	return nil
 }

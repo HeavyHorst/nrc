@@ -14,7 +14,7 @@ import "core:log"
 import "core:net"
 import "core:os"
 import "core:strconv"
-import "core:time"
+import "core:sync"
 
 import "byte_pool"
 import nbio "nbio/poly"
@@ -264,13 +264,9 @@ get_rss_memory_mb :: proc() -> u32 {
 
 // Process C_Stats: respond with S_StatsResponse containing thread metrics.
 process_stats :: proc(c: ^NRC_Connection, req: pr.StatsRequest) {
-	// Get RSS memory in MB (throttled to 1Hz)
-	now := nrc_time_now()
-	if time.diff(td.last_rss_update, now) > time.Second {
-		td.cached_rss_mb = get_rss_memory_mb()
-		td.last_rss_update = now
-	}
-	mem_mb := td.cached_rss_mb
+	// The service thread samples procfs; requests only load its latest value.
+	mem_mb: u32
+	if td.server != nil do mem_mb = sync.atomic_load(&td.server.cached_rss_mb)
 
 	// Connection count
 	conn_count := u32(td.connection_count)

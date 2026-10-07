@@ -388,6 +388,7 @@ when NRC_SIMULATION {
 		for &writer in td.shard_writers.writers do writer.commit_started = {}
 		_, ok := schedule_shard_writer_fsyncs_if_due(&td.shard_writers)
 		if !ok do return false
+		for nrc_sim_run_next_file_write(sim) {}
 		for nrc_sim_run_next_fsync_completion(sim) {}
 		nrc_sim_run_all_send_completions(sim)
 		return true

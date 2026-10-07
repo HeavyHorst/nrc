@@ -68,6 +68,7 @@ when NRC_SIMULATION {
 		if !sync_ok || !did_work {
 			return "submit first fsync"
 		}
+		if !nrc_sim_run_next_file_write(&campaign.ctx.sim) do return "complete first async write"
 		if campaign.writer.fsync_snapshot.record_count != 1 || campaign.writer.fsync_snapshot.pending_bytes == 0 {
 			return "first fsync captured the wrong WAL snapshot"
 		}
@@ -232,6 +233,7 @@ when NRC_SIMULATION {
 		campaign.writer.commit_started = {}
 		did_work, sync_ok := schedule_shard_writer_fsyncs_if_due(&campaign.registry)
 		if !sync_ok || !did_work do return "submit second fsync"
+		if !nrc_sim_run_next_file_write(&campaign.ctx.sim) do return "complete second async write"
 		diagnostic = shard_fsync_campaign_check(&campaign, 2, 1, true, false, false)
 		if diagnostic != "" do return diagnostic
 		if attempt_rotation_while_second && rotate_shard_writer_for_compaction(campaign.writer) {

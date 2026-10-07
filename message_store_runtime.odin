@@ -498,7 +498,7 @@ release_message_segment_index_cache :: proc(store: ^Message_Store, segment: ^Mes
 release_message_segment_read_file :: proc(store: ^Message_Store, segment: ^Message_Segment_Descriptor) {
 	if store == nil || segment == nil || segment.read_file == nil do return
 	assert(segment.readers == 0, "cannot close a borrowed sealed message WAL descriptor")
-	storage_io.discard(segment.read_file)
+	nrc_io_discard_read_file(segment.read_file)
 	segment.read_file = nil
 	if store.sealed_wal_cache == nil do return
 	for entry, i in store.sealed_wal_cache.entries {
@@ -533,33 +533,36 @@ evict_message_segment_read_file :: proc(cache: ^Message_Sealed_WAL_Cache) -> boo
 	return false
 }
 
-open_message_segment_read_file :: proc(
+cache_message_segment_read_file :: proc(
 	store: ^Message_Store,
 	segment: ^Message_Segment_Descriptor,
-	path: string,
+	opened: ^storage_io.File,
 ) -> (
 	file: ^storage_io.File,
 	owned, capacity: bool,
 ) {
 	if store == nil || segment == nil do return nil, false, false
 	if segment.read_file != nil {
+		nrc_io_discard_read_file(opened)
 		segment.readers += 1
 		return segment.read_file, false, false
 	}
 	cache := store.sealed_wal_cache
 	if cache != nil && cache.limit > 0 {
-		for len(cache.entries) >= cache.limit do if !evict_message_segment_read_file(cache) do break
-		if len(cache.entries) >= cache.limit do return nil, false, true
+		for len(cache.entries) + cache.opening >= cache.limit do if !evict_message_segment_read_file(cache) do break
+		if len(cache.entries) + cache.opening >= cache.limit {
+			nrc_io_discard_read_file(opened)
+			return nil, false, true
+		}
 	}
-	file, _ = storage_io.open(store.storage, path, {.Read})
-	if file == nil do return nil, false, false
+	file = opened
 	if cache != nil && len(cache.entries) < cache.limit {
 		if _, err := append(&cache.entries, Message_Sealed_WAL_Cache_Entry{store, segment.generation}); err == nil {
 			segment.read_file = file
 			segment.readers += 1
 			return file, false, false
 		}
-		storage_io.discard(file)
+		nrc_io_discard_read_file(file)
 		return nil, false, true
 	}
 	return file, true, false
@@ -914,7 +917,7 @@ rotate_message_store :: proc(store: ^Message_Store, now_ns: i64) -> bool {
 	if store.async_readers != 0 || store.fsync_in_flight || len(store.pending_appends) != 0 || store.write_batch_pending || store.wal.write_offset != 0 do return false
 	if store.wal.record_count == 0 do return true
 	if store.active_read_file != nil {
-		storage_io.discard(store.active_read_file)
+		nrc_io_discard_read_file(store.active_read_file)
 		store.active_read_file = nil
 	}
 	if !persistence.shutdown_wal(&store.wal) {store.poisoned = true; return false}
@@ -932,7 +935,7 @@ publish_message_seal :: proc(store: ^Message_Store, now_ns: i64, sealed_bytes: u
 	if !message_store_enabled(store) do return false
 	assert(store.async_readers == 0)
 	if store.active_read_file != nil {
-		storage_io.discard(store.active_read_file)
+		nrc_io_discard_read_file(store.active_read_file)
 		store.active_read_file = nil
 	}
 	if store.wal.file != nil && !persistence.shutdown_wal(&store.wal) {store.poisoned = true; return false}
@@ -1194,7 +1197,7 @@ shutdown_message_store :: proc(store: ^Message_Store) -> bool {
 	)
 	ok := true
 	if store.active_read_file != nil {
-		storage_io.discard(store.active_read_file)
+		nrc_io_discard_read_file(store.active_read_file)
 		store.active_read_file = nil
 	}
 	if store.enabled {

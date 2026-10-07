@@ -50,6 +50,7 @@ NRC_Server :: struct {
 	threads:                  []^thread.Thread,
 	closing:                  bool,
 	fatal_storage_error:      bool,
+	cached_rss_mb:            u32, // Service-thread sample, accessed atomically.
 	shutdown_requested:       bool, // For SIGINT edge detection (first vs second signal)
 	main_thread:              int,
 	wg:                       sync.Wait_Group,
@@ -290,10 +291,6 @@ Server_Thread :: struct {
 	// Workspace string interning pool (reduces duplicate allocations)
 	workspace_intern:          strings.Intern,
 
-	// Performance metric caches
-	last_rss_update:           time.Time,
-	cached_rss_mb:             u32,
-
 	// Runtime adapter configuration. Empty means production defaults.
 	persistence_data_dir:      string,
 
@@ -302,7 +299,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:6e54e14"
+BUILD_VERSION :: "dev-2026-10:6f074af"
 PROTOCOL_VERSION :: 8 // Calendar appointment rows carry an explicit time interval.
 
 jwt_auth_secret: string
@@ -675,7 +672,10 @@ persistent_mutation_failed :: proc(domain: string, op: string, workspace_id: str
 	if consume_shard_append_deferred() do return
 	persistent_mutation_failure_seen = true
 	if consume_shard_append_backpressure() {
-		log.warnf("[T%d] Persistent %s %s deferred by shard storage backpressure for workspace %s", td.thread_index, domain, op, workspace_id)
+		log.warnf("[T%d] Persistent %s %s rejected by shard storage backpressure for workspace %s", td.thread_index, domain, op, workspace_id)
+		if conn := shard_protocol_dispatch_context.connection; conn != nil {
+			send_websocket_close_frame_and_close(conn, 1013, "Server too busy")
+		}
 		return
 	}
 	log.errorf(

@@ -8,8 +8,10 @@
 package main
 
 import "core:net"
+import "core:sys/linux"
 import "core:time"
 
+import "byte_pool"
 import nbio_raw "nbio"
 import nbio "nbio/poly"
 import "persistence"
@@ -107,6 +109,65 @@ nrc_io_append_wal :: proc(file: ^storage_io.File, buf: []byte, user: rawptr, cal
 		}
 	}
 	return nbio_raw.write_file_at(&td.io, storage_io.fd(file), buf, max(u64), user, callback)
+}
+
+NRC_File_Open_Context :: struct {
+	storage:  storage_io.Context,
+	path:     []byte,
+	user:     rawptr,
+	callback: proc(user: rawptr, file: ^storage_io.File, err: linux.Errno),
+	discard:  proc(user: rawptr),
+}
+
+nrc_io_open_read_file :: proc(
+	storage: storage_io.Context,
+	path: string,
+	user: rawptr,
+	callback: proc(user: rawptr, file: ^storage_io.File, err: linux.Errno),
+	discard: proc(user: rawptr),
+) {
+	buffer, err := byte_pool.alloc(td.spool, uint(len(path) + 1))
+	if err != .None {callback(user, nil, .ENOMEM); return}
+	copy(buffer, transmute([]byte)path); buffer[len(path)] = 0
+	ctx := new(NRC_File_Open_Context)
+	ctx^ = {storage, buffer, user, callback, discard}
+	when NRC_SIMULATION {
+		if nrc_sim_runtime != nil {
+			_ = sim_world_enqueue_event(
+				&nrc_sim_runtime.world,
+				nrc_sim_runtime.world.now,
+				{kind = .Storage},
+				.File_Read,
+				Sim_Event_Payload(Sim_File_Open_Completion{ctx = ctx}),
+			)
+			return
+		}
+	}
+	_ = nbio_raw.open_read_file(&td.io, cstring(raw_data(buffer)), ctx, proc(user: rawptr, fd: linux.Fd, err: linux.Errno) {
+			ctx := (^NRC_File_Open_Context)(user)
+			file: ^storage_io.File
+			if err == .NONE do file = storage_io.read_file_from_fd(fd)
+			nrc_io_finish_file_open(ctx, file, err)
+		})
+}
+
+nrc_io_finish_file_open :: proc(ctx: ^NRC_File_Open_Context, file: ^storage_io.File, err: linux.Errno) {
+	callback, user := ctx.callback, ctx.user
+	byte_pool.release(td.spool, ctx.path)
+	free(ctx)
+	callback(user, file, err)
+}
+
+// Read descriptors acquired through io_uring close through the same loop.
+nrc_io_discard_read_file :: proc(file: ^storage_io.File) {
+	if file == nil do return
+	if fd, ok := file.read_fd.?; ok {
+		free(file)
+		_ = nbio_raw.close(&td.io, fd)
+	} else {
+		// Virtual and standalone synchronous read handles have no kernel lease.
+		storage_io.discard(file)
+	}
 }
 
 nrc_io_read_file_at :: #force_inline proc(

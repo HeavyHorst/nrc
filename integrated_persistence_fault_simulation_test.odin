@@ -5,11 +5,13 @@ import "core:log"
 import "core:strings"
 import "core:testing"
 
+import "byte_pool"
 import hgl "hegel"
 import "persistence"
 import "storage_io"
 
 when !NRC_SIMULATION {
+	_ :: byte_pool.release
 	_ :: fmt.tprintf
 	_ :: log.nil_logger
 	_ :: strings.clone
@@ -166,6 +168,7 @@ when NRC_SIMULATION {
 	}
 
 	generated_semantic_virtual_process_discard :: proc(writer: ^Shard_Transaction_Writer) {
+		if writer.oversized_write != nil do byte_pool.release(td.spool, writer.oversized_write)
 		persistence.simulate_wal_crash_for_test(&writer.wal)
 		persistence.cleanup_init_wal_state(&writer.wal)
 		discard_shard_deferred_requests(writer)

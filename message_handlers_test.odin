@@ -34,9 +34,12 @@ test_simulation_process_stats_and_ping_protocol_responses :: proc(t: ^testing.T)
 		if conn == nil do return
 		ctx.conns[1] = conn
 
-		// Keep this response deterministic and cover an empty metric snapshot.
-		td.cached_rss_mb = 0
-		td.last_rss_update = nrc_time_now()
+		// Requests consume the service's sample without touching procfs.
+		server := NRC_Server {
+			cached_rss_mb = 37,
+		}
+		td.server = &server
+		defer td.server = nil
 
 		stats_correlation_token :: i64(0x1122_3344_5566_7788)
 		process_stats(conn, pr.StatsRequest{timestamp = stats_correlation_token})
@@ -54,7 +57,7 @@ test_simulation_process_stats_and_ping_protocol_responses :: proc(t: ^testing.T)
 		testing.expect_value(t, stats.server_timestamp, NRC_SIM_TIME_EPOCH_NANOS)
 		testing.expect_value(t, stats.thread_id, u32(117))
 		testing.expect_value(t, stats.connections, u32(1))
-		testing.expect_value(t, stats.memory_total_mb, u32(0))
+		testing.expect_value(t, stats.memory_total_mb, u32(37))
 		testing.expect_value(t, stats.buffer_pool_percent, u32(0))
 		testing.expect_value(t, stats.io_pending, u32(0))
 		testing.expect_value(t, stats.io_total_completions, u64(0))

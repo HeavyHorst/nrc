@@ -27,6 +27,7 @@ when NRC_SIMULATION {
 
 	File :: struct {
 		real:        ^os.File,
+		read_fd:     Maybe(linux.Fd), // Read-only descriptor adopted after async open.
 		virtual_fs:  ^Virtual_FS,
 		inode:       ^Virtual_Inode,
 		incarnation: u64,
@@ -51,7 +52,8 @@ when NRC_SIMULATION {
 	}
 
 	File :: struct {
-		real: ^os.File,
+		real:    ^os.File,
+		read_fd: Maybe(linux.Fd),
 	}
 
 	Sync_Snapshot :: struct {}
@@ -97,8 +99,21 @@ open :: proc(storage: Context, path: string, flags: os.File_Flags = {.Read}, per
 	return file, nil
 }
 
+// Takes ownership without os.new_file's synchronous /proc descriptor lookup.
+read_file_from_fd :: proc(handle: linux.Fd) -> ^File {
+	file := new(File)
+	file.read_fd = handle
+	return file
+}
+
 close :: proc(file: ^File) -> os.Error {
 	if file == nil do return nil
+	if handle, ok := file.read_fd.?; ok {
+		err := linux.close(handle)
+		free(file)
+		if err != .NONE do return os.Platform_Error(err)
+		return nil
+	}
 	when NRC_SIMULATION {
 		if file.virtual_fs != nil {
 			return virtual_close(file)
@@ -112,6 +127,11 @@ close :: proc(file: ^File) -> os.Error {
 
 discard :: proc(file: ^File) {
 	if file == nil do return
+	if handle, ok := file.read_fd.?; ok {
+		_ = linux.close(handle)
+		free(file)
+		return
+	}
 	when NRC_SIMULATION {
 		if file.virtual_fs != nil {
 			virtual_discard(file)
@@ -132,6 +152,13 @@ write :: proc(file: ^File, data: []byte) -> (int, os.Error) {
 }
 
 read_at :: proc(file: ^File, out: []byte, offset: int) -> (int, os.Error) {
+	if file != nil {
+		if handle, ok := file.read_fd.?; ok {
+			n, err := linux.pread(handle, out, i64(offset))
+			if err != .NONE do return n, os.Platform_Error(err)
+			return n, nil
+		}
+	}
 	when NRC_SIMULATION {
 		if file_is_virtual(file) do return virtual_read_at(file, out, offset)
 	}
@@ -182,6 +209,13 @@ truncate :: proc(file: ^File, size: int) -> os.Error {
 }
 
 file_size :: proc(file: ^File) -> (i64, os.Error) {
+	if file != nil {
+		if handle, ok := file.read_fd.?; ok {
+			stat: linux.Stat
+			if err := linux.fstat(handle, &stat); err != .NONE do return 0, os.Platform_Error(err)
+			return i64(stat.size), nil
+		}
+	}
 	when NRC_SIMULATION {
 		if file_is_virtual(file) do return virtual_file_size(file)
 	}
@@ -246,6 +280,7 @@ read_entire_file :: proc(storage: Context, path: string, allocator := context.al
 }
 
 fd :: proc(file: ^File) -> linux.Fd {
+	if file != nil do if handle, ok := file.read_fd.?; ok do return handle
 	if file == nil || file.real == nil do return -1
 	return linux.Fd(os.fd(file.real))
 }

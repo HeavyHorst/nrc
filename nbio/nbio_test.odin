@@ -49,6 +49,50 @@ file_sync_test_callback :: proc(user: rawptr, err: linux.Errno) {
 }
 
 @(test)
+test_async_read_only_file_open_and_close :: proc(t: ^testing.T) {
+	path := fmt.aprintf("/tmp/nrc-nbio-open-%d", linux.getpid())
+	defer delete(path)
+	defer os.remove(path)
+	expect(t, os.write_entire_file(path, transmute([]byte)string("asymmetric")) == nil)
+	cpath := strings.clone_to_cstring(path)
+	defer delete(cpath)
+	missing := strings.clone_to_cstring(fmt.tprintf("%s.missing", path))
+	defer delete(missing)
+	io: IO
+	expect(t, init(&io) == .NONE)
+	defer destroy(&io)
+	Result :: struct {
+		done: bool,
+		fd:   linux.Fd,
+		err:  linux.Errno,
+	}
+	results: [2]Result
+	callback := proc(user: rawptr, fd: linux.Fd, err: linux.Errno) {
+		result := (^Result)(user)
+		result^ = {true, fd, err}
+	}
+	open_read_file(&io, cpath, &results[0], callback)
+	open_read_file(&io, missing, &results[1], callback)
+	expect(t, !results[0].done && !results[1].done, "open completed synchronously")
+	drain_and_expect_empty(t, &io)
+	expect(t, results[0].done && results[0].err == .NONE && results[0].fd >= 0)
+	expect(t, results[1].done && results[1].err == .ENOENT && results[1].fd == -1)
+	if results[0].err != .NONE do return
+	buffer: [4]byte
+	read: File_Read_Test_Result
+	read_file_at(&io, results[0].fd, buffer[:], 3, &read, file_read_test_callback)
+	drain_and_expect_empty(t, &io)
+	expect(t, read.done && read.err == .NONE && read.read == 4)
+	expect(t, string(buffer[:]) == "mmet")
+	_, write_err := linux.write(results[0].fd, buffer[:])
+	expect(t, write_err == .EBADF, "async open must be read-only")
+	close(&io, results[0].fd)
+	drain_and_expect_empty(t, &io)
+	_, read_err := linux.pread(results[0].fd, buffer[:], 0)
+	expect(t, read_err == .EBADF, "descriptor was not closed")
+}
+
+@(test)
 test_positional_regular_file_reads :: proc(t: ^testing.T) {
 	path := fmt.aprintf("/tmp/nrc-nbio-read-%d", linux.getpid())
 	defer delete(path)

@@ -87,6 +87,7 @@ Message_Segment_Descriptor :: struct {
 	conversation_ranges:  [dynamic]Message_Conversation_Range,
 	cached_message_index: []byte,
 	read_file:            ^storage_io.File,
+	read_open_pending:    bool,
 	readers:              int,
 }
 
@@ -123,6 +124,7 @@ Message_Sealed_WAL_Cache_Entry :: struct {
 
 Message_Sealed_WAL_Cache :: struct {
 	limit:   int,
+	opening: int,
 	entries: [dynamic]Message_Sealed_WAL_Cache_Entry,
 }
 
@@ -172,6 +174,7 @@ Message_Store :: struct {
 	active_max_time:     i64,
 	active_bytes:        u64,
 	active_read_file:    ^storage_io.File,
+	active_open_pending: bool,
 	async_readers:       u32,
 	high_water:          u64,
 	purge_floor_ns:      i64,

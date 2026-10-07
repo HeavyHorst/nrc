@@ -202,11 +202,13 @@ The race-enabled real-process suite below runs four 60-step outside-in campaigns
 replayable seeds derived from `NRC_FAULT_CAMPAIGN_SEED`. The campaigns cover TCP reset,
 half-close and delay, reconnects, process pause, and in-flight `SIGKILL`. Separate
 once-per-run tests cover targeted multi-client isolation and concurrent multi-workspace
-crashes. The suite also injects `ENOSPC`, a real partial WAL
+crashes. The suite also exercises a kernel `EFBIG` write rejection, a real partial WAL
 write, and a non-writable shard directory at rotation, then checks acknowledged-prefix recovery and
 continued writes. Abrupt restart, trailing shard-WAL garbage, worker-count resize, compaction
 publication crashes, and slow-reader backpressure remain in the same suite. These tests exercise the
 real kernel, filesystem, process lifecycle, and WebSocket stack rather than simulation failpoints.
+`RLIMIT_FSIZE` reaches io_uring writes; the previous strace `write(2)` injector did not.
+`ENOSPC` completion failures remain covered by the deterministic simulation suite.
 `SIGKILL` coverage verifies kernel-accepted bytes; deterministic WAL crash tests model loss of
 un-fsynced bytes.
 
@@ -214,7 +216,7 @@ un-fsynced bytes.
 cd test/e2e
 NRC_FAULT_CAMPAIGN_SEED=12345 NRC_FAULT_CAMPAIGN_STEPS=60 NRC_FAULT_CAMPAIGN_RUNS=4 \
 go test -race -count=1 -timeout=20m \
-  -run '^(TestOutsideInFaultCampaign|TestOutsideInMultiClientFaultCampaign|TestOutsideInConcurrentMultiWorkspaceCrash|TestOutsideInENOSPCRecoversAcknowledgedPrefixAndContinues|TestOutsideInPartialWALWriteTruncatesTailAndContinues|TestOutsideInNonWritableShardDirectoryDefersRotationAndRecovers|TestDirtyRestartRecoversKernelAcceptedTaskAssetEdgeState|TestDirtyRestartTruncatesTrailingShardWALGarbage|TestCompactionCrashBoundariesRecoverExactStateAndContinueWriting|TestWorkerCountResizeReassignsReplaysAndContinuesWrites|TestSlowReaderBackpressureDoesNotStopHealthyPeer)$' -v
+  -run '^(TestOutsideInFaultCampaign|TestOutsideInMultiClientFaultCampaign|TestOutsideInConcurrentMultiWorkspaceCrash|TestOutsideInWALWriteErrorRecoversAcknowledgedPrefixAndContinues|TestOutsideInPartialWALWriteTruncatesTailAndContinues|TestOutsideInNonWritableShardDirectoryDefersRotationAndRecovers|TestDirtyRestartRecoversKernelAcceptedTaskAssetEdgeState|TestDirtyRestartTruncatesTrailingShardWALGarbage|TestCompactionCrashBoundariesRecoverExactStateAndContinueWriting|TestWorkerCountResizeReassignsReplaysAndContinuesWrites|TestSlowReaderBackpressureDoesNotStopHealthyPeer)$' -v
 ```
 
 Replay one failed campaign with its logged seed, preserving the step count and selecting only

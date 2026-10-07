@@ -127,6 +127,20 @@ most 512 live send contexts per store, including duplicate retries, and at most
 waiting for fsync remain in separately bounded connection outboxes, outside this
 context limit.
 
+Production shard-transaction batches also use io_uring, including records larger
+than the fixed write buffer. A leased batch is immutable; requests for its shard
+wait in the bounded deferred-request queue until write completion. Durability
+watermarks advance only after fsync, not after submission or write completion.
+History and sealed dedup lookups open, read and close their read descriptors
+asynchronously. The service thread samples RSS and disk space; requests consume
+cached values. Disk-space probes refresh after one second, and samples older than
+two seconds or failed probes cause write-admission backpressure, reported to
+protocol clients with WebSocket close code 1013 (retry later). Concurrent lazy
+history opens reserve cache capacity; duplicate opens and descriptor exhaustion
+return a retryable capacity error rather than poisoning the store. Startup takes
+the initial sample synchronously. Rotation, manifest publication, retention
+cleanup and shutdown still contain synchronous filesystem operations.
+
 The sealing service deletes obsolete source WALs after durable manifest
 publication and reader drain. Queue refusal retries later. An accepted deletion
 can leave a safe, unreferenced file on failure or shutdown; this does not add

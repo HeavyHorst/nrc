@@ -706,6 +706,12 @@ _server_thread_shutdown :: proc(s: ^NRC_Server, loc := #caller_location) {
 		log.errorf("[T%d] Final shard WAL durability sync failed during shutdown", td.thread_index)
 		server_shutdown_after_storage_error(td.server)
 	}
+	// Destroying the sealed-WAL cache queues closes for its adopted read handles.
+	// Retire them before the worker allocator and io_uring are destroyed.
+	for nbio.num_waiting(&td.io) > 0 {
+		err := nbio.tick(&td.io, time.Millisecond)
+		assert(err == .NONE, "I/O failed while closing cached read descriptors")
+	}
 	assert(td.shared_fanout_depth == 0, "worker shutdown with active shared fanout")
 	assert(!td.draining_presence_updates, "worker shutdown while draining deferred presence")
 	assert(len(td.deferred_presence_updates) == 0, "worker shutdown with deferred presence updates")

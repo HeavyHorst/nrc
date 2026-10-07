@@ -4636,6 +4636,13 @@ when NRC_SIMULATION {
 		   td.message_stores.pending_write_count != 1 {
 			return "global segmented deferred retained callback-wave readers did not start"
 		}
+		// The index and WAL opens precede the header read, and neither may
+		// flush the unrelated staged append while the duplicate lookup waits.
+		for _ in 0 ..< 2 {
+			if !nrc_sim_run_next_file_read(&campaign.ctx.sim) || store.wal.write_count != 0 || store.fsync_in_flight {
+				return "global segmented deferred retained callback-wave open failed"
+			}
+		}
 		header_index := semantic_retained_read_event_index(campaign, 0xDA05, .Header)
 		if header_index < 0 || !sim_world_dispatch_event(&campaign.ctx.sim.world, header_index) {
 			return "global segmented deferred retained callback-wave header failed"

@@ -83,8 +83,8 @@ destroy_retained_dedup_context :: proc(ctx: ^Retained_Dedup_Context, resume_rota
 	}
 	for duplicate in ctx.duplicates do destroy_retained_dedup_context(duplicate, resume_rotation)
 	delete(ctx.duplicates)
-	if ctx.index_file != nil do storage_io.discard(ctx.index_file)
-	if ctx.wal_file != nil do storage_io.discard(ctx.wal_file)
+	if ctx.index_file != nil do nrc_io_discard_read_file(ctx.index_file)
+	if ctx.wal_file != nil do nrc_io_discard_read_file(ctx.wal_file)
 	if ctx.holds_store_reader {
 		if resume_rotation {
 			retained_message_release_store_reader(ctx.store)
@@ -415,8 +415,8 @@ retained_message_queue_append :: proc(ctx: ^Retained_Dedup_Context, sealed_check
 	// A completed negative lookup owns its message, not segment offsets. Drop
 	// its pin before deferring admission so publication cannot deadlock on it.
 	if sealed_checked && ctx.holds_store_reader {
-		if ctx.index_file != nil {storage_io.discard(ctx.index_file); ctx.index_file = nil}
-		if ctx.wal_file != nil {storage_io.discard(ctx.wal_file); ctx.wal_file = nil}
+		if ctx.index_file != nil {nrc_io_discard_read_file(ctx.index_file); ctx.index_file = nil}
+		if ctx.wal_file != nil {nrc_io_discard_read_file(ctx.wal_file); ctx.wal_file = nil}
 		ctx.holds_store_reader = false
 		retained_message_release_store_reader(store)
 	}
@@ -547,7 +547,7 @@ retained_message_try_stage_append :: proc(ctx: ^Retained_Dedup_Context, key: str
 retained_dedup_submit_probe :: proc(ctx: ^Retained_Dedup_Context) {
 	if ctx.low >= ctx.high {
 		if ctx.low >= ctx.count {
-			storage_io.discard(ctx.index_file); ctx.index_file = nil; storage_io.discard(ctx.wal_file); ctx.wal_file = nil
+			nrc_io_discard_read_file(ctx.index_file); ctx.index_file = nil; nrc_io_discard_read_file(ctx.wal_file); ctx.wal_file = nil
 			ctx.segment_index -= 1; retained_dedup_open_segment(ctx); return
 		}
 		ctx.probe = ctx.low
@@ -583,17 +583,24 @@ retained_dedup_open_segment :: proc(ctx: ^Retained_Dedup_Context) {
 		retained_message_queue_append(ctx, true); return
 	}
 	segment := ctx.store.segments[ctx.segment_index]
-	index_path := message_store_path(
-		ctx.store.directory,
-		segment.generation,
-		"idx",
-	); wal_path := message_store_path(ctx.store.directory, segment.generation, "wal")
-	ctx.index_file, _ = storage_io.open(
-		ctx.store.storage,
-		index_path,
-		{.Read},
-	); ctx.wal_file, _ = storage_io.open(ctx.store.storage, wal_path, {.Read}); delete(index_path); delete(wal_path)
-	if ctx.index_file == nil || ctx.wal_file == nil {ctx.store.poisoned = true; finish_retained_send(ctx, .Poisoned, 0); return}
+	index_path := message_store_path(ctx.store.directory, segment.generation, "idx"); defer delete(index_path)
+	nrc_io_open_read_file(ctx.store.storage, index_path, ctx, retained_dedup_on_index_open, retained_dedup_read_discard_raw)
+}
+
+retained_dedup_on_index_open :: proc(user: rawptr, file: ^storage_io.File, err: linux.Errno) {
+	ctx := (^Retained_Dedup_Context)(user)
+	if err == .EMFILE || err == .ENFILE {finish_retained_send(ctx, .Capacity, 0); return}
+	if err != .NONE {ctx.store.poisoned = true; finish_retained_send(ctx, .Poisoned, 0); return}
+	ctx.index_file = file
+	path := message_store_path(ctx.store.directory, ctx.store.segments[ctx.segment_index].generation, "wal"); defer delete(path)
+	nrc_io_open_read_file(ctx.store.storage, path, ctx, retained_dedup_on_wal_open, retained_dedup_read_discard_raw)
+}
+
+retained_dedup_on_wal_open :: proc(user: rawptr, file: ^storage_io.File, err: linux.Errno) {
+	ctx := (^Retained_Dedup_Context)(user)
+	if err == .EMFILE || err == .ENFILE {finish_retained_send(ctx, .Capacity, 0); return}
+	if err != .NONE {ctx.store.poisoned = true; finish_retained_send(ctx, .Poisoned, 0); return}
+	ctx.wal_file = file
 	ctx.phase = .Header
 	_ = nrc_io_read_file_at(ctx.index_file, ctx.header[:], 0, ctx, retained_dedup_on_read_raw, retained_dedup_read_discard_raw)
 }
@@ -629,7 +636,7 @@ retained_dedup_on_read :: proc(ctx: ^Retained_Dedup_Context, read: int, err: lin
 			retained_dedup_submit_probe(ctx); return
 		}
 		if comparison != 0 {
-			storage_io.discard(ctx.index_file); ctx.index_file = nil; storage_io.discard(ctx.wal_file); ctx.wal_file = nil
+			nrc_io_discard_read_file(ctx.index_file); ctx.index_file = nil; nrc_io_discard_read_file(ctx.wal_file); ctx.wal_file = nil
 			ctx.segment_index -= 1; retained_dedup_open_segment(ctx); return
 		}
 		length := int(
@@ -774,6 +781,8 @@ Retained_History_Context :: struct {
 	index_file:           ^storage_io.File,
 	cached_message_index: []byte,
 	wal_file:             ^storage_io.File,
+	active_wal_source:    ^Message_Store,
+	wal_open_segment:     ^Message_Segment_Descriptor,
 	owns_wal_file:        bool,
 	wal_segment:          ^Message_Segment_Descriptor,
 	holds_store_reader:   bool,
@@ -817,9 +826,10 @@ Retained_History_Context :: struct {
 }
 
 destroy_retained_history_context :: proc(ctx: ^Retained_History_Context, resume_rotation := true) {
-	if ctx.index_file != nil do storage_io.discard(ctx.index_file)
+	retained_history_release_open_reservation(ctx)
+	if ctx.index_file != nil do nrc_io_discard_read_file(ctx.index_file)
 	if ctx.wal_segment != nil do release_message_segment_read_borrow(ctx.wal_segment)
-	if ctx.wal_file != nil && ctx.owns_wal_file do storage_io.discard(ctx.wal_file)
+	if ctx.wal_file != nil && ctx.owns_wal_file do nrc_io_discard_read_file(ctx.wal_file)
 	if ctx.frozen != nil {
 		assert(ctx.frozen.async_readers > 0)
 		ctx.frozen.async_readers -= 1
@@ -1260,16 +1270,31 @@ retained_history_conversation_range :: proc(segment: ^Message_Segment_Descriptor
 	return range.start, range.end, true
 }
 
-retained_history_open_active_wal :: proc(ctx: ^Retained_History_Context, source: ^Message_Store = nil) -> bool {
+retained_history_submit_active_batch :: proc(ctx: ^Retained_History_Context, source: ^Message_Store = nil) {
 	owner := source; if owner == nil do owner = ctx.store
-	if owner.active_read_file == nil {
+	ctx.records_clustered = false
+	ctx.owns_wal_file = false
+	if retained_history_specs_need_wal(ctx.specs[:]) && owner.active_read_file == nil {
+		if owner.active_open_pending {retained_history_capacity(ctx); return}
+		owner.active_open_pending = true
+		ctx.active_wal_source = owner
 		path := message_store_path(owner.directory, owner.active_generation, "wal"); defer delete(path)
-		owner.active_read_file, _ = storage_io.open(owner.storage, path, {.Read})
+		nrc_io_open_read_file(owner.storage, path, ctx, retained_history_on_active_open, retained_history_read_discard_raw)
+		return
 	}
 	ctx.wal_file = owner.active_read_file
-	ctx.owns_wal_file = false
-	ctx.records_clustered = false
-	return ctx.wal_file != nil
+	retained_history_submit_record_batch(ctx)
+}
+
+retained_history_on_active_open :: proc(user: rawptr, file: ^storage_io.File, err: linux.Errno) {
+	ctx := (^Retained_History_Context)(user)
+	owner := ctx.active_wal_source
+	retained_history_release_open_reservation(ctx)
+	if err == .EMFILE || err == .ENFILE {retained_history_capacity(ctx); return}
+	if err != .NONE {retained_history_fail(ctx); return}
+	if owner.active_read_file == nil {owner.active_read_file = file} else {nrc_io_discard_read_file(file)}
+	ctx.wal_file = owner.active_read_file
+	retained_history_submit_record_batch(ctx)
 }
 
 retained_history_active_sequence_bound :: proc(entries: []Message_Offset_Entry, sequence: u64, upper: bool) -> int {
@@ -1294,8 +1319,7 @@ retained_history_open_sealed :: proc(ctx: ^Retained_History_Context) {
 		if ctx.segment_index == ctx.sealed_count {
 			if len(ctx.frozen_specs) > 0 {
 				ctx.specs = ctx.frozen_specs; ctx.frozen_specs = nil
-				if retained_history_specs_need_wal(ctx.specs[:]) && !retained_history_open_active_wal(ctx, ctx.frozen) {retained_history_fail(ctx); return}
-				retained_history_submit_record_batch(ctx); return
+				retained_history_submit_active_batch(ctx, ctx.frozen); return
 			}
 			ctx.segment_index += ctx.segment_step
 			continue
@@ -1303,8 +1327,7 @@ retained_history_open_sealed :: proc(ctx: ^Retained_History_Context) {
 		if ctx.segment_index < 0 || ctx.segment_index > ctx.sealed_count {
 			if ctx.ascending && !ctx.active_processed && len(ctx.active_specs) > 0 {
 				ctx.active_processed = true; ctx.specs = ctx.active_specs; ctx.active_specs = nil
-				if retained_history_specs_need_wal(ctx.specs[:]) && !retained_history_open_active_wal(ctx) {retained_history_fail(ctx); return}
-				retained_history_submit_record_batch(ctx); return
+				retained_history_submit_active_batch(ctx); return
 			}
 			retained_history_finish(ctx); return
 		}
@@ -1318,19 +1341,7 @@ retained_history_open_sealed :: proc(ctx: ^Retained_History_Context) {
 		if !found {ctx.segment_index += ctx.segment_step; continue}
 		break
 	}
-	index_path := message_store_path(
-		ctx.store.directory,
-		segment.generation,
-		"idx",
-	); defer delete(index_path); wal_path := message_store_path(ctx.store.directory, segment.generation, "wal")
-	capacity: bool
-	ctx.wal_file, ctx.owns_wal_file, capacity = open_message_segment_read_file(ctx.store, segment, wal_path); delete(wal_path)
-	if capacity {retained_history_capacity(ctx); return}
-	if ctx.wal_file == nil {retained_history_fail(ctx); return}
-	if !ctx.owns_wal_file do ctx.wal_segment = segment
 	ctx.cached_message_index = segment.cached_message_index
-	if len(ctx.cached_message_index) == 0 do ctx.index_file, _ = storage_io.open(ctx.store.storage, index_path, {.Read})
-	if len(ctx.cached_message_index) == 0 && ctx.index_file == nil {retained_history_fail(ctx); return}
 	ctx.records_clustered = true
 	ctx.conversation_start = conversation_start
 	ctx.conversation_end = conversation_end
@@ -1342,13 +1353,86 @@ retained_history_open_sealed :: proc(ctx: ^Retained_History_Context) {
 	// Use an upper bound directly: adding one would wrap at max(u64).
 	ctx.target_sequence = ctx.ascending ? ctx.after : (ctx.before > 0 ? ctx.before : ctx.high_water)
 	ctx.target_upper = ctx.ascending || ctx.before == 0
+	if segment.read_file != nil {
+		segment.readers += 1
+		ctx.wal_segment = segment
+		ctx.wal_file = segment.read_file
+		retained_history_open_sealed_index(ctx)
+	} else {
+		if segment.read_open_pending {retained_history_capacity(ctx); return}
+		cache := ctx.store.sealed_wal_cache
+		if cache != nil && cache.limit > 0 {
+			for len(cache.entries) + cache.opening >= cache.limit do if !evict_message_segment_read_file(cache) do break
+			if len(cache.entries) + cache.opening >= cache.limit {retained_history_capacity(ctx); return}
+			cache.opening += 1
+		}
+		segment.read_open_pending = true
+		ctx.wal_open_segment = segment
+		path := message_store_path(ctx.store.directory, segment.generation, "wal"); defer delete(path)
+		nrc_io_open_read_file(ctx.store.storage, path, ctx, retained_history_on_sealed_open, retained_history_read_discard_raw)
+	}
+}
+
+retained_history_on_sealed_open :: proc(user: rawptr, file: ^storage_io.File, err: linux.Errno) {
+	ctx := (^Retained_History_Context)(user)
+	retained_history_release_open_reservation(ctx)
+	if err == .EMFILE || err == .ENFILE {retained_history_capacity(ctx); return}
+	if err != .NONE {retained_history_fail(ctx); return}
+	segment := &ctx.store.segments[ctx.segment_index]
+	capacity: bool
+	ctx.wal_file, ctx.owns_wal_file, capacity = cache_message_segment_read_file(ctx.store, segment, file)
+	if capacity {retained_history_capacity(ctx); return}
+	if !ctx.owns_wal_file do ctx.wal_segment = segment
+	retained_history_open_sealed_index(ctx)
+}
+
+retained_history_release_open_reservation :: proc(ctx: ^Retained_History_Context) {
+	if ctx.active_wal_source != nil {
+		ctx.active_wal_source.active_open_pending = false
+		ctx.active_wal_source = nil
+	}
+	if ctx.wal_open_segment != nil {
+		ctx.wal_open_segment.read_open_pending = false
+		ctx.wal_open_segment = nil
+		cache := ctx.store.sealed_wal_cache
+		if cache != nil && cache.limit > 0 {
+			assert(cache.opening > 0)
+			cache.opening -= 1
+		}
+	}
+}
+
+retained_history_open_sealed_index :: proc(ctx: ^Retained_History_Context) {
+	if len(ctx.cached_message_index) == 0 {
+		path := message_store_path(ctx.store.directory, ctx.store.segments[ctx.segment_index].generation, "idx"); defer delete(path)
+		nrc_io_open_read_file(ctx.store.storage, path, ctx, retained_history_on_index_open, retained_history_read_discard_raw)
+		return
+	}
+	retained_history_start_sealed_probe(ctx)
+}
+
+retained_history_on_index_open :: proc(user: rawptr, file: ^storage_io.File, err: linux.Errno) {
+	ctx := (^Retained_History_Context)(user)
+	if err == .EMFILE || err == .ENFILE {retained_history_capacity(ctx); return}
+	if err != .NONE {retained_history_fail(ctx); return}
+	ctx.index_file = file
+	retained_history_start_sealed_probe(ctx)
+}
+
+retained_history_start_sealed_probe :: proc(ctx: ^Retained_History_Context) {
 	if len(ctx.cached_message_index) > 0 {
-		bound := retained_history_cached_sequence_bound(ctx.cached_message_index, conversation_start, conversation_end, ctx.target_sequence, ctx.target_upper)
+		bound := retained_history_cached_sequence_bound(
+			ctx.cached_message_index,
+			ctx.conversation_start,
+			ctx.conversation_end,
+			ctx.target_sequence,
+			ctx.target_upper,
+		)
 		if ctx.ascending {
 			ctx.range_start = bound
-			ctx.range_end = conversation_end
+			ctx.range_end = ctx.conversation_end
 		} else {
-			ctx.range_start = conversation_start
+			ctx.range_start = ctx.conversation_start
 			ctx.range_end = bound
 		}
 		retained_history_submit_entry_chunk(ctx)
@@ -1363,10 +1447,10 @@ retained_history_specs_need_wal :: proc(specs: []Retained_Read_Spec) -> bool {
 }
 
 retained_history_next_segment :: proc(ctx: ^Retained_History_Context) {
-	if ctx.index_file != nil {storage_io.discard(ctx.index_file); ctx.index_file = nil}
+	if ctx.index_file != nil {nrc_io_discard_read_file(ctx.index_file); ctx.index_file = nil}
 	ctx.cached_message_index = nil
 	if ctx.wal_segment != nil {release_message_segment_read_borrow(ctx.wal_segment); ctx.wal_segment = nil}
-	if ctx.wal_file != nil && ctx.owns_wal_file do storage_io.discard(ctx.wal_file)
+	if ctx.wal_file != nil && ctx.owns_wal_file do nrc_io_discard_read_file(ctx.wal_file)
 	ctx.wal_file = nil; ctx.owns_wal_file = false
 	ctx.segment_index += ctx.segment_step; retained_history_open_sealed(ctx)
 }
@@ -1445,8 +1529,7 @@ process_message_history :: proc(c: ^NRC_Connection, req: pr.MessageRangeRequest,
 	}
 	retained_history_snapshot_active(ctx, store, ascending ? &ctx.active_specs : &ctx.specs)
 	if !ascending && len(ctx.specs) > 0 {
-		if retained_history_specs_need_wal(ctx.specs[:]) && !retained_history_open_active_wal(ctx) {retained_history_fail(ctx); return}
-		retained_history_submit_record_batch(ctx); _ = nbio.submit_pending(&td.io); return
+		retained_history_submit_active_batch(ctx); _ = nbio.submit_pending(&td.io); return
 	}
 	retained_history_next_segment(ctx); _ = nbio.submit_pending(&td.io)
 }

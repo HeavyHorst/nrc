@@ -389,9 +389,11 @@ close :: proc(io: ^IO, fd: Closable, user: rawptr = nil, callback: On_Close = em
 	case linux.Fd:       handle = h
 	} //odinfmt:enable
 
+	_, is_file := fd.(linux.Fd)
 	completion.operation = Op_Close {
 		callback = callback,
 		fd       = handle,
+		file     = is_file,
 	}
 
 	close_enqueue(io, completion, &completion.operation.(Op_Close))
@@ -480,6 +482,19 @@ _send :: proc(
 	}
 
 	send_enqueue(io, completion, &completion.operation.(Op_Send))
+	return completion
+}
+
+_open_read_file :: proc(io: ^IO, path: cstring, user: rawptr, callback: On_File_Open) -> ^Completion {
+	completion := pool_get(&io.completion_pool)
+	completion.ctx = context
+	completion.user_data = user
+	set_start_time_disabled(completion)
+	completion.operation = Op_File_Open {
+		callback = callback,
+		path     = path,
+	}
+	file_open_enqueue(io, completion, &completion.operation.(Op_File_Open))
 	return completion
 }
 

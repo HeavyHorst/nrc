@@ -54,9 +54,9 @@ destroy_frozen_message_store :: proc(store: ^Message_Store, remove_source: bool)
 	frozen := store.frozen
 	if frozen == nil do return
 	assert(frozen.async_readers == 0)
-	// Close before dispatch: otherwise the worker's final close can perform the
-	// eviction after the service unlinks the still-open file.
-	if frozen.active_read_file != nil {storage_io.discard(frozen.active_read_file); frozen.active_read_file = nil}
+	// Queue the adopted descriptor's close: even if unlink wins the race, the
+	// final inode eviction must not run synchronously on the owning worker.
+	if frozen.active_read_file != nil {nrc_io_discard_read_file(frozen.active_read_file); frozen.active_read_file = nil}
 	if remove_source {
 		if message_seal_service_available() {
 			if !enqueue_message_source_delete(store, frozen.active_generation) do return

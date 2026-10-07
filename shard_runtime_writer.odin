@@ -2,8 +2,10 @@ package main
 
 import "core:os"
 import "core:strings"
+import "core:sync/chan"
 import "core:time"
 
+import "byte_pool"
 import "persistence"
 import "storage_io"
 import "ulid"
@@ -41,6 +43,9 @@ Shard_Sweep_Metrics :: struct {
 Shard_Transaction_Writer :: struct {
 	wal:                        persistence.WAL_State,
 	storage:                    storage_io.Context,
+	write_in_flight:            bool,
+	write_started:              time.Time,
+	oversized_write:            []byte,
 	fsync_in_flight:            bool,
 	fsync_snapshot:             persistence.WAL_Fsync_Snapshot,
 	fsync_started:              time.Time,
@@ -73,6 +78,7 @@ Shard_Transaction_Writer :: struct {
 	available_disk_bytes:       u64,
 	space_known:                bool,
 	space_checked_at:           time.Time,
+	space_refresh_started:      time.Time,
 	compaction:                 Shard_Compaction_Status,
 	compaction_floors:          Shard_High_Water_Requirements,
 	sweep_metrics:              Shard_Sweep_Metrics,
@@ -122,7 +128,31 @@ refresh_shard_writer_catalog_bytes :: proc(writer: ^Shard_Transaction_Writer) ->
 refresh_shard_writer_storage_space :: proc(writer: ^Shard_Transaction_Writer, force := false) -> bool {
 	if writer == nil do return false
 	now := ulid.time_now()
-	if !force && writer.space_checked_at != (time.Time{}) && time.diff(writer.space_checked_at, now) < SHARD_STORAGE_SPACE_CACHE_TTL do return true
+	if !force && writer.space_known && writer.space_checked_at != (time.Time{}) && time.diff(writer.space_checked_at, now) < SHARD_STORAGE_SPACE_CACHE_TTL do return true
+	if !force && writer.batch_writes && td.server != nil {
+		// Request paths consume bounded-age cached samples, never statfs().
+		// Retry after a second even if a service result was dropped or delayed.
+		if writer.space_refresh_started == (time.Time{}) || time.diff(writer.space_refresh_started, now) >= SHARD_STORAGE_SPACE_CACHE_TTL {
+			context.allocator = worker_backing_allocator()
+			directory, err := strings.clone(writer.shard_dir)
+			if err == .None {
+				job := Shard_Compaction_Job {
+					allocator           = context.allocator,
+					storage_space_probe = true,
+					owner_worker        = writer.owner_worker,
+					shard               = writer.shard,
+					storage             = writer.storage,
+					shard_dir           = directory,
+				}
+				if chan.try_send(td.server.shard_compaction_jobs, job) {
+					writer.space_refresh_started = now
+				} else {
+					delete(directory)
+				}
+			}
+		}
+		return writer.space_known && time.diff(writer.space_checked_at, now) < 2 * SHARD_STORAGE_SPACE_CACHE_TTL
+	}
 	space, space_err := storage_io.storage_space(writer.storage, writer.shard_dir)
 	if space_err != nil do return false
 	writer.available_disk_bytes = space.available_bytes
@@ -462,6 +492,7 @@ init_managed_shard_transaction_writer_with_storage :: proc(
 
 shutdown_shard_transaction_writer :: proc(writer: ^Shard_Transaction_Writer) -> bool {
 	if writer == nil do return true
+	assert(!writer.write_in_flight, "shard writer shutdown requires drained async write")
 	assert(!writer.fsync_in_flight, "shard writer shutdown requires drained async fsync")
 	discard_shard_deferred_requests(writer)
 	delete(writer.durability_waiters)
@@ -479,6 +510,10 @@ shutdown_shard_transaction_writer :: proc(writer: ^Shard_Transaction_Writer) -> 
 append_shard_transaction :: proc(writer: ^Shard_Transaction_Writer, tx: ^Shard_Transaction) -> bool {
 	shard_append_failure = .None
 	if writer == nil || tx == nil || writer.poisoned || !writer.wal.enabled do return false
+	if writer.write_in_flight {
+		shard_append_failure = defer_current_shard_protocol_request(writer) ? .Deferred : .Backpressure
+		return false
+	}
 	if writer.batch_writes && writer.wal.pending_bytes + u64(writer.wal.write_offset) >= SHARD_COMMIT_PENDING_MAX_BYTES {
 		if defer_current_shard_protocol_request(writer) {
 			shard_append_failure = .Deferred
@@ -498,11 +533,14 @@ append_shard_transaction :: proc(writer: ^Shard_Transaction_Writer, tx: ^Shard_T
 	if validation_err != .None do return false
 	payload_size, size_err := shard_transaction_size(tx)
 	if size_err != .None do return false
-	record := make([]byte, persistence.LOG_HEADER_SIZE + payload_size)
-	defer delete(record)
-	if encode_shard_transaction(tx, record[persistence.LOG_HEADER_SIZE:]) != .None do return false
+	record_size := persistence.LOG_HEADER_SIZE + payload_size
+	if writer.batch_writes && writer.wal.write_offset > 0 && record_size > persistence.WRITE_BATCH_MAX_BYTES - writer.wal.write_offset {
+		submit_shard_writer_write(writer)
+		shard_append_failure = defer_current_shard_protocol_request(writer) ? .Deferred : .Backpressure
+		return false
+	}
 	current_wal_bytes := persistence.get_file_size(&writer.wal)
-	if writer.managed && current_wal_bytes > 0 && u64(len(record)) > SHARD_WAL_SEGMENT_MAX_BYTES - min(SHARD_WAL_SEGMENT_MAX_BYTES, current_wal_bytes) {
+	if writer.managed && current_wal_bytes > 0 && u64(record_size) > SHARD_WAL_SEGMENT_MAX_BYTES - min(SHARD_WAL_SEGMENT_MAX_BYTES, current_wal_bytes) {
 		if writer.fsync_in_flight && defer_current_shard_protocol_request(writer) {
 			shard_append_failure = .Deferred
 			return false
@@ -516,10 +554,41 @@ append_shard_transaction :: proc(writer: ^Shard_Transaction_Writer, tx: ^Shard_T
 			return false
 		}
 	}
-	if !persistence.finalize_and_write_record_deferred_fsync(&writer.wal, u8(Shard_Log_Op.Transaction), record) ||
-	   (!writer.batch_writes && !persistence.flush_write_batch_deferred_fsync(&writer.wal)) {
-		writer.poisoned = true
-		return false
+	if writer.batch_writes {
+		if record_size <= persistence.WRITE_BATCH_MAX_BYTES {
+			record := writer.wal.write_buffer[writer.wal.write_offset:][:record_size]
+			if encode_shard_transaction(tx, record[persistence.LOG_HEADER_SIZE:]) != .None do return false
+			if !persistence.stage_record_in_place(&writer.wal, u8(Shard_Log_Op.Transaction), record_size) do return false
+		} else {
+			// Oversized records must not bypass asynchronous I/O.
+			record, err := byte_pool.alloc(td.spool, uint(record_size))
+			if err != .None do return false
+			if encode_shard_transaction(tx, record[persistence.LOG_HEADER_SIZE:]) != .None {
+				byte_pool.release(td.spool, record)
+				return false
+			}
+			persistence.finalize_wal_record_buffer(
+				writer.wal.magic,
+				writer.wal.version,
+				u8(Shard_Log_Op.Transaction),
+				&writer.wal.last_hash,
+				record,
+				&writer.wal.crc64_state,
+			)
+			persistence.compute_chain_hash(&writer.wal.sha_state, record, writer.wal.buffered_last_hash[:])
+			writer.wal.buffered_record_count = 1
+			writer.wal.write_offset = record_size
+			writer.oversized_write = record
+		}
+	} else {
+		record := make([]byte, record_size)
+		defer delete(record)
+		if encode_shard_transaction(tx, record[persistence.LOG_HEADER_SIZE:]) != .None do return false
+		if !persistence.finalize_and_write_record_deferred_fsync(&writer.wal, u8(Shard_Log_Op.Transaction), record) ||
+		   !persistence.flush_write_batch_deferred_fsync(&writer.wal) {
+			writer.poisoned = true
+			return false
+		}
 	}
 	if !writer.commit_pending {
 		writer.commit_pending = true
@@ -528,6 +597,7 @@ append_shard_transaction :: proc(writer: ^Shard_Transaction_Writer, tx: ^Shard_T
 	append_only := writer.active_wal_append_only && shard_transaction_is_append_only(tx, writer.floors)
 	writer.floors = next
 	writer.active_wal_append_only = append_only
+	if writer.batch_writes && writer.wal.write_offset >= persistence.WRITE_BATCH_MAX_BYTES do submit_shard_writer_write(writer)
 	return true
 }
 

@@ -1,8 +1,12 @@
 package main
 
+import "core:log"
+import "core:os"
 import "core:sys/linux"
 import "core:time"
 
+import "byte_pool"
+import nbio "nbio/poly"
 import "persistence"
 
 Sharded_Persistence_Mode :: enum u8 {
@@ -51,6 +55,21 @@ logical_shard_worker :: proc(shard, worker_count: int) -> (worker: int, ok: bool
 
 shutdown_shard_writer_registry :: proc(registry: ^Shard_Writer_Registry) -> bool {
 	if registry == nil do return true
+	for &writer in registry.writers do discard_shard_deferred_requests(&writer)
+	for {
+		leased := false
+		for &writer in registry.writers do leased = leased || writer.write_in_flight || writer.fsync_in_flight
+		if !leased do break
+		when NRC_SIMULATION {
+			if nrc_sim_runtime != nil {
+				for nrc_sim_run_next_file_write(nrc_sim_runtime) {}
+				for nrc_sim_run_next_fsync_completion(nrc_sim_runtime) {}
+				continue
+			}
+		}
+		err := nbio.tick(&td.io, time.Millisecond)
+		assert(err == .NONE, "I/O failed while draining shard WAL leases")
+	}
 	ok := true
 	for &writer in registry.writers {
 		if !shutdown_shard_transaction_writer(&writer) do ok = false
@@ -76,6 +95,7 @@ init_shard_writer_registry :: proc(registry: ^Shard_Writer_Registry, generation_
 		initialized := init_managed_shard_transaction_writer(&registry.writers[writer_index], shard_dir, shard, worker, worker_count, apply)
 		delete(shard_dir)
 		if !initialized {shutdown_shard_writer_registry(registry); return false}
+		if !refresh_shard_writer_storage_space(&registry.writers[writer_index], force = true) {shutdown_shard_writer_registry(registry); return false}
 		registry.writers[writer_index].batch_writes = true
 		registry.writer_index[shard] = i16(writer_index)
 	}
@@ -113,7 +133,7 @@ shard_writer_fsync_complete :: proc(writer: ^Shard_Transaction_Writer, err: linu
 }
 
 shard_commit_due :: proc(writer: ^Shard_Transaction_Writer) -> bool {
-	if writer == nil || !writer.wal.enabled || writer.fsync_in_flight do return false
+	if writer == nil || !writer.wal.enabled || writer.write_in_flight || writer.fsync_in_flight do return false
 	bytes := writer.wal.pending_bytes + u64(writer.wal.write_offset)
 	if bytes == 0 do return false
 	return bytes >= SHARD_COMMIT_MAX_BYTES || (writer.commit_pending && time.diff(writer.commit_started, writer.wal.get_time()) >= SHARD_COMMIT_WINDOW)
@@ -122,6 +142,7 @@ shard_commit_due :: proc(writer: ^Shard_Transaction_Writer) -> bool {
 shard_writer_should_rotate_before_async_fsync :: proc(writer: ^Shard_Transaction_Writer) -> bool {
 	if writer == nil ||
 	   !writer.managed ||
+	   writer.write_in_flight ||
 	   writer.fsync_in_flight ||
 	   writer.manifest.sealed_present ||
 	   writer.compaction == .Sealed ||
@@ -133,43 +154,70 @@ shard_writer_should_rotate_before_async_fsync :: proc(writer: ^Shard_Transaction
 	return wal_bytes > 0 && wal_bytes >= SHARD_WAL_SEGMENT_MAX_BYTES - rotation_reserve
 }
 
+submit_shard_writer_write :: proc(writer: ^Shard_Transaction_Writer) {
+	assert(!writer.write_in_flight && writer.wal.write_offset > 0)
+	buffer := writer.oversized_write
+	if buffer == nil do buffer = writer.wal.write_buffer[:writer.wal.write_offset]
+	writer.write_in_flight = true
+	writer.write_started = writer.wal.get_time()
+	_ = nrc_io_append_wal(writer.wal.file, buffer, rawptr(writer), shard_writer_write_complete)
+}
+
+shard_writer_write_complete :: proc(user: rawptr, written: int, err: linux.Errno) {
+	writer := (^Shard_Transaction_Writer)(user)
+	assert(writer.write_in_flight)
+	writer.write_in_flight = false
+	write_err: os.Error
+	if err != .NONE do write_err = os.Platform_Error(err)
+	ok := persistence.complete_deferred_write(&writer.wal, written, write_err, time.diff(writer.write_started, writer.wal.get_time()))
+	writer.write_started = {}
+	if writer.oversized_write != nil {
+		byte_pool.release(td.spool, writer.oversized_write)
+		writer.oversized_write = nil
+	}
+	if !ok {
+		writer.poisoned = true
+		discard_shard_deferred_requests(writer)
+		log.errorf("[T%d] Shard WAL async write failed; shutting down (shard=%d)", td.thread_index, writer.shard)
+		if td.server != nil do server_shutdown_after_storage_error(td.server)
+		return
+	}
+	// Capture only completed writes, before deferred requests can stage a suffix.
+	if !writer.fsync_in_flight do schedule_shard_writer_fsync(writer)
+	if !writer.poisoned do drain_shard_deferred_requests(writer)
+}
+
+schedule_shard_writer_fsync :: proc(writer: ^Shard_Transaction_Writer) {
+	assert(!writer.write_in_flight && !writer.fsync_in_flight)
+	// Preserve preemptive rotation, but never rotate a leased or staged suffix.
+	if writer.wal.write_offset == 0 && shard_writer_should_rotate_before_async_fsync(writer) && rotate_shard_writer_for_compaction(writer) do return
+	if writer.poisoned || !writer.wal.enabled || writer.wal.pending_bytes == 0 do return
+	writer.fsync_snapshot = {
+		last_hash     = writer.wal.last_hash,
+		record_count  = writer.wal.record_count,
+		pending_bytes = writer.wal.pending_bytes,
+	}
+	writer.fsync_in_flight = true
+	writer.fsync_started = writer.wal.get_time()
+	writer.commit_pending = false
+	_ = nrc_io_sync_file(
+		writer.wal.file,
+		rawptr(writer),
+		proc(user: rawptr, err: linux.Errno) {shard_writer_fsync_complete((^Shard_Transaction_Writer)(user), err)},
+	)
+}
+
 schedule_shard_writer_fsyncs_if_due :: proc(registry: ^Shard_Writer_Registry) -> (did_work, ok: bool) {
 	if registry == nil || registry.mode != .Active do return false, true
 	for &writer in registry.writers {
 		if writer.poisoned || !writer.wal.enabled do return did_work, false
 		if !shard_commit_due(&writer) do continue
-		if !persistence.flush_write_batch_deferred_fsync(&writer.wal) {
-			writer.poisoned = true
-			return did_work, false
-		}
-		// Near the segment boundary, rotating now avoids submitting an async
-		// fsync that would make the next append reject while that fsync is in
-		// flight. The reserve covers the largest accepted outer WAL record.
-		if shard_writer_should_rotate_before_async_fsync(&writer) && rotate_shard_writer_for_compaction(&writer) {
-			did_work = true
-			continue
+		if writer.wal.write_offset > 0 {
+			submit_shard_writer_write(&writer)
+		} else {
+			schedule_shard_writer_fsync(&writer)
 		}
 		if writer.poisoned || !writer.wal.enabled do return did_work, false
-		// A failed rotation may still have synced the old WAL. Never submit a
-		// pre-rotation byte snapshot that could consume a later suffix's accounting.
-		if writer.wal.pending_bytes == 0 {
-			did_work = true
-			continue
-		}
-		snapshot := persistence.WAL_Fsync_Snapshot {
-			last_hash     = writer.wal.last_hash,
-			record_count  = writer.wal.record_count,
-			pending_bytes = writer.wal.pending_bytes,
-		}
-		writer.fsync_in_flight = true
-		writer.fsync_snapshot = snapshot
-		writer.fsync_started = writer.wal.get_time()
-		writer.commit_pending = false
-		_ = nrc_io_sync_file(
-			writer.wal.file,
-			rawptr(&writer),
-			proc(user: rawptr, err: linux.Errno) {shard_writer_fsync_complete((^Shard_Transaction_Writer)(user), err)},
-		)
 		did_work = true
 	}
 	return did_work, true

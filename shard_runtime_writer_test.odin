@@ -4,7 +4,9 @@ import "core:bytes"
 import "core:encoding/endian"
 import "core:fmt"
 import "core:log"
+import "core:mem"
 import "core:os"
+import "core:sync/chan"
 import "core:sys/linux"
 import "core:sys/posix"
 import "core:testing"
@@ -21,10 +23,107 @@ when !NRC_SIMULATION {
 	_ :: hgl.Test_Case
 }
 
+@(test)
+test_shard_storage_probe_uses_cache_and_rejects_stale_or_failed_samples :: proc(t: ^testing.T) {
+	old_server, old_registry := td.server, td.shard_writers
+	defer {td.server = old_server; td.shard_writers = old_registry}
+	td.shard_writers = {}
+	server: NRC_Server
+	channel_err: mem.Allocator_Error
+	server.shard_compaction_jobs, channel_err = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+	testing.expect(t, channel_err == .None)
+	defer chan.destroy(server.shard_compaction_jobs)
+	td.server = &server
+	for &index in td.shard_writers.writer_index do index = -1
+	append(&td.shard_writers.writers, Shard_Transaction_Writer{})
+	defer delete(td.shard_writers.writers)
+	td.shard_writers.writer_index[7] = 0
+	writer := &td.shard_writers.writers[0]
+	writer^ = {
+		batch_writes         = true,
+		shard                = 7,
+		shard_dir            = "/nrc-storage-probe-missing-directory",
+		storage              = storage_io.host_context(),
+		space_known          = true,
+		space_checked_at     = time.time_add(ulid.time_now(), -1500 * time.Millisecond),
+		available_disk_bytes = 123456,
+	}
+	// A synchronous statfs on the missing directory would fail instead.
+	testing.expect(t, refresh_shard_writer_storage_space(writer))
+	testing.expect_value(t, writer.available_disk_bytes, u64(123456))
+	job, received := chan.try_recv(server.shard_compaction_jobs)
+	testing.expect(t, received && job.storage_space_probe && job.shard == 7)
+	result := run_shard_compaction_job(job)
+	testing.expect(t, !result.ok)
+	testing.expect(t, process_shard_compaction_result(result))
+	testing.expect(t, !writer.space_known)
+	testing.expect(t, !refresh_shard_writer_storage_space(writer))
+	_, received = chan.try_recv(server.shard_compaction_jobs)
+	testing.expect(t, !received, "probe retries must be rate limited")
+	sample := ulid.time_now()
+	testing.expect(
+		t,
+		process_shard_compaction_result({storage_space_probe = true, shard = 7, ok = true, available_disk_bytes = 654321, space_checked_at = sample}),
+	)
+	testing.expect(
+		t,
+		process_shard_compaction_result({storage_space_probe = true, shard = 7, ok = false, space_checked_at = time.time_add(sample, -time.Second)}),
+	)
+	testing.expect(t, writer.space_known && refresh_shard_writer_storage_space(writer))
+	testing.expect_value(t, writer.available_disk_bytes, u64(654321))
+	writer.space_checked_at = time.time_add(ulid.time_now(), -3 * time.Second)
+	testing.expect(t, !refresh_shard_writer_storage_space(writer), "old samples must not admit writes")
+}
+
 Shard_Writer_Test_Data :: struct {
 	tx:        Shard_Transaction,
 	mutations: [3]Shard_Mutation,
 	storage:   [3][]byte,
+}
+
+@(test)
+test_stale_shard_space_probe_replies_busy_instead_of_dropping_request :: proc(t: ^testing.T) {
+	when !NRC_SIMULATION {
+		return
+	} else {
+		ctx: Sim_Test_Context
+		simulation_test_begin(&ctx, 189)
+		defer simulation_test_end(&ctx)
+		workspace := "stale-probe-busy"
+		path, ok := task_handler_test_init_sim_writer(workspace, "stale-probe-busy.log")
+		defer os.remove(path)
+		if !testing.expect(t, ok) do return
+		defer shutdown_shard_writer_registry(&td.shard_writers)
+		server: NRC_Server
+		channel_err: mem.Allocator_Error
+		server.shard_compaction_jobs, channel_err = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+		testing.expect(t, channel_err == .None)
+		defer chan.destroy(server.shard_compaction_jobs)
+		td.server = &server
+		defer td.server = nil
+		writer := &td.shard_writers.writers[0]
+		writer.batch_writes = true; writer.managed = true
+		writer.shard_dir = fmt.aprintf("/missing-probe-%d", td.thread_index)
+		writer.space_known = true
+		writer.space_checked_at = time.time_add(ulid.time_now(), -3 * time.Second)
+		conn := simulation_test_install_client(&ctx.sim, 0, workspace, "writer", init_send_queue = true)
+		ctx.conns[0] = conn
+		payload: [512]byte
+		length := pr.serializeCreateTaskRequest(
+			{conv_id = pr.WORKSPACE_DATA_ID, title = transmute([]byte)string("must not vanish"), correlation_id = 83},
+			payload[:],
+		)
+		process_protocol_payload(conn, payload[:length])
+		testing.expect(t, conn.state >= .Will_Close, "backpressure must explicitly close with busy status")
+		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, conn.sock), 1)
+		frame := nrc_sim_client_frame(&ctx.sim, conn.sock, 0)
+		testing.expect(t, len(frame) >= 4 && frame[0] & 0x0f == 8 && frame[2] == 3 && frame[3] == 0xF5, "expected WebSocket close code 1013")
+		testing.expect_value(t, writer.wal.write_offset, 0)
+		testing.expect(t, !writer.poisoned)
+		job, received := chan.try_recv(server.shard_compaction_jobs)
+		testing.expect(t, received && job.storage_space_probe)
+		if received do destroy_shard_compaction_job(&job)
+	}
 }
 
 shard_writer_test_transaction_init :: proc(data: ^Shard_Writer_Test_Data, workspace: string) {
@@ -570,10 +669,17 @@ test_worker_durability_sweep_fsyncs_idle_batched_writes :: proc(t: ^testing.T) {
 	writer.commit_started = {}
 	did_work, sync_ok := schedule_shard_writer_fsyncs_if_due(&registry)
 	testing.expect(t, sync_ok && did_work)
-	testing.expect(t, writer.fsync_in_flight)
+	testing.expect(t, writer.write_in_flight && !writer.fsync_in_flight)
 	testing.expect_value(t, writer.wal.durable_record_count, u64(0))
 	testing.expect(t, !rotate_shard_writer_for_compaction(writer))
 	testing.expect(t, !writer.poisoned && writer.compaction == .Idle)
+	testing.expect(t, !append_shard_transaction(writer, &test_data.tx), "leased batch cannot be changed")
+	testing.expect(t, consume_shard_append_backpressure())
+	write_started := ulid.time_now()
+	for writer.write_in_flight && time.since(write_started) < time.Second {
+		testing.expect_value(t, nbio.tick(&td.io, time.Millisecond, yield_after_callbacks = true), linux.Errno.NONE)
+	}
+	testing.expect(t, !writer.write_in_flight)
 
 	// Writes may continue while fsync is in flight. Completion advances the
 	// conservative durable watermark only through the submitted snapshot.
@@ -592,10 +698,10 @@ test_worker_durability_sweep_fsyncs_idle_batched_writes :: proc(t: ^testing.T) {
 	did_work, sync_ok = schedule_shard_writer_fsyncs_if_due(&registry)
 	testing.expect(t, sync_ok && did_work)
 	fsync_started = time.now()
-	for writer.fsync_in_flight && time.since(fsync_started) < time.Second {
+	for (writer.write_in_flight || writer.fsync_in_flight) && time.since(fsync_started) < time.Second {
 		testing.expect_value(t, nbio.tick(&td.io, time.Millisecond), linux.Errno.NONE)
 	}
-	testing.expect(t, !writer.fsync_in_flight)
+	testing.expect(t, !writer.write_in_flight && !writer.fsync_in_flight)
 	testing.expect_value(t, writer.wal.durable_record_count, u64(2))
 	testing.expect_value(t, writer.wal.pending_bytes, u64(0))
 	testing.expect(t, rotate_shard_writer_for_compaction(writer))

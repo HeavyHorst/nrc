@@ -13,6 +13,7 @@ import "core:os"
 import "core:sys/linux"
 import "core:time"
 
+import "byte_pool"
 import nbio_raw "nbio"
 import nbio "nbio/poly"
 import "persistence"
@@ -21,6 +22,7 @@ import ws "websocket"
 
 when !NRC_SIMULATION {
 	_ :: mem.ptr_to_bytes
+	_ :: byte_pool.release
 	_ :: net.TCP_Socket
 	_ :: os.Error
 	_ :: linux.Errno
@@ -104,6 +106,7 @@ when NRC_SIMULATION {
 		Sim_Driver_Action_Event,
 		Sim_Process_Crash_Event,
 		Sim_File_Read_Completion,
+		Sim_File_Open_Completion,
 		Sim_File_Write_Completion,
 		Sim_Input_Turn_Event,
 	}
@@ -233,6 +236,11 @@ when NRC_SIMULATION {
 		case Sim_Process_Crash_Event:
 		case Sim_File_Read_Completion:
 			if value.discard != nil do value.discard(value.user)
+		case Sim_File_Open_Completion:
+			ctx := value.ctx
+			if ctx.discard != nil do ctx.discard(ctx.user)
+			byte_pool.release(td.spool, ctx.path)
+			free(ctx)
 		case Sim_File_Write_Completion:
 		// Borrowed batch only. Crash teardown releases its owner; never call
 		// a stale write callback or touch its old-process bytes here.
@@ -522,6 +530,16 @@ when NRC_SIMULATION {
 			completion := payload
 			sim_file_write_apply(&completion)
 			completion.callback(completion.user, completion.written, completion.err)
+		case Sim_File_Open_Completion:
+			ctx := payload.ctx
+			file: ^storage_io.File
+			err := payload.err
+			if err == .NONE {
+				open_err: os.Error
+				file, open_err = storage_io.open(ctx.storage, string(ctx.path[:len(ctx.path) - 1]), {.Read})
+				if open_err != nil do err = .EIO
+			}
+			nrc_io_finish_file_open(ctx, file, err)
 		case Sim_File_Read_Completion:
 			read := 0
 			err := payload.err
@@ -673,6 +691,13 @@ when NRC_SIMULATION {
 		callback: nbio_raw.On_File_Sync,
 		err:      linux.Errno,
 		snapshot: storage_io.Sync_Snapshot,
+	}
+
+	// Opens share the read domain: each metadata/data step is independently
+	// schedulable, injectable and stale-discardable in a read operation.
+	Sim_File_Open_Completion :: struct {
+		ctx: ^NRC_File_Open_Context,
+		err: linux.Errno,
 	}
 
 	Sim_File_Read_Completion :: struct {
@@ -1027,12 +1052,15 @@ when NRC_SIMULATION {
 		if sim == nil do return false
 		index := sim_world_domain_event_index(&sim.world, .File_Read, ordinal)
 		if index < 0 do return false
-		completion, ok := sim.world.events[index].payload.(Sim_File_Read_Completion)
-		assert(ok)
-		if !ok do return false
 		if err != .NONE {
-			completion.err = err
-			sim.world.events[index].payload = Sim_Event_Payload(completion)
+			#partial switch &completion in sim.world.events[index].payload {
+			case Sim_File_Read_Completion:
+				completion.err = err
+			case Sim_File_Open_Completion:
+				completion.err = err
+			case:
+				unreachable()
+			}
 		}
 		return sim_world_dispatch_event(&sim.world, index)
 	}

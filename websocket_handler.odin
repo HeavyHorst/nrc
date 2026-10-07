@@ -236,7 +236,7 @@ drain_shard_deferred_requests :: proc(writer: ^Shard_Transaction_Writer) {
 	writer.deferred_requests = nil
 	writer.deferred_request_bytes = 0
 	defer delete(requests)
-	for request in requests {
+	for request, index in requests {
 		c := connection_from_io_context(request.connection)
 		server_running := td.server == nil || !sync.atomic_load(&td.server.closing)
 		if !writer.poisoned && td.state == .Running && server_running && c != nil && c.state < .Will_Close {
@@ -248,6 +248,14 @@ drain_shard_deferred_requests :: proc(writer: ^Shard_Transaction_Writer) {
 		delete(request.payload)
 		release_shard_deferred_connection(request)
 		connection_io_unpin(request.connection)
+		if len(writer.deferred_requests) > 0 {
+			// A replay that re-defers remains ahead of the untouched tail. Move
+			// its existing ownership, rather than dispatching or pinning it again.
+			_, err := append(&writer.deferred_requests, ..requests[index + 1:])
+			assert(err == nil)
+			for pending in requests[index + 1:] do writer.deferred_request_bytes += len(pending.payload)
+			break
+		}
 	}
 }
 
@@ -335,8 +343,8 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 		payload    = frame_data,
 	}
 	defer shard_protocol_dispatch_context = previous_dispatch
-	if c.deferred_shard_requests > 0 && !shard_protocol_replay_active {
-		writer := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)c.workspace_id)
+	writer := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)c.workspace_id)
+	if writer != nil && writer.write_in_flight || c.deferred_shard_requests > 0 && !shard_protocol_replay_active {
 		if writer != nil && defer_current_shard_protocol_request(writer) do return
 		send_websocket_close_frame_and_close(c, 1013, "Server too busy")
 		return

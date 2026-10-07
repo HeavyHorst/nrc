@@ -183,6 +183,12 @@ zero at EOF). A short read is not an error. On error, `read` is zero.
 */
 On_File_Read :: #type proc(user: rawptr, read: int, err: linux.Errno)
 
+// Read-only open. Keep the NUL-terminated path alive until callback delivery.
+On_File_Open :: #type proc(user: rawptr, fd: linux.Fd, err: linux.Errno)
+open_read_file :: proc(io: ^IO, path: cstring, user: rawptr, callback: On_File_Open) -> ^Completion {
+	return _open_read_file(io, path, user, callback)
+}
+
 // One-shot file write, not write-all. The caller keeps the descriptor and buffer
 // alive until completion and handles short writes. max(u64) uses the current offset.
 On_File_Write :: #type proc(user: rawptr, written: int, err: linux.Errno)
@@ -336,6 +342,7 @@ Operation :: union #no_nil {
 	Op_Timeout,
 	Op_Writev,
 	Op_File_Read,
+	Op_File_Open,
 	Op_File_Write,
 	Op_File_Sync,
 }

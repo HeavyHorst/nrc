@@ -65,6 +65,7 @@ Shard_Compactor_Thread_Data :: struct {
 
 Shard_Compaction_Job :: struct {
 	allocator:                     mem.Allocator, // Thread-safe ownership across the worker/service boundary.
+	storage_space_probe:           bool,
 	message_source_generation:     u64, // Nonzero selects immutable retained WAL sealing.
 	message_remove_generation:     u64, // Obsolete source, excluded by the durable manifest.
 	owner_worker:                  int,
@@ -84,6 +85,9 @@ Shard_Compaction_Job :: struct {
 
 Shard_Compaction_Result :: struct {
 	allocator:                     mem.Allocator,
+	storage_space_probe:           bool,
+	available_disk_bytes:          u64,
+	space_checked_at:              time.Time,
 	message_source_generation:     u64,
 	message_remove_generation:     u64,
 	message_sealed_bytes:          u64,
@@ -287,6 +291,7 @@ rotate_shard_writer_for_compaction :: proc(writer: ^Shard_Transaction_Writer) ->
 	   !writer.managed ||
 	   writer.poisoned ||
 	   !writer.wal.enabled ||
+	   writer.write_in_flight ||
 	   writer.fsync_in_flight ||
 	   writer.manifest.sealed_present ||
 	   writer.compaction == .Sealed {
@@ -638,6 +643,18 @@ run_shard_compaction_job :: proc(job: Shard_Compaction_Job) -> Shard_Compaction_
 	context.allocator = allocator
 	owned_job := job
 	defer destroy_shard_compaction_job(&owned_job)
+	if job.storage_space_probe {
+		space, err := storage_io.storage_space(job.storage, job.shard_dir)
+		return {
+			allocator = allocator,
+			storage_space_probe = true,
+			owner_worker = job.owner_worker,
+			shard = job.shard,
+			available_disk_bytes = space.available_bytes,
+			space_checked_at = ulid.time_now(),
+			ok = err == nil,
+		}
+	}
 	if job.message_remove_generation != 0 {
 		path := message_store_path(job.shard_dir, job.message_remove_generation, "wal"); defer delete(path)
 		removed := storage_io.remove(job.storage, path) == nil
@@ -773,6 +790,7 @@ shard_compactor_thread :: proc(data: Shard_Compactor_Thread_Data) {
 	if !cpu_affinity_disabled() && cpu_role_plan.service_cpu >= 0 {
 		set_thread_cpu_affinity(cpu_role_plan.service_cpu)
 	}
+	last_rss_update: time.Time
 	for {
 		if sync.atomic_load(&data.server.closing) {
 			// Workers no longer need results once shutdown starts. Do not make
@@ -780,6 +798,11 @@ shard_compactor_thread :: proc(data: Shard_Compactor_Thread_Data) {
 			// directory strings transferred with those jobs.
 			discard_queued_shard_compaction_jobs(data.server)
 			return
+		}
+		now := ulid.time_now()
+		if last_rss_update == (time.Time{}) || time.diff(last_rss_update, now) >= time.Second {
+			sync.atomic_store(&data.server.cached_rss_mb, get_rss_memory_mb())
+			last_rss_update = now
 		}
 		if service_shard_compaction_job(data.server) {
 			continue
@@ -952,6 +975,14 @@ process_shard_compaction_result :: proc(result: Shard_Compaction_Result) -> bool
 		return false
 	}
 	writer := &td.shard_writers.writers[index]
+	if result.storage_space_probe {
+		if result.space_checked_at._nsec >= writer.space_checked_at._nsec {
+			writer.space_known = result.ok
+			writer.available_disk_bytes = result.available_disk_bytes
+			writer.space_checked_at = result.space_checked_at
+		}
+		return true
+	}
 	if !publish_shard_compaction_result(writer, result) {
 		result_identity_valid := result.segments.catalog.shard == result.shard
 		if result_identity_valid &&
