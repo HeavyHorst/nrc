@@ -1339,13 +1339,25 @@ serializeGraphCommonNeighborsRequest :: proc(req: GraphCommonNeighborsRequest, b
 // Client-side asset parsing helpers
 // These parse the common asset wire format used by S_AssetCreated,
 // S_AssetUpdated, S_AssetFull, and S_AssetList.
+// Returned byte slices borrow data; attachment descriptors borrow the caller's
+// attachments buffer. Both must outlive the parsed asset. A nil buffer accepts
+// only assets without attachments; insufficient capacity returns TooMany.
 // ============================================================================
 
-parseAssetFromPayload :: proc(data: []byte, offset: int) -> (Asset, int, ProtocolParseError) {
-	return parseAssetHeaderFromPayload(data, offset, true)
+parseAssetFromPayload :: proc(data: []byte, offset: int, attachments: []Attachment = nil) -> (Asset, int, ProtocolParseError) {
+	return parseAssetHeaderFromPayload(data, offset, true, attachments)
 }
 
-parseAssetHeaderFromPayload :: proc(data: []byte, offset: int, include_attachments: bool) -> (Asset, int, ProtocolParseError) {
+parseAssetHeaderFromPayload :: proc(
+	data: []byte,
+	offset: int,
+	include_attachments: bool,
+	attachments: []Attachment = nil,
+) -> (
+	Asset,
+	int,
+	ProtocolParseError,
+) {
 	result := Asset{}
 	pos := offset
 
@@ -1420,8 +1432,7 @@ parseAssetHeaderFromPayload :: proc(data: []byte, offset: int, include_attachmen
 	}
 
 	if include_attachments {
-		attachments: [MAX_ATTACHMENTS_PER_TASK]Attachment
-		att_slice, new_pos, att_err := parseAssetAttachmentsFromPayload(data, pos, attachments[:])
+		att_slice, new_pos, att_err := parseAssetAttachmentsFromPayload(data, pos, attachments)
 		if att_err != nil do return result, pos, att_err
 		result.attachments = att_slice
 		pos = new_pos
@@ -1430,7 +1441,7 @@ parseAssetHeaderFromPayload :: proc(data: []byte, offset: int, include_attachmen
 	return result, pos, nil
 }
 
-parseAssetFullFromPayload :: proc(data: []byte, offset: int) -> (Asset, int, ProtocolParseError) {
+parseAssetFullFromPayload :: proc(data: []byte, offset: int, attachments: []Attachment = nil) -> (Asset, int, ProtocolParseError) {
 	result, pos, err := parseAssetHeaderFromPayload(data, offset, false)
 	if err != nil {
 		return result, pos, err
@@ -1451,8 +1462,7 @@ parseAssetFullFromPayload :: proc(data: []byte, offset: int) -> (Asset, int, Pro
 		pos += int(payload_len)
 	}
 
-	attachments: [MAX_ATTACHMENTS_PER_TASK]Attachment
-	att_slice, new_pos, att_err := parseAssetAttachmentsFromPayload(data, pos, attachments[:])
+	att_slice, new_pos, att_err := parseAssetAttachmentsFromPayload(data, pos, attachments)
 	if att_err != nil do return result, pos, att_err
 	result.attachments = att_slice
 	pos = new_pos
@@ -1475,7 +1485,7 @@ parseAssetAttachmentsFromPayload :: proc(
 	if !ok do return nil, offset, .TooShort
 	pos += 2
 	attachment_count := int(attachment_count_raw)
-	if attachment_count > len(attachments) do return nil, offset, .TooMany
+	if attachment_count > MAX_ATTACHMENTS_PER_TASK || attachment_count > len(attachments) do return nil, offset, .TooMany
 
 	for i := 0; i < attachment_count; i += 1 {
 		att: Attachment
@@ -1505,8 +1515,8 @@ parseAssetAttachmentsFromPayload :: proc(
 // S_AssetCreated (opcode 140) — parse full asset with payload
 // ----------------------------------------------------------------------------
 
-parseAssetCreatedEvent :: proc(data: []byte) -> (Asset, ProtocolParseError) {
-	asset, _, err := parseAssetFullFromPayload(data, 0)
+parseAssetCreatedEvent :: proc(data: []byte, attachments: []Attachment = nil) -> (Asset, ProtocolParseError) {
+	asset, _, err := parseAssetFullFromPayload(data, 0, attachments)
 	return asset, err
 }
 
@@ -1514,8 +1524,8 @@ parseAssetCreatedEvent :: proc(data: []byte) -> (Asset, ProtocolParseError) {
 // S_AssetUpdated (opcode 141) — parse full asset with payload
 // ----------------------------------------------------------------------------
 
-parseAssetUpdatedEvent :: proc(data: []byte) -> (Asset, ProtocolParseError) {
-	asset, _, err := parseAssetFullFromPayload(data, 0)
+parseAssetUpdatedEvent :: proc(data: []byte, attachments: []Attachment = nil) -> (Asset, ProtocolParseError) {
+	asset, _, err := parseAssetFullFromPayload(data, 0, attachments)
 	return asset, err
 }
 
@@ -1548,8 +1558,8 @@ parseAssetDeletedEvent :: proc(data: []byte) -> (AssetDeletedEvent, ProtocolPars
 // S_AssetFull (opcode 143) — parse full asset with payload
 // ----------------------------------------------------------------------------
 
-parseAssetFullEvent :: proc(data: []byte) -> (Asset, ProtocolParseError) {
-	asset, _, err := parseAssetFullFromPayload(data, 0)
+parseAssetFullEvent :: proc(data: []byte, attachments: []Attachment = nil) -> (Asset, ProtocolParseError) {
+	asset, _, err := parseAssetFullFromPayload(data, 0, attachments)
 	return asset, err
 }
 
@@ -1563,7 +1573,9 @@ AssetListEvent :: struct {
 	assets:       []Asset,
 }
 
-parseAssetListEvent :: proc(data: []byte, allocator := context.allocator) -> (AssetListEvent, ProtocolParseError) {
+// attachments must have capacity for the sum of attachments across all assets.
+// The caller owns result.assets (including on error) and deletes it with allocator.
+parseAssetListEvent :: proc(data: []byte, allocator := context.allocator, attachments: []Attachment = nil) -> (AssetListEvent, ProtocolParseError) {
 	result := AssetListEvent{}
 
 	// conv_id(8) + full_content(1) + count(2)
@@ -1578,26 +1590,28 @@ parseAssetListEvent :: proc(data: []byte, allocator := context.allocator) -> (As
 
 	count, _ := endian.get_u16(data[9:], .Big)
 	pos := 11
+	attachment_pos := 0
 
 	if count > 0 {
 		result.assets = make([]Asset, count, allocator)
 
 		for i in 0 ..< int(count) {
 			if result.full_content {
-				asset, new_pos, err := parseAssetFullFromPayload(data, pos)
+				asset, new_pos, err := parseAssetFullFromPayload(data, pos, attachments[attachment_pos:])
 				if err != nil {
 					return result, err
 				}
 				result.assets[i] = asset
 				pos = new_pos
 			} else {
-				asset, new_pos, err := parseAssetFromPayload(data, pos)
+				asset, new_pos, err := parseAssetFromPayload(data, pos, attachments[attachment_pos:])
 				if err != nil {
 					return result, err
 				}
 				result.assets[i] = asset
 				pos = new_pos
 			}
+			attachment_pos += len(result.assets[i].attachments)
 		}
 	}
 

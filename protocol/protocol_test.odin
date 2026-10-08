@@ -1386,14 +1386,18 @@ test_roundtrip_create_asset_request_with_attachments :: proc(t: ^testing.T) {
 	defer delete(buf)
 	written := serializeCreateAssetRequest(req, buf)
 	testing.expect_value(t, written, len(buf))
-	parsed, err := parseCreateAssetRequest(buf[2:])
+	decoded: [MAX_ATTACHMENTS_PER_TASK]Attachment
+	parsed, err := parseCreateAssetRequest(buf[2:], decoded[:])
 
 	testing.expect_value(t, err, nil)
 	testing.expect_value(t, parsed.conv_id, req.conv_id)
 	testing.expect_value(t, parsed.asset_type, req.asset_type)
 	testing.expect_value(t, parsed.correlation_id, req.correlation_id)
 	testing.expect_value(t, len(parsed.attachments), 1)
+	testing.expect(t, &parsed.attachments[0] == &decoded[0], "create request must borrow caller descriptors")
 	testing.expect(t, test_attachment_equal(parsed.attachments[0], attachments[0]), "create asset attachment mismatch")
+	_, err = parseCreateAssetRequest(buf[2:])
+	testing.expect_value(t, err, ProtocolParseError.TooMany)
 }
 
 @(test)
@@ -1452,14 +1456,18 @@ test_roundtrip_update_asset_request_with_attachments :: proc(t: ^testing.T) {
 	defer delete(buf)
 	written := serializeUpdateAssetRequest(req, buf)
 	testing.expect_value(t, written, len(buf))
-	parsed, err := parseUpdateAssetRequest(buf[2:])
+	decoded: [MAX_ATTACHMENTS_PER_TASK]Attachment
+	parsed, err := parseUpdateAssetRequest(buf[2:], decoded[:])
 
 	testing.expect_value(t, err, nil)
 	testing.expect_value(t, parsed.conv_id, req.conv_id)
 	testing.expect_value(t, parsed.asset_id, req.asset_id)
 	testing.expect_value(t, parsed.correlation_id, req.correlation_id)
 	testing.expect_value(t, len(parsed.attachments), 1)
+	testing.expect(t, &parsed.attachments[0] == &decoded[0], "update request must borrow caller descriptors")
 	testing.expect(t, test_attachment_equal(parsed.attachments[0], attachments[0]), "update asset attachment mismatch")
+	_, err = parseUpdateAssetRequest(buf[2:])
+	testing.expect_value(t, err, ProtocolParseError.TooMany)
 }
 
 test_write_asset_attachment_field :: proc(buf: []byte, offset: int, field_len: int, fill: byte) -> int {
@@ -1519,21 +1527,22 @@ test_build_create_asset_request_with_attachment_lengths :: proc(
 test_parse_create_asset_request_rejects_invalid_attachment_metadata :: proc(t: ^testing.T) {
 	buf := make([]byte, 4096)
 	defer delete(buf)
+	attachments: [MAX_ATTACHMENTS_PER_TASK]Attachment
 
 	too_many_len := test_build_create_asset_request_with_attachment_lengths(buf, MAX_ATTACHMENTS_PER_TASK + 1, 0, 0, 0)
-	_, err := parseCreateAssetRequest(buf[:too_many_len])
+	_, err := parseCreateAssetRequest(buf[:too_many_len], attachments[:])
 	testing.expect_value(t, err, ProtocolParseError.TooMany)
 
 	file_id_len := test_build_create_asset_request_with_attachment_lengths(buf, 1, MAX_FILE_ID_LENGTH + 1, 0, 0)
-	_, err = parseCreateAssetRequest(buf[:file_id_len])
+	_, err = parseCreateAssetRequest(buf[:file_id_len], attachments[:])
 	testing.expect_value(t, err, ProtocolParseError.ContentLengthExceedsMax)
 
 	filename_len := test_build_create_asset_request_with_attachment_lengths(buf, 1, MAX_FILE_ID_LENGTH, MAX_FILENAME_LENGTH + 1, 0)
-	_, err = parseCreateAssetRequest(buf[:filename_len])
+	_, err = parseCreateAssetRequest(buf[:filename_len], attachments[:])
 	testing.expect_value(t, err, ProtocolParseError.ContentLengthExceedsMax)
 
 	mime_len := test_build_create_asset_request_with_attachment_lengths(buf, 1, MAX_FILE_ID_LENGTH, 0, MAX_MIME_TYPE_LENGTH + 1)
-	_, err = parseCreateAssetRequest(buf[:mime_len])
+	_, err = parseCreateAssetRequest(buf[:mime_len], attachments[:])
 	testing.expect_value(t, err, ProtocolParseError.ContentLengthExceedsMax)
 }
 
@@ -1541,17 +1550,18 @@ test_parse_create_asset_request_rejects_invalid_attachment_metadata :: proc(t: ^
 test_parse_create_asset_request_rejects_attachment_trailing_and_missing_bytes :: proc(t: ^testing.T) {
 	buf := make([]byte, 512)
 	defer delete(buf)
+	attachments: [MAX_ATTACHMENTS_PER_TASK]Attachment
 
 	valid_len := test_build_create_asset_request_with_attachment_lengths(buf, 1, 1, 1, 1)
 	buf[valid_len] = 0xEE
-	_, err := parseCreateAssetRequest(buf[:valid_len + 1])
+	_, err := parseCreateAssetRequest(buf[:valid_len + 1], attachments[:])
 	testing.expect_value(t, err, ProtocolParseError.ContentLengthMismatch)
 
 	missing_corr_len := test_build_create_asset_request_with_attachment_lengths(buf, 1, 1, 1, 1, false)
-	_, err = parseCreateAssetRequest(buf[:missing_corr_len])
+	_, err = parseCreateAssetRequest(buf[:missing_corr_len], attachments[:])
 	testing.expect_value(t, err, ProtocolParseError.TooShort)
 
-	_, err = parseCreateAssetRequest(buf[:valid_len - 1])
+	_, err = parseCreateAssetRequest(buf[:valid_len - 1], attachments[:])
 	testing.expect_value(t, err, ProtocolParseError.TooShort)
 }
 
@@ -2465,4 +2475,192 @@ test_parse_promoted_response_parsers_malformed :: proc(t: ^testing.T) {
 	endian.put_u16(common_count_too_large[0:], .Big, u16(Opcode.S_GraphQueryResult))
 	_, err = parseGraphCommonNeighborsResult(common_count_too_large[:], path_nodes[:], edges[:])
 	testing.expect_value(t, err, ProtocolParseError.InvalidOpcode)
+}
+
+@(test)
+test_asset_response_attachment_storage :: proc(t: ^testing.T) {
+	attachments := [?]Attachment {
+		{
+			file_id = transmute([]byte)string("file-a"),
+			filename = transmute([]byte)string("alpha.txt"),
+			size = 17,
+			mime_type = transmute([]byte)string("text/plain"),
+			uploaded_at = 31,
+		},
+		{
+			file_id = transmute([]byte)string("file-b"),
+			filename = transmute([]byte)string("beta.png"),
+			size = 209,
+			mime_type = transmute([]byte)string("image/png"),
+			uploaded_at = 47,
+		},
+	}
+	asset := Asset {
+		asset_type      = .Document,
+		asset_id        = 23,
+		payload         = transmute([]byte)string("body"),
+		payload_raw_len = 4,
+		attachments     = attachments[:],
+	}
+	buf: [1024]byte
+	decoded: [2]Attachment
+	full_len := serializeAsset(asset, buf[:])
+	testing.expect(t, full_len > 0)
+	if full_len <= 0 do return
+	full, pos, err := parseAssetFullFromPayload(buf[:full_len], 0, decoded[:])
+	testing.expect_value(t, err, nil)
+	testing.expect_value(t, pos, full_len)
+	testing.expect_value(t, len(full.attachments), 2)
+	if err != nil || len(full.attachments) != 2 do return
+	testing.expect(t, &full.attachments[0] == &decoded[0], "returned descriptors must live in caller storage")
+	testing.expect(t, string(full.attachments[0].filename) == "alpha.txt")
+	testing.expect(t, string(full.attachments[1].file_id) == "file-b")
+	testing.expect_value(t, full.attachments[1].size, u64(209))
+	testing.expect_value(t, full.attachments[1].uploaded_at, i64(47))
+	_, _, err = parseAssetFullFromPayload(buf[:full_len], 0, decoded[:1])
+	testing.expect_value(t, err, ProtocolParseError.TooMany)
+	_, _, err = parseAssetFullFromPayload(buf[:full_len], 0)
+	testing.expect_value(t, err, ProtocolParseError.TooMany)
+	_, _, err = parseAssetFullFromPayload(buf[:full_len - 1], 0, decoded[:])
+	testing.expect_value(t, err, ProtocolParseError.TooShort)
+
+	event_parsers := [?]proc(_: []byte, _: []Attachment) -> (Asset, ProtocolParseError){parseAssetCreatedEvent, parseAssetUpdatedEvent, parseAssetFullEvent}
+	for parse in event_parsers {
+		parsed, parse_err := parse(buf[:full_len], decoded[:])
+		testing.expect_value(t, parse_err, nil)
+		if parse_err != nil || len(parsed.attachments) != 2 do continue
+		testing.expect(t, &parsed.attachments[0] == &decoded[0])
+		testing.expect(t, string(parsed.attachments[1].filename) == "beta.png")
+	}
+
+	message_len := serializeAssetCreatedMessage({asset = asset, correlation_id = 59}, buf[:])
+	created, created_err := parseAssetCreatedMessage(buf[:message_len], decoded[:])
+	testing.expect_value(t, created_err, nil)
+	if created_err == nil do testing.expect(t, &created.asset.attachments[0] == &decoded[0])
+	testing.expect_value(t, created.correlation_id, u32(59))
+	endian.put_u16(buf[:], .Big, u16(Opcode.S_AssetUpdated))
+	updated, updated_err := parseAssetUpdatedMessage(buf[:message_len], decoded[:])
+	testing.expect_value(t, updated_err, nil)
+	if updated_err == nil do testing.expect(t, &updated.asset.attachments[0] == &decoded[0])
+	endian.put_u16(buf[:], .Big, u16(Opcode.S_AssetFull))
+	got, got_err := parseAssetFullMessage(buf[:message_len], decoded[:])
+	testing.expect_value(t, got_err, nil)
+	if got_err == nil do testing.expect(t, &got.asset.attachments[0] == &decoded[0])
+
+	header_len := serializeAssetHeader(asset, buf[:])
+	header, header_pos, header_err := parseAssetFromPayload(buf[:header_len], 0, decoded[:])
+	testing.expect_value(t, header_err, nil)
+	testing.expect_value(t, header_pos, header_len)
+	if header_err == nil do testing.expect(t, &header.attachments[0] == &decoded[0])
+	testing.expect_value(t, len(header.payload), 0)
+
+	// A larger caller buffer must not relax the protocol's per-asset limit.
+	oversized: [MAX_ATTACHMENTS_PER_TASK + 1]Attachment
+	endian.put_u16(buf[:], .Big, MAX_ATTACHMENTS_PER_TASK + 1)
+	_, _, err = parseAssetAttachmentsFromPayload(buf[:2], 0, oversized[:])
+	testing.expect_value(t, err, ProtocolParseError.TooMany)
+	endian.put_u16(buf[:], .Big, 0)
+	empty, empty_pos, empty_err := parseAssetAttachmentsFromPayload(buf[:2], 0, nil)
+	testing.expect_value(t, empty_err, nil)
+	testing.expect_value(t, empty_pos, 2)
+	testing.expect_value(t, len(empty), 0)
+}
+
+@(test)
+test_asset_list_response_attachment_storage :: proc(t: ^testing.T) {
+	// More descriptors in total than one asset may have, with an empty asset in
+	// between. This catches reuse of one buffer or a per-asset rather than total offset.
+	attachments: [MAX_ATTACHMENTS_PER_TASK + 1]Attachment
+	for &att, i in attachments {
+		att.size = u64(100 + i)
+		att.uploaded_at = i64(200 + i)
+	}
+	assets := [?]Asset {
+		{
+			asset_type = .Document,
+			asset_id = 11,
+			payload = transmute([]byte)string("one"),
+			payload_raw_len = 3,
+			attachments = attachments[:MAX_ATTACHMENTS_PER_TASK],
+		},
+		{asset_type = .Note, asset_id = 22, payload = transmute([]byte)string("two"), payload_raw_len = 3},
+		{
+			asset_type = .Document,
+			asset_id = 33,
+			payload = transmute([]byte)string("three"),
+			payload_raw_len = 5,
+			attachments = attachments[MAX_ATTACHMENTS_PER_TASK:],
+		},
+	}
+	buf: [2048]byte
+	decoded: [MAX_ATTACHMENTS_PER_TASK + 1]Attachment
+	full_contents := [?]bool{false, true}
+	for full_content in full_contents {
+		msg := AssetListMessage {
+			conv_id        = 71,
+			assets         = assets[:],
+			full_content   = full_content,
+			correlation_id = 83,
+		}
+		written := serializeAssetListMessage(msg, buf[:])
+		parsed, err := parseAssetListMessage(buf[:written], attachments = decoded[:])
+		defer delete(parsed.assets)
+		testing.expect_value(t, err, nil)
+		testing.expect_value(t, len(parsed.assets), 3)
+		if err != nil || len(parsed.assets) != 3 do continue
+		testing.expect(t, &parsed.assets[0].attachments[0] == &decoded[0])
+		testing.expect_value(t, len(parsed.assets[1].attachments), 0)
+		testing.expect(t, &parsed.assets[2].attachments[0] == &decoded[MAX_ATTACHMENTS_PER_TASK])
+		testing.expect_value(t, parsed.assets[0].attachments[0].size, u64(100))
+		testing.expect_value(t, parsed.assets[2].attachments[0].size, u64(100 + MAX_ATTACHMENTS_PER_TASK))
+		testing.expect_value(t, parsed.correlation_id, u32(83))
+		testing.expect_value(t, len(parsed.assets[2].payload), full_content ? 5 : 0)
+		short, short_err := parseAssetListMessage(buf[:written], attachments = decoded[:MAX_ATTACHMENTS_PER_TASK])
+		defer delete(short.assets)
+		testing.expect_value(t, short_err, ProtocolParseError.TooMany)
+
+		page_msg := AssetListPageMessage {
+			conv_id        = 71,
+			assets         = assets[:],
+			full_content   = full_content,
+			has_more       = true,
+			total_count    = 9,
+			correlation_id = 97,
+		}
+		written = serializeAssetListPageMessage(page_msg, buf[:])
+		page, page_err := parseAssetListPageMessage(buf[:written], attachments = decoded[:])
+		defer delete(page.assets)
+		testing.expect_value(t, page_err, nil)
+		if page_err == nil {
+			testing.expect_value(t, len(page.assets), 3)
+			testing.expect(t, &page.assets[2].attachments[0] == &decoded[MAX_ATTACHMENTS_PER_TASK])
+			testing.expect_value(t, page.assets[0].attachments[0].size, u64(100))
+			testing.expect_value(t, page.assets[2].attachments[0].uploaded_at, i64(200 + MAX_ATTACHMENTS_PER_TASK))
+			testing.expect_value(t, page.correlation_id, u32(97))
+			testing.expect_value(t, page.has_more, true)
+		}
+		short_page, short_page_err := parseAssetListPageMessage(buf[:written], attachments = decoded[:MAX_ATTACHMENTS_PER_TASK])
+		defer delete(short_page.assets)
+		testing.expect_value(t, short_page_err, ProtocolParseError.TooMany)
+
+		// Event payloads have an 11-byte header, unlike the opcode/correlation messages.
+		endian.put_u64(buf[:], .Big, 71)
+		buf[8] = full_content ? 1 : 0
+		endian.put_u16(buf[9:], .Big, 3)
+		pos := 11
+		for asset in assets {
+			pos += full_content ? serializeAsset(asset, buf[pos:]) : serializeAssetHeader(asset, buf[pos:])
+		}
+		event, event_err := parseAssetListEvent(buf[:pos], attachments = decoded[:])
+		defer delete(event.assets)
+		testing.expect_value(t, event_err, nil)
+		if event_err == nil {
+			testing.expect(t, &event.assets[0].attachments[0] == &decoded[0])
+			testing.expect(t, &event.assets[2].attachments[0] == &decoded[MAX_ATTACHMENTS_PER_TASK])
+			testing.expect_value(t, event.assets[0].attachments[0].size, u64(100))
+		}
+		short_event, short_event_err := parseAssetListEvent(buf[:pos], attachments = decoded[:MAX_ATTACHMENTS_PER_TASK])
+		defer delete(short_event.assets)
+		testing.expect_value(t, short_event_err, ProtocolParseError.TooMany)
+	}
 }

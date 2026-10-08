@@ -152,12 +152,13 @@ when NRC_SIMULATION {
 		result.index_key, result.index_present = conv.note_index_keys[asset_id]
 		if result.index_present do result.btree_contains = btree.contains(&conv.note_index, result.index_key)
 		correlation_matches := false
+		attachments: [pr.MAX_ATTACHMENTS_PER_TASK]pr.Attachment
 		#partial switch expected_opcode {
 		case .S_AssetCreated:
-			msg, parse_err := pr.parseAssetCreatedMessage(payload)
+			msg, parse_err := pr.parseAssetCreatedMessage(payload, attachments[:])
 			correlation_matches = parse_err == nil && msg.correlation_id == expected_correlation
 		case .S_AssetUpdated:
-			msg, parse_err := pr.parseAssetUpdatedMessage(payload)
+			msg, parse_err := pr.parseAssetUpdatedMessage(payload, attachments[:])
 			correlation_matches = parse_err == nil && msg.correlation_id == expected_correlation
 		}
 		if pr.get_opcode(payload) != expected_opcode || !correlation_matches || result.asset_count != 1 || result.wal_last_hash == ([32]byte{}) {

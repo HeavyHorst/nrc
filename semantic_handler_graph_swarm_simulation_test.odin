@@ -2240,12 +2240,13 @@ when NRC_SIMULATION {
 		queued_response := writer.wal.durable_record_count < writer.wal.record_count
 		queued_payload, queued_payload_ok := semantic_transport_persistence_pending_payload(campaign.requester, .S_AssetListPage)
 		next_frame_index := requester_frames_before
+		attachments: [SEMANTIC_HANDLER_SWARM_MAX_ASSETS * pr.MAX_ATTACHMENTS_PER_TASK]pr.Attachment
 		for _ in 0 ..< (queued_response ? 0 : 32) {
 			frame_count := nrc_sim_client_frame_count(&campaign.ctx.sim, campaign.requester.sock)
 			for next_frame_index < frame_count {
 				payload, payload_ok := nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&campaign.ctx.sim, campaign.requester.sock, next_frame_index))
 				if payload_ok && pr.get_opcode(payload) == .S_AssetListPage {
-					candidate, candidate_err := pr.parseAssetListPageMessage(payload)
+					candidate, candidate_err := pr.parseAssetListPageMessage(payload, attachments = attachments[:])
 					matches := candidate_err == nil && candidate.correlation_id == correlation_id
 					if len(candidate.assets) > 0 do delete(candidate.assets)
 					if matches {
@@ -2273,7 +2274,7 @@ when NRC_SIMULATION {
 		}
 		payload, payload_ok := queued_payload, queued_payload_ok
 		if !queued_response do payload, payload_ok = nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&campaign.ctx.sim, campaign.requester.sock, response_frame_index))
-		result, parse_err := pr.parseAssetListPageMessage(payload)
+		result, parse_err := pr.parseAssetListPageMessage(payload, attachments = attachments[:])
 		defer if len(result.assets) > 0 do delete(result.assets)
 		expected := semantic_handler_swarm_note_page(model, &req)
 		if !payload_ok ||

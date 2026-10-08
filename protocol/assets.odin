@@ -80,9 +80,10 @@ CreateAssetRequest :: struct {
 	correlation_id:   u32, // Client-generated, echoed in S_AssetCreated for request/response correlation
 }
 
-parseCreateAssetRequest :: proc(data: []byte) -> (CreateAssetRequest, ProtocolParseError) {
-	attachments: [MAX_ATTACHMENTS_PER_TASK]Attachment
-	return parseCreateAssetRequestWithAttachments(data, attachments[:])
+// Returned fields borrow data and the caller's attachment descriptors. Without
+// a descriptor buffer, only attachment-free requests can be parsed.
+parseCreateAssetRequest :: proc(data: []byte, attachments: []Attachment = nil) -> (CreateAssetRequest, ProtocolParseError) {
+	return parseCreateAssetRequestWithAttachments(data, attachments)
 }
 
 parseCreateAssetRequestWithAttachments :: proc(data: []byte, attachments: []Attachment) -> (CreateAssetRequest, ProtocolParseError) {
@@ -201,9 +202,9 @@ UpdateAssetRequest :: struct {
 	correlation_id:   u32, // Client-generated, echoed in S_AssetUpdated for request/response correlation
 }
 
-parseUpdateAssetRequest :: proc(data: []byte) -> (UpdateAssetRequest, ProtocolParseError) {
-	attachments: [MAX_ATTACHMENTS_PER_TASK]Attachment
-	return parseUpdateAssetRequestWithAttachments(data, attachments[:])
+// Same borrowed-buffer lifetime as parseCreateAssetRequest.
+parseUpdateAssetRequest :: proc(data: []byte, attachments: []Attachment = nil) -> (UpdateAssetRequest, ProtocolParseError) {
+	return parseUpdateAssetRequestWithAttachments(data, attachments)
 }
 
 parseUpdateAssetRequestWithAttachments :: proc(data: []byte, attachments: []Attachment) -> (UpdateAssetRequest, ProtocolParseError) {
@@ -515,12 +516,14 @@ serializeAssetCreatedMessage :: proc(msg: AssetCreatedMessage, buf: []byte) -> i
 	return total_size
 }
 
-parseAssetCreatedMessage :: proc(data: []byte) -> (AssetCreatedMessage, ProtocolParseError) {
+// Response parsers borrow bytes from data and descriptors from attachments.
+// Both buffers must outlive the result. Nil attachments accepts only empty lists.
+parseAssetCreatedMessage :: proc(data: []byte, attachments: []Attachment = nil) -> (AssetCreatedMessage, ProtocolParseError) {
 	result := AssetCreatedMessage{}
 	if len(data) < 6 do return result, .TooShort
 	if get_opcode(data) != .S_AssetCreated do return result, .InvalidOpcode
 
-	asset, offset, err := parseAssetFullFromPayload(data, 2)
+	asset, offset, err := parseAssetFullFromPayload(data, 2, attachments)
 	if err != nil do return result, err
 	if offset + 4 > len(data) do return result, .TooShort
 	if offset + 4 != len(data) do return result, .ContentLengthMismatch
@@ -562,12 +565,12 @@ serializeAssetUpdatedMessage :: proc(msg: AssetUpdatedMessage, buf: []byte) -> i
 	return total_size
 }
 
-parseAssetUpdatedMessage :: proc(data: []byte) -> (AssetUpdatedMessage, ProtocolParseError) {
+parseAssetUpdatedMessage :: proc(data: []byte, attachments: []Attachment = nil) -> (AssetUpdatedMessage, ProtocolParseError) {
 	result := AssetUpdatedMessage{}
 	if len(data) < 6 do return result, .TooShort
 	if get_opcode(data) != .S_AssetUpdated do return result, .InvalidOpcode
 
-	asset, offset, err := parseAssetFullFromPayload(data, 2)
+	asset, offset, err := parseAssetFullFromPayload(data, 2, attachments)
 	if err != nil do return result, err
 	if offset + 4 > len(data) do return result, .TooShort
 	if offset + 4 != len(data) do return result, .ContentLengthMismatch
@@ -652,12 +655,12 @@ serializeAssetFullMessage :: proc(msg: AssetFullMessage, buf: []byte) -> int {
 	return total_size
 }
 
-parseAssetFullMessage :: proc(data: []byte) -> (AssetFullMessage, ProtocolParseError) {
+parseAssetFullMessage :: proc(data: []byte, attachments: []Attachment = nil) -> (AssetFullMessage, ProtocolParseError) {
 	result := AssetFullMessage{}
 	if len(data) < 6 do return result, .TooShort
 	if get_opcode(data) != .S_AssetFull do return result, .InvalidOpcode
 
-	asset, offset, err := parseAssetFullFromPayload(data, 2)
+	asset, offset, err := parseAssetFullFromPayload(data, 2, attachments)
 	if err != nil do return result, err
 	if offset + 4 > len(data) do return result, .TooShort
 	if offset + 4 != len(data) do return result, .ContentLengthMismatch
@@ -728,7 +731,16 @@ serializeAssetListMessage :: proc(msg: AssetListMessage, buf: []byte) -> int {
 	return total_size
 }
 
-parseAssetListMessage :: proc(data: []byte, allocator := context.allocator) -> (result: AssetListMessage, err: ProtocolParseError) {
+// attachments holds the sum of descriptors across all assets, not just one.
+// The caller owns result.assets (including on error) and deletes it with allocator.
+parseAssetListMessage :: proc(
+	data: []byte,
+	allocator := context.allocator,
+	attachments: []Attachment = nil,
+) -> (
+	result: AssetListMessage,
+	err: ProtocolParseError,
+) {
 	if len(data) < 17 do return result, .TooShort
 	if get_opcode(data) != .S_AssetList do return result, .InvalidOpcode
 
@@ -739,18 +751,20 @@ parseAssetListMessage :: proc(data: []byte, allocator := context.allocator) -> (
 	result.correlation_id, _ = endian.get_u32(data[13:], .Big)
 
 	pos := 17
+	attachment_pos := 0
 	if count > 0 {
 		result.assets = make([]Asset, count, allocator)
 		for i in 0 ..< int(count) {
 			asset: Asset
 			asset_err: ProtocolParseError
 			if result.full_content {
-				asset, pos, asset_err = parseAssetFullFromPayload(data, pos)
+				asset, pos, asset_err = parseAssetFullFromPayload(data, pos, attachments[attachment_pos:])
 			} else {
-				asset, pos, asset_err = parseAssetFromPayload(data, pos)
+				asset, pos, asset_err = parseAssetFromPayload(data, pos, attachments[attachment_pos:])
 			}
 			if asset_err != nil do return result, asset_err
 			result.assets[i] = asset
+			attachment_pos += len(asset.attachments)
 		}
 	}
 	if pos != len(data) do return result, .ContentLengthMismatch
@@ -772,7 +786,15 @@ AssetListPageMessage :: struct {
 	correlation_id:         u32, // Echoed from client's ListAssetsPaged request (0 when not request-scoped)
 }
 
-parseAssetListPageMessage :: proc(data: []byte, allocator := context.allocator) -> (AssetListPageMessage, ProtocolParseError) {
+// Buffer lifetime and ownership are the same as parseAssetListMessage.
+parseAssetListPageMessage :: proc(
+	data: []byte,
+	allocator := context.allocator,
+	attachments: []Attachment = nil,
+) -> (
+	AssetListPageMessage,
+	ProtocolParseError,
+) {
 	result := AssetListPageMessage{}
 	if len(data) < 38 do return result, .TooShort
 	if get_opcode(data) != .S_AssetListPage do return result, .InvalidOpcode
@@ -790,18 +812,20 @@ parseAssetListPageMessage :: proc(data: []byte, allocator := context.allocator) 
 	result.correlation_id, _ = endian.get_u32(data[34:], .Big)
 
 	pos := 38
+	attachment_pos := 0
 	if count > 0 {
 		result.assets = make([]Asset, count, allocator)
 		for i in 0 ..< int(count) {
 			asset: Asset
 			err: ProtocolParseError
 			if result.full_content {
-				asset, pos, err = parseAssetFullFromPayload(data, pos)
+				asset, pos, err = parseAssetFullFromPayload(data, pos, attachments[attachment_pos:])
 			} else {
-				asset, pos, err = parseAssetFromPayload(data, pos)
+				asset, pos, err = parseAssetFromPayload(data, pos, attachments[attachment_pos:])
 			}
 			if err != nil do return result, err
 			result.assets[i] = asset
+			attachment_pos += len(asset.attachments)
 		}
 	}
 	if pos != len(data) do return result, .ContentLengthMismatch

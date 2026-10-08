@@ -915,7 +915,8 @@ prop_create_task_and_asset_request_roundtrips :: proc(tc: ^hgl.Test_Case, _: raw
 	if get_opcode(asset_buf[:written]) != .C_CreateAsset {
 		return hgl.interesting("serializeCreateAssetRequest opcode")
 	}
-	parsed_asset, asset_err := parseCreateAssetRequest(asset_buf[2:written])
+	decoded_asset_attachments: [MAX_ATTACHMENTS_PER_TASK]Attachment
+	parsed_asset, asset_err := parseCreateAssetRequest(asset_buf[2:written], decoded_asset_attachments[:])
 	if asset_err != nil {
 		return hgl.interesting("parseCreateAssetRequest rejected serialized payload")
 	}
@@ -954,7 +955,8 @@ prop_create_task_and_asset_request_roundtrips :: proc(tc: ^hgl.Test_Case, _: raw
 	if get_opcode(update_asset_buf[:written]) != .C_UpdateAsset {
 		return hgl.interesting("serializeUpdateAssetRequest opcode")
 	}
-	parsed_update_asset, update_asset_err := parseUpdateAssetRequest(update_asset_buf[2:written])
+	decoded_update_asset_attachments: [MAX_ATTACHMENTS_PER_TASK]Attachment
+	parsed_update_asset, update_asset_err := parseUpdateAssetRequest(update_asset_buf[2:written], decoded_update_asset_attachments[:])
 	if update_asset_err != nil {
 		return hgl.interesting("parseUpdateAssetRequest rejected serialized payload")
 	}

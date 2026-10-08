@@ -472,6 +472,7 @@ variable_request_valid_message :: proc(selector: int, seed: u64, buf: []byte) ->
 }
 
 variable_request_parse :: proc(selector: int, payload: []byte) -> ProtocolParseError {
+	attachments: [MAX_ATTACHMENTS_PER_TASK]Attachment
 	switch selector {
 	case 0:
 		_, err := parseSendMessageRequest(payload)
@@ -489,10 +490,10 @@ variable_request_parse :: proc(selector: int, payload: []byte) -> ProtocolParseE
 		_, err := parseUpdateTaskRequest(payload)
 		return err
 	case 5:
-		_, err := parseCreateAssetRequest(payload)
+		_, err := parseCreateAssetRequest(payload, attachments[:])
 		return err
 	case 6:
-		_, err := parseUpdateAssetRequest(payload)
+		_, err := parseUpdateAssetRequest(payload, attachments[:])
 		return err
 	case 7:
 		_, err := parseListAssetsRequest(payload)

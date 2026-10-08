@@ -2159,7 +2159,8 @@ when NRC_SIMULATION {
 						return "generated two-worker task-deleted response differs"
 					}
 				case .Create_Asset:
-					created, create_err := pr.parseAssetCreatedMessage(payload)
+					attachments: [pr.MAX_ATTACHMENTS_PER_TASK]pr.Attachment
+					created, create_err := pr.parseAssetCreatedMessage(payload, attachments[:])
 					expected_id := expected_model.asset_high
 					expected_attachments: [1]pr.Attachment
 					expected_asset := generated_shard_asset_snapshot(expected_model.assets[expected_id], expected_id, &expected_attachments)
