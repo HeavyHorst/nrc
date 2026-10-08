@@ -7,6 +7,11 @@ The core requires Linux 5.19+ with usable io_uring. Tested locally with Odin
 Go module requirements are in each `go.mod`; the proxy requires at least Go 1.26.6.
 Docker builds supply their own toolchains and build Odin from upstream HEAD.
 
+For the reviewed baseline of newer Odin escape-analysis warnings, see
+[the escape-analysis audit](ODIN_ESCAPE_ANALYSIS_AUDIT.md). Its lifetime arguments
+apply only to the recorded code/compiler revisions and must be revisited when
+the affected ownership paths change; it is not a warning-suppression list.
+
 Install an Odin compiler, Go and Node.js before you build.
 On Debian/Ubuntu, also install `libopus-dev` and `libzstd-dev`.
 Run these commands from the repository root:
