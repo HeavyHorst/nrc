@@ -2709,7 +2709,7 @@
       const title = await window.NRCDialog.prompt("Task title:", { title: "CREATE TASK FROM RESPONSE", initialValue: conciseTitle(messageData.aiQuestion) });
       if (!title) return;
       const correlationId = window.NRCTasks?.sendCreateTask(
-        BigInt(messageData.aiContextRoomId), truncateUtf8(title, 256), truncateUtf8(answerWithSources(messageData), 2048), 128, 0,
+        BigInt(messageData.aiContextRoomId), truncateUtf8(title, 256), truncateUtf8(answerWithSources(messageData), MAX_TASK_DESCRIPTION_LENGTH), 128, 0,
         "", 0n, [], 0, 0, "",
         {
           onSuccess: ({ task }) => feedback(`✓ TASK #${task.id} CREATED IN ${getRoomName(BigInt(messageData.aiContextRoomId))}`),

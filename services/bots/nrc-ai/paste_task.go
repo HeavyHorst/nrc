@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/heavyhorst/nrc/protocol-go"
 )
@@ -124,8 +125,12 @@ func validateTask(t *extractedTask) error {
 	if len(t.Title) > 256 {
 		t.Title = t.Title[:256]
 	}
-	if len(t.Description) > 2048 {
-		t.Description = t.Description[:2048]
+	if len(t.Description) > protocol.MaxTaskDescriptionLength {
+		end := protocol.MaxTaskDescriptionLength
+		for end > 0 && !utf8.RuneStart(t.Description[end]) {
+			end--
+		}
+		t.Description = t.Description[:end]
 	}
 
 	if t.Title == "" {

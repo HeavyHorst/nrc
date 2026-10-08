@@ -4,7 +4,7 @@ const PasteToTaskPrompt = `You are a task extraction assistant for a project man
 
 Output a JSON object with these fields:
 - "title": Short, actionable summary (max 256 characters)
-- "description": Cleaned-up context in markdown format (use headings, bullet points, bold for emphasis), preserving source attribution (max 2048 characters)
+- "description": Cleaned-up context in markdown format (use headings, bullet points, bold for emphasis), preserving source attribution (max 4096 UTF-8 bytes)
 - "priority": 0 (default), 1 (low), 2 (high). Use 2 for urgency signals like "ASAP", "blocking", "critical", "urgent"
 - "status": "backlog" (default) or "todo" if urgency is high
 - "color": One of "none" (default), "red" (blocked/critical), "green" (ready/approved), "gray" (deferred/low-priority), "cyan" (active/focus), "gold" (test items)
@@ -66,7 +66,7 @@ Output a JSON object with these fields:
 If the input includes "extract_tasks": true, also include:
 - "extracted_tasks": An array of actionable items found in the text. Each task has:
   - "title": Short, actionable summary (max 256 characters)
-  - "description": Context for the task (max 2048 characters)
+  - "description": Context for the task (max 4096 UTF-8 bytes)
   - "priority": 0 (default), 1 (low), 2 (high)
   - "status": "backlog" (default) or "todo" if urgent
   - "color": One of "none", "red", "green", "gray", "cyan", "gold"

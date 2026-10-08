@@ -79,6 +79,7 @@ run node client/slices-keyboard.e2e.mjs
 run node client/slice-filters.e2e.mjs
 run node client/task-status.e2e.mjs
 run node client/task-assignee.e2e.mjs
+run node client/task-description.e2e.mjs
 run node client/note-surfaces.e2e.mjs
 run node client/note-html.e2e.mjs
 run node client/record-document.e2e.mjs

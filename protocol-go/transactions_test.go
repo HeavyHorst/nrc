@@ -2,8 +2,34 @@ package protocol
 
 import (
 	"encoding/hex"
+	"strings"
 	"testing"
 )
+
+func TestTransactionTaskDescriptionByteLimit(t *testing.T) {
+	for _, size := range []int{2049, 4096, 4097} {
+		// Non-ASCII text distinguishes UTF-8 bytes from character count.
+		description := strings.Repeat("ä", size/2) + strings.Repeat("x", size%2)
+		_, createErr := EncodeTransactionTaskCreate(TransactionTaskCreate{
+			Title: "Images", Description: description,
+			BlockedBy: Existing(TransactionEntityTask, 0),
+		})
+		body, patchErr := EncodeTransactionTaskPatch(TransactionTaskPatch{
+			Task:    Existing(TransactionEntityTask, 469),
+			Present: TransactionTaskPatchDescription, Description: description,
+		})
+		if size <= 4096 {
+			if createErr != nil || patchErr != nil {
+				t.Fatalf("%d bytes rejected: create=%v patch=%v", size, createErr, patchErr)
+			}
+			if string(body[32:]) != description {
+				t.Fatalf("%d-byte patch description changed", size)
+			}
+		} else if createErr == nil || patchErr == nil {
+			t.Fatalf("%d bytes accepted: create=%v patch=%v", size, createErr, patchErr)
+		}
+	}
+}
 
 func TestEncodeApplyTransactionByteExact(t *testing.T) {
 	body, err := EncodeTransactionDelete(TransactionDelete{ConvID: 2, Entity: Existing(TransactionEntityTask, 9)}, TransactionEntityTask)

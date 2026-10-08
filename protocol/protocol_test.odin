@@ -18,6 +18,59 @@ import "core:time"
 // ============================================================================
 
 @(test)
+test_task_description_byte_limit :: proc(t: ^testing.T) {
+	description: [4097]byte
+	buf: [4200]byte
+	title := "Images"
+	sizes := [3]int{2049, 4096, 4097}
+	for size in sizes {
+		for i in 0 ..< size / 2 {
+			description[2 * i] = 0xc3
+			description[2 * i + 1] = 0xa4 // UTF-8 ä
+		}
+		if size % 2 != 0 do description[size - 1] = 'x'
+		create := CreateTaskRequest {
+			conv_id     = 7,
+			title       = transmute([]byte)title,
+			description = description[:size],
+		}
+		update := UpdateTaskRequest {
+			conv_id     = 7,
+			task_id     = 469,
+			description = description[:size],
+		}
+		if size <= 4096 {
+			written := serializeCreateTaskRequest(create, buf[:])
+			testing.expect(t, written > 0)
+			if written > 0 {
+				parsed, err := parseCreateTaskRequest(buf[2:written])
+				testing.expect_value(t, err, nil)
+				testing.expect(t, bytes.equal(parsed.description, description[:size]))
+			}
+			written = serializeUpdateTaskRequest(update, buf[:])
+			testing.expect(t, written > 0)
+			if written > 0 {
+				parsed, err := parseUpdateTaskRequest(buf[2:written])
+				testing.expect_value(t, err, nil)
+				testing.expect(t, bytes.equal(parsed.description, description[:size]))
+			}
+		} else {
+			testing.expect_value(t, serializeCreateTaskRequest(create, buf[:]), -1)
+			testing.expect_value(t, serializeUpdateTaskRequest(update, buf[:]), -1)
+			// Hand-written lengths also check server rejection independently of encoders.
+			buf = {}
+			endian.put_u16(buf[10:], .Big, 4097) // create: conv_id + empty title
+			_, create_err := parseCreateTaskRequest(buf[:])
+			testing.expect_value(t, create_err, ProtocolParseError.ContentLengthExceedsMax)
+			endian.put_u16(buf[16:], .Big, 0) // update: empty title
+			endian.put_u16(buf[18:], .Big, 4097)
+			_, update_err := parseUpdateTaskRequest(buf[:])
+			testing.expect_value(t, update_err, ProtocolParseError.ContentLengthExceedsMax)
+		}
+	}
+}
+
+@(test)
 test_roundtrip_send_message_request :: proc(t: ^testing.T) {
 	buf: [256]byte
 

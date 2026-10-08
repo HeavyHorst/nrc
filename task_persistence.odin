@@ -24,29 +24,6 @@ import pr "protocol"
 TASK_LOG_MAGIC :: 0x4E524354 // "NRCT" (NRC Tasks)
 TASK_LOG_VERSION :: u16(1)
 
-// Maximum task record size for stack allocation (zero-alloc write path).
-// Calculation breakdown:
-//   Header:           48  (LOG_HEADER_SIZE)
-//   workspace:       130  (2 + 128 assumed max)
-//   18 field headers: 54  (18 × (tag:1 + len:2))
-//   TaskID:            8  (u64)
-//   ConvID:            8  (u64)
-//   BlockedBy:         8  (u64)
-//   timestamps (4):   32  (4 × i64: CreatedAt, UpdatedAt, DueAt, CompletedAt)
-//   Status:            1  (u8)
-//   Priority:          1  (u8)
-//   Color:             1  (u8)
-//   OrderIndex:        2  (u16)
-//   title:           256  (MAX_TASK_TITLE_LENGTH)
-//   description:    2048  (MAX_TASK_DESCRIPTION_LENGTH)
-//   assignee:         64  (MAX_USER_ID_LENGTH)
-//   created_by:       64  (MAX_USER_ID_LENGTH)
-//   external_ref:    512  (MAX_EXTERNAL_REF_LENGTH)
-//   attachments:    2560  (10 attachments × 256 bytes each: file_id(28) + filename(256) + size(8) + mimeType(128) + uploadedAt(8))
-// Total: 48 + 130 + 54 + 24 + 32 + 3 + 2 + 256 + 2048 + 64 + 64 + 512 + 2560 = 5,797 bytes
-// Rounded up to 8192 for safety with larger attachment lists.
-TASK_MAX_RECORD_SIZE :: 8192
-
 // ============================================================================
 // Types
 // ============================================================================

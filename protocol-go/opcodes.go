@@ -252,8 +252,8 @@ const (
 	MaxOpusPacketSize               = 1275
 	MaxScreenFrameSize              = 131072
 	MaxTaskTitleLength              = 256
-	MaxTaskDescriptionLength        = 2048
-	MaxAppointmentDescriptionLength = MaxTaskDescriptionLength
+	MaxTaskDescriptionLength        = 4096
+	MaxAppointmentDescriptionLength = 2048
 	MaxAppointmentURLLength         = 2048
 	MaxAssigneeLength               = 32
 	MaxExternalRefLength            = 512

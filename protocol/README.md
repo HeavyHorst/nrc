@@ -845,7 +845,7 @@ Each limit names the constant that enforces it in `protocol/`.
 ### Tasks and slices
 
 - **Task title**: 256 bytes max (`MAX_TASK_TITLE_LENGTH`)
-- **Task description**: 2048 bytes max (`MAX_TASK_DESCRIPTION_LENGTH`)
+- **Task description**: 4096 bytes max (`MAX_TASK_DESCRIPTION_LENGTH`)
 - **Task assignee**: 32 bytes max (`MAX_ASSIGNEE_LENGTH`)
 - **External reference**: 512 bytes max (`MAX_EXTERNAL_REF_LENGTH`)
 - **Task project label**: 128 bytes max (`MAX_PROJECT_LENGTH`)

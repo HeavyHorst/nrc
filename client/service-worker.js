@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261007customersearch1";
+const CACHE_NAME = "nrc-terminal-20261008description1";
 
 const APP_SHELL = [
   "./",
@@ -37,7 +37,7 @@ const APP_SHELL = [
   "./task-search.js?v=20260917taskscroll1",
   "./detail-ui.js?v=20261007people1",
   "./column-resize.js?v=20260913tables2",
-  "./tasks.js?v=20261007people1",
+  "./tasks.js?v=20261008description1",
   "./attention.js?v=20260926why4",
   "./calendar.js?v=20260928atomic1",
   "./appointments.js?v=20260928appointment8",
@@ -48,7 +48,7 @@ const APP_SHELL = [
   "./note-html.js?v=20261007fragments1",
   "./notes.js?v=20261007htmlamp2",
   "./task-references.js?v=20260914workspace1",
-  "./ai.js?v=20260924select1",
+  "./ai.js?v=20261008description1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20260923attention7",
   "./app.js?v=20261007search1",

@@ -30,7 +30,7 @@ const TaskColorCSS = ["none", "cyan", "red", "green", "gray", "gold"];
 
 // Protocol limits (must match server protocol/types.odin)
 const MAX_TASK_TITLE_LENGTH = 256;
-const MAX_TASK_DESCRIPTION_LENGTH = 2048;
+const MAX_TASK_DESCRIPTION_LENGTH = 4096;
 const MAX_ASSIGNEE_LENGTH = 32;
 const MAX_EXTERNAL_REF_LENGTH = 512;
 const MAX_PROJECT_LENGTH = 128;
@@ -4032,10 +4032,10 @@ function showTaskDetailPanel(task, { view = true } = {}) {
         <section class="detail-edit-section" data-detail-section="core">
           <div class="task-detail-row task-detail-row-desc detail-edit-field detail-edit-field--content">
             <div class="detail-edit-label-row">
-              <span class="task-detail-field-stats" id="taskDetailDescStats">0 / 2,048 BYTES</span>
+              <span class="task-detail-field-stats" id="taskDetailDescStats">0 / ${MAX_TASK_DESCRIPTION_LENGTH.toLocaleString("en-US")} BYTES</span>
             </div>
             <div class="task-detail-desc-container">
-              <textarea class="task-detail-textarea" id="taskDetailDesc" aria-label="Description" maxlength="2048" placeholder="Description...">${escapeHtml(task.description || "")}</textarea>
+              <textarea class="task-detail-textarea" id="taskDetailDesc" aria-label="Description" maxlength="${MAX_TASK_DESCRIPTION_LENGTH}" placeholder="Description...">${escapeHtml(task.description || "")}</textarea>
             </div>
           </div>
         </section>
