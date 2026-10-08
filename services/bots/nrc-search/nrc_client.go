@@ -69,15 +69,16 @@ type NRCClient struct {
 	embedCh         chan EmbedJob
 	diskSignal      chan struct{}
 
-	pendingReconcilePageMu sync.Mutex
-	pendingReconcilePage   map[uint64]chan *protocol.AssetListPageResponse
-	pendingTaskPagesMu     sync.Mutex
-	pendingTaskPages       map[uint32]chan *protocol.TaskListPage
-	pendingTaskFullMu      sync.Mutex
-	pendingTaskFull        map[uint32]chan *protocol.TaskFull
-	customerMu             sync.Mutex
-	customerVersion        uint64
-	customerPages          map[uint32]chan *protocol.AllEdgeListPageResponse
+	pendingReconcilePageMu  sync.Mutex
+	pendingReconcilePage    map[uint64]chan *protocol.AssetListPageResponse
+	pendingTaskPagesMu      sync.Mutex
+	pendingTaskPages        map[uint32]chan *protocol.TaskListPage
+	pendingTaskFullMu       sync.Mutex
+	pendingTaskFull         map[uint32]chan *protocol.TaskFull
+	pendingAttachmentAssets sync.Map // correlation ID -> chan attachmentAssetResult
+	customerMu              sync.Mutex
+	customerVersion         uint64
+	customerPages           map[uint32]chan *protocol.AllEdgeListPageResponse
 
 	embedRetries      map[embedRetryKey]int
 	embedRetriesMu    sync.Mutex
@@ -308,8 +309,11 @@ func (c *NRCClient) readPump(ctx context.Context) {
 	c.writeMu.Lock()
 	conn := c.conn
 	c.writeMu.Unlock()
-	defer conn.Close()
-	defer c.invalidateConnection()
+	defer func() {
+		conn.Close()
+		c.failAttachmentAssets()
+		c.invalidateConnection()
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -349,6 +353,14 @@ func (c *NRCClient) readPump(ctx context.Context) {
 			c.handleAssetDeleted(msg.Data)
 		case protocol.S_AssetListPage:
 			c.handleAssetListPage(msg.Data)
+		case protocol.S_AssetFull:
+			if response, err := protocol.DecodeAssetFullResponse(msg.Data); err == nil {
+				c.settleAttachmentAsset(response.CorrelationID, attachmentAssetResult{asset: response.Asset})
+			}
+		case protocol.S_ErrorResponse:
+			if response, err := protocol.DecodeErrorResponse(msg.Data); err == nil && response.OriginOpcode == protocol.C_GetAsset {
+				c.settleAttachmentAsset(response.CorrelationID, attachmentAssetResult{err: fmt.Errorf("%s", response.ErrorMessage)})
+			}
 		case protocol.S_EdgeCreated, protocol.S_EdgeDeleted, protocol.S_AllEdgeListPage:
 			c.handleCustomerEdge(msg.Opcode, msg.Data)
 		case protocol.S_TaskCreated:

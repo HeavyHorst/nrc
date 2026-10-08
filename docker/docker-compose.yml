@@ -142,6 +142,7 @@ services:
       - NRC_NICKNAME=sullivan-ai
       - AI_PORT=8091
       - SEARCH_URL=http://search:8090
+      - FILES_URL=http://tailscale-proxy:8094
     depends_on:
       - websocket-server
       - search

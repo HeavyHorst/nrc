@@ -113,6 +113,8 @@ func assetSearchOutput(response protocol.SearchResponse, workspace string, convI
 		if includePayload {
 			item.Payload = trimForTool(strings.TrimSpace(r.Payload), adkSearchAssetPayloadMaxChars)
 		}
+		item.PayloadOmitted = !includePayload
+		item.PayloadTruncated = includePayload && len(strings.TrimSpace(r.Payload)) > adkSearchAssetPayloadMaxChars
 		if t >= protocol.AssetTypeCustomerCompany && t <= protocol.AssetTypeCustomerActivity {
 			raw := r.Metadata.Customer
 			if companiesOnly && len(raw) == 0 {

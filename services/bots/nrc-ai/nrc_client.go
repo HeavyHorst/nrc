@@ -85,6 +85,8 @@ type NRCClient struct {
 
 	pendingNoteTagsMu sync.Mutex
 	pendingNoteTags   map[uint32][]chan noteTagsResult
+	dataReadsMu       sync.Mutex
+	dataReads         map[uint32]pendingDataRead
 }
 
 type graphQueryKey struct {
@@ -267,6 +269,7 @@ func (c *NRCClient) Run(ctx context.Context) {
 			c.readPump(ctx)
 			cancelPing()
 			c.connected.Store(false)
+			c.failDataReads(errNotConnected)
 		}
 
 		select {
@@ -377,6 +380,10 @@ func (c *NRCClient) readPump(ctx context.Context) {
 	c.connMu.RLock()
 	conn := c.conn
 	c.connMu.RUnlock()
+	defer func() {
+		c.connected.Store(false)
+		c.failDataReads(errNotConnected)
+	}()
 
 	for {
 		select {
@@ -419,6 +426,8 @@ func (c *NRCClient) readPump(ctx context.Context) {
 			c.handleTaskListResponse(msg.Data)
 		case protocol.S_TaskListPage:
 			c.handleTaskListPage(msg.Data)
+		case protocol.S_TaskFull, protocol.S_CalendarPage, protocol.S_TaskSliceList, protocol.S_EdgeListPage:
+			c.handleDataRead(msg.Opcode, msg.Data)
 		case protocol.S_EdgeCreated:
 			c.handleEdgeCreated(msg.Data)
 		case protocol.S_EdgeDeleted:
@@ -455,6 +464,7 @@ func (c *NRCClient) handleErrorResponse(payload []byte) {
 		slog.Warn("failed to decode error response", "error", err)
 		return
 	}
+	c.settleDataRead(resp.CorrelationID, resp.OriginOpcode, nil, fmt.Errorf("%s", resp.ErrorMessage))
 
 	if resp.CorrelationID != 0 && resp.OriginOpcode == protocol.C_CreateTask {
 		c.settleTaskCreate(resp.CorrelationID, nil, fmt.Errorf("%s", resp.ErrorMessage))
@@ -2022,6 +2032,8 @@ func (c *NRCClient) touchAccess() {
 
 // Stop cancels the client's Run loop and closes the connection.
 func (c *NRCClient) Stop() {
+	c.connected.Store(false)
+	c.failDataReads(errNotConnected)
 	if c.cancel != nil {
 		c.cancel()
 	}

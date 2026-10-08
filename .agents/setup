@@ -50,19 +50,19 @@ else
 fi
 ln -sfn "$HOME/odin/odin" "$local_bin/odin"
 
-step "Installing Go 1.26"
+step "Installing Go 1.27"
 go_bin="$toolchains/go/bin/go"
-if [[ ! -x "$go_bin" ]] || [[ "$($go_bin version 2>/dev/null || true)" != *' go1.26.'* ]]; then
+if [[ ! -x "$go_bin" ]] || [[ "$($go_bin version 2>/dev/null || true)" != *' go1.27.'* ]]; then
 	tmp_dir="$(mktemp -d)"
 	trap 'rm -rf "$tmp_dir"' EXIT
-	go_archive="$(curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL 'https://go.dev/dl/?mode=json' | python3 -c 'import json, sys; releases=json.load(sys.stdin); print(next(f["filename"] for release in releases if release["version"].startswith("go1.26.") for f in release["files"] if f["os"] == "linux" and f["arch"] == "amd64" and f["kind"] == "archive"))')"
+	go_archive="$(curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL 'https://go.dev/dl/?mode=json' | python3 -c 'import json, sys; releases=json.load(sys.stdin); print(next(f["filename"] for release in releases if release["version"].startswith("go1.27.") for f in release["files"] if f["os"] == "linux" and f["arch"] == "amd64" and f["kind"] == "archive"))')"
 	curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL "https://go.dev/dl/$go_archive" -o "$tmp_dir/go.tar.gz"
 	rm -rf "$toolchains/go"
 	tar -xzf "$tmp_dir/go.tar.gz" -C "$toolchains"
 	rm -rf "$tmp_dir"
 	trap - EXIT
 else
-	echo "Go 1.26 already installed"
+	echo "Go 1.27 already installed"
 fi
 ln -sfn "$toolchains/go/bin/go" "$local_bin/go"
 ln -sfn "$toolchains/go/bin/gofmt" "$local_bin/gofmt"

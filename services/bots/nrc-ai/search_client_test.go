@@ -31,7 +31,7 @@ func TestSearchTasksUsesTypedIndexContractAndReturnsDoneTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !out.Complete || out.Source != "nrc-search" || out.Count != 1 || out.Results[0].TaskID != "27" || out.Results[0].Status != "Done" {
+	if out.Complete || out.Stale || out.Limit != 5 || out.LimitReached || out.RankingHint == "" || out.Source != "nrc-search" || out.Count != 1 || out.Results[0].TaskID != "27" || out.Results[0].Status != "Done" {
 		t.Fatalf("tool output = %#v", out)
 	}
 	if request.Filters == nil || len(request.Filters.EntityTypes) != 1 || request.Filters.EntityTypes[0] != protocol.SearchEntityTask || request.Filters.Task == nil {

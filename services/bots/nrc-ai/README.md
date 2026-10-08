@@ -60,6 +60,49 @@ customer records remain available with `metadata_warning`; only the company
 register requires valid metadata. Search traces/progress and citation titles use
 the same integration as the existing tools. Customer mutation tools are not added.
 
+### Exact reads, domain pages and attachments
+
+`get_task` reads directly from NRC, including completed or uncached tasks. It
+never substitutes a cache snapshot for the exact record or stale-write timestamp.
+`search_tasks`, like asset/customer search, returns ranked top-N evidence with
+`complete:false`, `stale`, `limit`, `limit_reached` and a ranking hint. Use paginated
+`list_tasks`/`list_assets` for inventory, not relevance search.
+
+Additional bounded, read-only tools use the existing server APIs:
+
+- `query_calendar`: explicit RFC3339 range (max 62 days), assignee/project filters,
+  limit 1–100 and server cursor. Includes overlapping appointments and task/reminder dates.
+- `list_task_slices`: slice register with server membership counters, optional
+  owner/name/include_closed filters, limit 1–100 and server cursor.
+- `list_entity_links`: incident edges of a task/asset, including company and slice
+  membership; limit 1–100, `has_more` and `next_edge_id` continuation.
+- `list_attachments`: fresh owner metadata; no file download.
+- `read_attachment`: default text mode reads PDF/DOCX/XLSX/UTF-8 text via Search's
+  private `/attachment/text` endpoint. Default 16 KiB, max 32 KiB per page; follow
+  `next_offset` while `has_more`. `complete` describes extraction coverage, not
+  page coverage. PDF uses its text layer, at most 20 pages, without OCR; Office
+  covers body/cell values only and explicitly reports partial coverage.
+
+`get_asset` accepts optional byte `offset`/`limit` and returns `next_offset`,
+`has_more`, `total_bytes` and `payload_truncated`; offsets preserve original
+UTF-8 text, including whitespace. Search/list payloads explicitly distinguish
+omitted from clipped content. `graph_walk` marks its bounded traversal as
+non-exhaustive and reports clipping; use paginated links for exact incident edges.
+New domain/attachment IDs and timestamps are decimal strings. All reads remain
+in workspace data scope (`conv_id=0`), not private chat/DM history.
+
+Attachment text requires the updated Search service and its configured `FILES_URL`
+and `NRC_BOT_SECRET`. Native `mode:"media"` additionally requires AI's private
+`FILES_URL` (wired in Docker Compose) and the shared bot secret. It sends at most
+4 MiB of PNG/JPEG/GIF (max 16 megapixels) or WAV/MP3, after a fresh ownership read;
+no arbitrary URLs, redirects or silent byte truncation are permitted.
+The pinned provider adapter supports images on OpenAI/Anthropic and images/audio
+on OpenAI Chat-compatible adapters; OpenAI Responses (gpt-5.6/gpt-6) is image-only.
+OpenRouter/DeepSeek are explicitly unsupported for media tool results. Adapter
+support is not a guarantee that the selected model accepts media. There is no
+automatic image OCR or audio transcription fallback. Retrieved files may be
+sent to the external LLM; the existing data-processing warning applies to them too.
+
 - **Paste-to-Task:** paste unstructured text, edit the extracted task and confirm.
   The browser creates the task through its own WebSocket connection.
 - **Paste-to-Note:** preview a cleaned-up note and optional extracted tasks.
@@ -214,6 +257,7 @@ These are standalone defaults. Compose overrides service addresses and the nickn
 | `NRC_NICKNAME` | `Sullivan-{hostname}` | Bot nickname |
 | `AI_PORT` | `8091` | Internal HTTP port |
 | `SEARCH_URL` | `http://localhost:8090` | Search endpoint |
+| `FILES_URL` | None | Private files endpoint for native attachment media reads |
 | `LLM_PROVIDER` | `openai` | Provider from the table above |
 | `LLM_MODEL` | `gpt-4o-mini` | Provider model name |
 | `LLM_API_KEY` | None | Provider credential |
@@ -227,7 +271,7 @@ These are standalone defaults. Compose overrides service addresses and the nickn
 
 ## Development
 
-Requires Go 1.26.5 or newer. No native libraries are required.
+Requires Go 1.27.0 or newer (Fantasy v0.45.2). No native libraries are required.
 Run from this directory:
 
 ```sh

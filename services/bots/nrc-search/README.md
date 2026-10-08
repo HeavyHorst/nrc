@@ -280,3 +280,70 @@ go test -tags noembed -run '^$' -bench '^BenchmarkSearchVsParallel$' -benchmem
 ```
 
 This benchmark measures search with test embeddings, not model inference.
+
+## Bounded attachment text API (version 1)
+
+`POST /attachment/text` returns extracted text, not embeddings. Request:
+
+```json
+{"workspace":"demo","conv_id":"0","entity_type":"asset","entity_id":"123","file_id":"att_0123456789abcdef0123456789abcdef","offset":0,"limit":16384}
+```
+
+`workspace` is 1–128 ASCII letters, digits, underscores or hyphens;
+`entity_type` is `asset` or `task`. IDs are canonical decimal **strings**:
+`conv_id` must be `"0"` (workspace data scope); `entity_id`
+is nonzero unsigned 64-bit. `file_id` is `att_` plus 32 lowercase hex digits.
+`offset` defaults to zero and is an integer UTF-8 **byte** offset (0–16 MiB).
+`limit` defaults to 16384, must be a positive integer and is capped at 32768.
+Unknown fields, including caller filenames, MIME types and URLs, are rejected.
+
+Response (`X-NRC-Attachment-Text-Version: 1`):
+
+```json
+{"file_id":"att_0123456789abcdef0123456789abcdef","filename":"note.txt","mime_type":"text/plain","status":"ok","text":"hello","offset":0,"next_offset":5,"has_more":false,"complete":true,"total_bytes":5}
+```
+
+`warning` is an optional string. `status` is `ok`, `partial`, `unsupported` or
+`failed`. `next_offset` is the actual byte position after the returned text;
+pages never split a rune. A mid-rune or out-of-text offset, or a limit too small
+for the next rune, returns 400. `has_more` means more **extracted** bytes remain;
+`complete` describes extraction coverage, not whether this is the final page.
+`total_bytes` counts the available extracted UTF-8 text, not source-file bytes.
+Unsupported/failed results have no text, `complete:false`, `has_more:false` and
+a warning; they are not successful empty extractions.
+
+Each request freshly fetches the exact NRC task/asset in the specified workspace
+and conversation, verifies its identity and attachment membership, then downloads
+only from configured `FILES_URL` using the bot bearer and workspace query. It
+never trusts the index or a workspace-wide file grant as ownership evidence,
+accepts external URLs, or follows redirects. Metadata comes from the owning record.
+The endpoint requires `Authorization: Bearer <NRC_BOT_SECRET>` before any body
+parsing, owner lookup or extraction. Missing/incorrect credentials (or an empty
+configured secret) return 401, including requests forwarded by the public Search
+proxy. AI sends this credential over the trusted service network; do not expose
+the bot secret to end users. This is bot authentication, not end-user authentication.
+
+Availability requires a running nrc-search build containing this endpoint,
+`FILES_URL`, `NRC_BOT_SECRET`, and NRC's correlated exact `GetAsset`/`GetTask`
+responses. No protocol version change is needed. PDF extraction requires Poppler's
+`pdfinfo` and `pdftotext`; DOCX/XLSX use the existing Go Office parser. UTF-8
+`text/*`, `application/json`, `application/xml`, and `.txt`, `.md`, `.csv`, `.tsv`,
+`.log`, `.json`, `.xml` attachments are read directly. No OCR, image text inference or audio
+transcription is performed; images/audio return `unsupported` without downloading.
+The endpoint itself needs no model inference, though normal nrc-search startup
+still requires its configured embedding model.
+
+Downloads are bounded to 100 MiB, extracted output and Office XML input to 16 MiB,
+and PDF text to the first 20 pages. Page-limited or textless PDFs are `partial`;
+all PDF results warn that scanned content is omitted. Office results are `partial`
+because only document-body text or worksheet cell values are included, not other
+parts such as headers, comments and drawings. Corrupt/encrypted files, non-UTF-8
+text, extractor failures and extraction-budget overruns return `failed` rather
+than inventing text or silently reporting completeness. Requests time out after
+60 seconds; subprocesses have a 30-second bound and are cancelled with the request.
+Temporary downloads are removed after every request. Text is re-extracted per
+page, so callers should restart paging if the underlying attachment changes.
+
+HTTP errors use `{"error":"..."}`: 400 invalid request/page, 404 attachment not
+on the requested entity, 502 fresh owner lookup/download failure, 503 workspace
+or files service configuration unavailable, 500 temporary-storage failure.

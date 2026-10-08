@@ -337,9 +337,9 @@ func applyCreateTaskAction(ctx context.Context, client *NRCClient, store *AgentS
 }
 
 func applyUpdateTaskAction(ctx context.Context, client *NRCClient, store *AgentSessionStore, convID uint64, pending actionToApply, result *askApplyResponse) {
-	current, ok := findTaskByID(client.GetTasks(convID), pending.Action.TaskID)
-	if !ok {
-		completed, _ := store.completeUpdateTaskAction(pending.SessionID, pending.PlanID, pending.Action.ID, nil, fmt.Errorf("task %d not found", pending.Action.TaskID))
+	current, err := client.GetTask(ctx, convID, pending.Action.TaskID)
+	if err != nil {
+		completed, _ := store.completeUpdateTaskAction(pending.SessionID, pending.PlanID, pending.Action.ID, nil, err)
 		result.Failed = append(result.Failed, applyActionFailure{ActionID: pending.Action.ID, Type: pending.Action.Type, Error: completed.Error})
 		return
 	}
@@ -355,8 +355,8 @@ func applyUpdateTaskAction(ctx context.Context, client *NRCClient, store *AgentS
 		return
 	}
 	if pending.Action.BlockedBy != 0 {
-		if _, ok := findTaskByID(client.GetTasks(convID), pending.Action.BlockedBy); !ok {
-			completed, _ := store.completeUpdateTaskAction(pending.SessionID, pending.PlanID, pending.Action.ID, nil, fmt.Errorf("blocked_by task %d not found", pending.Action.BlockedBy))
+		if _, err := client.GetTask(ctx, convID, pending.Action.BlockedBy); err != nil {
+			completed, _ := store.completeUpdateTaskAction(pending.SessionID, pending.PlanID, pending.Action.ID, nil, fmt.Errorf("blocked_by task %d: %w", pending.Action.BlockedBy, err))
 			result.Failed = append(result.Failed, applyActionFailure{ActionID: pending.Action.ID, Type: pending.Action.Type, Error: completed.Error})
 			return
 		}

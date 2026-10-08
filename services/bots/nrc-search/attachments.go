@@ -77,6 +77,10 @@ func attachmentKind(a protocol.Attachment) string {
 }
 
 func (c *NRCClient) downloadAttachment(a protocol.Attachment, dir string) (string, error) {
+	return c.downloadAttachmentContext(context.Background(), a, dir)
+}
+
+func (c *NRCClient) downloadAttachmentContext(parent context.Context, a protocol.Attachment, dir string) (string, error) {
 	if !attachmentIDPattern.MatchString(a.FileId) {
 		return "", fmt.Errorf("invalid attachment ID")
 	}
@@ -87,7 +91,7 @@ func (c *NRCClient) downloadAttachment(a protocol.Attachment, dir string) (strin
 	q := u.Query()
 	q.Set("workspace", c.workspace)
 	u.RawQuery = q.Encode()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
@@ -276,7 +280,11 @@ func (b *limitedExtractionBuffer) Write(p []byte) (int, error) {
 }
 
 func runExtraction(name string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return runExtractionContext(context.Background(), name, args...)
+}
+
+func runExtractionContext(parent context.Context, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	var output limitedExtractionBuffer
@@ -288,6 +296,10 @@ func runExtraction(name string, args ...string) ([]byte, error) {
 }
 
 func extractOffice(path, kind string) (string, error) {
+	return extractOfficeContext(context.Background(), path, kind)
+}
+
+func extractOfficeContext(ctx context.Context, path, kind string) (string, error) {
 	archive, err := zip.OpenReader(path)
 	if err != nil {
 		return "", err
@@ -295,6 +307,9 @@ func extractOffice(path, kind string) (string, error) {
 	defer archive.Close()
 	budget := int64(maxExtractedBytes)
 	read := func(file *zip.File) ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if file.UncompressedSize64 > uint64(budget) {
 			return nil, fmt.Errorf("office content exceeds 16 MiB")
 		}
@@ -326,6 +341,9 @@ func extractOffice(path, kind string) (string, error) {
 		return text
 	}
 	for _, file := range archive.File {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if kind == "docx" && file.Name == "word/document.xml" {
 			names = append(names, file)
 		}
@@ -363,6 +381,12 @@ func extractOffice(path, kind string) (string, error) {
 			fmt.Fprintln(&result, filepath.Base(file.Name))
 		}
 		for {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			if result.Len() > maxExtractedBytes {
+				return "", fmt.Errorf("extracted office text exceeds 16 MiB")
+			}
 			token, err := decoder.Token()
 			if err == io.EOF {
 				break

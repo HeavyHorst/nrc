@@ -319,6 +319,10 @@ func NewWorkspaceManager(ctx context.Context, cfg Config, storage *Storage, embe
 }
 
 func (wm *WorkspaceManager) GetOrCreateClient(workspace string) (*NRCClient, error) {
+	return wm.getAttachmentClient(wm.ctx, workspace)
+}
+
+func (wm *WorkspaceManager) getAttachmentClient(ctx context.Context, workspace string) (*NRCClient, error) {
 	wm.mu.Lock()
 	if wm.closed {
 		wm.mu.Unlock()
@@ -351,7 +355,7 @@ func (wm *WorkspaceManager) GetOrCreateClient(workspace string) (*NRCClient, err
 	wm.mu.Unlock()
 
 	slog.Info("waiting for NRC client ready", "workspace", workspace, "timeout", clientReadyTimeout, "new_client", isNew)
-	if err := waitForClientReady(wm.ctx, client, clientReadyTimeout, workspace); err != nil {
+	if err := waitForClientReady(ctx, client, clientReadyTimeout, workspace); err != nil {
 		return nil, err
 	}
 
@@ -394,6 +398,10 @@ func waitForClientReady(ctx context.Context, client *NRCClient, timeout time.Dur
 
 func newHTTPHandler(cfg Config, startTime time.Time, wm *WorkspaceManager, index *Index, embedder Embedder) http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("POST /attachment/text", attachmentTextHandler(cfg.NRCBotSecret, func(ctx context.Context, workspace string) (*NRCClient, error) {
+		client, err := wm.getAttachmentClient(ctx, workspace)
+		return client, err
+	}))
 
 	mux.HandleFunc("POST /search", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(protocol.SearchAPIVersionHeader, protocol.SearchAPIVersion)

@@ -26,6 +26,7 @@ type Config struct {
 	LLMAPIKey          string
 	LLMBaseURL         string
 	SearchURL          string
+	FilesURL           string
 	SourcebotURL       string
 	SourcebotAPIKey    string
 	SourcebotBearer    string
@@ -45,6 +46,7 @@ func loadConfig() Config {
 		LLMAPIKey:       os.Getenv("LLM_API_KEY"),
 		LLMBaseURL:      os.Getenv("LLM_BASE_URL"),
 		SearchURL:       envOrDefault("SEARCH_URL", "http://localhost:8090"),
+		FilesURL:        os.Getenv("FILES_URL"),
 		SourcebotURL:    os.Getenv("SOURCEBOT_URL"),
 		SourcebotAPIKey: os.Getenv("SOURCEBOT_API_KEY"),
 		SourcebotBearer: os.Getenv("SOURCEBOT_BEARER_TOKEN"),
