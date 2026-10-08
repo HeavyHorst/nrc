@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261007search2">
+    <link rel="stylesheet" href="../css/main.css?v=20261008files1">
     <link rel="stylesheet" href="../css/custom-select.css?v=20260926nesting1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -866,6 +866,24 @@
                         </div>
                     </nrc-attachment-list>
                     <p class="text-muted"><code>&lt;nrc-attachment-list&gt;</code> owns OPEN click handling across mounting, row replacement and removal. DOWNLOAD remains a native link; upload controls are separate.</p>
+                    <div class="file-assets-details">
+                        <section class="file-assets-metadata" aria-label="File metadata">
+                            <h2 class="file-assets-heading">NRC application icon</h2>
+                            <p class="file-assets-description">An image File with its preview directly below the metadata register.</p>
+                            <dl>
+                                <div class="file-assets-fact-group" role="group" aria-label="File"><dt>FILENAME</dt><dd>favicon.png</dd><dt>TYPE</dt><dd>application/octet-stream</dd><dt>SIZE</dt><dd>2.0 KB</dd></div>
+                                <div class="file-assets-fact-group" role="group" aria-label="Classification"><dt>CATEGORY</dt><dd>design-reference</dd><dt>TAGS</dt><dd>brand, icon</dd></div>
+                                <div class="file-assets-fact-group" role="group" aria-label="Record info"><dt>OWNER</dt><dd>rene</dd><dt>UPDATED</dt><dd>08 Oct 2026, 14:02</dd></div>
+                            </dl>
+                        </section>
+                        <nrc-attachment-list class="note-links-section note-preview-links note-preview-attachments" id="fileDetailsAttachments">
+                            <div class="note-links-header"><span class="note-links-label">ATTACHMENTS (1)</span></div>
+                            <div class="note-links-list">
+                                <div class="note-link-item"><span class="note-preview-attachment-type">PNG</span><span class="note-preview-attachment-name">favicon.png</span><span class="note-preview-attachment-size">2.0 KB</span><span class="note-preview-attachment-actions"><button class="btn btn--row" type="button" data-attachment-open data-image="1" data-file-id="catalog-icon" data-filename="favicon.png">OPEN</button><a class="btn btn--row" href="../favicon.png" download="favicon.png">DOWNLOAD</a></span></div>
+                                <button class="file-assets-image" type="button" data-attachment-open data-image="1" data-file-id="catalog-icon" data-filename="favicon.png" aria-label="Open favicon.png"><img src="../favicon.png" alt="favicon.png" loading="lazy"></button>
+                            </div>
+                        </nrc-attachment-list>
+                    </div>
                     <div class="catalog-attachment-list">
                         <div class="task-attachment-item"><div class="task-attachment-filename-cell"><a class="task-attachment-filename">interface-specification.pdf</a></div><div class="task-attachment-type">PDF</div><div class="task-attachment-size">284 KB</div><button class="btn btn--row task-attachment-md-btn" type="button">REF</button><button class="btn btn--row btn--danger task-attachment-remove-btn" type="button">×</button></div>
                         <div class="task-attachment-item"><div class="task-attachment-filename-cell"><a class="task-attachment-filename">terminal-dark.png</a></div><div class="task-attachment-type">PNG</div><div class="task-attachment-size">1.8 MB</div><button class="btn btn--row task-attachment-md-btn" type="button">REF</button><button class="btn btn--row btn--danger task-attachment-remove-btn" type="button">×</button></div>
@@ -1194,7 +1212,7 @@ status      ← Service Worker</code></pre>
                             <tr><td>NOTE SHARE</td><td>Read-only header, export states, metadata, Markdown, attachments, linked nodes, responsive focus</td><td><code>.note-share-*</code>, <code>.agenda-preview</code></td><td>notes.js / css/main.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>HTML NOTE</td><td>Script-free sandbox, local fragment jumps, isolated HTTP(S) tabs, semantic theme tokens, attachment blobs</td><td><code>.note-html-frame</code>, <code>NRCHTMLNotes</code></td><td>note-html.js / notes.js</td><td><b>CONTENT</b></td></tr>
                             <tr><td>ATTACHMENTS</td><td>Lifecycle-owned read ledger: kind, filename, size, OPEN and native DOWNLOAD. Upload progress, popover and editing remain separate.</td><td><code>&lt;nrc-attachment-list&gt;</code>, <code>.task-attachment-*</code>, <code>.attachment-popover*</code></td><td>attachments.js / css/main.css</td><td><b>COMPONENT / FEATURE</b></td></tr>
-                            <tr><td>FILE ASSETS</td><td>Compact rows with OPEN and DOWNLOAD; the title opens Details. Document resource tabs own the title/count, with no nested File header. Standalone sections retain a header; share headers use the same frame and typography as attachments and links. Empty/loading/error states share context insets. Read-first Details supports EDIT/CANCEL EDIT; upload/edit use paired fields and fixed footer actions.</td><td><code>.file-assets-*</code>, <code>NRCFiles</code></td><td>files.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>FILE ASSETS</td><td>Compact rows with OPEN and DOWNLOAD; the title opens Details. Inspector and Details share a title, description and grouped metadata register, OPEN/DOWNLOAD ledger and inline images that open the image viewer. Known raster extensions also preview when MIME is generic. Document resource tabs own the title/count; standalone sections retain a header. Read-first Details supports EDIT/CANCEL EDIT; upload/edit use paired fields and fixed footer actions.</td><td><code>.file-assets-*</code>, <code>NRCFiles</code></td><td>files.js / attachments.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>INSPECTOR</td><td>Control-matrix header with inline scrollable provenance, scoped keyboard operations, persistent resize; entity-only rail in workspace registers, conversation context and selected system events</td><td><code>.inspector-*</code>, <code>.ledger-*</code></td><td>inspector.js / detail-ui.js / app.js</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>AI WORKBENCH</td><td>Run state, response, steps, preview cards</td><td><code>.ai-*</code>, <code>.sullivan-*</code></td><td>ai.js / css/main.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>MARKDOWN CONTENT</td><td>Headings, code, links, tables, shared/nested quotes, KaTeX</td><td><code>.agenda-preview</code>, <code>.message-content</code>, <code>blockquote</code></td><td>app.js / css/main.css</td><td><b>CONTENT</b></td></tr>
@@ -1218,7 +1236,7 @@ status      ← Service Worker</code></pre>
     <script src="../note-html.js?v=20261007fragments1"></script>
     <script src="../page-loader.js?v=20260924pager1"></script>
     <script src="catalog.js?v=20260912css1"></script>
-    <script src="../attachments.js?v=20260924attachment1"></script>
+    <script src="../attachments.js?v=20261008files1"></script>
     <script>window.NRCAssets = { MAX_PAYLOAD_LENGTH: 65535 };</script>
     <script src="../detail-ui.js?v=20261007people1"></script>
     <script>

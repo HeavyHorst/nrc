@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261008description1";
+const CACHE_NAME = "nrc-terminal-20261008files1";
 
 const APP_SHELL = [
   "./",
@@ -8,10 +8,10 @@ const APP_SHELL = [
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261007search2",
+  "./css/main.css?v=20261008files1",
   "./css/foundation.css?v=20261005danger1",
   "./css/workspace.css?v=20261007search1",
-  "./css/entities.css?v=20261007search2",
+  "./css/entities.css?v=20261008files1",
   "./css/ledger.css?v=20261006shareborder1",
   "./css/mobile-tasks.css?v=20261007people1",
   "./css/mobile.css?v=20261007search2",
@@ -20,11 +20,11 @@ const APP_SHELL = [
   "./portal.js?v=20260803a",
   "./custom-picker.js?v=20260927appointment2",
   "./custom-select.js?v=20260924select1",
-  "./attachments.js?v=20260924attachment1",
+  "./attachments.js?v=20261008files1",
   "./assets.js?v=20260927appointment1",
   "./transactions.js?v=20260925inline1",
   "./edges.js?v=20260924slicelive1",
-  "./files.js?v=20261007search1",
+  "./files.js?v=20261008files1",
   "./links-ui.js?v=20260929prefetch1",
   "./inspector.js?v=20261007search2",
   "./view-manager.js?v=20261007search1",

@@ -586,7 +586,8 @@ function getAttachmentPreviewData(att) {
   const type = getFileExtension(filename, mimeType);
   const size = formatFileSize(Number(att.size || 0));
   const fileId = att.fileId || "";
-  const isImage = mimeType.startsWith("image/");
+  const genericType = !att.mimeType || mimeType === "application/octet-stream";
+  const isImage = mimeType.startsWith("image/") || (genericType && /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(filename));
   const inline = isImage || isPreviewableType(mimeType);
   const href = fileId ? attachmentFileURL(fileId, filename, inline) : "#";
   // DOWNLOAD always saves: the inline flag belongs to OPEN only.
@@ -598,7 +599,7 @@ function getAttachmentPreviewData(att) {
 // The read ledger names the attachment and offers the two operations the file
 // service supports: OPEN previews what can be previewed, DOWNLOAD always saves.
 // The filename is a label, not a link, so both rows of the ledger read alike.
-function renderAttachmentPreviewStripHtml(attachments = [], id = "attachmentPreviewStrip") {
+function renderAttachmentPreviewStripHtml(attachments = [], id = "attachmentPreviewStrip", { inlineImages = false, alwaysOpen = false } = {}) {
   if (!attachments || attachments.length === 0) return "";
 
   const rows = attachments.map((att) => {
@@ -609,10 +610,11 @@ function renderAttachmentPreviewStripHtml(attachments = [], id = "attachmentPrev
         <span class="note-preview-attachment-name" title="${escapeHtml(data.filename)}">${escapeHtml(data.filename)}</span>
         <span class="note-preview-attachment-size">${escapeHtml(data.size)}</span>
         <span class="note-preview-attachment-actions">
-          ${data.inline && data.href !== "#" ? `<button class="btn btn--row" type="button" data-attachment-open ${data.dataAttrs}>OPEN</button>` : ""}
+          ${(data.inline || alwaysOpen) && data.href !== "#" ? `<button class="btn btn--row" type="button" data-attachment-open ${data.dataAttrs}>OPEN</button>` : ""}
           <a class="btn btn--row" href="${escapeHtml(data.downloadHref)}" download="${escapeHtml(data.filename)}">DOWNLOAD</a>
         </span>
       </div>
+      ${inlineImages && data.isImage && data.href !== "#" ? `<button class="file-assets-image" type="button" data-attachment-open ${data.dataAttrs} aria-label="Open ${escapeHtml(data.filename)}"><img src="${escapeHtml(data.href)}" alt="${escapeHtml(data.filename)}" loading="lazy"></button>` : ""}
     `;
   }).join("");
 

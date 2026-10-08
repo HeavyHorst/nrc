@@ -128,25 +128,25 @@
   // The file read view is one markup with two hosts: the details modal, and the
   // inspector that a file reference opens in.
   function fileReadBody(asset) {
-    const data = parseMetadata(asset), att = asset.attachments?.[0];
-    const updated = new Date(Number(BigInt(asset.updatedAt ?? asset.createdAt ?? 0) / 1000000n)).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
     const body = document.createElement("div"); body.className = "customer-fields file-assets-details";
-    body.innerHTML = `<dl>
-      <div class="file-assets-fact-group" role="group" aria-label="File"><dt>TITLE</dt><dd>${escape(data.title)}</dd><dt>FILENAME</dt><dd>${escape(att?.filename || "—")}</dd><dt>TYPE / SIZE</dt><dd>${escape(att?.mimeType || "—")} · ${escape(att ? formatFileSize(Number(att.size)) : "—")}</dd></div>
-      <div class="file-assets-fact-group" role="group" aria-label="Classification"><dt>CATEGORY</dt><dd>${escape(data.category || "—")}</dd><dt>TAGS</dt><dd>${escape(data.tags.join(", ") || "—")}</dd><dt>DESCRIPTION</dt><dd>${escape(data.description || "—")}</dd></div>
-      <div class="file-assets-fact-group" role="group" aria-label="Record info"><dt>OWNER</dt><dd>${escape(asset.owner || "—")}</dd><dt>UPDATED</dt><dd>${escape(updated)}</dd></div>
-    </dl>`;
+    body.innerHTML = fileFacts(asset) + renderAttachmentPreviewStripHtml(asset.attachments, "fileDetailsAttachments", { inlineImages: true, alwaysOpen: true });
     return body;
   }
 
-  // fileFacts renders the file's fields as the shared fact register, which is
-  // what an inspector uses for a record's facts. The details modal keeps the
-  // dialog markup: each host gets the component its scale was drawn for.
+  // Both read hosts use the same compact, grouped metadata register.
   function fileFacts(asset) {
     const data = parseMetadata(asset), att = asset.attachments?.[0];
     const updated = new Date(Number(BigInt(asset.updatedAt ?? asset.createdAt ?? 0) / 1000000n)).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-    const fact = (label, value) => `<div><dt>${label}</dt><dd>${escape(value || "—")}</dd></div>`;
-    return `<dl class="customer-facts">${fact("TITLE", data.title)}${fact("FILENAME", att?.filename)}${fact("TYPE / SIZE", att ? `${att.mimeType || "—"} · ${formatFileSize(Number(att.size))}` : "—")}${fact("CATEGORY", data.category)}${fact("TAGS", data.tags.join(", "))}${fact("DESCRIPTION", data.description)}${fact("OWNER", asset.owner)}${fact("UPDATED", updated)}</dl>`;
+    const fact = (label, value) => `<dt>${label}</dt><dd>${escape(value || "—")}</dd>`;
+    return `<section class="file-assets-metadata" aria-label="File metadata">
+      <h2 class="file-assets-heading">${escape(data.title || att?.filename || "Untitled file")}</h2>
+      ${data.description ? `<p class="file-assets-description">${escape(data.description)}</p>` : ""}
+      <dl>
+        <div class="file-assets-fact-group" role="group" aria-label="File">${fact("FILENAME", att?.filename)}${fact("TYPE", att?.mimeType)}${fact("SIZE", att ? formatFileSize(Number(att.size)) : "—")}</div>
+        <div class="file-assets-fact-group" role="group" aria-label="Classification">${fact("CATEGORY", data.category)}${fact("TAGS", data.tags.join(", "))}</div>
+        <div class="file-assets-fact-group" role="group" aria-label="Record info">${fact("OWNER", asset.owner)}${fact("UPDATED", updated)}</div>
+      </dl>
+    </section>`;
   }
 
   // showInspector renders a file reference into the inspector, so a file member
@@ -178,9 +178,9 @@
           return;
         }
         render("READ ONLY", null);
-        const body = document.createElement("div"); body.className = "customer-inspector-body";
+        const body = document.createElement("div"); body.className = "customer-inspector-body file-assets-details";
         body.innerHTML = fileFacts(asset);
-        body.insertAdjacentHTML("beforeend", renderAttachmentPreviewStripHtml(asset.attachments, "fileInspectorAttachments"));
+        body.insertAdjacentHTML("beforeend", renderAttachmentPreviewStripHtml(asset.attachments, "fileInspectorAttachments", { inlineImages: true, alwaysOpen: true }));
         const shell = document.createElement("div"); shell.className = "customer-inspector";
         shell.append(body);
         host.append(shell);
@@ -208,14 +208,14 @@
       saveButton.setAttribute("form", form.id);
       saveButton.hidden = true;
       const editButton = button("EDIT", () => {
-        body.querySelector("dl").hidden = true;
+        body.querySelector(".file-assets-metadata").hidden = true;
         form.hidden = false; saveButton.hidden = false; editButton.hidden = true; cancelEdit.hidden = false;
         form.elements.title.focus();
       });
       const cancelEdit = button("CANCEL EDIT", () => {
         if (busy) return;
         form.reset(); form.hidden = true; saveButton.hidden = true; editButton.hidden = false; cancelEdit.hidden = true;
-        body.querySelector("dl").hidden = false;
+        body.querySelector(".file-assets-metadata").hidden = false;
         editButton.focus();
       });
       cancelEdit.hidden = true;

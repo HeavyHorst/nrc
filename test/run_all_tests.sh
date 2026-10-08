@@ -72,6 +72,7 @@ run node client/virtual-list.e2e.mjs
 run node client/entity-tables.e2e.mjs
 run node client/dialog.e2e.mjs
 run node client/attachment-list.e2e.mjs
+run node client/file-details.e2e.mjs
 run node client/custom-select.e2e.mjs
 run node client/link-picker.e2e.mjs
 run node client/page-loader.e2e.mjs
