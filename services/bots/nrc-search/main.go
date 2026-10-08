@@ -291,16 +291,17 @@ type healthResponse struct {
 }
 
 type WorkspaceManager struct {
-	mu       sync.Mutex
-	clients  map[string]*NRCClient
-	cfg      Config
-	storage  *Storage
-	embedder Embedder
-	index    *Index
-	ctx      context.Context
-	cancel   context.CancelFunc
-	workers  sync.WaitGroup
-	closed   bool
+	mu          sync.Mutex
+	clients     map[string]*NRCClient
+	reconciling map[string]bool
+	cfg         Config
+	storage     *Storage
+	embedder    Embedder
+	index       *Index
+	ctx         context.Context
+	cancel      context.CancelFunc
+	workers     sync.WaitGroup
+	closed      bool
 }
 
 const clientReadyTimeout = 45 * time.Second
@@ -308,13 +309,14 @@ const clientReadyTimeout = 45 * time.Second
 func NewWorkspaceManager(ctx context.Context, cfg Config, storage *Storage, embedder Embedder, index *Index) *WorkspaceManager {
 	ctx, cancel := context.WithCancel(ctx)
 	return &WorkspaceManager{
-		clients:  make(map[string]*NRCClient),
-		cfg:      cfg,
-		storage:  storage,
-		embedder: embedder,
-		index:    index,
-		ctx:      ctx,
-		cancel:   cancel,
+		clients:     make(map[string]*NRCClient),
+		reconciling: make(map[string]bool),
+		cfg:         cfg,
+		storage:     storage,
+		embedder:    embedder,
+		index:       index,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -323,12 +325,22 @@ func (wm *WorkspaceManager) GetOrCreateClient(workspace string) (*NRCClient, err
 }
 
 func (wm *WorkspaceManager) getAttachmentClient(ctx context.Context, workspace string) (*NRCClient, error) {
+	client, err := wm.getClient(workspace)
+	if err != nil {
+		return nil, err
+	}
+	if err := waitForClientReady(ctx, client, clientReadyTimeout, workspace); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+func (wm *WorkspaceManager) getClient(workspace string) (*NRCClient, error) {
 	wm.mu.Lock()
 	if wm.closed {
 		wm.mu.Unlock()
 		return nil, fmt.Errorf("search generation stopped")
 	}
-	isNew := false
 	var client *NRCClient
 
 	if existing, ok := wm.clients[workspace]; ok {
@@ -350,17 +362,39 @@ func (wm *WorkspaceManager) getAttachmentClient(ctx context.Context, workspace s
 		go func() { defer wm.workers.Done(); client.DrainEmbedQueue(wm.ctx) }()
 
 		wm.clients[workspace] = client
-		isNew = true
 	}
 	wm.mu.Unlock()
-
-	slog.Info("waiting for NRC client ready", "workspace", workspace, "timeout", clientReadyTimeout, "new_client", isNew)
-	if err := waitForClientReady(ctx, client, clientReadyTimeout, workspace); err != nil {
-		return nil, err
-	}
-
-	slog.Info("NRC client ready", "workspace", workspace)
 	return client, nil
+}
+
+// Search only accepts workspace data (conv_id 0), so one refresh per workspace
+// covers all search requests. The generation owns it, not the HTTP request.
+func (wm *WorkspaceManager) reconcileInBackground(client *NRCClient) {
+	wm.mu.Lock()
+	if wm.closed || wm.reconciling[client.workspace] {
+		wm.mu.Unlock()
+		return
+	}
+	wm.reconciling[client.workspace] = true
+	wm.workers.Add(1)
+	wm.mu.Unlock()
+	go func() {
+		defer wm.workers.Done()
+		defer func() {
+			wm.mu.Lock()
+			delete(wm.reconciling, client.workspace)
+			wm.mu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(wm.ctx, 30*time.Second)
+		defer cancel()
+		err := waitForClientReady(ctx, client, clientReadyTimeout, client.workspace)
+		if err == nil {
+			err = client.SubscribeAndReconcile(ctx, protocol.WorkspaceDataConvID)
+		}
+		if err != nil {
+			slog.Warn("background reconciliation failed", "workspace", client.workspace, "error", err)
+		}
+	}()
 }
 
 func (wm *WorkspaceManager) Close() {
@@ -415,29 +449,17 @@ func newHTTPHandler(cfg Config, startTime time.Time, wm *WorkspaceManager, index
 			return
 		}
 
-		client, err := wm.GetOrCreateClient(req.Workspace)
+		client, err := wm.getClient(req.Workspace)
 		if err != nil {
 			slog.Error("failed to get client for workspace", "workspace", req.Workspace, "error", err)
 			http.Error(w, `{"error":"failed to connect to workspace"}`, http.StatusInternalServerError)
 			return
 		}
 
-		reconcileCtx, reconcileCancel := context.WithTimeout(r.Context(), 30*time.Second)
-		stale := false
-		if !client.IsSubscribed(req.ConvID) {
-			slog.Info("room not subscribed, triggering subscription", "workspace", req.Workspace, "conv_id", req.ConvID)
-			if err := client.SubscribeAndReconcile(reconcileCtx, req.ConvID); err != nil {
-				slog.Warn("failed to subscribe and reconcile, searching with cached data", "workspace", req.Workspace, "conv_id", req.ConvID, "error", err)
-				stale = true
-			}
-		} else if client.NeedsReconcile(req.ConvID, cfg.ReconcileInterval) {
-			slog.Info("reconciling stale room", "workspace", req.Workspace, "conv_id", req.ConvID)
-			if err := client.SubscribeAndReconcile(reconcileCtx, req.ConvID); err != nil {
-				slog.Warn("reconciliation failed, searching with stale data", "workspace", req.Workspace, "conv_id", req.ConvID, "error", err)
-				stale = true
-			}
+		stale := !client.IsSubscribed(req.ConvID) || client.NeedsReconcile(req.ConvID, cfg.ReconcileInterval)
+		if stale {
+			defer wm.reconcileInBackground(client)
 		}
-		reconcileCancel()
 
 		var results []SearchResult
 		if req.SimilarEntity != nil {

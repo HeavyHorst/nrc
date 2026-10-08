@@ -134,8 +134,14 @@ func TestNRCClientRunWebSocketTaskEventsAndReconciliation(t *testing.T) {
 
 	wm := NewWorkspaceManager(ctx, cfg, storage, embedder, index)
 	wm.clients["ws-integration"] = client
+	defer wm.Close()
 	handler := newHTTPHandler(cfg, time.Now(), wm, index, embedder)
 	response, _ := postTaskSearch(t, handler, `{"workspace":"ws-integration","query":"unloaded done websocket","conv_id":"0","filters":{"entity_types":["task"],"task":{"task_ids":["42"]}}}`)
+	if !response.Stale || len(response.Results) != 0 {
+		t.Fatalf("websocket cached search = %#v", response)
+	}
+	wm.workers.Wait()
+	response, _ = postTaskSearch(t, handler, `{"workspace":"ws-integration","query":"unloaded done websocket","conv_id":"0","filters":{"entity_types":["task"],"task":{"task_ids":["42"]}}}`)
 	if response.Stale || len(response.Results) != 1 || response.Results[0].Entity.EntityID != 42 || response.Results[0].Metadata.Task.Status != protocol.TaskStatusDone {
 		t.Fatalf("websocket reconciliation search = %#v", response)
 	}

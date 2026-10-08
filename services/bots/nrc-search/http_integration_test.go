@@ -17,7 +17,12 @@ import (
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
 
-func taskSearchTestHandler(t *testing.T, cfg Config, storage *Storage, embedder Embedder, index *Index, clients ...*NRCClient) http.Handler {
+type searchTestHandler struct {
+	http.Handler
+	manager *WorkspaceManager
+}
+
+func taskSearchTestHandler(t *testing.T, cfg Config, storage *Storage, embedder Embedder, index *Index, clients ...*NRCClient) *searchTestHandler {
 	t.Helper()
 	wm := NewWorkspaceManager(context.Background(), cfg, storage, embedder, index)
 	for _, client := range clients {
@@ -28,7 +33,8 @@ func taskSearchTestHandler(t *testing.T, cfg Config, storage *Storage, embedder 
 		client.closeReady()
 		wm.clients[client.workspace] = client
 	}
-	return newHTTPHandler(cfg, time.Now(), wm, index, embedder)
+	t.Cleanup(wm.Close)
+	return &searchTestHandler{newHTTPHandler(cfg, time.Now(), wm, index, embedder), wm}
 }
 
 func postTaskSearch(t *testing.T, handler http.Handler, body string) (searchResponse, http.Header) {
@@ -145,6 +151,11 @@ func TestTaskSearchHTTPTaskLifecycleReconciliationAndReload(t *testing.T) {
 	reloadedClient.roomSyncTimes[0] = time.Time{}
 	reloadedClient.mu.Unlock()
 	response, _ = postTaskSearch(t, handler, `{"workspace":"lifecycle-ws","query":"unloaded done history","conv_id":"0","filters":{"entity_types":["task"],"task":{"task_ids":["29"]}}}`)
+	if !response.Stale || len(response.Results) != 0 {
+		t.Fatalf("cached response before reconciliation = %#v", response)
+	}
+	handler.manager.workers.Wait()
+	response, _ = postTaskSearch(t, handler, `{"workspace":"lifecycle-ws","query":"unloaded done history","conv_id":"0","filters":{"entity_types":["task"],"task":{"task_ids":["29"]}}}`)
 	if len(response.Results) != 1 || response.Results[0].Entity.EntityID != 29 || response.Results[0].Metadata.Task.Status != protocol.TaskStatusDone {
 		t.Fatalf("reconciled Done history = %#v", response.Results)
 	}
@@ -246,16 +257,59 @@ func TestTaskSearchHTTPMarksUncommittedReconciliationStale(t *testing.T) {
 	client.roomSyncTimes[0] = time.Time{}
 	client.mu.Unlock()
 
-	response, _ := postTaskSearch(t, handler, `{"workspace":"stale-ws","query":"not committed","conv_id":"0","filters":{"entity_types":["task"]}}`)
+	response, _ := postTaskSearch(t, handler, `{"workspace":"stale-ws","conv_id":"0","filters":{"entity_types":["task"]}}`)
 	if !response.Stale || len(response.Results) != 0 {
 		t.Fatalf("failed reconciliation response = %#v", response)
 	}
+	handler.manager.workers.Wait()
 	if _, queued, err := storage.GetEntityQueueEntry(taskIdentity("stale-ws", 30, 0)); err != nil || !queued {
 		t.Fatalf("failed reconciled task was not retained for retry: queued=%v err=%v", queued, err)
 	}
 }
 
-func TestTaskSearchHTTPConcurrentReconciliationSharesFailure(t *testing.T) {
+func TestTaskSearchHTTPReturnsCachedResultsWhileDisconnected(t *testing.T) {
+	storage := newTestStorage(t)
+	embedder := &recordingEmbedder{}
+	index := NewIndex()
+	cfg := Config{EmbedTasks: true, ReconcileInterval: time.Hour}
+	client, err := NewNRCClient(cfg, "offline-ws", storage, embedder, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := taskSearchTestHandler(t, cfg, storage, embedder, index, client)
+	client.resetReady()
+	client.mu.Lock()
+	client.subscribedRooms[0] = false
+	client.mu.Unlock()
+	if err := index.AddEntity(taskIdentity("offline-ws", 23, 0), &IndexEntry{Preview: "offline cached task", Metadata: SearchMetadata{Task: &TaskMetadata{Status: protocol.TaskStatusTodo}}}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		response, _ := postTaskSearch(t, handler, `{"workspace":"offline-ws","filters":{"entity_types":["task"]}}`)
+		if !response.Stale || len(response.Results) != 1 || response.Results[0].Entity.EntityID != 23 {
+			t.Errorf("disconnected cached response = %#v", response)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		handler.manager.cancel()
+		<-done
+		t.Fatal("search waited for the disconnected client")
+	}
+	// Shutdown cancels the background readiness wait instead of waiting 30s.
+	stopped := make(chan struct{})
+	go func() { handler.manager.Close(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel background reconciliation")
+	}
+}
+
+func TestTaskSearchHTTPReturnsCachedResultsDuringSingleBackgroundReconciliation(t *testing.T) {
 	storage := newTestStorage(t)
 	embedder := &recordingEmbedder{}
 	index := NewIndex()
@@ -265,12 +319,17 @@ func TestTaskSearchHTTPConcurrentReconciliationSharesFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := taskSearchTestHandler(t, cfg, storage, embedder, index, client)
+	if err := index.AddEntity(taskIdentity("shared-ws", 17, 0), &IndexEntry{Vector: []float32{1, 0}, Preview: "cached task", Metadata: SearchMetadata{Task: &TaskMetadata{Status: protocol.TaskStatusTodo}}}); err != nil {
+		t.Fatal(err)
+	}
 	client.mu.Lock()
 	client.roomSyncTimes[0] = time.Time{}
 	client.mu.Unlock()
 
 	started := make(chan struct{})
 	release := make(chan struct{})
+	defer handler.manager.workers.Wait()
+	defer close(release)
 	var once sync.Once
 	var taskPageRequests atomic.Int32
 	client.sendMessage = func(opcode uint16, _ []byte) error {
@@ -304,12 +363,14 @@ func TestTaskSearchHTTPConcurrentReconciliationSharesFailure(t *testing.T) {
 		t.Fatal("leader reconciliation did not start")
 	}
 	go request(results)
-	time.Sleep(20 * time.Millisecond)
-	close(release)
 	for i := 0; i < 2; i++ {
-		got := <-results
-		if got.err != nil || got.status != http.StatusOK || !got.response.Stale {
-			t.Fatalf("shared reconciliation response = %+v", got)
+		select {
+		case got := <-results:
+			if got.err != nil || got.status != http.StatusOK || !got.response.Stale || len(got.response.Results) != 1 || got.response.Results[0].Entity.EntityID != 17 {
+				t.Fatalf("cached reconciliation response = %+v", got)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("search blocked on background reconciliation")
 		}
 	}
 	if got := taskPageRequests.Load(); got != 1 {

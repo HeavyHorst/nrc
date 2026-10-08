@@ -305,10 +305,16 @@ func TestCustomerFailureAfterGraphSnapshotFencesPublicationAndHTTPRecovery(t *te
 	if !response.Stale {
 		t.Fatal("HTTP reported fresh after failed live persistence during reconciliation")
 	}
+	handler.manager.workers.Wait()
 	if complete, _ := client.indexComplete(); complete {
 		t.Fatal("old reconciliation republished failed epoch")
 	}
 	fail = false
+	response, _ = postTaskSearch(t, handler, body)
+	if !response.Stale {
+		t.Fatal("recovery request must report the still-stale cached inventory")
+	}
+	handler.manager.workers.Wait()
 	response, _ = postTaskSearch(t, handler, body)
 	if response.Stale || client.NeedsReconcile(0, time.Hour) {
 		t.Fatal("successful recovery remains stale")
