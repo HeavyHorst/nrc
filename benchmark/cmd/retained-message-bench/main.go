@@ -659,7 +659,7 @@ func run() error {
 	if count == 0 || count != hist.TotalCount() {
 		return fmt.Errorf("invalid sample count")
 	}
-	result := map[string]any{"ops": count, "ops_per_sec": float64(count) / elapsed.Seconds(), "duration_ms": float64(elapsed) / float64(time.Millisecond), "measured_start_ns": measuredPhaseStart.UnixNano(), "measured_end_ns": measuredPhaseStart.Add(elapsed).UnixNano(), "latency_ms": map[string]float64{"p50": float64(hist.ValueAtQuantile(50)) / 1000, "p99": float64(hist.ValueAtQuantile(99)) / 1000}, "subscribers": *subscribers, "offered_rate": *rate, "achieved_publish_rate": float64(count) / elapsed.Seconds()}
+	result := map[string]any{"ops": count, "ops_per_sec": float64(count) / elapsed.Seconds(), "duration_ms": float64(elapsed) / float64(time.Millisecond), "measured_start_ns": measuredPhaseStart.UnixNano(), "measured_end_ns": measuredPhaseStart.Add(elapsed).UnixNano(), "latency_ms": map[string]float64{"p50": float64(hist.ValueAtQuantile(50)) / 1000, "p99": float64(hist.ValueAtQuantile(99)) / 1000, "max": float64(hist.Max()) / 1000}, "subscribers": *subscribers, "offered_rate": *rate, "achieved_publish_rate": float64(count) / elapsed.Seconds()}
 	if probeConn != nil {
 		probeResult["workspace"] = *probeWorkspace
 		probeResult["sample_count"] = len(probeResult["samples"].([]map[string]float64))

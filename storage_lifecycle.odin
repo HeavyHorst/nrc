@@ -44,7 +44,11 @@ Storage_Lifecycle :: struct {
 storage_lifecycle_on_service: bool
 
 storage_lifecycle_available :: proc() -> bool {
-	return !storage_lifecycle_on_service && td.state == .Running && message_seal_service_available()
+	if storage_lifecycle_on_service || td.state != .Running do return false
+	when NRC_SIMULATION {
+		if nrc_sim_runtime != nil && nrc_sim_runtime.compaction_job_event_submission do return true
+	}
+	return td.server != nil && td.server.storage_control_jobs.impl != nil
 }
 
 destroy_storage_lifecycle :: proc(plan: ^Storage_Lifecycle) {
@@ -94,7 +98,7 @@ submit_storage_lifecycle :: proc(plan: ^Storage_Lifecycle, shard: int) -> bool {
 			return true
 		}
 	}
-	if chan.try_send(td.server.shard_compaction_jobs, job) do return true
+	if chan.try_send(td.server.storage_control_jobs, job) do return true
 	return false
 }
 

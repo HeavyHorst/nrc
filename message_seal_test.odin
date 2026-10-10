@@ -43,6 +43,8 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	td.server = &server
 	server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
 	defer chan.destroy(server.shard_compaction_jobs)
+	server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+	defer chan.destroy(server.storage_control_jobs)
 	server.shard_compaction_results = make([]^spsc.Queue(Shard_Compaction_Result), 1)
 	defer delete(server.shard_compaction_results)
 	server.shard_compaction_results[0], _ = spsc.create(Shard_Compaction_Result, 2, context.allocator)
@@ -70,17 +72,17 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	testing.expect_value(t, result, Message_Store_Result.Appended)
 	store.rotation_pending = true
 	// A full queue must not build inline or poison the store.
-	testing.expect(t, chan.try_send(server.shard_compaction_jobs, Shard_Compaction_Job{}))
+	testing.expect(t, chan.try_send(server.storage_control_jobs, Shard_Compaction_Job{}))
 	testing.expect(t, retained_message_flush_store(store))
 	testing.expect(t, store.rotation_pending && store.frozen == nil && !store.lifecycle_in_flight && !store.poisoned)
-	_, _ = chan.try_recv(server.shard_compaction_jobs)
+	_, _ = chan.try_recv(server.storage_control_jobs)
 	testing.expect(t, retained_message_flush_store(store) && store.lifecycle_in_flight)
 	testing.expect_value(t, store.active_generation, u64(1))
-	roll_job, roll_queued := chan.try_recv(server.shard_compaction_jobs)
+	roll_job, roll_queued := chan.try_recv(server.storage_control_jobs)
 	assert(roll_queued)
 	testing.expect(t, !worker_heap_contains_for_test(&heap, roll_job.lifecycle.store))
 	testing.expect(t, !worker_heap_contains_for_test(&heap, raw_data(roll_job.lifecycle.store.wal.path)))
-	assert(chan.try_send(server.shard_compaction_jobs, roll_job))
+	assert(chan.try_send(server.storage_control_jobs, roll_job))
 	worker := thread.create_and_start_with_poly_data(&server, proc(s: ^NRC_Server) {_ = service_shard_compaction_job(s)}, service_context)
 	thread.join(worker); thread.destroy(worker)
 	testing.expect(t, process_shard_compaction_results())
@@ -133,10 +135,21 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	thread.destroy(worker)
 	testing.expect(t, process_shard_compaction_results())
 	testing.expect(t, store.seal_ready)
+	// Real publication must admit and execute ahead of a full bulk lane.
+	obsolete_path := message_store_path(store.directory, 99, "wal"); defer delete(obsolete_path)
+	testing.expect(t, os.write_entire_file(obsolete_path, []byte{1}) == nil)
+	cleanup_dir, _ := strings.clone(store.directory, service_context.allocator)
+	assert(
+		chan.try_send(
+			server.shard_compaction_jobs,
+			Shard_Compaction_Job{allocator = service_context.allocator, storage = store.storage, shard_dir = cleanup_dir, message_remove_generation = 99},
+		),
+	)
 	_, flushed = flush_pending_retained_message_writes(&td.message_stores)
 	testing.expect(t, flushed && store.lifecycle_in_flight && !store.frozen_published)
 	worker = thread.create_and_start_with_poly_data(&server, proc(s: ^NRC_Server) {_ = service_shard_compaction_job(s)}, service_context)
 	thread.join(worker); thread.destroy(worker)
+	testing.expect(t, os.exists(obsolete_path))
 	seal_result, seal_received := spsc.try_pop(server.shard_compaction_results[0]); assert(seal_received)
 	sealed := seal_result.lifecycle.store.segments[len(seal_result.lifecycle.store.segments) - 1]
 	testing.expect(t, len(sealed.dedup_filter) > 0 && len(sealed.conversation_ranges) == 1)
@@ -149,10 +162,15 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	testing.expect(t, raw_data(store.segments[0].conversation_ranges) == raw_data(sealed.conversation_ranges))
 	testing.expect(t, message_dedup_filter_maybe_contains(store.segments[0].dedup_filter, workspace, seed.sender_principal, seed.client_message_id))
 	testing.expect(t, flushed && store.active_generation == 3 && store.frozen_published)
+	store.frozen.async_readers -= 1
+	_, maintained = maintain_message_store_registry(&td.message_stores)
+	testing.expect(t, maintained && store.frozen != nil, "full bulk admission must retain the published source for cleanup retry")
+	worker = thread.create_and_start_with_poly_data(&server, proc(s: ^NRC_Server) {_ = service_shard_compaction_job(s)}, service_context)
+	thread.join(worker); thread.destroy(worker)
+	testing.expect(t, !os.exists(obsolete_path))
 	result, _ = append_message_after_sealed_lookup(store, &third)
 	testing.expect_value(t, result, Message_Store_Result.Appended)
 	persistence.force_fsync(&store.wal)
-	store.frozen.async_readers -= 1
 	_, maintained = maintain_message_store_registry(&td.message_stores)
 	testing.expect(t, maintained && store.frozen == nil)
 	retained_message_release_store_reader(store)
@@ -195,6 +213,8 @@ test_message_seal_failure_and_shutdown_keep_source :: proc(t: ^testing.T) {
 		defer nbio.destroy(&td.io)
 		server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
 		defer chan.destroy(server.shard_compaction_jobs)
+		server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+		defer chan.destroy(server.storage_control_jobs)
 		dir := test_wal_path("message-seal-failure-shutdown")
 		_ = os.remove_all(dir); testing.expect(t, os.make_directory(dir) == nil); defer os.remove_all(dir)
 		workspace := "message-seal-failure"
@@ -208,7 +228,7 @@ test_message_seal_failure_and_shutdown_keep_source :: proc(t: ^testing.T) {
 		testing.expect_value(t, result, Message_Store_Result.Appended)
 		store.rotation_pending = true
 		testing.expect(t, retained_message_flush_store(store) && store.lifecycle_in_flight)
-		roll_job, roll_received := chan.try_recv(server.shard_compaction_jobs)
+		roll_job, roll_received := chan.try_recv(server.storage_control_jobs)
 		assert(roll_received)
 		rolled := run_shard_compaction_job(roll_job)
 		testing.expect(t, rolled.ok && process_shard_compaction_result(rolled))
@@ -247,7 +267,7 @@ test_message_seal_failure_and_shutdown_keep_source :: proc(t: ^testing.T) {
 			testing.expect(t, os.write_entire_file(blocker, []byte{1}) == nil)
 			_, ok := flush_pending_retained_message_writes(&td.message_stores)
 			testing.expect(t, ok && store.lifecycle_in_flight)
-			publication_job, queued := chan.try_recv(server.shard_compaction_jobs)
+			publication_job, queued := chan.try_recv(server.storage_control_jobs)
 			assert(queued)
 			published := run_shard_compaction_job(publication_job)
 			testing.expect(t, !published.ok && !process_shard_compaction_result(published))
@@ -262,7 +282,7 @@ test_message_seal_failure_and_shutdown_keep_source :: proc(t: ^testing.T) {
 			testing.expect(t, built.ok && process_message_seal_result(built))
 			_, ok := flush_pending_retained_message_writes(&td.message_stores)
 			testing.expect(t, ok && store.lifecycle_in_flight)
-			publication_job, queued := chan.try_recv(server.shard_compaction_jobs); assert(queued)
+			publication_job, queued := chan.try_recv(server.storage_control_jobs); assert(queued)
 			published := run_shard_compaction_job(publication_job)
 			testing.expect(t, published.ok)
 			sealed := published.lifecycle.store.segments[len(published.lifecycle.store.segments) - 1]

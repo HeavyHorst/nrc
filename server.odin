@@ -46,22 +46,28 @@ runtime_storage_layout: Storage_Layout_Manifest
 PENDING_QUEUE_CAPACITY :: 16384
 
 NRC_Server :: struct {
-	sock:                     net.TCP_Socket,
-	threads:                  []^thread.Thread,
-	closing:                  bool,
-	fatal_storage_error:      bool,
-	cached_rss_mb:            u32, // Service-thread sample, accessed atomically.
-	shutdown_requested:       bool, // For SIGINT edge detection (first vs second signal)
-	main_thread:              int,
-	wg:                       sync.Wait_Group,
+	sock:                       net.TCP_Socket,
+	threads:                    []^thread.Thread,
+	closing:                    bool,
+	fatal_storage_error:        bool,
+	cached_rss_mb:              u32, // Service-thread sample, accessed atomically.
+	shutdown_requested:         bool, // For SIGINT edge detection (first vs second signal)
+	main_thread:                int,
+	wg:                         sync.Wait_Group,
 	// The queue will hold socket descriptors for handoff.
-	pending_connections:      []Pending_Connection_Queue,
-	worker_startup:           chan.Chan(bool),
-	shard_compaction_jobs:    chan.Chan(Shard_Compaction_Job),
+	pending_connections:        []Pending_Connection_Queue,
+	worker_startup:             chan.Chan(bool),
+	shard_compaction_jobs:      chan.Chan(Shard_Compaction_Job),
+	storage_control_jobs:       chan.Chan(Shard_Compaction_Job),
+	storage_control_streak:     int, // Service-owned; bounded priority without starving bulk work.
+	storage_bulk_threads:       [STORAGE_BULK_EXECUTORS]^thread.Thread,
+	storage_bulk_results:       chan.Chan(Shard_Compaction_Result),
+	storage_bulk_pending:       [STORAGE_BULK_EXECUTORS]Shard_Compaction_Result,
+	storage_bulk_pending_valid: [STORAGE_BULK_EXECUTORS]bool, // Service-owned backpressure slots.
 	// One compactor producer and one owning-worker consumer per result queue.
 	// Main drains leftovers only after the wait group synchronizes completion.
-	shard_compaction_results: []^spsc.Queue(Shard_Compaction_Result),
-	shard_compactor_thread:   ^thread.Thread,
+	shard_compaction_results:   []^spsc.Queue(Shard_Compaction_Result),
+	shard_compactor_thread:     ^thread.Thread,
 }
 
 Server_State :: enum {
@@ -299,7 +305,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:e438d49"
+BUILD_VERSION :: "dev-2026-10:926c789"
 PROTOCOL_VERSION :: 8 // Calendar appointment rows carry an explicit time interval.
 
 jwt_auth_secret: string
@@ -551,6 +557,24 @@ start_server :: proc() -> bool {
 		}
 	}
 	defer chan.destroy(server.shard_compaction_jobs)
+	{
+		err: runtime.Allocator_Error
+		server.storage_control_jobs, err = chan.create_buffered(chan.Chan(Shard_Compaction_Job), LOGICAL_SHARD_COUNT, context.allocator)
+		if err != .None {
+			log.fatalf("Failed to allocate storage control job channel: %v", err)
+			return false
+		}
+	}
+	defer chan.destroy(server.storage_control_jobs)
+	{
+		err: runtime.Allocator_Error
+		server.storage_bulk_results, err = chan.create_buffered(chan.Chan(Shard_Compaction_Result), STORAGE_BULK_EXECUTORS, context.allocator)
+		if err != .None {
+			log.fatalf("Failed to allocate bulk completion channel: %v", err)
+			return false
+		}
+	}
+	defer chan.destroy(server.storage_bulk_results)
 	server.shard_compaction_results = make([]^spsc.Queue(Shard_Compaction_Result), thread_count)
 	defer delete(server.shard_compaction_results)
 	defer {
@@ -582,8 +606,11 @@ start_server :: proc() -> bool {
 
 	// Start worker threads
 	log.infof("Starting server with %d worker threads...", thread_count)
-	sync.wait_group_add(&server.wg, thread_count + 1)
+	sync.wait_group_add(&server.wg, thread_count + 1 + STORAGE_BULK_EXECUTORS)
 	server.shard_compactor_thread = thread.create_and_start_with_poly_data(Shard_Compactor_Thread_Data{server}, shard_compactor_thread, context)
+	for &bulk_thread in server.storage_bulk_threads {
+		bulk_thread = thread.create_and_start_with_poly_data(Shard_Compactor_Thread_Data{server}, storage_bulk_thread, context)
+	}
 	server.threads = make([]^thread.Thread, thread_count)
 	for i in 0 ..< thread_count {
 		worker_data := Worker_Thread_Data {
@@ -644,6 +671,7 @@ start_server :: proc() -> bool {
 	for t in server.threads do thread.destroy(t)
 	delete(server.threads)
 	thread.destroy(server.shard_compactor_thread)
+	for t in server.storage_bulk_threads do thread.destroy(t)
 	return workers_ready && !sync.atomic_load(&server.fatal_storage_error)
 }
 

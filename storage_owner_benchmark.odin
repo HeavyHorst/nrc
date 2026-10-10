@@ -110,8 +110,8 @@ benchmark_storage_owner_lifecycle :: proc(t: ^testing.T) {
 	defer {td = old^; free(old)}
 	td.backing_allocator = backing
 	server: NRC_Server; td.server = &server
-	server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
-	defer chan.destroy(server.shard_compaction_jobs)
+	server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+	defer chan.destroy(server.storage_control_jobs)
 	queue, _ := spsc.create(Shard_Compaction_Result, 2)
 	defer spsc.destroy(queue)
 	td.shard_writers.writers = make([dynamic]Shard_Transaction_Writer, 1)
@@ -151,7 +151,7 @@ benchmark_storage_owner_lifecycle :: proc(t: ^testing.T) {
 				if message {
 					if !enqueue_message_lifecycle(s, .Message_Retain) do return 0
 				} else if !enqueue_shard_lifecycle(w, .Shard_Rotate) do return 0
-				job, received := chan.try_recv(server.shard_compaction_jobs); if !received do return 0
+				job, received := chan.try_recv(server.storage_control_jobs); if !received do return 0
 				context.allocator = job.allocator
 				job.lifecycle.ok = true
 				if message {

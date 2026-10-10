@@ -151,7 +151,7 @@ refresh_shard_writer_storage_space :: proc(writer: ^Shard_Transaction_Writer, fo
 					storage             = writer.storage,
 					shard_dir           = directory,
 				}
-				if chan.try_send(td.server.shard_compaction_jobs, job) {
+				if chan.try_send(td.server.storage_control_jobs, job) {
 					writer.space_refresh_started = now
 				} else {
 					delete(directory)

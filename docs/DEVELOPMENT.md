@@ -146,7 +146,13 @@ return a retryable capacity error rather than poisoning the store. Startup takes
 the initial sample synchronously.
 
 Runtime WAL rotation, segment publication and retained-message retention cleanup
-run on the storage service. Workers submit detached, backing-allocator-owned
+run on the storage service through a separate bounded control queue. Bulk sealing,
+compaction and obsolete-source deletion use two bounded executors that share the
+reserved service CPU, overlapping IO waits without taking a worker core. Bulk
+completions return through a bounded multi-producer channel; the service retains
+backpressured results and remains the sole producer of each worker's SPSC result
+queue. Shutdown joins all producers before draining jobs and completions.
+Workers submit detached, backing-allocator-owned
 snapshots and gate the affected shard until the durable publication result is
 adopted. No worker indexes, arenas, connection handles or live WAL file objects
 cross this boundary. Snapshots carry buffer-free WAL metadata, not the 128 KiB

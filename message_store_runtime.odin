@@ -188,9 +188,13 @@ message_dedup_record_cmp :: proc(lhs, rhs, _: rawptr) -> slice.Ordering {
 	a, b := (^Message_Index_Record)(lhs), (^Message_Index_Record)(rhs)
 	if a.workspace_hash != b.workspace_hash do return a.workspace_hash < b.workspace_hash ? .Less : .Greater
 	if a.principal_hash != b.principal_hash do return a.principal_hash < b.principal_hash ? .Less : .Greater
-	for value, i in a.client_id {
-		if value != b.client_id[i] do return value < b.client_id[i] ? .Less : .Greater
-	}
+	// Big-endian words preserve the serialized key's unsigned bytewise order.
+	a_first, _ := endian.get_u64(a.client_id[:8], .Big)
+	b_first, _ := endian.get_u64(b.client_id[:8], .Big)
+	if a_first != b_first do return a_first < b_first ? .Less : .Greater
+	a_last, _ := endian.get_u64(a.client_id[8:], .Big)
+	b_last, _ := endian.get_u64(b.client_id[8:], .Big)
+	if a_last != b_last do return a_last < b_last ? .Less : .Greater
 	return .Equal
 }
 

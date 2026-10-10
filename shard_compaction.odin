@@ -6,6 +6,7 @@ import "core:os"
 import "core:strings"
 import "core:sync"
 import "core:sync/chan"
+import "core:sys/linux"
 import "core:time"
 
 import "persistence"
@@ -352,8 +353,24 @@ rotate_shard_writer_for_compaction :: proc(writer: ^Shard_Transaction_Writer) ->
 	defer delete(new_active_path)
 	if !prepared_active {
 		if shard_compaction_fault_hit(.New_Active_Create) do return false
-		new_file, open_err := storage_io.open(writer.storage, new_active_path, {.Write, .Create, .Excl, .Append}, os.perm(0o644))
-		if open_err != nil do return false
+		if shard_compaction_fault_hit(.New_Active_Generation_Claimed) {
+			// Deterministically exercise a bulk reservation winning after discovery.
+			_, _ = reserve_shard_active_generation(writer.storage, writer.shard_dir, next_generation - 1)
+		}
+		new_file: ^storage_io.File
+		for {
+			open_err: os.Error
+			new_file, open_err = storage_io.open(writer.storage, new_active_path, {.Write, .Create, .Excl, .Append}, os.perm(0o644))
+			if open_err == nil do break
+			if open_err != os.General_Error.Exist && open_err != os.Platform_Error(linux.Errno.EEXIST) do return false
+			// Bulk reservation can claim a generation while this rotation fsyncs.
+			// Never remove its file or turn that healthy contention into rejection.
+			generation_ok: bool
+			next_generation, generation_ok = shard_compaction_next_file_generation_after(writer.storage, writer.shard_dir, next_generation)
+			if !generation_ok do return false
+			delete(new_active_path)
+			new_active_path = shard_generation_wal_path(writer.shard_dir, next_generation)
+		}
 		sync_ok := !shard_compaction_fault_hit(.New_Active_Sync) && storage_io.sync(new_file) == nil
 		close_err := storage_io.close(new_file)
 		directory_synced := false
@@ -791,20 +808,97 @@ run_shard_compaction_job :: proc(input: Shard_Compaction_Job) -> Shard_Compactio
 
 discard_queued_shard_compaction_jobs :: proc(server: ^NRC_Server) {
 	if server == nil do return
-	for {
-		job, received := chan.try_recv(server.shard_compaction_jobs)
-		if !received do return
-		if job.active_reservation_generation != 0 {
-			remove_shard_active_reservation(job.storage, job.shard_dir, job.active_reservation_generation)
+	for jobs in ([2]chan.Chan(Shard_Compaction_Job){server.storage_control_jobs, server.shard_compaction_jobs}) {
+		if jobs.impl == nil do continue
+		for {
+			job, received := chan.try_recv(jobs)
+			if !received do break
+			if job.active_reservation_generation != 0 {
+				remove_shard_active_reservation(job.storage, job.shard_dir, job.active_reservation_generation)
+			}
+			destroy_shard_compaction_job(&job)
 		}
-		destroy_shard_compaction_job(&job)
+	}
+}
+
+// Cheap freshness probes share this lane. A small count budget lets probes
+// force many expensive seals ahead of an already-admitted publication.
+STORAGE_CONTROL_BURST :: 64
+STORAGE_BULK_EXECUTORS :: 2
+
+// Bulk threads never publish to worker SPSC queues. The service retains refused
+// completions in bounded slots so one slow owner cannot discard a seal result.
+service_storage_bulk_results :: proc(server: ^NRC_Server) -> bool {
+	did_work := false
+	for &pending, i in server.storage_bulk_pending {
+		if !server.storage_bulk_pending_valid[i] {
+			received: bool
+			pending, received = chan.try_recv(server.storage_bulk_results)
+			if !received do continue
+			server.storage_bulk_pending_valid[i] = true
+			did_work = true
+		}
+		if pending.message_remove_generation != 0 || pending.owner_worker < 0 || pending.owner_worker >= len(server.shard_compaction_results) {
+			destroy_shard_compaction_result(&pending, true)
+		} else if spsc.try_push(server.shard_compaction_results[pending.owner_worker], pending) {
+			pending = {}
+		} else {
+			continue
+		}
+		server.storage_bulk_pending_valid[i] = false
+		did_work = true
+	}
+	return did_work
+}
+
+storage_bulk_thread :: proc(data: Shard_Compactor_Thread_Data) {
+	defer sync.wait_group_done(&data.server.wg)
+	// Share the reserved service CPU initially: overlap disk waits without
+	// borrowing a worker or generator core or claiming extra CPU capacity.
+	if !cpu_affinity_disabled() && cpu_role_plan.service_cpu >= 0 {
+		set_thread_cpu_affinity(cpu_role_plan.service_cpu)
+	}
+	for !sync.atomic_load(&data.server.closing) {
+		job, received := chan.try_recv(data.server.shard_compaction_jobs)
+		if !received {time.sleep(time.Millisecond); continue}
+		result := run_shard_compaction_job(job)
+		transferred := false
+		for !sync.atomic_load(&data.server.closing) {
+			if chan.try_send(data.server.storage_bulk_results, result) {
+				transferred = true
+				break
+			}
+			time.sleep(time.Millisecond)
+		}
+		if !transferred do destroy_shard_compaction_result(&result, true)
 	}
 }
 
 service_shard_compaction_job :: proc(server: ^NRC_Server) -> bool {
 	if server == nil do return false
-	job, received := chan.try_recv(server.shard_compaction_jobs)
-	if !received do return false
+	// Without a bulk completion channel, synchronous fixtures/simulation retain
+	// the bounded fair executor. Production bulk execution is independent.
+	job: Shard_Compaction_Job
+	received: bool
+	did_work := false
+	if server.storage_bulk_results.impl != nil {
+		did_work = service_storage_bulk_results(server)
+		job, received = chan.try_recv(server.storage_control_jobs)
+	} else {
+		if server.storage_control_streak < STORAGE_CONTROL_BURST && server.storage_control_jobs.impl != nil {
+			job, received = chan.try_recv(server.storage_control_jobs)
+			if received do server.storage_control_streak += 1
+		}
+		if !received && server.shard_compaction_jobs.impl != nil {
+			job, received = chan.try_recv(server.shard_compaction_jobs)
+			if received do server.storage_control_streak = 0
+		}
+		if !received && server.storage_control_jobs.impl != nil {
+			job, received = chan.try_recv(server.storage_control_jobs)
+			if received do server.storage_control_streak = min(server.storage_control_streak + 1, STORAGE_CONTROL_BURST)
+		}
+	}
+	if !received do return did_work
 	result := run_shard_compaction_job(job)
 	if result.message_remove_generation != 0 {
 		destroy_shard_compaction_result(&result, true)
@@ -827,6 +921,19 @@ service_shard_compaction_job :: proc(server: ^NRC_Server) -> bool {
 
 discard_queued_shard_compaction_results :: proc(server: ^NRC_Server) {
 	if server == nil do return
+	for &pending, i in server.storage_bulk_pending {
+		if server.storage_bulk_pending_valid[i] {
+			destroy_shard_compaction_result(&pending, true)
+			server.storage_bulk_pending_valid[i] = false
+		}
+	}
+	if server.storage_bulk_results.impl != nil {
+		for {
+			result, received := chan.try_recv(server.storage_bulk_results)
+			if !received do break
+			destroy_shard_compaction_result(&result, true)
+		}
+	}
 	for result_queue in server.shard_compaction_results {
 		for {
 			result, received := spsc.try_pop(result_queue)
@@ -858,7 +965,7 @@ shard_compactor_thread :: proc(data: Shard_Compactor_Thread_Data) {
 		if service_shard_compaction_job(data.server) {
 			continue
 		}
-		time.sleep(10 * time.Millisecond)
+		time.sleep(time.Millisecond)
 	}
 }
 

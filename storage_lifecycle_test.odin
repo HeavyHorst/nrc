@@ -4,12 +4,14 @@ import "base:runtime"
 import "core:fmt"
 import "core:log"
 import "core:os"
+import "core:sync"
 import "core:sync/chan"
 import "core:testing"
 import "core:thread"
 import "core:time"
 import nbio "nbio/poly"
 import "spsc"
+import "storage_io"
 import tlsf "vendor/tlsf"
 
 storage_lifecycle_test_service :: proc(server: ^NRC_Server, service_context: runtime.Context) {
@@ -27,6 +29,210 @@ test_storage_lifecycle_snapshot_budget :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_storage_control_admission_fairness_and_discard :: proc(t: ^testing.T) {
+	server: NRC_Server
+	server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 65, context.allocator)
+	defer chan.destroy(server.storage_control_jobs)
+	server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+	defer chan.destroy(server.shard_compaction_jobs)
+	server.shard_compaction_results = make([]^spsc.Queue(Shard_Compaction_Result), 1)
+	server.shard_compaction_results[0], _ = spsc.create(Shard_Compaction_Result, 16)
+	defer {spsc.destroy(server.shard_compaction_results[0]); delete(server.shard_compaction_results)}
+	defer discard_queued_shard_compaction_results(&server)
+	defer discard_queued_shard_compaction_jobs(&server)
+	dir := test_wal_path("storage-control-fairness"); defer os.remove_all(dir)
+	testing.expect(t, os.make_directory(dir) == nil)
+	path := message_store_path(dir, 17, "wal"); defer delete(path)
+	testing.expect(t, os.write_entire_file(path, []byte{1}) == nil)
+	bulk := Shard_Compaction_Job {
+		allocator                 = context.allocator,
+		storage                   = storage_io.host_context(),
+		shard_dir                 = fmt.aprintf("%s", dir),
+		message_remove_generation = 17,
+	}
+	assert(chan.try_send(server.shard_compaction_jobs, bulk))
+	testing.expect(t, !chan.try_send(server.shard_compaction_jobs, Shard_Compaction_Job{}))
+	// Full bulk admission cannot prevent controls; control admission is bounded too.
+	for i in 0 ..< 65 {
+		assert(
+			chan.try_send(
+				server.storage_control_jobs,
+				Shard_Compaction_Job {
+					allocator = context.allocator,
+					storage = storage_io.host_context(),
+					shard_dir = fmt.aprintf("%s", dir),
+					storage_space_probe = true,
+					shard = i,
+				},
+			),
+		)
+	}
+	testing.expect(t, !chan.try_send(server.storage_control_jobs, Shard_Compaction_Job{}))
+	for i in 0 ..< 64 {
+		testing.expect(t, service_shard_compaction_job(&server) && os.exists(path))
+		result, received := spsc.try_pop(server.shard_compaction_results[0])
+		testing.expect(t, received && result.ok && result.storage_space_probe && result.shard == i)
+		destroy_shard_compaction_result(&result, true)
+	}
+	// Strict priority would leave this obsolete WAL forever under control load.
+	testing.expect(t, service_shard_compaction_job(&server) && !os.exists(path))
+	testing.expect(t, service_shard_compaction_job(&server))
+	result, received := spsc.try_pop(server.shard_compaction_results[0])
+	testing.expect(t, received && result.ok && result.shard == 64)
+	destroy_shard_compaction_result(&result, true)
+	testing.expect(t, !service_shard_compaction_job(&server))
+	// With no bulk, controls continue past the burst; a later bulk still runs.
+	for _ in 0 ..< 66 {
+		assert(
+			chan.try_send(
+				server.storage_control_jobs,
+				Shard_Compaction_Job {
+					allocator = context.allocator,
+					storage = storage_io.host_context(),
+					shard_dir = fmt.aprintf("%s", dir),
+					storage_space_probe = true,
+				},
+			),
+		)
+		testing.expect(t, service_shard_compaction_job(&server))
+		result, received = spsc.try_pop(server.shard_compaction_results[0])
+		testing.expect(t, received && result.ok)
+		destroy_shard_compaction_result(&result, true)
+	}
+	testing.expect(t, os.write_entire_file(path, []byte{1}) == nil)
+	bulk.shard_dir = fmt.aprintf("%s", dir)
+	assert(chan.try_send(server.shard_compaction_jobs, bulk))
+	plan := new(Storage_Lifecycle)
+	plan.kind = .Message_Seal
+	plan.store = new(Storage_Lifecycle_Message)
+	plan.store.directory = fmt.aprintf("%s", dir)
+	plan.store.wal.path = fmt.aprintf("%s", path)
+	plan.store.wal.path_allocator = context.allocator
+	plan.store.segments = make([dynamic]Message_Segment_Descriptor, 1)
+	assert(chan.try_send(server.storage_control_jobs, Shard_Compaction_Job{allocator = context.allocator, lifecycle = plan}))
+	testing.expect(t, service_shard_compaction_job(&server) && !os.exists(path))
+	// Shutdown discards owned payloads in both lanes without executing them.
+	testing.expect(t, os.write_entire_file(path, []byte{1}) == nil)
+	bulk.shard_dir = fmt.aprintf("%s", dir)
+	assert(chan.try_send(server.shard_compaction_jobs, bulk))
+	discard_queued_shard_compaction_jobs(&server)
+	_, received = chan.try_recv(server.storage_control_jobs); testing.expect(t, !received)
+	_, received = chan.try_recv(server.shard_compaction_jobs); testing.expect(t, !received)
+	testing.expect(t, os.exists(path) && !service_shard_compaction_job(&server))
+}
+
+@(test)
+test_storage_bulk_completion_backpressure_preserves_control_progress :: proc(t: ^testing.T) {
+	server: NRC_Server
+	server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+	defer chan.destroy(server.storage_control_jobs)
+	server.storage_bulk_results, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Result), STORAGE_BULK_EXECUTORS, context.allocator)
+	defer chan.destroy(server.storage_bulk_results)
+	server.shard_compaction_results = make([]^spsc.Queue(Shard_Compaction_Result), 2)
+	for &queue in server.shard_compaction_results do queue, _ = spsc.create(Shard_Compaction_Result, 1)
+	defer {for queue in server.shard_compaction_results do spsc.destroy(queue); delete(server.shard_compaction_results)}
+	defer discard_queued_shard_compaction_results(&server)
+	dir := test_wal_path("bulk-completion-backpressure"); defer os.remove_all(dir)
+	assert(os.make_directory(dir) == nil)
+	assert(spsc.try_push(server.shard_compaction_results[0], Shard_Compaction_Result{shard = 99}))
+	for generation in ([2]u64{17, 19}) {
+		assert(chan.try_send(server.storage_bulk_results, Shard_Compaction_Result{owner_worker = 0, message_source_generation = generation, ok = true}))
+	}
+	assert(
+		chan.try_send(
+			server.storage_control_jobs,
+			Shard_Compaction_Job {
+				allocator = context.allocator,
+				storage = storage_io.host_context(),
+				shard_dir = fmt.aprintf("%s", dir),
+				owner_worker = 1,
+				storage_space_probe = true,
+			},
+		),
+	)
+	// A full owner's queue holds both bulk completions, not the control service.
+	testing.expect(t, service_shard_compaction_job(&server))
+	control, received := spsc.try_pop(server.shard_compaction_results[1])
+	testing.expect(t, received && control.storage_space_probe && control.ok)
+	destroy_shard_compaction_result(&control, true)
+	_, received = spsc.try_pop(server.shard_compaction_results[0]); testing.expect(t, received)
+	for generation in ([2]u64{17, 19}) {
+		testing.expect(t, service_shard_compaction_job(&server))
+		result: Shard_Compaction_Result
+		result, received = spsc.try_pop(server.shard_compaction_results[0])
+		testing.expect(t, received && result.ok && result.message_source_generation == generation)
+		destroy_shard_compaction_result(&result, true)
+	}
+	testing.expect(t, !service_shard_compaction_job(&server))
+	// Shutdown frees completions both in service slots and still in the channel.
+	for generation in ([2]u64{21, 23}) {
+		result := Shard_Compaction_Result {
+			owner_worker              = 0,
+			message_source_generation = generation,
+			allocator                 = context.allocator,
+		}
+		result.active_reservation_path = fmt.aprintf("%s/unused-%d", dir, generation)
+		result.active_reservation_storage = storage_io.host_context()
+		assert(chan.try_send(server.storage_bulk_results, result))
+	}
+	assert(spsc.try_push(server.shard_compaction_results[0], Shard_Compaction_Result{}))
+	testing.expect(t, service_shard_compaction_job(&server))
+	result := Shard_Compaction_Result {
+		allocator    = context.allocator,
+		owner_worker = 0,
+	}
+	result.active_reservation_path = fmt.aprintf("%s/unused-25", dir)
+	result.active_reservation_storage = storage_io.host_context()
+	assert(chan.try_send(server.storage_bulk_results, result))
+	discard_queued_shard_compaction_results(&server)
+	testing.expect(t, !service_shard_compaction_job(&server))
+}
+
+@(test)
+test_storage_bulk_executors_shutdown_with_full_completions :: proc(t: ^testing.T) {
+	server: NRC_Server
+	server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 2, context.allocator)
+	defer chan.destroy(server.shard_compaction_jobs)
+	server.storage_bulk_results, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Result), STORAGE_BULK_EXECUTORS, context.allocator)
+	defer chan.destroy(server.storage_bulk_results)
+	dir := test_wal_path("bulk-shutdown-full-completions"); defer os.remove_all(dir)
+	assert(os.make_directory(dir) == nil)
+	paths: [2]string
+	defer for path in paths do delete(path)
+	for generation, i in ([2]u64{17, 19}) {
+		paths[i] = message_store_path(dir, generation, "wal")
+		assert(os.write_entire_file(paths[i], []byte{1}) == nil)
+		assert(
+			chan.try_send(
+				server.shard_compaction_jobs,
+				Shard_Compaction_Job {
+					allocator = context.allocator,
+					storage = storage_io.host_context(),
+					shard_dir = fmt.aprintf("%s", dir),
+					message_remove_generation = generation,
+				},
+			),
+		)
+	}
+	for _ in 0 ..< STORAGE_BULK_EXECUTORS do assert(chan.try_send(server.storage_bulk_results, Shard_Compaction_Result{}))
+	sync.wait_group_add(&server.wg, STORAGE_BULK_EXECUTORS)
+	for &executor in server.storage_bulk_threads do executor = thread.create_and_start_with_poly_data(Shard_Compactor_Thread_Data{&server}, storage_bulk_thread, context)
+	defer {
+		sync.atomic_store(&server.closing, true)
+		sync.wait(&server.wg)
+		for executor in server.storage_bulk_threads {thread.join(executor); thread.destroy(executor)}
+		discard_queued_shard_compaction_jobs(&server)
+		discard_queued_shard_compaction_results(&server)
+	}
+	// One executor cannot finish both jobs: its first completion is blocked.
+	// Both deleted files therefore demonstrate concurrent bulk progress.
+	started := time.tick_now()
+	for (os.exists(paths[0]) || os.exists(paths[1])) && time.tick_since(started) < 5 * time.Second do time.sleep(time.Millisecond)
+	testing.expect(t, !os.exists(paths[0]) && !os.exists(paths[1]))
+	// The deferred join must finish even though nobody frees completion capacity.
+}
+
+@(test)
 test_shard_lifecycle_channel_rotation_publication :: proc(t: ^testing.T) {
 	service_context := context
 	heap: tlsf.Allocator
@@ -38,6 +244,8 @@ test_shard_lifecycle_channel_rotation_publication :: proc(t: ^testing.T) {
 	server: NRC_Server; td.server = &server
 	server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
 	defer chan.destroy(server.shard_compaction_jobs)
+	server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+	defer chan.destroy(server.storage_control_jobs)
 	server.shard_compaction_results = make([]^spsc.Queue(Shard_Compaction_Result), 1)
 	server.shard_compaction_results[0], _ = spsc.create(Shard_Compaction_Result, 2)
 	defer {spsc.destroy(server.shard_compaction_results[0]); delete(server.shard_compaction_results)}
@@ -59,17 +267,17 @@ test_shard_lifecycle_channel_rotation_publication :: proc(t: ^testing.T) {
 	testing.expect(t, shard_compaction_test_append_task(w, workspace, 10, "before first roll"))
 	w.batch_writes = true
 	old_manifest := w.manifest
-	testing.expect(t, chan.try_send(server.shard_compaction_jobs, Shard_Compaction_Job{}))
+	testing.expect(t, chan.try_send(server.storage_control_jobs, Shard_Compaction_Job{}))
 	testing.expect(t, !rotate_shard_writer_for_compaction(w) && !w.poisoned && !w.lifecycle_in_flight)
 	testing.expect_value(t, w.manifest, old_manifest)
-	_, _ = chan.try_recv(server.shard_compaction_jobs)
+	_, _ = chan.try_recv(server.storage_control_jobs)
 	for round in 0 ..< 2 {
 		testing.expect(t, rotate_shard_writer_for_compaction(w) && w.lifecycle_in_flight)
-		job, queued := chan.try_recv(server.shard_compaction_jobs); assert(queued)
+		job, queued := chan.try_recv(server.storage_control_jobs); assert(queued)
 		testing.expect(t, job.lifecycle.writer.wal.file == nil)
 		testing.expect(t, !worker_heap_contains_for_test(&heap, job.lifecycle.writer))
 		testing.expect(t, !worker_heap_contains_for_test(&heap, raw_data(job.lifecycle.writer.wal.path)))
-		assert(chan.try_send(server.shard_compaction_jobs, job))
+		assert(chan.try_send(server.storage_control_jobs, job))
 		generation := w.manifest.active_generation
 		storage_lifecycle_test_service(&server, service_context)
 		// The disk has advanced, but the owner remains gated until adoption.
@@ -97,16 +305,16 @@ test_shard_lifecycle_channel_rotation_publication :: proc(t: ^testing.T) {
 	storage_lifecycle_test_service(&server, service_context)
 	testing.expect(t, process_shard_compaction_results() && w.pending_publication != nil)
 	pending := w.pending_publication^
-	testing.expect(t, chan.try_send(server.shard_compaction_jobs, Shard_Compaction_Job{}))
+	testing.expect(t, chan.try_send(server.storage_control_jobs, Shard_Compaction_Job{}))
 	testing.expect(t, !schedule_shard_compaction_work() && !w.lifecycle_in_flight)
 	testing.expect(t, raw_data(w.pending_publication.segments.catalog.segments) == raw_data(pending.segments.catalog.segments))
-	_, _ = chan.try_recv(server.shard_compaction_jobs)
+	_, _ = chan.try_recv(server.storage_control_jobs)
 	manifest := w.manifest
 	testing.expect(t, schedule_shard_compaction_work() && w.lifecycle_in_flight)
-	publication_job, publication_queued := chan.try_recv(server.shard_compaction_jobs); assert(publication_queued)
+	publication_job, publication_queued := chan.try_recv(server.storage_control_jobs); assert(publication_queued)
 	testing.expect(t, raw_data(publication_job.lifecycle.publication.segments.catalog.segments) == raw_data(pending.segments.catalog.segments))
 	testing.expect(t, len(w.pending_publication.segments.catalog.segments) == 0)
-	assert(chan.try_send(server.shard_compaction_jobs, publication_job))
+	assert(chan.try_send(server.storage_control_jobs, publication_job))
 	storage_lifecycle_test_service(&server, service_context)
 	testing.expect_value(t, w.manifest, manifest)
 	testing.expect(t, process_shard_compaction_results() && w.pending_publication == nil && !w.lifecycle_in_flight)
@@ -145,8 +353,8 @@ test_message_retention_lifecycle_publication_and_failure :: proc(t: ^testing.T) 
 		wal_path := message_store_path(s.directory, expired.generation, "wal"); defer delete(wal_path)
 		index_path := message_store_path(s.directory, expired.generation, "idx"); defer delete(index_path)
 		td.server = &server
-		server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
-		defer chan.destroy(server.shard_compaction_jobs)
+		server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+		defer chan.destroy(server.storage_control_jobs)
 		server.shard_compaction_results = make([]^spsc.Queue(Shard_Compaction_Result), 1)
 		server.shard_compaction_results[0], _ = spsc.create(Shard_Compaction_Result, 2)
 		defer {spsc.destroy(server.shard_compaction_results[0]); delete(server.shard_compaction_results)}
@@ -155,9 +363,9 @@ test_message_retention_lifecycle_publication_and_failure :: proc(t: ^testing.T) 
 		s.async_readers = 1
 		testing.expect(t, maintain_message_store(s, now, sync_wal = false) && !s.lifecycle_in_flight)
 		s.async_readers = 0
-		testing.expect(t, chan.try_send(server.shard_compaction_jobs, Shard_Compaction_Job{}))
+		testing.expect(t, chan.try_send(server.storage_control_jobs, Shard_Compaction_Job{}))
 		testing.expect(t, maintain_message_store(s, now, sync_wal = false) && !s.lifecycle_in_flight && len(s.segments) == 2)
-		_, _ = chan.try_recv(server.shard_compaction_jobs)
+		_, _ = chan.try_recv(server.storage_control_jobs)
 		testing.expect(t, maintain_message_store(s, now, sync_wal = false) && s.lifecycle_in_flight)
 		testing.expect(t, os.exists(wal_path) && os.exists(index_path) && len(s.segments) == 2)
 		if fail_publication {

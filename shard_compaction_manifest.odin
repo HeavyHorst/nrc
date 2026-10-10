@@ -37,6 +37,7 @@ Shard_Compaction_Fault_Point :: enum u8 {
 	None,
 	Sealed_WAL_Sync,
 	New_Active_Create,
+	New_Active_Generation_Claimed,
 	New_Active_Sync,
 	New_Active_Directory_Sync,
 	Manifest_Create,

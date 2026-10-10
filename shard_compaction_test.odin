@@ -774,6 +774,32 @@ test_shard_checkpoint_floor_witness_routes_to_every_logical_shard :: proc(t: ^te
 }
 
 @(test)
+test_shard_rotation_retries_generation_claimed_by_bulk_reservation :: proc(t: ^testing.T) {
+	data_dir := storage_layout_test_setup("shard-rotation-reservation-race"); defer os.remove_all(data_dir)
+	testing.expect(t, storage_layout_test_create_generation(data_dir, 1))
+	workspace := "rotation-reservation-race"
+	shard := int(shard_for_workspace(transmute([]byte)workspace))
+	generation_dir := sharded_generation_path(data_dir, 1); defer delete(generation_dir)
+	shard_dir := sharded_shard_path(generation_dir, shard); defer delete(shard_dir)
+	writer: Shard_Transaction_Writer
+	if !testing.expect(t, init_managed_shard_transaction_writer(&writer, shard_dir, shard, shard, LOGICAL_SHARD_COUNT)) do return
+	defer shard_compaction_test_crash_writer(&writer)
+	testing.expect(t, shard_compaction_test_append_task(&writer, workspace, 10, "before-rotation"))
+	claimed_generation, found := shard_compaction_next_file_generation(writer.storage, shard_dir, writer.manifest)
+	if !testing.expect(t, found) do return
+	set_shard_compaction_fault_for_test(.New_Active_Generation_Claimed)
+	defer clear_shard_compaction_fault_for_test()
+	testing.expect(t, rotate_shard_writer_for_compaction(&writer))
+	testing.expect(t, shard_compaction_fault_triggered_for_test() && !writer.poisoned)
+	testing.expect(t, writer.manifest.active_generation > claimed_generation)
+	claimed_path := shard_generation_wal_path(shard_dir, claimed_generation); defer delete(claimed_path)
+	reserved, read_err := os.read_entire_file(claimed_path, context.allocator); defer delete(reserved)
+	testing.expect(t, read_err == nil && len(reserved) == 0)
+	shard_compaction_test_crash_writer(&writer)
+	testing.expect(t, shard_compaction_test_restart_is_exact(shard_dir, shard, workspace, false, true, []string{"before-rotation"}, 1, {task = 10}))
+}
+
+@(test)
 test_shard_compaction_rotation_fault_matrix_restarts_from_durable_manifest :: proc(t: ^testing.T) {
 	previous_logger := context.logger
 	points := [?]Shard_Compaction_Fault_Point {

@@ -30,9 +30,13 @@ test_shard_storage_probe_uses_cache_and_rejects_stale_or_failed_samples :: proc(
 	td.shard_writers = {}
 	server: NRC_Server
 	channel_err: mem.Allocator_Error
+	server.storage_control_jobs, channel_err = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+	testing.expect(t, channel_err == .None)
+	defer chan.destroy(server.storage_control_jobs)
 	server.shard_compaction_jobs, channel_err = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
 	testing.expect(t, channel_err == .None)
 	defer chan.destroy(server.shard_compaction_jobs)
+	assert(chan.try_send(server.shard_compaction_jobs, Shard_Compaction_Job{}))
 	td.server = &server
 	for &index in td.shard_writers.writer_index do index = -1
 	append(&td.shard_writers.writers, Shard_Transaction_Writer{})
@@ -51,14 +55,14 @@ test_shard_storage_probe_uses_cache_and_rejects_stale_or_failed_samples :: proc(
 	// A synchronous statfs on the missing directory would fail instead.
 	testing.expect(t, refresh_shard_writer_storage_space(writer))
 	testing.expect_value(t, writer.available_disk_bytes, u64(123456))
-	job, received := chan.try_recv(server.shard_compaction_jobs)
+	job, received := chan.try_recv(server.storage_control_jobs)
 	testing.expect(t, received && job.storage_space_probe && job.shard == 7)
 	result := run_shard_compaction_job(job)
 	testing.expect(t, !result.ok)
 	testing.expect(t, process_shard_compaction_result(result))
 	testing.expect(t, !writer.space_known)
 	testing.expect(t, !refresh_shard_writer_storage_space(writer))
-	_, received = chan.try_recv(server.shard_compaction_jobs)
+	_, received = chan.try_recv(server.storage_control_jobs)
 	testing.expect(t, !received, "probe retries must be rate limited")
 	sample := ulid.time_now()
 	testing.expect(
@@ -96,9 +100,9 @@ test_stale_shard_space_probe_replies_busy_instead_of_dropping_request :: proc(t:
 		defer shutdown_shard_writer_registry(&td.shard_writers)
 		server: NRC_Server
 		channel_err: mem.Allocator_Error
-		server.shard_compaction_jobs, channel_err = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+		server.storage_control_jobs, channel_err = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
 		testing.expect(t, channel_err == .None)
-		defer chan.destroy(server.shard_compaction_jobs)
+		defer chan.destroy(server.storage_control_jobs)
 		td.server = &server
 		defer td.server = nil
 		writer := &td.shard_writers.writers[0]
@@ -120,7 +124,7 @@ test_stale_shard_space_probe_replies_busy_instead_of_dropping_request :: proc(t:
 		testing.expect(t, len(frame) >= 4 && frame[0] & 0x0f == 8 && frame[2] == 3 && frame[3] == 0xF5, "expected WebSocket close code 1013")
 		testing.expect_value(t, writer.wal.write_offset, 0)
 		testing.expect(t, !writer.poisoned)
-		job, received := chan.try_recv(server.shard_compaction_jobs)
+		job, received := chan.try_recv(server.storage_control_jobs)
 		testing.expect(t, received && job.storage_space_probe)
 		if received do destroy_shard_compaction_job(&job)
 	}

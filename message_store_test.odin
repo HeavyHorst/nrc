@@ -1172,7 +1172,7 @@ test_message_index_pointer_comparators_match_value_order :: proc(t: ^testing.T) 
 		}
 		return false
 	}
-	input: [128]Message_Index_Record
+	input: [160]Message_Index_Record
 	for &record, i in input {
 		record.workspace_hash = i < 64 ? 0 : u64(i % 3) * (max(u64) / 2)
 		record.conversation_id = u64(i % 5)
@@ -1180,6 +1180,16 @@ test_message_index_pointer_comparators_match_value_order :: proc(t: ^testing.T) 
 		record.sequence = u64(i % 11)
 		record.client_id[i % 16] = byte((i / 16) % 2) * 255
 		record.offset = u64(i) // Distinct non-key data, including equal-key records.
+	}
+	// Every first-difference position, including both word boundaries. Later
+	// bytes oppose the first difference, catching native-endian comparisons.
+	for position in 0 ..< 16 {
+		a, b := &input[128 + position * 2], &input[129 + position * 2]
+		a.workspace_hash = 0; b.workspace_hash = 0
+		a.principal_hash = 0; b.principal_hash = 0
+		for i in 0 ..< 16 {a.client_id[i] = 0x80; b.client_id[i] = 0x80}
+		a.client_id[position] = 0x7f
+		if position < 15 {a.client_id[position + 1] = 0xff; b.client_id[position + 1] = 0}
 	}
 	for kind in 0 ..< 2 {
 		less := kind == 0 ? index_less : dedup_less
