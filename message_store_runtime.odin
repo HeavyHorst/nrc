@@ -232,6 +232,11 @@ message_dedup_filter_maybe_contains :: proc(filter: []u64, workspace, principal:
 	message_put_u64(key[8:], message_string_hash(principal))
 	for value, i in client_id do key[16 + i] = value
 	first, step := message_dedup_filter_hashes(key[:])
+	return message_dedup_filter_maybe_contains_hashes(filter, first, step)
+}
+
+// Callers handle empty/unknown filters before probing their bits.
+message_dedup_filter_maybe_contains_hashes :: proc(filter: []u64, first, step: u64) -> bool {
 	bit_count := u64(len(filter) * 64)
 	for i in 0 ..< MESSAGE_DEDUP_FILTER_HASH_COUNT {
 		bit := (first + u64(i) * step) % bit_count
@@ -1027,12 +1032,21 @@ message_store_dedup_cutoff :: proc(store: ^Message_Store, now_ns: i64 = 0) -> i6
 message_store_next_dedup_segment :: proc(store: ^Message_Store, start: int, cutoff_ns: i64, message: ^Retained_Message = nil) -> int {
 	if store == nil do return -1
 	i := min(start, len(store.segments) - 1)
+	first, step: u64
+	hashes_ready := false
 	for i >= 0 {
 		segment := &store.segments[i]
-		if segment.max_time >= cutoff_ns &&
-		   (message == nil ||
-				   message_dedup_filter_maybe_contains(segment.dedup_filter, message.workspace, message.sender_principal, message.client_message_id)) {
-			return i
+		if segment.max_time >= cutoff_ns {
+			if message == nil || len(segment.dedup_filter) == 0 do return i
+			if !hashes_ready {
+				key: [32]byte
+				message_put_u64(key[:], message_string_hash(message.workspace))
+				message_put_u64(key[8:], message_string_hash(message.sender_principal))
+				copy(key[16:], message.client_message_id[:])
+				first, step = message_dedup_filter_hashes(key[:])
+				hashes_ready = true
+			}
+			if message_dedup_filter_maybe_contains_hashes(segment.dedup_filter, first, step) do return i
 		}
 		i -= 1
 	}
