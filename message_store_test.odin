@@ -398,7 +398,7 @@ test_message_dedup_serialized_key_preserves_filter_bits :: proc(t: ^testing.T) {
 		first := xxhash.XXH64(key[:32])
 		message_put_u64(key[32:], 0x9e3779b97f4a7c15)
 		step := xxhash.XXH64(key[:]) | 1
-		for i in 0 ..< 7 {
+		for i in 0 ..< MESSAGE_DEDUP_FILTER_HASH_COUNT {
 			bit := (first + u64(i) * step) % u64(len(expected) * 64)
 			expected[bit / 64] |= u64(1) << (bit % 64)
 		}
