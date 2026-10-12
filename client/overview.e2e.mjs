@@ -17,21 +17,9 @@ try {
   await page.goto("http://nrc.test");
   await page.waitForFunction(() => window.NRCOverview && window.NRCSlices);
   await page.evaluate(() => {
-    window.overviewFixture = { empty: false, fail: false, incomplete: false };
+    window.overviewFixture = { empty: false, fail: false, malformed: false, requests: [] };
     serverReady = true;
-    const encoder = new TextEncoder();
-    const names = ["RELEASE 1.8", "CUSTOMER ONBOARDING", "PLATFORM", "CLOSED"];
-    const values = [[3, 5, 6, 2], [4, 6, 3, 1], [5, 5, 5, 3], [0, 0, 0, 8]];
     const now = Date.now();
-    // Both sides of every bucket boundary, plus empty, done-only and closed.
-    const boundaryRows = [0, 1, 5, 6, 15, 16, 30, 31].map((size, i) => ({
-      name: `BOUNDARY ${i}`, sliceId: i + 1, flags: 0,
-      backlog: i === 0 ? 0 : 1, todo: 0, inProgress: 0, done: Math.max(0, size - 1),
-      blocked: [0, 1, 2, 3, 0, 2, 3, 0][i],
-      oldestActiveAt: i === 0 ? 0n : BigInt(now - [0, 7, 8, 30, 31, 90, 91, 2][i] * 86400000) * 1000000n,
-    }));
-    boundaryRows.push({ name: "DONE ONLY", sliceId: 9, flags: 0, backlog: 0, todo: 0, inProgress: 0, done: 4, blocked: 0, oldestActiveAt: 0n });
-    boundaryRows.push({ ...boundaryRows[7], name: "CLOSED BOUNDARY", sliceId: 10, flags: 1 });
     const projects = ["PLATFORM", "CUSTOMER ONBOARDING", "BILLING", "MOBILE", "SECURITY", "SEARCH", "INTEGRATIONS", "OPERATIONS"];
     const largeSlices = Array.from({ length: 100 }, (_, i) => ({
       name: `${projects[i % projects.length]} / ${String(i + 1).padStart(3, "0")}`,
@@ -65,6 +53,7 @@ try {
       const request = new DataView(buffer), opcode = request.getUint16(0);
       const id = request.getUint32(request.byteLength - 4);
       const f = window.overviewFixture;
+      if (window.NRCViewManager.getActiveView() === "overview") f.requests.push(opcode);
       if (opcode === 28) {
         const view = new DataView(new ArrayBuffer(42));
         view.setUint16(0, 138); view.setUint8(10, f.fail ? 0 : 1);
@@ -74,40 +63,28 @@ try {
         view.setUint32(38, id);
         handleBinaryMessage(view.buffer);
       }
-      if (opcode === 56) {
-        let cursorOffset = 14 + request.getUint16(12);
-        cursorOffset += 3 + request.getUint16(cursorOffset + 1);
-        cursorOffset += 2; // requested page size
-        const start = f.large && request.getUint8(cursorOffset) ? Number(request.getBigUint64(cursorOffset + 10)) : 0;
-        const allRows = f.empty ? [] : f.boundaries ? boundaryRows : f.large ? largeSlices : names.map((name, i) => ({
-          name, sliceId: i + 1, flags: i === 3 ? 1 : 0,
-          backlog: values[i][0], todo: values[i][1], inProgress: values[i][2], done: values[i][3],
-          blocked: [3, 2, 2, 0][i], oldestActiveAt: BigInt(now - [12, 9, 21, 0][i] * 86400000) * 1000000n,
-        }));
-        const rows = f.large ? allRows.slice(start, start + 25) : allRows;
-        const more = f.incomplete || start + rows.length < allRows.length;
-        const view = new DataView(new ArrayBuffer(49 + rows.reduce((n, row) => n + 43 + encoder.encode(row.name).length, 0)));
-        let offset = 0;
-        const u8 = v => view.setUint8(offset++, v);
-        const u16 = v => { view.setUint16(offset, v); offset += 2; };
-        const u32 = v => { view.setUint32(offset, v); offset += 4; };
-        const u64 = v => { view.setBigUint64(offset, BigInt(v)); offset += 8; };
-        const str = value => { const b = encoder.encode(value); u16(b.length); new Uint8Array(view.buffer, offset, b.length).set(b); offset += b.length; };
-        u16(164); u64(0); u8(f.fail ? 0 : 1); u16(rows.length);
-        rows.forEach(row => { str(row.name); u64(row.sliceId); str(""); u8(row.flags);
-          for (const value of [row.backlog, row.todo, row.inProgress, row.done, row.blocked, 0, 0]) u16(value);
-          u64(row.oldestActiveAt); u64(0);
-        });
-        u8(more ? 1 : 0); u8(0); u64(0); u64(rows.at(-1)?.sliceId || 0); u32(allRows.length);
-        u32(f.empty || start ? 0 : f.large ? 850 : 39); u32(f.empty || start ? 0 : f.large ? 150 : 9); str(""); u32(id);
+      if (opcode === 59) {
+        if (request.byteLength !== 14 || request.getBigUint64(2) !== 0n) throw new Error("Invalid overview request");
+        // Fixed server aggregates, not production-client aggregation. Odin tests
+        // verify the fold; this checks decoding/rendering of independent values.
+        const values = f.empty ? Array(20).fill(0) : f.large ?
+          [250, 350, 250, 150, 850, 150, 100, 2, 0, 87, 10, 1, 42, 57, 1, 0, 0, 0, 98, 2] :
+          [12, 16, 14, 6, 39, 9, 3, 0, 0, 1, 2, 0, 0, 2, 1, 0, 3, 0, 0, 0];
+        const view = new DataView(new ArrayBuffer(105));
+        view.setUint16(0, 167); view.setUint8(10, f.fail ? 0 : 1);
+        view.setBigUint64(11, BigInt(now) * 1000000n);
+        values.forEach((value, i) => view.setUint32(19 + i * 4, value));
+        view.setUint16(99, f.malformed ? 1 : 0);
+        view.setUint32(101, id);
         handleBinaryMessage(view.buffer);
       }
     }
     ws = { readyState: WebSocket.OPEN, send: buffer => queueMicrotask(() => reply(buffer)) };
-    // The status sender uses the production query encoder and response parser.
+    // Overview sends one fixed-size request through the production dispatcher.
   });
   await page.click("#overviewBtn");
   await page.waitForFunction(() => document.getElementById("overviewStatus").hidden);
+  assert.deepEqual(await page.evaluate(() => window.overviewFixture.requests), [59], "one overview request, no slice pages or task queries");
   assert.match(await page.locator("#overviewBody").innerText(), /48 UNIQUE TASKS/);
   assert.equal(await page.locator("[data-overview-status]").count(), 4);
   assert.equal(await page.locator(".overview-bucket").count(), 13);
@@ -127,11 +104,11 @@ try {
   await page.click("#overviewRefresh");
   await page.waitForFunction(() => document.getElementById("overviewStatus").textContent.includes("READ FAILED"));
   assert.match(await page.locator("#overviewBody").innerText(), /48 UNIQUE TASKS/);
-  await page.evaluate(() => { window.overviewFixture.fail = false; window.overviewFixture.incomplete = true; });
+  await page.evaluate(() => { window.overviewFixture.fail = false; window.overviewFixture.malformed = true; });
   await page.click("#overviewRefresh");
   await page.waitForFunction(() => document.getElementById("overviewStatus").textContent.includes("READ FAILED"));
   assert.match(await page.locator("#overviewBody").innerText(), /48 UNIQUE TASKS/);
-  await page.evaluate(() => { window.overviewFixture.incomplete = false; });
+  await page.evaluate(() => { window.overviewFixture.malformed = false; });
   await page.click("#overviewRefresh");
   await page.waitForFunction(() => document.getElementById("overviewStatus").hidden);
   if (process.env.OVERVIEW_SCREENSHOTS) {
@@ -155,20 +132,19 @@ try {
   assert.equal(await page.locator("#filterStatus").inputValue(), "2");
   await page.evaluate(() => window.NRCViewManager.setActiveView("chat"));
   assert.equal(await page.locator("#inspector").isVisible(), true, "Overview does not hide the inspector after leaving");
+  // Let the Tasks view's debounced metadata refresh finish before measuring
+  // Overview's own requests (it is not a request made by Overview).
+  await page.waitForTimeout(250);
   await page.click("#overviewBtn");
   await page.waitForFunction(() => document.getElementById("overviewStatus").hidden);
-  await page.evaluate(() => { window.overviewFixture.boundaries = true; });
-  await page.click("#overviewRefresh");
-  await page.waitForFunction(() => document.getElementById("overviewStatus").hidden);
-  assert.deepEqual(await page.locator(".overview-bucket strong").allTextContents(), ["1", "3", "2", "2", "1", "4", "3", "2", "2", "2", "2", "1", "2"], "boundary values, done tasks, empty slices and closed exclusion");
-  await page.evaluate(() => { window.overviewFixture.boundaries = false; });
-  await page.evaluate(() => { window.overviewFixture.large = true; });
+  await page.evaluate(() => { window.overviewFixture.large = true; window.overviewFixture.requests = []; });
   await page.click("#overviewRefresh");
   await page.waitForFunction(() => document.getElementById("overviewStatus").hidden && document.getElementById("overviewBody").textContent.includes("1000 UNIQUE TASKS"));
   assert.equal(await page.locator(".overview-bucket").count(), 13, "100 slices produce the same fixed-size distributions as three slices");
   assert.equal(await page.locator("[data-overview-slice]").count(), 0);
   assert.doesNotMatch(await page.locator("#overviewBody").innerText(), /CUSTOMER MIGRATION|MOBILE \/ 100/);
-  assert.deepEqual(await page.locator(".overview-distribution").evaluateAll(charts => charts.map(chart => [...chart.querySelectorAll("strong")].reduce((sum, el) => sum + Number(el.textContent), 0))), [100, 100, 100], "each distribution includes every page exactly once");
+  assert.deepEqual(await page.evaluate(() => window.overviewFixture.requests), [59], "large workspaces still need only one request");
+  assert.deepEqual(await page.locator(".overview-distribution").evaluateAll(charts => charts.map(chart => [...chart.querySelectorAll("strong")].reduce((sum, el) => sum + Number(el.textContent), 0))), [100, 100, 100], "each distribution preserves complete server totals");
   assert.deepEqual(await page.locator("[data-overview-status]").allTextContents(), ["250", "350", "250", "150"]);
   assert.deepEqual(await page.locator(".overview-legend").last().locator("span").allTextContents(), ["IN AT LEAST ONE SLICE", "WITHOUT SLICE"]);
   assert.deepEqual(await page.locator(".overview-bar--coverage .overview-segment").allTextContents(), ["850", "150"]);
@@ -198,6 +174,6 @@ try {
   assert.match(await page.locator("#overviewStatus").innerText(), /OFFLINE/);
   assert.equal(await page.locator("#overviewBody").innerText(), "");
   assert.deepEqual(errors, []);
-  console.log("Overview: unique server totals, overlapping/closed slices, stale-error retention, status drill-down, empty/offline and theme/width checks passed");
-  console.log("Large fixture: 100 slices, 1000 tasks, all pages aggregated into 13 buckets; boundary checks passed");
+  console.log("Overview: one 14-byte request / 105-byte response, aggregate decoding, failure/malformed retention, status drill-down, empty/offline and theme/width checks passed");
+  console.log("Large fixture: 100 slices, 1000 tasks rendered from one server aggregate; no slice-page or task-query requests");
 } finally { await browser.close(); }

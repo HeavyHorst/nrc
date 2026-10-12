@@ -112,8 +112,8 @@ its own cursor and the client asks for the next one when it needs it.
 invalid before any payload parsing happens, so a new opcode must be added to both
 the enum and the range check in `protocol/protocol.odin`.
 
-- Client to server: `1-3`, `8`, `16-58`
-- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-166`
+- Client to server: `1-3`, `8`, `16-59`
+- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-167`
 
 ### Client to Server
 
@@ -156,6 +156,7 @@ the enum and the range check in `protocol/protocol.odin`.
 | 56 | `C_ListTaskSlices` | List work slices with per-slice summaries |
 | 57 | `C_ListTaskAssignees` | List distinct workspace task assignees |
 | 58 | `C_QueryCalendar` | Query dated work in a half-open time range |
+| 59 | `C_GetWorkspaceOverview` | Read one complete, unpaged workspace aggregate snapshot |
 
 #### Assets
 
@@ -247,6 +248,7 @@ them.
 | 164 | `S_TaskSliceList` | Work slice list with per-slice summaries |
 | 165 | `S_TaskAssignees` | Chunked distinct task assignees, same layout as S_TaskProjects |
 | 166 | `S_CalendarPage` | Compact calendar summaries with a time/kind/ID cursor |
+| 167 | `S_WorkspaceOverview` | Unique task totals and open-slice distributions |
 
 #### Assets
 
@@ -525,6 +527,39 @@ slice is created with `C_CreateAsset`, its record is written with
 `C_UpdateAsset`, and its members are linked and unlinked with `C_CreateEdge` and
 `C_DeleteEdge`. A slice name is unique within the conversation, because the
 register, the record and the CLI address a slice by name.
+
+#### C_GetWorkspaceOverview (Client → Server)
+```
+[ConversationID: 8 bytes, must be 0] [CorrelationID: 4 bytes]
+```
+
+Uses the connection's authorized workspace. No filters, rows, cursors or page limit.
+
+#### S_WorkspaceOverview (Server → Client)
+```
+[ConversationID: 8 bytes] [Success: 1 byte] [SampledAt: 8 bytes]
+[StatusCounts: 4 × u32] [AssignedTasks: u32] [UnassignedTasks: u32] [OpenSlices: u32]
+[SizeBuckets: 5 × u32] [BlockedBuckets: 3 × u32] [AgeBuckets: 5 × u32]
+[ErrorLength: u16] [Error: variable UTF-8] [CorrelationID: u32]
+```
+
+One worker-owned snapshot, 105 bytes including opcode on success, independent of
+workspace size. `SampledAt` is Unix nanoseconds and the age boundary. Status order
+is Backlog, Todo, InProgress, Done; retired Note tasks are excluded. Coverage counts
+each task once across valid slices, including closed slices and either membership
+edge direction. Invalid slice previews, dangling members and non-membership links
+are ignored. Each distribution counts every **open** slice once, including empty
+and done-only slices:
+
+- Size: 0, 1–5, 6–15, 16–30, 31+ task members, including Done.
+- Blocked: 0, 1–2, 3+ members with a nonzero blocker (a flag, not a status).
+- Age: ≤7, 8–30, 31–90, 91+ completed days since the oldest non-Done task's
+  creation; final bucket means no open tasks. Future timestamps count as age 0.
+
+Aggregation does not use the listing's u16 counters or 512-row page bound. Counters
+are u32; an unrepresentable workspace returns `Success=0`, never wrapped totals.
+On failure ignore all counters and retain the last successful snapshot. This is
+an additive protocol-v8 opcode; the Overview client requires a server supporting it.
 
 #### C_ListTaskSlices (Client → Server)
 ```

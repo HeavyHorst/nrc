@@ -28,19 +28,20 @@ const (
 	C_Ping    uint16 = 19
 
 	// Tasks/Kanban (Client -> Server)
-	C_CreateTask        uint16 = 20
-	C_UpdateTask        uint16 = 21
-	C_DeleteTask        uint16 = 22
-	C_MoveTask          uint16 = 23
-	C_GetTasks          uint16 = 24
-	C_ListTasksPaged    uint16 = 25
-	C_GetTask           uint16 = 26
-	C_ApplyTransaction  uint16 = 27
-	C_QueryTasks        uint16 = 28
-	C_ListTaskProjects  uint16 = 29
-	C_ListTaskSlices    uint16 = 56
-	C_ListTaskAssignees uint16 = 57
-	C_QueryCalendar     uint16 = 58
+	C_CreateTask           uint16 = 20
+	C_UpdateTask           uint16 = 21
+	C_DeleteTask           uint16 = 22
+	C_MoveTask             uint16 = 23
+	C_GetTasks             uint16 = 24
+	C_ListTasksPaged       uint16 = 25
+	C_GetTask              uint16 = 26
+	C_ApplyTransaction     uint16 = 27
+	C_QueryTasks           uint16 = 28
+	C_ListTaskProjects     uint16 = 29
+	C_ListTaskSlices       uint16 = 56
+	C_ListTaskAssignees    uint16 = 57
+	C_QueryCalendar        uint16 = 58
+	C_GetWorkspaceOverview uint16 = 59
 
 	// Assets (Client -> Server)
 	C_CreateAsset              uint16 = 30
@@ -124,6 +125,7 @@ const (
 	S_TaskSliceList     uint16 = 164
 	S_TaskAssignees     uint16 = 165
 	S_CalendarPage      uint16 = 166
+	S_WorkspaceOverview uint16 = 167
 
 	// Assets (Server -> Client)
 	S_AssetCreated    uint16 = 140

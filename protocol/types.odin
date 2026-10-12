@@ -79,6 +79,7 @@ Opcode :: enum u16 {
 	C_ListTaskSlices = 56,
 	C_ListTaskAssignees = 57,
 	C_QueryCalendar = 58,
+	C_GetWorkspaceOverview = 59,
 
 	// Tasks/Kanban (Server -> Client)
 	S_TaskCreated = 130,
@@ -94,6 +95,7 @@ Opcode :: enum u16 {
 	S_TaskSliceList = 164,
 	S_TaskAssignees = 165,
 	S_CalendarPage = 166,
+	S_WorkspaceOverview = 167,
 
 	// Assets (Client -> Server)
 	C_CreateAsset = 30,

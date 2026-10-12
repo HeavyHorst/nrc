@@ -20,6 +20,7 @@ is_workspace_data_opcode :: proc(opcode: pr.Opcode) -> bool {
 	return(
 		opcode == .C_ListTaskAssignees ||
 		opcode == .C_QueryCalendar ||
+		opcode == .C_GetWorkspaceOverview ||
 		(opcode >= .C_CreateTask && opcode <= .C_ListTaskProjects && opcode != .C_ApplyTransaction) ||
 		(opcode >= .C_CreateAsset && opcode <= .C_GraphCommonNeighbors) ||
 		(opcode >= .C_GraphRank && opcode <= .C_SearchCustomers) \

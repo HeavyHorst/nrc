@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261012overview5";
+const CACHE_NAME = "nrc-terminal-20261012overview6";
 
 const APP_SHELL = [
   "./",
@@ -44,15 +44,15 @@ const APP_SHELL = [
   "./appointment-notify.js?v=20260927appointment2",
   "./reminder-notify.js?v=20260923attention7",
   "./task-query.js?v=20260927calendar8",
-  "./slices.js?v=20261012overview5",
-  "./overview.js?v=20261012overview4",
+  "./slices.js?v=20261012overview6",
+  "./overview.js?v=20261012overview6",
   "./note-html.js?v=20261007fragments1",
   "./notes.js?v=20261007htmlamp2",
   "./task-references.js?v=20260914workspace1",
   "./ai.js?v=20261008description1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20260923attention7",
-  "./app.js?v=20261012overview1",
+  "./app.js?v=20261012overview6",
   "./customers.js?v=20261007customersearch1",
   "./mobile-shell.js?v=20260914chats1",
   "./latency-worker.js",

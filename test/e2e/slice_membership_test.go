@@ -57,6 +57,65 @@ func sliceNamed(t *testing.T, list *protocol.TaskSliceList, name string) protoco
 	return protocol.TaskSlice{}
 }
 
+func TestWorkspaceOverviewSnapshot(t *testing.T) {
+	server := startServerInWorkDir(t, t.TempDir())
+	defer server.stop(t)
+	workspace := fmt.Sprintf("e2e-overview-%d", time.Now().UnixNano())
+	conn := workspaceDataClient(t, workspace, "alice", 31)
+	defer conn.Close()
+	read := func(c *websocket.Conn, correlation uint32) *protocol.WorkspaceOverview {
+		t.Helper()
+		if err := sendProtocolMessage(c, protocol.C_GetWorkspaceOverview, protocol.EncodeListTaskProjects(protocol.WorkspaceDataConvID, correlation)); err != nil {
+			t.Fatal(err)
+		}
+		payload := mustReadUntilOpcode(t, c, protocol.S_WorkspaceOverview, 24)
+		if len(payload) != 103 {
+			t.Fatalf("overview response grew beyond its fixed size: %d", len(payload))
+		}
+		result, err := protocol.DecodeWorkspaceOverview(payload)
+		if err != nil || !result.Success || result.CorrelationID != correlation || result.ConvID != 0 || result.SampledAt <= 0 {
+			t.Fatalf("overview response: %+v, err=%v", result, err)
+		}
+		return result
+	}
+	if got := read(conn, 100); got.OpenSlices != 0 || got.StatusCounts != [4]uint32{} {
+		t.Fatalf("empty overview: %+v", got)
+	}
+	// Durable scope validation happens before collecting any workspace data.
+	if err := sendProtocolMessage(conn, protocol.C_GetWorkspaceOverview, protocol.EncodeListTaskProjects(31, 101)); err != nil {
+		t.Fatal(err)
+	}
+	mustReadErrorResponse(t, conn, protocol.C_GetWorkspaceOverview, 0)
+	if err := sendProtocolMessage(conn, protocol.C_GetWorkspaceOverview, append(protocol.EncodeListTaskProjects(0, 102), 1)); err != nil {
+		t.Fatal(err)
+	}
+	mustReadErrorResponse(t, conn, protocol.C_GetWorkspaceOverview, 0)
+	empty := createSliceAsset(t, conn, "Empty", "", false)
+	active := createSliceAsset(t, conn, "Active", "alice", false)
+	closed := createSliceAsset(t, conn, "Closed", "", true)
+	_ = empty
+	backlog := createQueryTask(t, conn, sliceRoomID, "backlog")
+	done := createQueryTask(t, conn, sliceRoomID, "done")
+	moveQueryTask(t, conn, sliceRoomID, done, protocol.TaskStatusDone)
+	closedOnly := createQueryTask(t, conn, sliceRoomID, "closed only")
+	moveQueryTask(t, conn, sliceRoomID, closedOnly, protocol.TaskStatusTodo)
+	createQueryTask(t, conn, sliceRoomID, "unassigned")
+	createSliceMemberEdge(t, conn, protocol.TargetTypeTask, backlog.ID, active.AssetID)
+	createSliceMemberEdge(t, conn, protocol.TargetTypeTask, done.ID, active.AssetID)
+	createSliceMemberEdge(t, conn, protocol.TargetTypeTask, backlog.ID, closed.AssetID)
+	createSliceMemberEdge(t, conn, protocol.TargetTypeTask, closedOnly.ID, closed.AssetID)
+	got := read(conn, 103)
+	if got.StatusCounts != [4]uint32{2, 1, 0, 1} || got.AssignedTasks != 3 || got.UnassignedTasks != 1 || got.OpenSlices != 2 ||
+		got.SizeBuckets != [5]uint32{1, 1, 0, 0, 0} || got.BlockedBuckets != [3]uint32{2, 0, 0} || got.AgeBuckets != [5]uint32{1, 0, 0, 0, 1} {
+		t.Fatalf("complete aggregate with shared and closed memberships: %+v", got)
+	}
+	isolated := workspaceDataClient(t, workspace+"-isolated", "alice", 32)
+	defer isolated.Close()
+	if got := read(isolated, 104); got.OpenSlices != 0 || got.StatusCounts != [4]uint32{} {
+		t.Fatalf("overview leaked another workspace: %+v", got)
+	}
+}
+
 func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 	workDir := t.TempDir()
 	workspace := fmt.Sprintf("e2e-slices-%d", time.Now().UnixNano())

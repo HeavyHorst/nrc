@@ -7,26 +7,32 @@ window.NRCOverview = (() => {
   const el = id => document.getElementById(id);
   const active = () => window.NRCViewManager?.getActiveView() === "overview";
   const ready = () => typeof serverReady !== "undefined" && serverReady && ws?.readyState === WebSocket.OPEN;
-  function count(status) {
+  function query() {
     const id = getRpcCorrelationId();
     return new Promise(resolve => {
       const timeout = setTimeout(() => { pending.delete(id); resolve(null); }, 15000);
       pending.set(id, { resolve, timeout });
-      sendPacket(window.encodeTaskQuery({ statusMask: 1 << status, sort: "status", descending: false,
-        assignee: null, project: null, color: null, blocked: null, overdueBefore: 0n }, null, id));
+      const view = new DataView(new ArrayBuffer(14));
+      view.setUint16(0, Opcode.C_GetWorkspaceOverview);
+      view.setBigUint64(2, 0n); // Canonical workspace data scope.
+      view.setUint32(10, id);
+      sendPacket(view.buffer);
     });
   }
   function handlePage(view) {
+    if (view.byteLength < 105) return;
     const id = view.getUint32(view.byteLength - 4, false);
     const request = pending.get(id);
     if (!request) return;
     pending.delete(id); clearTimeout(request.timeout);
-    if (!view.getUint8(10)) { request.resolve(null); return; }
-    let offset = 13;
-    for (let i = 0; i < view.getUint16(11, false); i++) offset = parseTask(view, offset).newOffset;
-    offset += 17; // hasMore and numeric/id cursor
-    offset += 2 + view.getUint16(offset, false); // text cursor
-    request.resolve(view.getUint32(offset, false));
+    if (view.getBigUint64(2) !== 0n || view.getUint8(10) !== 1 || view.byteLength !== 105 + view.getUint16(99)) {
+      request.resolve(null); return;
+    }
+    let offset = 19; // opcode, scope, success, server sampling time
+    const counts = n => Array.from({ length: n }, () => { const value = view.getUint32(offset); offset += 4; return value; });
+    const status = counts(4), [assignedTasks, unassignedTasks, openSlices] = counts(3);
+    request.resolve({ counts: status, assignedTasks, unassignedTasks, openSlices,
+      sizes: counts(5), blockages: counts(3), ages: counts(5) });
   }
   function cancel() {
     generation++;
@@ -40,13 +46,10 @@ window.NRCOverview = (() => {
     if (!ready()) { mode = "offline"; render(); return; }
     const current = generation;
     mode = "loading"; render();
-    const [counts, listing] = await Promise.all([
-      Promise.all(labels.map((_, status) => count(status))),
-      window.NRCSlices.readAll({ includeClosed: true }),
-    ]);
+    const result = await query();
     if (current !== generation) return;
-    if (counts.some(value => value === null) || !listing?.complete) mode = "error";
-    else { snapshot = { counts, ...listing }; mode = "ready"; }
+    if (result === null) mode = "error";
+    else { snapshot = result; mode = "ready"; }
     render();
   }
   function refreshSoon() {
@@ -68,30 +71,20 @@ window.NRCOverview = (() => {
   function render() {
     if (!active() || !el("overviewBody")) return;
     el("overviewStatus").textContent = mode === "loading" ? "LOADING WORKSPACE OVERVIEW…" : mode === "error" ?
-      "READ FAILED OR INCOMPLETE · RETRY · LAST COMPLETE RESULTS RETAINED" : mode === "offline" ? "OFFLINE · RECONNECT TO REFRESH" : "";
+      "READ FAILED · RETRY · LAST COMPLETE RESULTS RETAINED" : mode === "offline" ? "OFFLINE · RECONNECT TO REFRESH" : "";
     el("overviewStatus").hidden = mode === "ready";
     el("overviewBody").setAttribute("aria-busy", String(mode === "loading"));
     if (!snapshot) { el("overviewBody").innerHTML = ""; return; }
     if (mode === "loading" || mode === "error") return;
-    const { counts, slices, assignedTasks, unassignedTasks } = snapshot;
+    const { counts, sizes, blockages, ages, openSlices, assignedTasks, unassignedTasks } = snapshot;
     const total = counts.reduce((a, b) => a + b, 0);
-    const rows = slices.filter(slice => !(slice.flags & 1));
-    const now = Date.now();
-    const sizes = [0, 0, 0, 0, 0], blockages = [0, 0, 0], ages = [0, 0, 0, 0, 0];
-    for (const slice of rows) {
-      const size = slice.backlog + slice.todo + slice.inProgress + slice.done;
-      sizes[size === 0 ? 0 : size <= 5 ? 1 : size <= 15 ? 2 : size <= 30 ? 3 : 4]++;
-      blockages[slice.blocked === 0 ? 0 : slice.blocked <= 2 ? 1 : 2]++;
-      const age = slice.oldestActiveAt > 0n ? Math.max(0, Math.floor((now - Number(slice.oldestActiveAt / 1000000n)) / 86400000)) : null;
-      ages[age === null ? 4 : age <= 7 ? 0 : age <= 30 ? 1 : age <= 90 ? 2 : 3]++;
-    }
     const legend = `<div class="overview-legend">${labels.map((label, i) => `<span><i class="overview-${colors[i]}"></i>${label}</span>`).join("")}</div>`;
     el("overviewBody").innerHTML = section(`WORKSPACE STATUS <small>${total} UNIQUE TASKS</small>`,
       total ? `<div class="overview-bar overview-bar--hero">${segments(counts, total, true)}</div>${legend}` : '<p class="overview-note">NO TASKS IN THIS WORKSPACE</p>') +
       `<div class="overview-grid">` +
-      distribution("WORK SIZE <small>TASKS PER SLICE</small>", ["0 TASKS", "1–5 TASKS", "6–15 TASKS", "16–30 TASKS", "31+ TASKS"], sizes, rows.length) +
-      distribution("BLOCKAGES <small>BLOCKED TASKS PER SLICE</small>", ["0 BLOCKED", "1–2 BLOCKED", "3+ BLOCKED"], blockages, rows.length) +
-      distribution("OLDEST OPEN TASK <small>AGE SINCE CREATION</small>", ["≤7 DAYS", "8–30 DAYS", "31–90 DAYS", "91+ DAYS", "NO OPEN TASKS"], ages, rows.length) + `</div>` +
+      distribution("WORK SIZE <small>TASKS PER SLICE</small>", ["0 TASKS", "1–5 TASKS", "6–15 TASKS", "16–30 TASKS", "31+ TASKS"], sizes, openSlices) +
+      distribution("BLOCKAGES <small>BLOCKED TASKS PER SLICE</small>", ["0 BLOCKED", "1–2 BLOCKED", "3+ BLOCKED"], blockages, openSlices) +
+      distribution("OLDEST OPEN TASK <small>AGE SINCE CREATION</small>", ["≤7 DAYS", "8–30 DAYS", "31–90 DAYS", "91+ DAYS", "NO OPEN TASKS"], ages, openSlices) + `</div>` +
       section(`SLICE COVERAGE <small>${assignedTasks + unassignedTasks} UNIQUE TASKS</small>`,
         `<div class="overview-bar overview-bar--coverage">${assignedTasks ? `<span class="overview-segment overview-backlog" style="flex-grow:${assignedTasks}">${assignedTasks}</span>` : ""}${unassignedTasks ? `<span class="overview-segment overview-inprogress" style="flex-grow:${unassignedTasks}">${unassignedTasks}</span>` : ""}</div><div class="overview-legend"><span>IN AT LEAST ONE SLICE</span><span>WITHOUT SLICE</span></div>`) +
       `<details class="overview-explanation"><summary>HOW TO READ THIS OVERVIEW</summary><p>Workspace status and coverage count each task once. Each distribution counts every open slice once, including empty slices. Work size includes done tasks; slice memberships may overlap. Coverage includes closed slices. Blocked is a flag, not a status. Age uses completed days since the oldest open task was created, not time in status. Without slice means membership, not assignee.</p></details>`;

@@ -515,6 +515,10 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_ListTaskSlices:
 		req, parse_err := pr.parseListTaskSlicesRequest(frame_data[2:])
 		if parse_err == nil {process_list_task_slices(c, req)} else {send_error_response(c, .C_ListTaskSlices, "Failed to parse request")}
+	case .C_GetWorkspaceOverview:
+		// Same fixed scope/correlation body as the metadata queries.
+		req, parse_err := pr.parseListTaskProjectsRequest(frame_data[2:])
+		if parse_err == nil {process_workspace_overview(c, req)} else {send_error_response(c, .C_GetWorkspaceOverview, "Failed to parse request")}
 	case .C_CreateAsset:
 		attachments: [pr.MAX_ATTACHMENTS_PER_TASK]pr.Attachment
 		req, parse_err := pr.parseCreateAssetRequestWithAttachments(frame_data[2:], attachments[:])
