@@ -6,6 +6,9 @@
   --accent: #b53b13;
   --line: #d8d4cb;
   --pale: #efede6;
+  --background: #faf9f5;
+  --surface: #fff;
+  --accent-hover: #923010;
   font-family:
     ui-sans-serif,
     system-ui,
@@ -14,7 +17,7 @@
     "Segoe UI",
     sans-serif;
   color: var(--ink);
-  background: #faf9f5;
+  background: var(--background);
   font-synthesis: none;
 }
 * {
@@ -127,7 +130,7 @@ p {
   left: 20px;
   z-index: 20;
   padding: 12px;
-  background: #fff;
+  background: var(--surface);
 }
 .skip:focus {
   top: 10px;
@@ -135,7 +138,7 @@ p {
 .header {
   height: 74px;
   border-bottom: 1px solid var(--line);
-  background: #faf9f5;
+  background: var(--background);
 }
 .header-inner {
   max-width: 1440px;
@@ -157,11 +160,6 @@ p {
 }
 .brand:hover {
   text-decoration: none;
-}
-.brand-mark {
-  color: var(--accent);
-  font-size: 24px;
-  font-weight: 400;
 }
 .header nav {
   display: flex;
@@ -273,7 +271,7 @@ p {
 }
 .button:hover,
 .search button:hover {
-  background: #923010;
+  background: var(--accent-hover);
   text-decoration: none;
 }
 .home-content {
@@ -393,6 +391,12 @@ p {
 .footer .container {
   display: flex;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+.footer nav {
+  display: flex;
+  flex-wrap: wrap;
   gap: 20px;
 }
 .pill {
@@ -908,9 +912,6 @@ a.result:hover {
   }
   .brand {
     font-size: 19px;
-  }
-  .brand-mark {
-    font-size: 22px;
   }
   .header nav {
     font-size: 12px;

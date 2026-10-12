@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,7 +29,11 @@ import (
 //go:embed web/*
 var web embed.FS
 
-type config struct{ PublicAddr, AdminAddr, User, Password, Workspace, FilesDir, Brand, DataDir, NRCServer, BotSecret, JWTSecret, JWTIssuer, ReviewURL string }
+type config struct {
+	PublicAddr, AdminAddr, User, Password, Workspace, FilesDir, Brand, DataDir, NRCServer, BotSecret, JWTSecret, JWTIssuer, ReviewURL string
+	FooterText, ImprintURL, PrivacyURL, TermsURL, ContactURL                                                                          string
+	ThemeCSS                                                                                                                          []byte
+}
 
 type app struct {
 	store     *store
@@ -43,15 +48,16 @@ type category struct {
 	Articles []revision
 }
 type page struct {
-	Brand, Title, Mode, Query, Category, Error, CSRF string
-	Categories                                       []category
-	Articles, Drafts                                 []revision
-	Article, Previous                                revision
-	HTML, PreviousHTML                               template.HTML
-	Sections                                         []section
-	Notes                                            []protocol.Asset
-	Next                                             string
-	Changed, IsDraft                                 bool
+	Brand, Title, Mode, Query, Category, Error, CSRF         string
+	FooterText, ImprintURL, PrivacyURL, TermsURL, ContactURL string
+	Categories                                               []category
+	Articles, Drafts                                         []revision
+	Article, Previous                                        revision
+	HTML, PreviousHTML                                       template.HTML
+	Sections                                                 []section
+	Notes                                                    []protocol.Asset
+	Next                                                     string
+	Changed, IsDraft                                         bool
 }
 
 func newApp(s *store, source noteSource, cfg config) *app {
@@ -76,6 +82,8 @@ func noteMetadata(asset protocol.Asset) (string, string, string) {
 
 func (a *app) render(w http.ResponseWriter, status int, p page) {
 	p.Brand = a.cfg.Brand
+	p.FooterText, p.ImprintURL, p.PrivacyURL = a.cfg.FooterText, a.cfg.ImprintURL, a.cfg.PrivacyURL
+	p.TermsURL, p.ContactURL = a.cfg.TermsURL, a.cfg.ContactURL
 	p.CSRF = a.csrf
 	var buf bytes.Buffer
 	if err := a.templates.ExecuteTemplate(&buf, "page", p); err != nil {
@@ -108,7 +116,7 @@ func group(rows []revision) []category {
 func (a *app) public() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
-	mux.HandleFunc("GET /style.css", style)
+	mux.HandleFunc("GET /style.css", a.style)
 	mux.HandleFunc("GET /{$}", a.home)
 	mux.HandleFunc("GET /articles/{slug}", a.article)
 	mux.HandleFunc("GET /media/{revision}/{file}", func(w http.ResponseWriter, r *http.Request) { a.media(w, r, true) })
@@ -118,7 +126,7 @@ func (a *app) public() http.Handler {
 func (a *app) admin() http.Handler {
 	mux := http.NewServeMux()
 	agent := a.agentAPI()
-	mux.HandleFunc("GET /style.css", style)
+	mux.HandleFunc("GET /style.css", a.style)
 	mux.HandleFunc("GET /{$}", a.dashboard)
 	mux.HandleFunc("GET /notes", a.notes)
 	mux.HandleFunc("GET /drafts/{id}", a.draft)
@@ -177,10 +185,12 @@ func headers(next http.Handler, admin bool) http.Handler {
 	})
 }
 
-func style(w http.ResponseWriter, r *http.Request) {
+func (a *app) style(w http.ResponseWriter, r *http.Request) {
 	data, _ := web.ReadFile("web/style.css")
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Write(data)
+	w.Write([]byte("\n"))
+	w.Write(a.cfg.ThemeCSS)
 }
 
 func (a *app) home(w http.ResponseWriter, r *http.Request) {
@@ -270,7 +280,7 @@ func (a *app) notes(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseUint(r.URL.Query().Get("id"), 10, 64)
 	notes, err := a.source.list(r.Context(), updated, id, r.URL.Query().Has("id"))
 	if err != nil {
-		a.render(w, 502, page{Mode: "error", Title: "NRC nicht erreichbar", Error: err.Error()})
+		a.render(w, 502, page{Mode: "error", Title: "Notizquelle nicht erreichbar", Error: err.Error()})
 		return
 	}
 	var next string
@@ -338,7 +348,7 @@ func (a *app) draft(w http.ResponseWriter, r *http.Request) {
 	if asset, err := a.source.get(r.Context(), draft.SourceID); err == nil {
 		p.Changed = asset.UpdatedAt != draft.SourceUpdated || asset.Payload != draft.Markdown
 	} else {
-		p.Error = "Aktueller NRC-Stand konnte nicht gelesen werden. Die Vorschau zeigt weiterhin den gespeicherten Entwurf."
+		p.Error = "Aktueller Notizstand konnte nicht gelesen werden. Die Vorschau zeigt weiterhin den gespeicherten Entwurf."
 	}
 	head, err := a.store.head(draft.Slug)
 	if err != nil {
@@ -390,7 +400,27 @@ func env(name, fallback string) string {
 }
 
 func main() {
-	cfg := config{PublicAddr: env("PUBLISH_ADDR", ":8093"), AdminAddr: env("PUBLISH_ADMIN_ADDR", "127.0.0.1:8094"), User: os.Getenv("PUBLISH_ADMIN_USER"), Password: os.Getenv("PUBLISH_ADMIN_PASSWORD"), Workspace: os.Getenv("NRC_WORKSPACE"), FilesDir: os.Getenv("PUBLISH_FILES_DIR"), Brand: env("PUBLISH_BRAND", "NRC"), DataDir: env("PUBLISH_DATA_DIR", "data"), NRCServer: env("NRC_SERVER", "ws://localhost:8080"), BotSecret: os.Getenv("NRC_BOT_SECRET")}
+	cfg := config{PublicAddr: env("PUBLISH_ADDR", ":8093"), AdminAddr: env("PUBLISH_ADMIN_ADDR", "127.0.0.1:8094"), User: os.Getenv("PUBLISH_ADMIN_USER"), Password: os.Getenv("PUBLISH_ADMIN_PASSWORD"), Workspace: os.Getenv("NRC_WORKSPACE"), FilesDir: os.Getenv("PUBLISH_FILES_DIR"), Brand: env("PUBLISH_BRAND", "Dokumentation"), DataDir: env("PUBLISH_DATA_DIR", "data"), NRCServer: env("NRC_SERVER", "ws://localhost:8080"), BotSecret: os.Getenv("NRC_BOT_SECRET")}
+	cfg.FooterText, cfg.ImprintURL, cfg.PrivacyURL = os.Getenv("PUBLISH_FOOTER_TEXT"), os.Getenv("PUBLISH_IMPRINT_URL"), os.Getenv("PUBLISH_PRIVACY_URL")
+	cfg.TermsURL, cfg.ContactURL = os.Getenv("PUBLISH_TERMS_URL"), os.Getenv("PUBLISH_CONTACT_URL")
+	for _, value := range []string{cfg.ImprintURL, cfg.PrivacyURL, cfg.TermsURL, cfg.ContactURL} {
+		if value == "" {
+			continue
+		}
+		u, err := url.Parse(value)
+		if err != nil || strings.ContainsAny(value, "\\\r\n\t") || u.User != nil || !((u.Scheme == "https" || u.Scheme == "http") && u.Host != "" || u.Scheme == "" && u.Host == "" && strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "//")) {
+			slog.Error("footer URLs must be HTTP(S) URLs or root-relative paths")
+			os.Exit(1)
+		}
+	}
+	if path := os.Getenv("PUBLISH_THEME_FILE"); path != "" {
+		var err error
+		cfg.ThemeCSS, err = os.ReadFile(path)
+		if err != nil {
+			slog.Error("read theme stylesheet", "error", err)
+			os.Exit(1)
+		}
+	}
 	cfg.JWTSecret = os.Getenv("NRC_JWT_SECRET")
 	cfg.JWTIssuer = env("NRC_JWT_ISSUER", "nrc-tailscale-proxy")
 	cfg.ReviewURL = strings.TrimRight(os.Getenv("PUBLISH_REVIEW_URL"), "/")

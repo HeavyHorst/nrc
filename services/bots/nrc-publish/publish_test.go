@@ -42,7 +42,34 @@ func testApp(t *testing.T) *app {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.db.Close() })
-	return newApp(s, &fixtureSource{map[uint64]protocol.Asset{41: {AssetType: 5, AssetID: 41, UpdatedAt: 100, Preview: `{"title":"Interner Titel","format":"markdown"}`, Payload: "## Einrichtung\n\nFreigegebener Inhalt."}}}, config{User: "reviewer", Password: "only-for-tests-not-a-secret", Brand: "NRC"})
+	return newApp(s, &fixtureSource{map[uint64]protocol.Asset{41: {AssetType: 5, AssetID: 41, UpdatedAt: 100, Preview: `{"title":"Interner Titel","format":"markdown"}`, Payload: "## Einrichtung\n\nFreigegebener Inhalt."}}}, config{User: "reviewer", Password: "only-for-tests-not-a-secret", Brand: "Dokumentation"})
+}
+
+func TestBrandingHTTP(t *testing.T) {
+	a := testApp(t)
+	plain := request(a.public(), "GET", "/", nil, false).Body.String()
+	if strings.Contains(plain, "NRC") || strings.Contains(plain, "Wissen") || strings.Contains(plain, `<footer`) {
+		t.Fatal("default site contains fixed branding or footer")
+	}
+	a.cfg.Brand = "Example & Co"
+	a.cfg.FooterText = "© Example <Team>"
+	a.cfg.ImprintURL = "https://example.org/impressum"
+	a.cfg.PrivacyURL = "/articles/datenschutz"
+	a.cfg.TermsURL = "https://example.org/terms"
+	a.cfg.ContactURL = "https://example.org/contact"
+	a.cfg.ThemeCSS = []byte(":root { --accent: #123456; }")
+	for _, handler := range []http.Handler{a.public(), a.admin()} {
+		got := request(handler, "GET", "/", nil, true)
+		for _, want := range []string{"Example &amp; Co", "© Example &lt;Team&gt;", `href="https://example.org/impressum"`, `href="/articles/datenschutz"`, `href="https://example.org/terms"`, `href="https://example.org/contact"`} {
+			if !strings.Contains(got.Body.String(), want) {
+				t.Fatalf("branding missing %q", want)
+			}
+		}
+		css := request(handler, "GET", "/style.css", nil, true)
+		if !strings.HasSuffix(css.Body.String(), string(a.cfg.ThemeCSS)) {
+			t.Fatal("theme does not override base stylesheet")
+		}
+	}
 }
 
 func candidate() revision {

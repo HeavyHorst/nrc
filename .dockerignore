@@ -11,5 +11,7 @@ node_modules
 client/dist
 .env
 .env.*
+publish.env
+publish-branding/
 docker-compose.yml
 Dockerfile

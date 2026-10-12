@@ -43,6 +43,29 @@ not configure either public HTTPS or reviewer ingress.
 For a standalone build, see [Configuration](#configuration) and
 [Development](#development).
 
+### Internal test on the deployment host
+
+On `lti1`, keep publisher settings in `/root/nrc/publish.env` with mode `0600`.
+The source workspace is `workspace1`. Do not configure public ingress during the
+internal test. Forward both loopback listeners from your own machine:
+
+```sh
+ssh -N -L 127.0.0.1:18093:127.0.0.1:8093 \
+  -L 127.0.0.1:18094:127.0.0.1:8094 root@lti1
+```
+
+Open `http://127.0.0.1:18093` for the reader site and
+`http://127.0.0.1:18094` for review. The reviewer username is `rene`;
+retrieve the generated password yourself from the private server file, without
+sharing it with agents. No article is published until a human approves a draft.
+
+`docker/deploy.sh` detects the remote `publish.env` and uses the overlay for all
+Compose operations. It tests and rebuilds Publish when its source changes.
+`docker/backup.sh` is installed as `/usr/local/sbin/nrc-backup`; it stops and
+restarts Publish along with the running stack and backs up all project volumes,
+including `docker_publish-data`. Back up `.env` and `publish.env` separately with
+your private credential backup mechanism; they are not part of the volume backup.
+
 ## Use
 
 1. Sign into the **internal** listener and choose a workspace note (paginated picker
@@ -116,9 +139,48 @@ Revision history and audit are stored; a history/rollback UI is not provided yet
 | `PUBLISH_REVIEW_URL` | Optional private reviewer base URL; unset returns a relative review path, never an invented link under the API gateway |
 | `PUBLISH_ADDR` | `:8093` |
 | `PUBLISH_ADMIN_ADDR` | `127.0.0.1:8094` |
-| `PUBLISH_BRAND` | `NRC` (escaped text in header/title/footer; wordmark adds `/ Wissen`) |
+| `PUBLISH_BRAND` | `Dokumentation`; escaped site name in header and page title, no fixed product suffix |
+| `PUBLISH_FOOTER_TEXT` | Optional plain-text footer; empty by default |
+| `PUBLISH_IMPRINT_URL` | Optional Impressum link: HTTP(S) URL or root-relative path |
+| `PUBLISH_PRIVACY_URL` | Optional Datenschutz link: HTTP(S) URL or root-relative path |
+| `PUBLISH_TERMS_URL` | Optional Nutzungsbedingungen link: HTTP(S) URL or root-relative path |
+| `PUBLISH_CONTACT_URL` | Optional Kontakt link: HTTP(S) URL or root-relative path |
+| `PUBLISH_THEME_FILE` | Optional trusted local CSS file, loaded at startup and appended to the base stylesheet |
 | `PUBLISH_DATA_DIR` | `data`; contains `publish.db` |
 | `PUBLISH_FILES_DIR` | Existing NRC attachment directory; required for notes with files |
+
+### Corporate design and legal links
+
+Set the site name, footer text and legal URLs in the private `publish.env` file.
+Without footer text or links, no footer is displayed. Legal links point to your
+existing pages or approved `/articles/<slug>` pages; configuring a URL does not
+create an Impressum or privacy statement. Verify their content before public launch.
+
+The Compose overlay mounts the host directory `publish-branding` read-only at
+`/branding`. Put your stylesheet in `publish-branding/theme.css` and set
+`PUBLISH_THEME_FILE=/branding/theme.css`. For example:
+
+```css
+:root {
+  --accent: #165a91;
+  --accent-hover: #10436c;
+  --background: #f6f8fb;
+  --ink: #172a3a;
+  --muted: #526676;
+  --line: #cbd6df;
+  --pale: #e6eef5;
+  --surface: #ffffff;
+  font-family: Arial, sans-serif;
+}
+```
+
+The theme can override CSS selectors as well as these tokens. Only operators
+should supply theme files; CSS is not user-generated content. External resources
+remain blocked by the existing CSP. An unreadable configured theme prevents
+startup rather than silently falling back. Recreate Publish after changing its
+environment or theme file; neither requires new article approvals. Protect
+deployment-specific files separately: Git synchronization and the volume backup
+do not include `publish.env` or `publish-branding`.
 
 Provide credentials using your deployment's private secret mechanism, not command
 history or tracked files. Mount a separate persistent data directory; do not

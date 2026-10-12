@@ -23,7 +23,13 @@ services:
       PUBLISH_ADMIN_USER: ${PUBLISH_ADMIN_USER:?set PUBLISH_ADMIN_USER}
       PUBLISH_ADMIN_PASSWORD: ${PUBLISH_ADMIN_PASSWORD:?set PUBLISH_ADMIN_PASSWORD}
       PUBLISH_REVIEW_URL: ${PUBLISH_REVIEW_URL:-}
-      PUBLISH_BRAND: ${PUBLISH_BRAND:-NRC}
+      PUBLISH_BRAND: ${PUBLISH_BRAND:-Dokumentation}
+      PUBLISH_FOOTER_TEXT: ${PUBLISH_FOOTER_TEXT:-}
+      PUBLISH_IMPRINT_URL: ${PUBLISH_IMPRINT_URL:-}
+      PUBLISH_PRIVACY_URL: ${PUBLISH_PRIVACY_URL:-}
+      PUBLISH_TERMS_URL: ${PUBLISH_TERMS_URL:-}
+      PUBLISH_CONTACT_URL: ${PUBLISH_CONTACT_URL:-}
+      PUBLISH_THEME_FILE: ${PUBLISH_THEME_FILE:-}
       PUBLISH_ADMIN_ADDR: :8094
       PUBLISH_FILES_DIR: /data/files
     ports:
@@ -32,6 +38,7 @@ services:
     volumes:
       - publish-data:/data
       - attachments:/data/files:ro
+      - ../publish-branding:/branding:ro
     read_only: true
     cap_drop:
       - ALL

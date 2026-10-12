@@ -9,13 +9,12 @@ test_runner
 nrc-ai/nrc-ai
 services/bots/nrc-ai/nrc-ai
 
-# Local deployment helper
-/docker/deploy.sh
-
 # Local credentials (keep the tracked configuration example).
 .env
 .env.*
 !.env.example
+/publish.env
+/publish-branding/
 
 # Benchmark binary
 benchmark/nrc-bench

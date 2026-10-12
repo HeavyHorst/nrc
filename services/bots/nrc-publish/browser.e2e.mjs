@@ -77,7 +77,13 @@ try {
   await page.goto(publicURL);
   assert.equal(await page.locator(".category-card").count(), 4);
   assert.equal(await page.locator(".topic-number").count(), 4);
-  assert.match(await page.locator(".brand").textContent(), /NRC\s*\/\s*Wissen/);
+  assert.equal((await page.locator(".brand").textContent()).trim(), process.env.PUBLISH_BRAND || "Dokumentation");
+  assert.equal(await page.locator("footer").count(), process.env.PUBLISH_FOOTER_TEXT || process.env.PUBLISH_IMPRINT_URL || process.env.PUBLISH_PRIVACY_URL || process.env.PUBLISH_TERMS_URL || process.env.PUBLISH_CONTACT_URL ? 1 : 0);
+  for (const [name, variable] of [["Impressum", "PUBLISH_IMPRINT_URL"], ["Datenschutz", "PUBLISH_PRIVACY_URL"], ["Nutzungsbedingungen", "PUBLISH_TERMS_URL"], ["Kontakt", "PUBLISH_CONTACT_URL"]]) {
+    if (process.env[variable]) {
+      assert.equal(await page.getByRole("link", { name, exact: true }).getAttribute("href"), process.env[variable]);
+    }
+  }
   assert(
     await page
       .locator(".category-card a[href='/articles/api-schluessel']")
@@ -285,7 +291,7 @@ try {
   await admin.locator("input[name=slug]").fill("browser-freigabe");
   await admin.locator("input[name=category]").fill("Erste Schritte");
   await admin
-    .getByRole("button", { name: /Entwurf aus aktuellem NRC-Stand/ })
+    .getByRole("button", { name: /Entwurf aus aktuellem Notizstand/ })
     .click();
   await admin.waitForURL("**/drafts/*");
   assert.equal(

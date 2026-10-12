@@ -30,8 +30,18 @@ class PublishComposeTest(unittest.TestCase):
             }
             env_file = root / ".env"
             env_file.write_text("".join(f"{key}={value}\n" for key, value in credentials.items()))
+            branding = {
+                "PUBLISH_BRAND": "Example Dokumentation",
+                "PUBLISH_FOOTER_TEXT": "© Example GmbH",
+                "PUBLISH_IMPRINT_URL": "https://example.org/impressum",
+                "PUBLISH_PRIVACY_URL": "/articles/datenschutz",
+                "PUBLISH_TERMS_URL": "https://example.org/terms",
+                "PUBLISH_CONTACT_URL": "https://example.org/contact",
+                "PUBLISH_THEME_FILE": "/branding/theme.css",
+            }
             environment = {
                 **os.environ,
+                **branding,
                 **{key: "fixture-shell-conflict" for key in credentials},
                 "NRC_PUBLISH_WORKSPACE": "fixture-workspace",
                 "PUBLISH_ADMIN_USER": "fixture-reviewer",
@@ -48,6 +58,11 @@ class PublishComposeTest(unittest.TestCase):
                 for key, value in credentials.items():
                     self.assertEqual(services[service]["environment"][key], value, f"{service}: {key}")
             self.assertEqual(services["publish"]["environment"]["PUBLISH_ADMIN_USER"], "fixture-reviewer")
+            for key, value in branding.items():
+                self.assertEqual(services["publish"]["environment"][key], value)
+            theme_mount = next(v for v in services["publish"]["volumes"] if v["target"] == "/branding")
+            self.assertTrue(theme_mount["read_only"])
+            self.assertEqual(theme_mount["source"], str(root / "publish-branding"))
             proxy_env = services["tailscale-proxy"]["environment"]
             self.assertEqual(proxy_env["TS_AUTHKEY"], "fixture-tailnet-key")
             self.assertEqual(proxy_env["NRC_PUBLISH_BACKEND"], "http://publish:8094")

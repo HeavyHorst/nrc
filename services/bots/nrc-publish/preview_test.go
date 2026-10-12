@@ -24,6 +24,16 @@ func TestBrowserPreview(t *testing.T) {
 		t.Skip("opt-in browser fixture")
 	}
 	a := testApp(t)
+	a.cfg.Brand = env("PUBLISH_BRAND", "Dokumentation")
+	a.cfg.FooterText, a.cfg.ImprintURL, a.cfg.PrivacyURL = os.Getenv("PUBLISH_FOOTER_TEXT"), os.Getenv("PUBLISH_IMPRINT_URL"), os.Getenv("PUBLISH_PRIVACY_URL")
+	a.cfg.TermsURL, a.cfg.ContactURL = os.Getenv("PUBLISH_TERMS_URL"), os.Getenv("PUBLISH_CONTACT_URL")
+	if path := os.Getenv("PUBLISH_THEME_FILE"); path != "" {
+		var err error
+		a.cfg.ThemeCSS, err = os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	a.cfg.JWTSecret = os.Getenv("PUBLISH_PREVIEW_JWT_SECRET")
 	a.cfg.JWTIssuer = "nrc-tailscale-proxy"
 	a.cfg.Workspace = "test-workspace"
