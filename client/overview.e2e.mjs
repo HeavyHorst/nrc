@@ -91,6 +91,8 @@ try {
   assert.doesNotMatch(await page.locator("#overviewBody").innerText(), /NEEDS ATTENTION|CLOSED\n/);
   assert.deepEqual(await page.locator(".overview-legend").first().locator("span").allTextContents(), ["BACKLOG", "TODO", "IN PROGRESS", "DONE"]);
   assert.deepEqual(await page.locator(".overview-bar--coverage .overview-segment").allTextContents(), ["39", "9"]);
+  assert.deepEqual(await page.locator(".overview-bar--coverage .overview-segment").evaluateAll(segments => segments.map(el => el.getAttribute("aria-label"))), ["In at least one slice: 39", "Without slice: 9"]);
+  assert.equal(await page.locator(".overview-legend").last().locator("i").count(), 2, "coverage labels have matching color swatches without repeated numbers");
   assert.equal(await page.locator("#inspector").isVisible(), false);
   assert.equal(await page.locator("#inspector").evaluate(el => getComputedStyle(el).display), "none", "the inspector must release its layout space, not merely become invisible");
   assert.deepEqual(await page.locator(".overview-bucket strong").allTextContents(), ["0", "0", "1", "2", "0", "0", "2", "1", "0", "3", "0", "0", "0"]);

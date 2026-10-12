@@ -22,11 +22,19 @@ collect_workspace_overview :: proc(conv: ^Conversation_State, now: i64) -> (resu
 		return
 	}
 	defer virtual.arena_destroy(&arena)
-	assigned := make(map[pr.TaskID]struct{})
+	// Keep the last slice visited for each task: coverage stays unique across
+	// slices, and duplicate/reversed edges cannot count a task twice in one slice.
+	assigned := make(map[pr.TaskID]pr.AssetID)
 	defer delete(assigned)
+	total_tasks: u32
 	for _, task in conv.tasks {
 		if task == nil || task.status == .Note do continue
+		if u8(task.status) >= u8(len(result.status_counts)) {
+			result.error = transmute([]byte)string("Overview found an unsupported stored task status")
+			return
+		}
 		result.status_counts[int(task.status)] += 1
+		total_tasks += 1
 	}
 	for _, asset in conv.assets {
 		if asset == nil || asset.asset_type != .Slice do continue
@@ -47,7 +55,8 @@ collect_workspace_overview :: proc(conv: ^Conversation_State, now: i64) -> (resu
 				if !member || kind != .Task do continue
 				task := conv.tasks[pr.TaskID(id)]
 				if task == nil || task.status == .Note do continue
-				assigned[task.id] = {}
+				if last_slice, seen := assigned[task.id]; seen && last_slice == asset.asset_id do continue
+				assigned[task.id] = asset.asset_id
 				size += 1
 				if task.blocked_by != 0 do blocked += 1
 				if task.status != .Done && (oldest == 0 || task.created_at < oldest) do oldest = task.created_at
@@ -67,7 +76,7 @@ collect_workspace_overview :: proc(conv: ^Conversation_State, now: i64) -> (resu
 		result.age_buckets[age_bucket] += 1
 	}
 	result.assigned_tasks = u32(len(assigned))
-	result.unassigned_tasks = unassigned_task_count(conv, &assigned)
+	result.unassigned_tasks = total_tasks - result.assigned_tasks
 	result.success = true
 	return
 }

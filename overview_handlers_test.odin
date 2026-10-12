@@ -56,6 +56,12 @@ test_workspace_overview_membership_and_bucket_boundaries :: proc(t: ^testing.T) 
 	edge := conv.edges[pr.EdgeID(len(conv.edges))]
 	edge.source_type, edge.target_type = edge.target_type, edge.source_type
 	edge.source_id, edge.target_id = edge.target_id, edge.source_id
+	// Persisted duplicate memberships must not push one task into the 6–15
+	// size bucket or 3+ blocked bucket. Include a reversed duplicate too.
+	for _ in 0 ..< 5 do slice_test_member_of(&conv, .Task, 1, assets[1].asset_id)
+	duplicate := conv.edges[pr.EdgeID(len(conv.edges))]
+	duplicate.source_type, duplicate.target_type = duplicate.target_type, duplicate.source_type
+	duplicate.source_id, duplicate.target_id = duplicate.target_id, duplicate.source_id
 	tasks[109] = pr.Task {
 		id     = 110,
 		status = .InProgress,
@@ -93,6 +99,12 @@ test_workspace_overview_membership_and_bucket_boundaries :: proc(t: ^testing.T) 
 	testing.expect(t, empty.success)
 	testing.expect_value(t, empty.status_counts, [4]u32{})
 	testing.expect_value(t, empty.size_buckets, [5]u32{})
+	// Older stored records may contain invalid enum values. Refuse an incomplete
+	// snapshot instead of indexing outside status_counts or silently omitting it.
+	tasks[109].status = pr.TaskStatus(5)
+	invalid := collect_workspace_overview(&conv, now)
+	testing.expect(t, !invalid.success)
+	testing.expect(t, len(invalid.error) > 0)
 }
 
 @(test)
