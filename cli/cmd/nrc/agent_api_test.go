@@ -12,6 +12,59 @@ import (
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
 
+func TestReminderVisibilityContract(t *testing.T) {
+	if flag := reminderCreateCmd.Flags().Lookup("visibility"); flag == nil || flag.DefValue != "personal" {
+		t.Fatal("new reminders must default to personal")
+	}
+	if reminderUpdateCmd.Flags().Lookup("visibility") != nil {
+		t.Fatal("existing visibility must be immutable")
+	}
+	for _, visibility := range []string{"personal", "team"} {
+		t.Run(visibility, func(t *testing.T) {
+			asset := protocol.Asset{
+				AssetType: protocol.AssetTypeReminder,
+				AssetID:   42,
+				Preview:   buildReminderPreview("Review", 100, visibility),
+				Payload:   buildReminderPayload("Review", 100, 0, 3, 7, visibility),
+			}
+			for _, raw := range []string{asset.Preview, asset.Payload} {
+				var data map[string]any
+				if err := json.Unmarshal([]byte(raw), &data); err != nil || data["visibility"] != visibility {
+					t.Fatalf("preview and payload must carry visibility: %s (%v)", raw, err)
+				}
+			}
+			entry, ok := reminderAssetToEntry(asset, 1)
+			if !ok || entry.Visibility != visibility || entry.NoteAssetID != 7 {
+				t.Fatalf("bad entry: %+v", entry)
+			}
+			encoded, err := json.Marshal(entry)
+			if err != nil || !strings.Contains(string(encoded), `"visibility":"`+visibility+`"`) {
+				t.Fatalf("JSON output lost visibility: %s", encoded)
+			}
+			human := captureStdout(t, func() { outputReminderTable([]reminderEntry{entry}) })
+			if !strings.Contains(human, "VISIBILITY") || !strings.Contains(human, visibility) {
+				t.Fatalf("human list lost visibility: %s", human)
+			}
+			// Updates reconstruct both fields from the fetched entry, not the create default.
+			asset.Preview = buildReminderPreview("Edited", entry.Deadline, entry.Visibility)
+			asset.Payload = buildReminderPayload("Edited", entry.Deadline, entry.WindowStart, entry.UrgencyDays, entry.NoteAssetID, entry.Visibility)
+			updated, ok := reminderAssetToEntry(asset, 1)
+			if !ok || updated.Visibility != visibility || updated.Title != "Edited" {
+				t.Fatalf("update lost visibility: %+v", updated)
+			}
+			asset.Payload = ""
+			if previewOnly, ok := reminderAssetToEntry(asset, 1); !ok || previewOnly.Visibility != visibility {
+				t.Fatalf("preview-only entry lost visibility: %+v", previewOnly)
+			}
+		})
+	}
+	legacy := protocol.Asset{AssetType: protocol.AssetTypeReminder, Preview: "Legacy", Payload: `{"title":"Legacy","deadline_at":"100"}`}
+	entry, ok := reminderAssetToEntry(legacy, 1)
+	if !ok || entry.Visibility != "team" {
+		t.Fatalf("legacy reminder must be team: %+v", entry)
+	}
+}
+
 func TestRoomFlagIsOnlyForChatAndPresence(t *testing.T) {
 	for _, name := range []string{"task", "asset", "note", "customer", "contact", "activity", "file", "edge", "graph", "agenda", "reminder", "appointment", "search", "retrieve"} {
 		cmd, _, err := rootCmd.Find([]string{name})

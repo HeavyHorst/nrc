@@ -26,6 +26,7 @@ const (
 )
 
 type reminderAssetPayload struct {
+	Visibility        string `json:"visibility"`
 	Title             string `json:"title"`
 	Name              string `json:"name"`
 	WindowStart       string `json:"window_start_at"`
@@ -39,6 +40,7 @@ type reminderAssetPayload struct {
 }
 
 type reminderEntry struct {
+	Visibility   string `json:"visibility"`
 	ID           uint64 `json:"id"`
 	Title        string `json:"title"`
 	State        string `json:"state"`
@@ -152,6 +154,10 @@ var reminderCreateCmd = &cobra.Command{
 		windowStartRaw, _ := cmd.Flags().GetString("window-start")
 		urgencyDays, _ := cmd.Flags().GetInt("urgency-days")
 		noteIDRaw, _ := cmd.Flags().GetString("note-id")
+		visibility, _ := cmd.Flags().GetString("visibility")
+		if visibility != "personal" && visibility != "team" {
+			conn.FatalInvalid("visibility must be personal or team")
+		}
 
 		deadline, err := parseDateOrNanos(deadlineRaw)
 		if err != nil || deadline == 0 {
@@ -184,8 +190,8 @@ var reminderCreateCmd = &cobra.Command{
 		}
 		defer s.Close()
 
-		payload := buildReminderPayload(title, deadline, windowStart, urgencyDays, noteID)
-		preview := buildReminderPreview(title, deadline)
+		payload := buildReminderPayload(title, deadline, windowStart, urgencyDays, noteID, visibility)
+		preview := buildReminderPreview(title, deadline, visibility)
 
 		resp, err := s.SendAndRecv(&protocol.Message{
 			Opcode: protocol.C_CreateAsset,
@@ -256,6 +262,7 @@ var reminderGetCmd = &cobra.Command{
 		fmt.Printf("ID:          %d\n", entry.ID)
 		fmt.Printf("Title:       %s\n", entry.Title)
 		fmt.Printf("State:       %s\n", entry.State)
+		fmt.Printf("Visibility:  %s\n", entry.Visibility)
 		fmt.Printf("Window:      %s\n", formatTimestamp(entry.WindowStart))
 		fmt.Printf("Deadline:    %s\n", formatTimestamp(entry.Deadline))
 		fmt.Printf("Urgency:     %d day(s)\n", entry.UrgencyDays)
@@ -358,8 +365,8 @@ var reminderUpdateCmd = &cobra.Command{
 			conn.FatalInvalid("%v", err)
 		}
 
-		payload := buildReminderPayload(title, deadline, windowStart, urgencyDays, noteID)
-		preview := buildReminderPreview(title, deadline)
+		payload := buildReminderPayload(title, deadline, windowStart, urgencyDays, noteID, entry.Visibility)
+		preview := buildReminderPreview(title, deadline, entry.Visibility)
 
 		resp, err = s.SendAndRecv(&protocol.Message{
 			Opcode: protocol.C_UpdateAsset,
@@ -462,8 +469,9 @@ func validateReminderFields(title string, deadline, windowStart int64, urgencyDa
 	return nil
 }
 
-func buildReminderPayload(title string, deadline, windowStart int64, urgencyDays int, noteID uint64) string {
+func buildReminderPayload(title string, deadline, windowStart int64, urgencyDays int, noteID uint64, visibility string) string {
 	p := reminderAssetPayload{
+		Visibility:  visibility,
 		Title:       title,
 		WindowStart: fmt.Sprintf("%d", windowStart),
 		Deadline:    fmt.Sprintf("%d", deadline),
@@ -476,11 +484,13 @@ func buildReminderPayload(title string, deadline, windowStart int64, urgencyDays
 	return string(body)
 }
 
-func buildReminderPreview(title string, deadline int64) string {
-	if deadline == 0 {
-		return title
-	}
-	return fmt.Sprintf("%s | DUE %s", title, time.Unix(0, deadline).Format("2006-01-02 15:04"))
+func buildReminderPreview(title string, deadline int64, visibility string) string {
+	body, _ := json.Marshal(struct {
+		Title      string `json:"title"`
+		Deadline   string `json:"deadline_at"`
+		Visibility string `json:"visibility"`
+	}{title, strconv.FormatInt(deadline, 10), visibility})
+	return string(body)
 }
 
 func reminderState(deadline, windowStart int64, urgencyDays int, now int64) string {
@@ -522,6 +532,12 @@ func parseReminderPayload(asset protocol.Asset) (reminderAssetPayload, bool) {
 		}
 		var p reminderAssetPayload
 		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			return reminderAssetPayload{}, false
+		}
+		if p.Visibility == "" {
+			p.Visibility = "team"
+		}
+		if p.Visibility != "personal" && p.Visibility != "team" {
 			return reminderAssetPayload{}, false
 		}
 		return p, true
@@ -587,6 +603,7 @@ func reminderAssetToEntry(asset protocol.Asset, now int64) (reminderEntry, bool)
 	urgencyDays = normalizeUrgencyDays(urgencyDays)
 
 	return reminderEntry{
+		Visibility:   payload.Visibility,
 		ID:           asset.AssetID,
 		Title:        title,
 		State:        reminderState(deadline, windowStart, urgencyDays, now),
@@ -601,7 +618,7 @@ func reminderAssetToEntry(asset protocol.Asset, now int64) (reminderEntry, bool)
 }
 
 func outputReminderTable(reminders []reminderEntry) {
-	table := tablewriter.NewTable(os.Stdout, tablewriter.WithHeader([]string{"ID", "STATE", "TITLE", "WINDOW", "DEADLINE", "URG", "NOTE", "OWNER"}))
+	table := tablewriter.NewTable(os.Stdout, tablewriter.WithHeader([]string{"ID", "STATE", "VISIBILITY", "TITLE", "WINDOW", "DEADLINE", "URG", "NOTE", "OWNER"}))
 	for _, r := range reminders {
 		note := "-"
 		if r.NoteAssetID > 0 {
@@ -610,6 +627,7 @@ func outputReminderTable(reminders []reminderEntry) {
 		table.Append(
 			fmt.Sprintf("%d", r.ID),
 			r.State,
+			r.Visibility,
 			truncateNote(r.Title, 32),
 			formatTimestamp(r.WindowStart),
 			formatTimestamp(r.Deadline),
@@ -628,6 +646,7 @@ func init() {
 	reminderCreateCmd.Flags().String("window-start", "", "Window start (RFC3339, YYYY-MM-DDTHH:MM, or unix nanos)")
 	reminderCreateCmd.Flags().Int("urgency-days", reminderDefaultUrgencyDays, "Urgency window in days")
 	reminderCreateCmd.Flags().String("note-id", "", "Linked note asset ID")
+	reminderCreateCmd.Flags().String("visibility", "personal", "Visibility (personal|team); immutable after creation")
 	_ = reminderCreateCmd.MarkFlagRequired("deadline")
 
 	reminderUpdateCmd.Flags().String("title", "", "New title")

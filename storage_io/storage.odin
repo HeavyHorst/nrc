@@ -109,8 +109,9 @@ open_wal :: proc(storage: Context, path: string) -> (^File, os.Error) {
 		if storage.backend == .Virtual do return open(storage, path, {.Write, .Create, .Append}, os.perm(0o644))
 	}
 	if !context_is_host(storage) do return nil, invalid_context_error()
-	cpath := strings.clone_to_cstring(path, context.temp_allocator)
+	cpath := strings.clone_to_cstring(path, context.allocator)
 	if cpath == nil do return nil, os.Platform_Error(linux.Errno.ENOMEM)
+	defer delete(cpath)
 	handle, err := linux.open(cpath, {.WRONLY, .CREAT, .APPEND, .CLOEXEC, .NOCTTY}, transmute(linux.Mode)u32(0o644))
 	if err != .NONE do return nil, os.Platform_Error(err)
 	return read_file_from_fd(handle), nil
@@ -278,8 +279,9 @@ storage_space :: proc(storage: Context, path: string) -> (space: Storage_Space, 
 		}
 	}
 	if !context_is_host(storage) || path == "" do return {}, invalid_context_error()
-	cpath := strings.clone_to_cstring(path, context.temp_allocator)
+	cpath := strings.clone_to_cstring(path, context.allocator)
 	if cpath == nil do return {}, os.Platform_Error(linux.Errno.ENOMEM)
+	defer delete(cpath)
 	stat: linux.Stat_FS
 	if errno := linux.statfs(cpath, &stat); errno != .NONE do return {}, os.Platform_Error(errno)
 	if stat.bsize <= 0 || stat.blocks < 0 || stat.bfree < 0 || stat.bavail < 0 do return {}, os.Platform_Error(linux.Errno.EOVERFLOW)

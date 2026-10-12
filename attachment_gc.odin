@@ -292,9 +292,9 @@ attachment_gc_scan_active :: proc(
 	candidates: ^[dynamic]Attachment_GC_Candidate,
 	stats: ^Attachment_GC_Stats,
 ) -> bool {
-	entries, read_err := os.read_all_directory_by_path(attachments_dir, context.temp_allocator)
+	entries, read_err := os.read_all_directory_by_path(attachments_dir, context.allocator)
 	if read_err != nil do return false
-	defer os.file_info_slice_delete(entries, context.temp_allocator)
+	defer os.file_info_slice_delete(entries, context.allocator)
 	for entry in entries {
 		if entry.name == ATTACHMENT_GC_QUARANTINE_NAME do continue
 		if entry.type != .Regular || !attachment_file_id_is_valid(entry.name) {
@@ -335,13 +335,13 @@ attachment_gc_next_manifest_line :: proc(data: []byte, offset: ^int) -> (line: s
 attachment_gc_batch_is_safe :: proc(batch_dir: string, batch_started: i64) -> (file_count: int, bytes: i64, safe: bool) {
 	manifest_path := storage_layout_path(batch_dir, ATTACHMENT_GC_MANIFEST_NAME)
 	defer delete(manifest_path)
-	manifest_info, manifest_stat_err := os.lstat(manifest_path, context.temp_allocator)
+	manifest_info, manifest_stat_err := os.lstat(manifest_path, context.allocator)
 	if manifest_stat_err != nil do return
-	defer os.file_info_delete(manifest_info, context.temp_allocator)
+	defer os.file_info_delete(manifest_info, context.allocator)
 	if manifest_info.type != .Regular || manifest_info.size < 0 || manifest_info.size > 64 * 1024 * 1024 do return
 	manifest_data, manifest_read_err := os.read_entire_file(manifest_path, context.allocator)
-	if manifest_read_err != nil do return
 	defer delete(manifest_data)
+	if manifest_read_err != nil do return
 	offset := 0
 	header, header_ok := attachment_gc_next_manifest_line(manifest_data, &offset)
 	created_line, created_ok := attachment_gc_next_manifest_line(manifest_data, &offset)
@@ -367,16 +367,17 @@ attachment_gc_batch_is_safe :: proc(batch_dir: string, batch_started: i64) -> (f
 
 	complete_path := storage_layout_path(batch_dir, ATTACHMENT_GC_COMPLETE_NAME)
 	defer delete(complete_path)
-	complete_info, complete_stat_err := os.lstat(complete_path, context.temp_allocator)
+	complete_info, complete_stat_err := os.lstat(complete_path, context.allocator)
 	if complete_stat_err != nil do return
-	defer os.file_info_delete(complete_info, context.temp_allocator)
+	defer os.file_info_delete(complete_info, context.allocator)
 	if complete_info.type != .Regular || complete_info.size != 3 do return
-	complete_data, complete_read_err := os.read_entire_file(complete_path, context.temp_allocator)
+	complete_data, complete_read_err := os.read_entire_file(complete_path, context.allocator)
+	defer delete(complete_data)
 	if complete_read_err != nil || string(complete_data) != "ok\n" do return
 
-	entries, read_err := os.read_all_directory_by_path(batch_dir, context.temp_allocator)
+	entries, read_err := os.read_all_directory_by_path(batch_dir, context.allocator)
 	if read_err != nil do return
-	defer os.file_info_slice_delete(entries, context.temp_allocator)
+	defer os.file_info_slice_delete(entries, context.allocator)
 	for entry in entries {
 		switch entry.name {
 		case ATTACHMENT_GC_COMPLETE_NAME, ATTACHMENT_GC_MANIFEST_NAME:
@@ -469,9 +470,9 @@ attachment_gc_restore_and_purge :: proc(
 ) -> bool {
 	if !os.exists(quarantine_dir) do return true
 	if !storage_layout_is_real_directory(quarantine_dir) do return false
-	batches, read_err := os.read_all_directory_by_path(quarantine_dir, context.temp_allocator)
+	batches, read_err := os.read_all_directory_by_path(quarantine_dir, context.allocator)
 	if read_err != nil do return false
-	defer os.file_info_slice_delete(batches, context.temp_allocator)
+	defer os.file_info_slice_delete(batches, context.allocator)
 	// Validate every recognized batch before making any change. Incomplete or
 	// unexpected quarantine contents fail the entire destructive pass closed.
 	for batch in batches {
@@ -492,25 +493,25 @@ attachment_gc_restore_and_purge :: proc(
 		batch_started, named := attachment_gc_batch_timestamp(batch.name)
 		assert(batch.type == .Directory && named)
 		batch_dir := storage_layout_path(quarantine_dir, batch.name)
-		entries, batch_err := os.read_all_directory_by_path(batch_dir, context.temp_allocator)
+		entries, batch_err := os.read_all_directory_by_path(batch_dir, context.allocator)
 		if batch_err != nil {delete(batch_dir); return false}
 		contains_unrestored_live := false
 		for entry in entries {
 			if entry.type != .Regular || !attachment_file_id_is_valid(entry.name) do continue
 			if _, referenced := live[entry.name]; !referenced do continue
 			active_path := storage_layout_path(attachments_dir, entry.name)
-			active_info, active_err := os.lstat(active_path, context.temp_allocator)
+			active_info, active_err := os.lstat(active_path, context.allocator)
 			quarantined_path := storage_layout_path(batch_dir, entry.name)
 			if active_err == nil {
 				active_valid :=
 					active_info.type == .Regular && active_info.size == entry.size && attachment_gc_files_equal(quarantined_path, active_path, entry.size)
-				os.file_info_delete(active_info, context.temp_allocator)
-				if !active_valid {delete(quarantined_path); delete(active_path); os.file_info_slice_delete(entries, context.temp_allocator); delete(batch_dir); return false}
+				os.file_info_delete(active_info, context.allocator)
+				if !active_valid {delete(quarantined_path); delete(active_path); os.file_info_slice_delete(entries, context.allocator); delete(batch_dir); return false}
 			} else {
 				contains_unrestored_live = true
 				if apply {
 					restored := attachment_gc_copy_file(quarantined_path, active_path, entry.size)
-					if !restored {delete(quarantined_path); delete(active_path); os.file_info_slice_delete(entries, context.temp_allocator); delete(batch_dir); return false}
+					if !restored {delete(quarantined_path); delete(active_path); os.file_info_slice_delete(entries, context.allocator); delete(batch_dir); return false}
 					stats.restored_files += 1
 					contains_unrestored_live = false
 				}
@@ -518,14 +519,14 @@ attachment_gc_restore_and_purge :: proc(
 			if apply && (!attachment_gc_sync_file(active_path) || !attachment_gc_sync_directory(attachments_dir)) {
 				delete(quarantined_path)
 				delete(active_path)
-				os.file_info_slice_delete(entries, context.temp_allocator)
+				os.file_info_slice_delete(entries, context.allocator)
 				delete(batch_dir)
 				return false
 			}
 			delete(quarantined_path)
 			delete(active_path)
 		}
-		os.file_info_slice_delete(entries, context.temp_allocator)
+		os.file_info_slice_delete(entries, context.allocator)
 
 		file_count, bytes, safe := attachment_gc_batch_is_safe(batch_dir, batch_started)
 		assert(safe)

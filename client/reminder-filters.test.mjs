@@ -89,3 +89,33 @@ test("today uses local midnight boundaries, including the 23-hour DST day", () =
   assert.equal(matches({ deadlineAt: now }, "overdue", now), false);
   assert.equal(matches({ deadlineAt: now }, "upcoming", now), true);
 });
+
+test("public reminder snapshot and queue distinguish personal, team and legacy preview records", () => {
+  const { context, body } = harness();
+  const deadline = String(nanos("2026-04-10T12:00:00+02:00"));
+  context.window.NRCAssets.getAssetsByType = () => [
+    { assetId: 10n, convId: 0n, assetType: 9, payload: JSON.stringify({ title: "Private", deadline_at: deadline, visibility: "personal" }) },
+    { assetId: 11n, convId: 0n, assetType: 9, preview: JSON.stringify({ title: "Shared", deadline_at: deadline, visibility: "team" }) },
+    { assetId: 12n, convId: 0n, assetType: 9, preview: JSON.stringify({ title: "Legacy", deadline_at: deadline }) },
+  ];
+  const reminders = context.window.NRCTasks.getReminderSnapshot().reminders;
+  assert.deepEqual(Array.from(reminders, r => r.visibility), ["personal", "team", "team"]);
+  context.window.NRCTasks.renderReminderQueue();
+  assert.match(body.innerHTML, /PERSONAL · OPEN/);
+  assert.match(body.innerHTML, /TEAM · OPEN/);
+  for (const reminder of reminders) {
+    context.reminderForSave = reminder;
+    vm.runInContext("currentDetailReminder = reminderForSave", context);
+    const fields = {
+      reminderDetailTitle: { value: "Edited" }, reminderDetailDeadline: { value: "2026-04-10T12:00" },
+      reminderDetailWindowStart: { value: "" }, reminderDetailUrgency: { value: "3" }, reminderDetailNoteId: { value: "" },
+    };
+    context.document.getElementById = id => fields[id] || null;
+    let sent;
+    context.window.NRCAssets.sendUpdateAsset = (...args) => { sent = args; };
+    vm.runInContext("saveReminderFromDetailPanel()", context);
+    assert.equal(sent[2], sent[3], "preview and payload share JSON contract");
+    assert.equal(JSON.parse(sent[3]).visibility, reminder.visibility);
+    assert.equal(JSON.parse(sent[3]).title, "Edited");
+  }
+});

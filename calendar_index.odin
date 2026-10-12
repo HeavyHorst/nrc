@@ -101,7 +101,10 @@ calendar_index_asset :: proc(conv: ^Conversation_State, asset: ^pr.Asset, remove
 		delete_key(&conv.calendar_appointment_keys, asset.asset_id)
 	}
 	if !remove && asset.asset_type == .Appointment {
-		record, valid := parse_appointment_preview(asset.preview, context.temp_allocator)
+		arena: virtual.Arena
+		if virtual.arena_init_growing(&arena) != nil do return
+		defer virtual.arena_destroy(&arena)
+		record, valid := parse_appointment_preview(asset.preview, virtual.arena_allocator(&arena))
 		if valid {
 			key := appointment_index_key(record.start_at, record.end_at, asset.asset_id)
 			_, _ = btree.set(&conv.calendar_appointments, key)
@@ -144,6 +147,7 @@ collect_calendar_page :: proc(
 	req: pr.CalendarRequest,
 	rows: ^[dynamic]pr.CalendarRow,
 	allocator: mem.Allocator,
+	username: string = "",
 ) -> (
 	more: bool,
 	visited: int,
@@ -171,7 +175,9 @@ collect_calendar_page :: proc(
 			row.title = task.title; row.assignee = task.assignee; row.project = task.project; row.blocked = task.blocked_by != 0
 		} else {
 			if len(req.assignee) > 0 || len(req.project) > 0 do continue
-			_, row.title = calendar_reminder(conv.assets[pr.AssetID(key.id)], allocator)
+			asset := conv.assets[pr.AssetID(key.id)]
+			if !asset_visible_to(asset, username) do continue
+			_, row.title = calendar_reminder(asset, allocator)
 		}
 		append(rows, row)
 		// Later point rows cannot enter a page already filled by earlier ones.
@@ -224,7 +230,7 @@ process_calendar_query :: proc(c: ^NRC_Connection, req: pr.CalendarRequest) {
 	allocator := virtual.arena_allocator(&arena)
 	rows := make([dynamic]pr.CalendarRow, 0, int(req.limit), allocator)
 	conv := get_conversation(get_connection_workspace(c), req.conv_id)
-	more, _ := collect_calendar_page(conv, req, &rows, allocator)
+	more, _ := collect_calendar_page(conv, req, &rows, allocator, get_connection_nickname(c))
 	size := 34
 	for row in rows do size += pr.calendar_row_size(row)
 	buf, header := allocate_websocket_frame_buffer(size, "calendar page")

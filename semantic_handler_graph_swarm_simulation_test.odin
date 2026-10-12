@@ -1636,7 +1636,7 @@ when NRC_SIMULATION {
 			}
 			enqueued = semantic_transport_persistence_enqueue_create_asset(campaign, req, split_a, split_b)
 			expected_len = pr.serializeErrorResponse(
-				{origin_opcode = .C_CreateAsset, error_msg = transmute([]byte)string("Asset parent cycle not allowed"), correlation_id = correlation_id},
+				{origin_opcode = .C_CreateAsset, error_msg = transmute([]byte)string("Asset parent not found"), correlation_id = correlation_id},
 				expected[:],
 			)
 		}

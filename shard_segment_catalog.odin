@@ -84,7 +84,8 @@ shard_segment_catalog_is_valid :: proc(catalog: Shard_Segment_Catalog) -> bool {
 	if catalog.shard < 0 || catalog.shard >= LOGICAL_SHARD_COUNT || catalog.catalog_generation == 0 do return false
 	_, size_ok := shard_segment_catalog_encoded_size(len(catalog.segments))
 	if !size_ok do return false
-	seen := make(map[Shard_Segment_Descriptor]bool, len(catalog.segments), context.temp_allocator)
+	seen := make(map[Shard_Segment_Descriptor]bool, len(catalog.segments), context.allocator)
+	defer delete(seen)
 	for descriptor in catalog.segments {
 		if !shard_segment_descriptor_is_valid(descriptor) do return false
 		identity := shard_segment_descriptor_physical_identity(descriptor)
@@ -212,7 +213,8 @@ load_shard_segment_catalog :: proc(storage: storage_io.Context, shard_dir: strin
 	defer storage_io.discard(file)
 	size, size_err := storage_io.file_size(file)
 	if size_err != nil || size < SHARD_SEGMENT_CATALOG_HEADER_SIZE + SHARD_SEGMENT_CATALOG_CHECKSUM_SIZE || size > SHARD_SEGMENT_CATALOG_MAX_BYTES do return
-	data := make([]byte, int(size), context.temp_allocator)
+	data := make([]byte, int(size), context.allocator)
+	defer delete(data)
 	read := 0
 	for read < len(data) {
 		count, read_err := storage_io.read_at(file, data[read:], read)

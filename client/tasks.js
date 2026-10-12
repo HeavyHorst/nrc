@@ -425,6 +425,7 @@ function parseReminderAsset(asset) {
   return {
     asset,
     title,
+    visibility: data.visibility === "personal" ? "personal" : "team",
     deadlineAt,
     windowStartAt,
     urgencyDays,
@@ -461,6 +462,7 @@ function matchesReminderFilter(reminder, filter, nowNanos) {
 function buildReminderPayload(reminder) {
   return JSON.stringify({
     title: reminder.title,
+    visibility: reminder.visibility === "personal" ? "personal" : "team",
     window_start_at: reminder.windowStartAt.toString(),
     deadline_at: reminder.deadlineAt.toString(),
     urgency_days: reminder.urgencyDays,
@@ -618,6 +620,7 @@ function saveReminderFromDetailPanel() {
 
   const updatedReminder = {
     title,
+    visibility: currentDetailReminder.visibility,
     windowStartAt,
     deadlineAt,
     urgencyDays,
@@ -625,7 +628,7 @@ function saveReminderFromDetailPanel() {
   };
 
   const payload = buildReminderPayload(updatedReminder);
-  const preview = `${title} | DUE ${formatDueDateShort(deadlineAt)}`;
+  const preview = payload;
 
   window.NRCAssets.sendUpdateAsset(currentDetailReminder.asset.convId, currentDetailReminder.asset.assetId, preview, payload);
   reminderDetailDirty = false;
@@ -668,6 +671,10 @@ function showReminderDetailPanel(reminder) {
 
   agendaContent.innerHTML = `
     <div class="task-detail-panel task-detail-panel-editable reminder-detail-panel detail-edit-form">
+      <div class="task-detail-row detail-edit-field">
+        <span class="task-detail-label detail-edit-label">VISIBILITY · FIXED AT CREATION</span>
+        <span class="status-value-mono">${reminder.visibility.toUpperCase()}</span>
+      </div>
       <div class="task-detail-row detail-edit-field">
         <label class="task-detail-label detail-edit-label" for="reminderDetailTitle">TITLE</label>
         <input type="text" class="task-detail-input" id="reminderDetailTitle" value="${escapeHtml(reminder.title)}" maxlength="256">
@@ -938,7 +945,7 @@ function renderReminderQueue() {
 
   queueBody.innerHTML = `<div class="reminder-list-header">
     <span class="reminder-marker"></span><span>ID</span><span>TITLE</span>
-    <span>STATE</span><span>WINDOW START</span><span>DEADLINE</span><span>LINKED NOTE</span>
+    <span>VISIBILITY / STATE</span><span>WINDOW START</span><span>DEADLINE</span><span>LINKED NOTE</span>
   </div>` + reminders
     .map((r) => {
       let noteLabel = '<span class="reminder-note">—</span>';
@@ -952,8 +959,8 @@ function renderReminderQueue() {
         <div class="reminder-row ${isSelected ? "reminder-row-selected" : ""}" data-reminder-row-id="${r.asset.assetId}">
           <span class="reminder-marker" aria-hidden="true">${isSelected ? "›" : ""}</span>
           <span class="reminder-id" title="Reminder #${r.asset.assetId}">${r.asset.assetId}</span>
-          <button type="button" class="task-row-open reminder-title" aria-label="${escapeHtml(`Open reminder ${r.asset.assetId}: ${r.title}`)}" ${isSelected ? 'aria-current="true"' : ""} title="${escapeHtml(r.title)}">${escapeHtml(r.title)}</button>
-          <span class="reminder-state reminder-state-${r.state.toLowerCase()}">${r.state}</span>
+          <button type="button" class="task-row-open reminder-title" aria-label="${escapeHtml(`Open ${r.visibility} reminder ${r.asset.assetId}: ${r.title}`)}" ${isSelected ? 'aria-current="true"' : ""} title="${escapeHtml(r.title)}">${r.visibility.toUpperCase()} · ${escapeHtml(r.title)}</button>
+          <span class="reminder-state reminder-state-${r.state.toLowerCase()}" title="${r.visibility.toUpperCase()} · ${r.state}">${r.visibility.toUpperCase()} · ${r.state}</span>
           <span class="reminder-time">${r.windowStartAt !== 0n ? formatReminderDate(r.windowStartAt) : "—"}</span>
           <span class="reminder-time">${formatReminderDate(r.deadlineAt)}</span>
           ${noteLabel}
@@ -965,8 +972,8 @@ function renderReminderQueue() {
   window.NRCColumnResize?.init({
     root: ".reminder-list-header", headers: ":scope > span", storageKey: "nrc.reminder.columns.v1",
     // Keep the hidden slot so saved data-column widths retain their indexes.
-    defaults: [0, 48, 320, 90, 130, 130, 180],
-    minimums: [16, 48, 160, 80, 110, 110, 120],
+    defaults: [0, 48, 320, 160, 130, 130, 180],
+    minimums: [16, 48, 160, 150, 110, 110, 120],
     locked: [0],
     apply: (header, widths) => header.parentElement.style.setProperty("--reminder-columns", widths.map((width) => `${width}px`).join(" ")),
   });
@@ -1004,6 +1011,30 @@ function renderReminderQueue() {
 
 async function createReminder() {
   if (!window.NRCAssets || !window.NRCDialog) return;
+
+  const visibility = await new Promise((resolve) => {
+    const view = window.NRCModal.create({ title: "CREATE REMINDER", onCancel: () => resolve(null) });
+    const field = document.createElement("fieldset");
+    field.className = "choice-field";
+    field.innerHTML = `<legend class="task-detail-label detail-edit-label">VISIBILITY · FIXED AT CREATION</legend>
+      <label class="radio-choice"><input type="radio" name="reminderCreateVisibility" value="personal" checked><span>PERSONAL — ONLY YOU</span></label>
+      <label class="radio-choice"><input type="radio" name="reminderCreateVisibility" value="team"><span>TEAM — WORKSPACE</span></label>`;
+    view.panel.insertBefore(field, view.actions);
+    for (const [label, value] of [["CANCEL", null], ["NEXT", true]]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = value ? "btn btn--primary" : "btn";
+      button.textContent = label;
+      button.onclick = () => {
+        const selected = value ? field.querySelector("input:checked").value : null;
+        view.close();
+        resolve(selected);
+      };
+      view.actions.append(button);
+    }
+    view.show();
+  });
+  if (!visibility) return;
 
   const title = await window.NRCDialog.prompt("Reminder title:", {
     title: "CREATE REMINDER",
@@ -1057,6 +1088,7 @@ async function createReminder() {
 
   const reminder = {
     title: title.trim(),
+    visibility,
     windowStartAt,
     deadlineAt,
     urgencyDays: REMINDER_DEFAULT_URGENCY_DAYS,
@@ -1064,7 +1096,7 @@ async function createReminder() {
   };
   const payload = buildReminderPayload(reminder);
 
-  const preview = `${title.trim()} | DUE ${formatDueDateShort(deadlineAt)}`;
+  const preview = payload;
 
   window.NRCAssets.sendCreateAsset(
     0n,

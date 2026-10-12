@@ -215,10 +215,17 @@ Use reminders for deadlines and optional work windows. Replace the dates and
 note ID below with your own. Use an explicit time-zone offset to avoid ambiguity:
 
 ```sh
+nrc reminder create "Update my Xcode" --deadline 2026-10-16T17:00:00+02:00
 nrc reminder create "Submit rollout documents" --deadline 2026-10-09T17:00:00+02:00 \
-  --window-start 2026-10-05T09:00:00+02:00 --urgency-days 2 --note-id 81
+  --window-start 2026-10-05T09:00:00+02:00 --urgency-days 2 --note-id 81 --visibility team
 nrc reminder list
 ```
+
+New reminders default to `--visibility personal`: only their creator can see,
+edit or delete them. `--visibility team` shares a reminder with the workspace.
+Older reminders remain Team. Visibility is fixed at creation and shown in list
+and get output; updates preserve it. Personal reminders may reference a shared
+note, but cannot have shared graph relations, parent/child records or attachments.
 
 `nrc agenda show` and `nrc agenda set <content>` read and replace the shared
 workspace memo. This is not the Calendar's Agenda view. Attention and Calendar

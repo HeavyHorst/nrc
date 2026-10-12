@@ -1092,8 +1092,9 @@ direct_wal_read_source :: proc(data: rawptr, offset, length: int) -> ([]byte, bo
 
 open_direct_wal_read_source :: proc(path: string, thread_index: int) -> (source: Direct_WAL_Read_Source, file_size: int, ok: bool) {
 	source.fd = -1
-	path_cstr := strings.clone_to_cstring(path, context.temp_allocator)
+	path_cstr := strings.clone_to_cstring(path, context.allocator)
 	if path_cstr == nil do return
+	defer delete(path_cstr)
 	fd, open_err := linux.open(path_cstr, {.DIRECT, .CLOEXEC})
 	if open_err != .NONE {
 		log.errorf("[T%d] Failed to open WAL with O_DIRECT: %s (%v)", thread_index, path, open_err)

@@ -353,12 +353,12 @@ test_calendar_appointment_overlap_cursor_filters_and_mutation :: proc(t: ^testin
 @(test)
 test_appointment_record_validation :: proc(t: ^testing.T) {
 	valid := transmute([]byte)string(`{"version":1,"title":"Review","start_at":"123","description":"d","url":"https://example.test"}`)
-	testing.expect(t, validate_appointment_asset(.Appointment, .Plain, 0, valid, nil, context.temp_allocator))
+	testing.expect(t, validate_appointment_asset(.Appointment, .Plain, 0, valid, nil))
 	for text in ([?]string{`{"version":1,"title":"","start_at":"123"}`, `{"version":1,"title":"x","start_at":"0"}`, `{"version":1,"title":"x","start_at":"123","end_at":"123"}`, `{"version":2,"title":"x","start_at":"123"}`, `{"version":1,"title":"x","start_at":123}`}) {
-		testing.expect(t, !validate_appointment_asset(.Appointment, .Plain, 0, transmute([]byte)text, nil, context.temp_allocator))
+		testing.expect(t, !validate_appointment_asset(.Appointment, .Plain, 0, transmute([]byte)text, nil))
 	}
-	testing.expect(t, !validate_appointment_asset(.Appointment, .Zstd, 0, valid, nil, context.temp_allocator))
-	testing.expect(t, !validate_appointment_asset(.Appointment, .Plain, 1, valid, transmute([]byte)string("x"), context.temp_allocator))
+	testing.expect(t, !validate_appointment_asset(.Appointment, .Zstd, 0, valid, nil))
+	testing.expect(t, !validate_appointment_asset(.Appointment, .Plain, 1, valid, transmute([]byte)string("x")))
 }
 
 @(test)

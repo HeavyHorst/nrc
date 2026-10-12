@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"testing"
@@ -9,6 +10,243 @@ import (
 	"github.com/gorilla/websocket"
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
+
+func TestPersonalRemindersWorkspacePrivacy(t *testing.T) {
+	dir := t.TempDir()
+	server := startServerInWorkDir(t, dir)
+	defer func() { server.stop(t) }()
+	workspace := fmt.Sprintf("e2e-personal-reminders-%d", time.Now().UnixNano())
+	connect := func(username string) *websocket.Conn {
+		conn, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, username))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		mustSetReadDeadline(t, conn, 20*time.Second)
+		mustExpectServerReady(t, conn)
+		mustSubscribeWorkspaceData(t, conn)
+		return conn
+	}
+	alice, aliceOther, bob := connect("alice"), connect("alice"), connect("bob")
+	send := func(c *websocket.Conn, op uint16, body []byte) {
+		t.Helper()
+		if err := sendProtocolMessage(c, op, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	quiet := func(c *websocket.Conn) {
+		t.Helper()
+		send(c, protocol.C_Ping, protocol.EncodePing(77))
+		if msg := mustReadProtocolMessage(t, c); msg.Opcode != protocol.S_Pong {
+			t.Fatalf("private mutation leaked: opcode=%d", msg.Opcode)
+		}
+	}
+	personal := `{"title":"Update my Xcode","deadline_at":"100","visibility":"personal"}`
+	team := `{"title":"Team maintenance","deadline_at":"200","visibility":"team"}`
+	legacy := `{"title":"Legacy team reminder","deadline_at":"300"}`
+	compressed, err := protocol.EncodeCreateAssetZstdWithCorrelation(0, protocol.AssetTypeReminder, protocol.ParentTypeNone, 0, personal, personal, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send(alice, protocol.C_CreateAsset, compressed)
+	created, err := protocol.DecodeAssetCreated(mustReadUntilOpcode(t, alice, protocol.S_AssetCreated, 12))
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateID := created.Asset.AssetID
+	otherCreated, err := protocol.DecodeAssetCreated(mustReadUntilOpcode(t, aliceOther, protocol.S_AssetCreated, 12))
+	if err != nil || otherCreated.Asset.AssetID != privateID {
+		t.Fatalf("owner's other session missing reminder: %v", err)
+	}
+	quiet(bob)
+	for _, record := range []string{team, legacy} {
+		send(alice, protocol.C_CreateAsset, protocol.EncodeCreateAsset(0, protocol.AssetTypeReminder, protocol.ParentTypeNone, 0, record, record))
+		for _, c := range []*websocket.Conn{alice, aliceOther, bob} {
+			mustReadUntilOpcode(t, c, protocol.S_AssetCreated, 12)
+		}
+	}
+	checkReads := func() {
+		t.Helper()
+		for _, check := range []struct {
+			c    *websocket.Conn
+			want int
+		}{{alice, 3}, {bob, 2}} {
+			if assets := listAssetsFull(t, check.c, 0); len(assets) != check.want {
+				t.Fatalf("visible assets=%d want=%d", len(assets), check.want)
+			}
+			send(check.c, protocol.C_ListAssetsPaged, protocol.EncodeListAssetsPaged(0, protocol.AssetTypeReminder, true, 1, false, 0, 0))
+			page, err := protocol.DecodeAssetListPage(mustReadUntilOpcode(t, check.c, protocol.S_AssetListPage, 12))
+			if err != nil || page.TotalCount != uint32(check.want) || len(page.Assets) != 1 || !page.HasMore {
+				t.Fatalf("visible page/count: %+v %v", page, err)
+			}
+			// The private reminder is earlier than team reminders: filtering after
+			// pagination would incorrectly return an empty page or a private cursor.
+			body := make([]byte, 52)
+			binary.BigEndian.PutUint64(body[16:], 400)
+			binary.BigEndian.PutUint16(body[24:], 1)
+			send(check.c, protocol.C_QueryCalendar, body)
+			calendar := mustReadUntilOpcode(t, check.c, protocol.S_CalendarPage, 12)
+			wantTitle := "Update my Xcode"
+			if check.c == bob {
+				wantTitle = "Team maintenance"
+			}
+			if binary.BigEndian.Uint16(calendar[8:]) != 1 || !strings.Contains(string(calendar), wantTitle) {
+				t.Fatalf("wrong visible calendar page: %q", calendar)
+			}
+		}
+		send(alice, protocol.C_GetAsset, protocol.EncodeGetAsset(0, privateID))
+		mustReadUntilOpcode(t, alice, protocol.S_AssetFull, 12)
+		send(bob, protocol.C_GetAsset, protocol.EncodeGetAsset(0, privateID))
+		mustReadErrorResponse(t, bob, protocol.C_GetAsset, 0)
+	}
+	checkReads()
+	for _, request := range []struct {
+		op   uint16
+		body []byte
+	}{
+		{protocol.C_UpdateAsset, protocol.EncodeUpdateAsset(0, privateID, personal, personal)},
+		{protocol.C_DeleteAsset, protocol.EncodeDeleteAsset(0, privateID)},
+	} {
+		send(bob, request.op, request.body)
+		mustReadErrorResponse(t, bob, request.op, 0)
+	}
+	// Privacy cannot be weakened by clearing preview metadata or converting it
+	// to Team, and inconsistent/duplicate metadata must not claim false privacy.
+	for _, record := range []string{team, legacy} {
+		send(alice, protocol.C_UpdateAsset, protocol.EncodeUpdateAsset(0, privateID, record, record))
+		mustReadErrorResponse(t, alice, protocol.C_UpdateAsset, 0)
+	}
+	for _, preview := range []string{team, `{"visibility":"team","visibility":"personal"}`} {
+		send(alice, protocol.C_CreateAsset, protocol.EncodeCreateAsset(0, protocol.AssetTypeReminder, protocol.ParentTypeNone, 0, preview, personal))
+		mustReadErrorResponse(t, alice, protocol.C_CreateAsset, 0)
+	}
+	// Shared relations/children must not provide an indirect private-record path.
+	send(alice, protocol.C_CreateAsset, protocol.EncodeCreateAsset(0, protocol.AssetTypeNote, protocol.ParentTypeAsset, privateID, "child", "child"))
+	mustReadErrorResponse(t, alice, protocol.C_CreateAsset, 0)
+	send(alice, protocol.C_CreateEdge, protocol.EncodeCreateEdge(0, protocol.TargetTypeAsset, privateID, protocol.TargetTypeAsset, privateID+1, protocol.RelationRelatedTo))
+	mustReadErrorResponse(t, alice, protocol.C_CreateEdge, 0)
+	// Hidden records must be indistinguishable from missing IDs, including
+	// source/target-specific errors and ownership parent checks.
+	for _, source := range []bool{true, false} {
+		var messages []string
+		for _, id := range []uint64{privateID, privateID + 1000} {
+			src, dst := privateID+1, id
+			if source {
+				src, dst = id, privateID+1
+			}
+			send(bob, protocol.C_CreateEdge, protocol.EncodeCreateEdge(0, protocol.TargetTypeAsset, src, protocol.TargetTypeAsset, dst, protocol.RelationRelatedTo))
+			messages = append(messages, mustReadErrorResponse(t, bob, protocol.C_CreateEdge, 0).ErrorMessage)
+		}
+		if messages[0] != messages[1] {
+			t.Fatalf("edge error reveals private existence: %v", messages)
+		}
+	}
+	var parentErrors []string
+	for _, id := range []uint64{privateID, privateID + 4} {
+		send(bob, protocol.C_CreateAsset, protocol.EncodeCreateAsset(0, protocol.AssetTypeNote, protocol.ParentTypeAsset, id, "child", "child"))
+		parentErrors = append(parentErrors, mustReadErrorResponse(t, bob, protocol.C_CreateAsset, 0).ErrorMessage)
+	}
+	if parentErrors[0] != parentErrors[1] {
+		t.Fatalf("parent error reveals private existence: %v", parentErrors)
+	}
+	attached, err := protocol.EncodeCreateAssetWithAttachments(0, protocol.AssetTypeReminder, protocol.ParentTypeNone, 0, personal, personal, []protocol.Attachment{{FileId: "private-file", Filename: "private.txt", Size: 1, MimeType: "text/plain"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	send(alice, protocol.C_CreateAsset, attached)
+	mustReadErrorResponse(t, alice, protocol.C_CreateAsset, 0)
+	apply := func(c *websocket.Conn, ops []protocol.TransactionOperation, want uint8) *protocol.TransactionResult {
+		t.Helper()
+		body, err := protocol.EncodeApplyTransaction(88, ops)
+		if err != nil {
+			t.Fatal(err)
+		}
+		send(c, protocol.C_ApplyTransaction, body)
+		result, err := protocol.DecodeTransactionResult(mustReadUntilOpcode(t, c, protocol.S_TransactionResult, 12))
+		if err != nil || result.Status != want {
+			t.Fatalf("transaction status: %+v %v", result, err)
+		}
+		return result
+	}
+	patch, err := protocol.EncodeTransactionAssetPatch(protocol.TransactionAssetPatch{Asset: protocol.Existing(protocol.TransactionEntityAsset, privateID), Present: protocol.TransactionAssetPatchPreview, Preview: []byte(personal)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(bob, []protocol.TransactionOperation{{Type: protocol.TransactionOpAssetPatch, Body: patch}}, protocol.TransactionStatusRejected)
+	deletion, err := protocol.EncodeTransactionDelete(protocol.TransactionDelete{Entity: protocol.Existing(protocol.TransactionEntityAsset, privateID)}, protocol.TransactionEntityAsset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(bob, []protocol.TransactionOperation{{Type: protocol.TransactionOpAssetDelete, Body: deletion}}, protocol.TransactionStatusRejected)
+	// Projected-state validation also covers a private reminder and edge created
+	// in the same atomic transaction, not just pre-existing endpoints.
+	creation, err := protocol.EncodeTransactionAssetCreate(protocol.TransactionAssetCreate{AssetType: protocol.AssetTypeReminder, PayloadRawLen: uint32(len(personal)), Preview: []byte(personal), Payload: []byte(personal)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []uint64{privateID, privateID + 1000} {
+		for _, guard := range []int64{0, created.Asset.UpdatedAt, created.Asset.UpdatedAt + 1} {
+			deleteBody, err := protocol.EncodeTransactionDelete(protocol.TransactionDelete{Entity: protocol.Existing(protocol.TransactionEntityAsset, id), IfUpdatedAt: guard}, protocol.TransactionEntityAsset)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := apply(bob, []protocol.TransactionOperation{{Type: protocol.TransactionOpAssetCreate, Body: creation}, {Type: protocol.TransactionOpAssetDelete, Body: deleteBody}}, protocol.TransactionStatusRejected)
+			if result.FailedOperation != 1 || len(result.Results) != 0 {
+				t.Fatalf("hidden/missing delete must reject at operation 1: %+v", result)
+			}
+		}
+	}
+	for _, rawLen := range []uint32{protocol.MaxPayloadLength + 1, ^uint32(0)} {
+		oversized, err := protocol.EncodeTransactionAssetCreate(protocol.TransactionAssetCreate{AssetType: protocol.AssetTypeReminder, PayloadEncoding: 1, PayloadRawLen: rawLen, Preview: []byte(personal), Payload: []byte("invalid zstd")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		apply(alice, []protocol.TransactionOperation{{Type: protocol.TransactionOpAssetCreate, Body: oversized}}, protocol.TransactionStatusRejected)
+		oversizedPatch, err := protocol.EncodeTransactionAssetPatch(protocol.TransactionAssetPatch{Asset: protocol.Existing(protocol.TransactionEntityAsset, privateID), Present: protocol.TransactionAssetPatchPayload, PayloadEncoding: 1, PayloadRawLen: rawLen, Payload: []byte("invalid zstd")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		apply(alice, []protocol.TransactionOperation{{Type: protocol.TransactionOpAssetPatch, Body: oversizedPatch}}, protocol.TransactionStatusRejected)
+	}
+	child, err := protocol.EncodeTransactionAssetCreate(protocol.TransactionAssetCreate{AssetType: protocol.AssetTypeNote, ParentType: protocol.ParentTypeAsset, Parent: protocol.CreatedBy(protocol.TransactionEntityAsset, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(alice, []protocol.TransactionOperation{{Type: protocol.TransactionOpAssetCreate, Body: child}, {Type: protocol.TransactionOpAssetCreate, Body: creation}}, protocol.TransactionStatusRejected)
+	edge, err := protocol.EncodeTransactionEdgeCreate(protocol.TransactionEdgeCreate{Source: protocol.CreatedBy(protocol.TransactionEntityAsset, 0), Target: protocol.Existing(protocol.TransactionEntityAsset, privateID+1), Relation: protocol.RelationRelatedTo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(alice, []protocol.TransactionOperation{{Type: protocol.TransactionOpAssetCreate, Body: creation}, {Type: protocol.TransactionOpEdgeCreate, Body: edge}}, protocol.TransactionStatusRejected)
+	quiet(bob)
+	send(alice, protocol.C_UpdateAsset, protocol.EncodeUpdateAsset(0, privateID, personal, personal))
+	for _, c := range []*websocket.Conn{alice, aliceOther} {
+		mustReadUntilOpcode(t, c, protocol.S_AssetUpdated, 12)
+	}
+	quiet(bob)
+	alice.Close()
+	aliceOther.Close()
+	bob.Close()
+	server.stop(t)
+	server = startServerInWorkDir(t, dir)
+	alice, aliceOther, bob = connect("alice"), connect("alice"), connect("bob")
+	checkReads() // Privacy survives actual WAL recovery.
+	apply(alice, []protocol.TransactionOperation{{Type: protocol.TransactionOpAssetDelete, Body: deletion}}, protocol.TransactionStatusCommitted)
+	mustReadUntilOpcode(t, aliceOther, protocol.S_AssetDeleted, 12)
+	quiet(bob)
+	if assets := listAssetsFull(t, alice, 0); len(assets) != 2 {
+		t.Fatalf("owner deletion failed: %+v", assets)
+	}
+	result := apply(alice, []protocol.TransactionOperation{{Type: protocol.TransactionOpAssetCreate, Body: creation}}, protocol.TransactionStatusCommitted)
+	newPrivateID := result.Results[0].EntityID
+	mustReadUntilOpcode(t, aliceOther, protocol.S_AssetCreated, 12)
+	quiet(bob)
+	send(alice, protocol.C_DeleteAsset, protocol.EncodeDeleteAsset(0, newPrivateID))
+	for _, c := range []*websocket.Conn{alice, aliceOther} {
+		mustReadUntilOpcode(t, c, protocol.S_AssetDeleted, 12)
+	}
+	quiet(bob)
+}
 
 func workspaceDataClient(t *testing.T, workspace, username string, chatRoom int64) *websocket.Conn {
 	t.Helper()

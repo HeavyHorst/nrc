@@ -32,16 +32,22 @@ handle_create_edge :: proc(c: ^NRC_Connection, req: pr.CreateEdgeRequest) {
 	}
 
 	// Validate source exists
-	if !entity_exists(conv, req.source_type, req.source_id) {
+	if !entity_exists(conv, req.source_type, req.source_id) ||
+	   (req.source_type == .Asset && !asset_visible_to(conv.assets[pr.AssetID(req.source_id)], get_connection_nickname(c))) {
 		log.warnf("[T%d] Edge source entity not found: type=%d id=%d", td.thread_index, req.source_type, req.source_id)
 		send_error_response(c, .C_CreateEdge, "Edge source entity not found", req.correlation_id)
 		return
 	}
 
 	// Validate target exists
-	if !entity_exists(conv, req.target_type, req.target_id) {
+	if !entity_exists(conv, req.target_type, req.target_id) ||
+	   (req.target_type == .Asset && !asset_visible_to(conv.assets[pr.AssetID(req.target_id)], get_connection_nickname(c))) {
 		log.warnf("[T%d] Edge target entity not found: type=%d id=%d", td.thread_index, req.target_type, req.target_id)
 		send_error_response(c, .C_CreateEdge, "Edge target entity not found", req.correlation_id)
+		return
+	}
+	if entity_is_personal_reminder(conv, req.source_type, req.source_id) || entity_is_personal_reminder(conv, req.target_type, req.target_id) {
+		send_error_response(c, .C_CreateEdge, "Personal reminders cannot have shared relations", req.correlation_id)
 		return
 	}
 

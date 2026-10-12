@@ -454,8 +454,10 @@ finalize_shard_segment_metadata_builder :: proc(
 		records      = ctx.records,
 	}
 	ctx.owned_keys = nil; ctx.records = nil
-	remap := make([]u32, len(metadata.keys), context.temp_allocator)
-	indexed := make([]Shard_Segment_Metadata_Indexed_Key, len(metadata.keys), context.temp_allocator)
+	remap := make([]u32, len(metadata.keys), context.allocator)
+	defer delete(remap)
+	indexed := make([]Shard_Segment_Metadata_Indexed_Key, len(metadata.keys), context.allocator)
+	defer delete(indexed)
 	for key, i in metadata.keys do indexed[i] = {key, u32(i)}
 	slice.sort_by(indexed, proc(a, b: Shard_Segment_Metadata_Indexed_Key) -> bool {return shard_segment_metadata_key_less(a.key, b.key)})
 	for item, i in indexed {metadata.keys[i] = item.key; remap[item.insertion] = u32(i)}
@@ -538,7 +540,8 @@ load_shard_segment_metadata :: proc(
 		file,
 	); if size_err != nil || size < SHARD_SEGMENT_METADATA_HEADER_SIZE + SHARD_SEGMENT_METADATA_CHECKSUM_SIZE || size > SHARD_SEGMENT_METADATA_MAX_BYTES do return
 	if allocation_budget > 0 && u64(size) > allocation_budget / SHARD_SEGMENT_METADATA_DECODED_ESTIMATE_MULTIPLIER do return
-	data := make([]byte, int(size), context.temp_allocator)
+	data := make([]byte, int(size), context.allocator)
+	defer delete(data)
 	read := 0
 	for read < len(data) {n, err := storage_io.read_at(file, data[read:], read); if err != nil || n <= 0 do return; read += n}
 	read_bytes = u64(read)
@@ -614,7 +617,8 @@ load_shard_segment_metadata_summary :: proc(
 	read_bytes += u64(len(summary.bloom))
 	checksum, _ := endian.get_u64(header[88:], .Big)
 	endian.put_u64(header[88:], .Big, 0)
-	checksum_data := make([]byte, len(header) + len(summary.bloom), context.temp_allocator)
+	checksum_data := make([]byte, len(header) + len(summary.bloom), context.allocator)
+	defer delete(checksum_data)
 	copy(checksum_data, header[:])
 	copy(checksum_data[len(header):], summary.bloom)
 	if checksum != xxhash.XXH64(checksum_data) do return

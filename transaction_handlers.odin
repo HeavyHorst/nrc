@@ -4,6 +4,7 @@ import "core:encoding/endian"
 import "core:log"
 import "core:net"
 import "core:slice"
+import "core:strings"
 
 import "btree"
 import "byte_pool"
@@ -33,8 +34,9 @@ Transaction_Conversation_Stage :: struct {
 }
 
 Transaction_Delete_Item :: struct {
-	conv_id: pr.ConversationID,
-	id:      u64,
+	conv_id:        pr.ConversationID,
+	id:             u64,
+	personal_owner: string,
 }
 
 transaction_cleanup :: proc(p: ^Transaction_Prepared, committed := false) {
@@ -54,6 +56,7 @@ transaction_cleanup :: proc(p: ^Transaction_Prepared, committed := false) {
 	}
 	for payload in p.payloads do delete(payload)
 	delete(p.payloads); delete(p.mutations)
+	for item in p.delete_assets do if item.personal_owner != "" do delete(item.personal_owner)
 	delete(p.delete_tasks); delete(p.delete_assets); delete(p.delete_edges)
 	delete(p.stages)
 	delete(p.unblocks)
@@ -267,11 +270,18 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 				   0 {conv := get_conversation(ws, r.conv_id); old := conv == nil ? nil : conv.tasks[pr.TaskID(r.task.value)]; if old == nil || old.updated_at != r.if_updated_at {failed = u16(i); break planning}}
 			case .AssetPatch:
 				r, e := pr.parseTransactionAssetPatch(op.body); if e != nil {failed = u16(i); break planning}
-				if r.if_updated_at !=
-				   0 {conv := get_conversation(ws, r.conv_id); old := conv == nil ? nil : conv.assets[pr.AssetID(r.asset.value)]; if old == nil || old.updated_at != r.if_updated_at {failed = u16(i); break planning}}
+				conv := get_conversation(ws, r.conv_id)
+				old := conv == nil ? nil : conv.assets[pr.AssetID(r.asset.value)]
+				if !asset_visible_to(old, get_connection_nickname(c)) {failed = u16(i); break planning}
+				if r.if_updated_at != 0 && old.updated_at != r.if_updated_at {failed = u16(i); break planning}
 			case .TaskDelete, .AssetDelete:
 				expected := op.op_type == .TaskDelete ? pr.TransactionEntityType.Task : pr.TransactionEntityType.Asset
 				r, e := pr.parseTransactionDelete(op.body, expected); if e != nil {failed = u16(i); break planning}
+				if expected == .Asset {
+					conv := get_conversation(ws, r.conv_id)
+					old := conv == nil ? nil : conv.assets[pr.AssetID(r.entity.value)]
+					if !asset_visible_to(old, get_connection_nickname(c)) {failed = u16(i); break planning}
+				}
 				if r.if_updated_at !=
 				   0 {conv := get_conversation(ws, r.conv_id); updated_at: i64; if conv != nil {if expected == .Task {old := conv.tasks[pr.TaskID(r.entity.value)]; if old != nil do updated_at = old.updated_at} else {old := conv.assets[pr.AssetID(r.entity.value)]; if old != nil do updated_at = old.updated_at}}; if updated_at != r.if_updated_at {failed = u16(i); break planning}}
 			}
@@ -307,6 +317,10 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 				p.delete_assets[ai]; conv := get_conversation(ws, item.conv_id); ids := make([dynamic]pr.AssetID, 0, 8); collect_child_asset_delete_ids(conv, pr.AssetID(item.id), &ids)
 			for id in ids do if !transaction_delete_add(&p.delete_assets, item.conv_id, u64(id)) {delete(ids); break planning}; delete(ids)
 		}
+		for &item in p.delete_assets {
+			asset := get_conversation(ws, item.conv_id).assets[pr.AssetID(item.id)]
+			if reminder_is_personal(asset) do item.personal_owner = strings.clone(string(asset.owner))
+		}
 		for item in p.delete_tasks {conv := get_conversation(ws, item.conv_id); plan: Edge_Delete_Plan; edge_delete_plan_init(&plan); collect_edges_for_entity_delete(conv, &plan, .Task, item.id); for id in plan.edge_ids do if !transaction_delete_add(&p.delete_edges, item.conv_id, u64(id)) {edge_delete_plan_destroy(&plan); break planning}; edge_delete_plan_destroy(&plan)}
 		for item in p.delete_assets {conv := get_conversation(ws, item.conv_id); plan: Edge_Delete_Plan; edge_delete_plan_init(&plan); collect_edges_for_entity_delete(conv, &plan, .Asset, item.id); for id in plan.edge_ids do if !transaction_delete_add(&p.delete_edges, item.conv_id, u64(id)) {edge_delete_plan_destroy(&plan); break planning}; edge_delete_plan_destroy(&plan)}
 		now := nrc_time_unix_nanos(); creator := transmute([]byte)get_connection_nickname(c)
@@ -334,14 +348,7 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 			case .AssetCreate:
 				r, e := pr.parseTransactionAssetCreate(op.body)
 				if e != nil || r.asset_type == .RoomMapping || r.asset_type == .Agenda {failed = u16(i); break planning}
-				if !validate_appointment_asset(
-					r.asset_type,
-					r.payload_encoding,
-					r.payload_raw_len,
-					r.preview,
-					r.payload,
-					context.temp_allocator,
-				) {failed = u16(i); break planning}
+				if !validate_appointment_asset(r.asset_type, r.payload_encoding, r.payload_raw_len, r.preview, r.payload) {failed = u16(i); break planning}
 				p.conv_ids[i] = r.conv_id
 				parent: u64
 				if r.parent_type !=
@@ -431,7 +438,7 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 				if transaction_delete_contains(p.delete_assets[:], r.conv_id, r.asset.value) {failed = u16(i); break planning}
 				conv := get_conversation(ws, r.conv_id)
 				old := conv == nil ? nil : conv.assets[pr.AssetID(r.asset.value)]
-				if old == nil || old.asset_type == .RoomMapping {failed = u16(i); break planning}
+				if !asset_visible_to(old, get_connection_nickname(c)) || old.asset_type == .RoomMapping {failed = u16(i); break planning}
 				if r.if_updated_at != 0 && old.updated_at != r.if_updated_at {failed = u16(i); break planning}
 				preview := old.preview
 				payload := old.payload
@@ -443,7 +450,7 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 					   encoding > max(pr.PayloadEncoding) ||
 					   encoding == .Plain && raw_len != u32(len(payload)) {failed = u16(i)
 						break planning}}
-				if !validate_appointment_asset(old.asset_type, encoding, raw_len, preview, payload, context.temp_allocator) {failed = u16(i); break planning}
+				if !validate_appointment_asset(old.asset_type, encoding, raw_len, preview, payload) {failed = u16(i); break planning}
 				a := alloc_asset(old.owner, preview, payload, old.attachments)
 				if a == nil {failed = u16(i); break planning}
 				a.asset_type = old.asset_type
@@ -457,6 +464,7 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 				a.payload_raw_len = raw_len
 				p.old[i] = old
 				p.entity[i] = a
+				if !validate_reminder_asset(a) || reminder_is_personal(a) != reminder_is_personal(old) {failed = u16(i); break planning}
 			}
 		}
 		// Resolve completion cascades against the complete post-image set before
@@ -479,7 +487,14 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 						   transaction_delete_contains(p.delete_tasks[:], t.conv_id, u64(t.blocked_by))) {failed = u16(i); break planning}
 				if !transaction_add_task_mutation(&p, i, t, .Create) {failed = u16(i); break planning}
 			case .AssetCreate:
-				a := (^pr.Asset)(p.entity[i]); conv := get_conversation(ws, a.conv_id); if a.parent_type != .None {typ := pr.TransactionEntityType.Task
+				a := (^pr.Asset)(p.entity[i]); conv := get_conversation(ws, a.conv_id)
+				if !validate_reminder_asset(a) || (reminder_is_personal(a) && asset_has_children(conv, a.asset_id)) {failed = u16(i); break planning}
+				if a.parent_type == .Asset {
+					live := conv == nil ? nil : conv.assets[pr.AssetID(a.parent_id)]
+					parent := (^pr.Asset)(transaction_projected_entity(&p, .Asset, a.conv_id, a.parent_id, live))
+					if reminder_is_personal(parent) {failed = u16(i); break planning}
+				}
+				if a.parent_type != .None {typ := pr.TransactionEntityType.Task
 					if a.parent_type == .Asset do typ = .Asset
 					if !transaction_entity_exists(&p, conv, a.conv_id, typ, a.parent_id) ||
 					   (typ == .Task && transaction_delete_contains(p.delete_tasks[:], a.conv_id, a.parent_id)) ||
@@ -518,6 +533,12 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 				edge.relation = r.relation
 				edge.created_at = now
 				p.entity[i] = edge
+				for endpoint in ([?]pr.GraphEntityKey{{edge.source_type, sid}, {edge.target_type, tid}}) {
+					if endpoint.target_type != .Asset do continue
+					live := conv == nil ? nil : conv.assets[pr.AssetID(endpoint.target_id)]
+					asset := (^pr.Asset)(transaction_projected_entity(&p, .Asset, r.conv_id, endpoint.target_id, live))
+					if reminder_is_personal(asset) {failed = u16(i); break planning}
+				}
 				if !transaction_add_edge_mutation(&p, i, edge) {failed = u16(i); break planning}
 			case .TaskPatch:
 				t := (^pr.Task)(p.entity[i])
@@ -619,7 +640,7 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 			e := get_conversation(ws, p.conv_ids[i]).edges[pr.EdgeID(p.results[i].entity_id)]
 			broadcast_edge_created(e^, c.sock, ws); case .TaskDelete, .AssetDelete, .EdgeDelete:}}
 	for item in p.delete_edges do broadcast_edge_deleted(item.conv_id, pr.EdgeID(item.id), c.sock, ws)
-	for item in p.delete_assets do broadcast_asset_deleted_to_room(item.conv_id, pr.AssetID(item.id), c.sock, ws)
+	for item in p.delete_assets do broadcast_asset_deleted_to_room(item.conv_id, pr.AssetID(item.id), c.sock, ws, item.personal_owner)
 	for item in p.delete_tasks do broadcast_task_deleted(pr.TaskID(item.id), item.conv_id, c.sock, ws)
 	send_transaction_result(c, req.correlation_id, .Committed, max(u16), p.results[:len(req.operations)])
 }

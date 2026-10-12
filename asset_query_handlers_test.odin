@@ -122,6 +122,7 @@ when NRC_SIMULATION {
 		asset_id: pr.AssetID,
 		expected_opcode: pr.Opcode,
 		expected_correlation: u32,
+		expected_asset_count: int = 1,
 	) -> (
 		Asset_Equivalence_Result,
 		string,
@@ -161,7 +162,10 @@ when NRC_SIMULATION {
 			msg, parse_err := pr.parseAssetUpdatedMessage(payload, attachments[:])
 			correlation_matches = parse_err == nil && msg.correlation_id == expected_correlation
 		}
-		if pr.get_opcode(payload) != expected_opcode || !correlation_matches || result.asset_count != 1 || result.wal_last_hash == ([32]byte{}) {
+		if pr.get_opcode(payload) != expected_opcode ||
+		   !correlation_matches ||
+		   result.asset_count != expected_asset_count ||
+		   result.wal_last_hash == ([32]byte{}) {
 			return result, "asset path did not produce the expected successful mutation", false
 		}
 		return result, "", true
@@ -215,6 +219,16 @@ when NRC_SIMULATION {
 		if client == nil do return {}, "install create-asset client", false
 		ctx.conns[1] = client
 		subscribe_to_conversation(client, req.conv_id)
+		parent_conv := get_or_create_conversation(get_connection_workspace(client), req.conv_id)
+		if req.parent_type == .Asset {
+			if asset_query_test_install_asset(parent_conv, req.conv_id, pr.AssetID(req.parent_id), .Comment, "parent", "", 1) == nil do return {}, "install asset parent", false
+		} else if req.parent_type == .Task {
+			parent := alloc_task(transmute([]byte)string("parent"), nil, nil, nil, nil, nil, nil, nil)
+			if parent == nil do return {}, "install task parent", false
+			parent.id = pr.TaskID(req.parent_id)
+			parent.conv_id = req.conv_id
+			task_store_put(parent_conv, parent)
+		}
 		nrc_sim_clear_inboxes(&ctx.sim)
 		expected_now := nrc_time_unix_nanos()
 		if through_wire {
@@ -226,7 +240,15 @@ when NRC_SIMULATION {
 			handle_create_asset(client, req)
 		}
 
-		result, reason, ok := asset_equivalence_capture(&ctx, workspace_id, req.conv_id, 1, .S_AssetCreated, req.correlation_id)
+		result, reason, ok := asset_equivalence_capture(
+			&ctx,
+			workspace_id,
+			req.conv_id,
+			1,
+			.S_AssetCreated,
+			req.correlation_id,
+			req.parent_type == .Asset ? 2 : 1,
+		)
 		if !ok do return result, reason, false
 		expected_indexes := req.asset_type == .Note ? 1 : 0
 		expected_asset_floor := u64(1)
@@ -274,6 +296,12 @@ when NRC_SIMULATION {
 		if client == nil do return {}, "install update-asset client", false
 		ctx.conns[1] = client
 		subscribe_to_conversation(client, req.conv_id)
+		parent_conv := get_or_create_conversation(get_connection_workspace(client), req.conv_id)
+		parent := alloc_task(transmute([]byte)string("parent"), nil, nil, nil, nil, nil, nil, nil)
+		if parent == nil do return {}, "install update-asset task parent", false
+		parent.id = 44
+		parent.conv_id = req.conv_id
+		task_store_put(parent_conv, parent)
 		nrc_sim_clear_inboxes(&ctx.sim)
 		handle_create_asset(
 			client,
@@ -380,6 +408,12 @@ when NRC_SIMULATION {
 			payload          = transmute([]byte)payload,
 			attachments      = attachments,
 			correlation_id   = u32(correlation),
+		}
+		// Reminder visibility validation decodes payloads. These opaque bytes are
+		// not Zstd frames; real compressed reminders are covered by server E2E.
+		if req.asset_type == .Reminder {
+			req.payload_encoding = .Plain
+			req.payload_raw_len = u32(len(payload))
 		}
 		direct, direct_reason, direct_ok := asset_create_equivalence_run(req, false, 0, 0)
 		if !direct_ok do return hgl.interesting(direct_reason)

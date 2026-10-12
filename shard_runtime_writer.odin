@@ -393,9 +393,9 @@ init_shard_transaction_writer :: proc(writer: ^Shard_Transaction_Writer, path: s
 	if writer == nil || writer.wal.enabled || writer.poisoned do return false
 	owner, assignment_ok := logical_shard_worker(shard, worker_count)
 	if !assignment_ok || owner != owner_worker do return false
-	info, stat_err := os.lstat(path, context.temp_allocator)
+	info, stat_err := os.lstat(path, context.allocator)
 	if stat_err != nil do return false
-	defer os.file_info_delete(info, context.temp_allocator)
+	defer os.file_info_delete(info, context.allocator)
 	if info.type != .Regular do return false
 	if !persistence.init_wal(&writer.wal, path, SHARD_WAL_MAGIC, SHARD_WAL_VERSION, shard, nrc_wal_time_now) do return false
 	shard_writer_scan_context = {

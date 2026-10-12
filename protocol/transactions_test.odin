@@ -48,3 +48,28 @@ test_transaction_edge_parser_rejects_edge_endpoints :: proc(t: ^testing.T) {
 	_, err := parseTransactionEdgeCreate(body[:])
 	testing.expect_value(t, err, ProtocolParseError.InvalidValue)
 }
+
+@(test)
+test_transaction_asset_decompression_size_is_bounded :: proc(t: ^testing.T) {
+	create: [21]byte
+	endian.put_u16(create[8:], .Big, u16(AssetType.Reminder))
+	create[12] = u8(PayloadEncoding.Zstd)
+	patch: [36]byte
+	patch[8] = u8(TransactionReferenceKind.Existing)
+	patch[9] = u8(TransactionEntityType.Asset)
+	endian.put_u64(patch[12:], .Big, 1)
+	patch[28] = TRANSACTION_ASSET_PATCH_PAYLOAD
+	patch[29] = u8(PayloadEncoding.Zstd)
+	for raw_len in ([?]u32{MAX_PAYLOAD_LENGTH, MAX_PAYLOAD_LENGTH + 1, max(u32)}) {
+		endian.put_u32(create[13:], .Big, raw_len)
+		endian.put_u32(patch[30:], .Big, raw_len)
+		_, create_err := parseTransactionAssetCreate(create[:])
+		_, patch_err := parseTransactionAssetPatch(patch[:])
+		if raw_len == MAX_PAYLOAD_LENGTH {
+			testing.expect(t, create_err == nil && patch_err == nil)
+		} else {
+			testing.expect_value(t, create_err, ProtocolParseError.ContentLengthExceedsMax)
+			testing.expect_value(t, patch_err, ProtocolParseError.ContentLengthExceedsMax)
+		}
+	}
+}

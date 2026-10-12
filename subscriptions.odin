@@ -114,6 +114,7 @@ send_shared_to_subscriber_entries :: proc(
 	excluded_sock: net.TCP_Socket,
 	shared_buf: ^Broadcast_Buffer,
 	excluded_handle: Connection_Handle = {},
+	personal_owner: string = "",
 ) -> int {
 	shared_fanout_begin()
 	defer shared_fanout_end()
@@ -133,6 +134,7 @@ send_shared_to_subscriber_entries :: proc(
 		} else if entry.sock == excluded_sock do continue
 		conn := connection_get_by_handle(entry.handle)
 		if conn == nil || conn.sock != entry.sock || conn.state >= .Will_Close do continue
+		if personal_owner != "" && get_connection_nickname(conn) != personal_owner do continue
 		if oversized_room {
 			append(&oversized, entry.handle)
 			handles = oversized[:]

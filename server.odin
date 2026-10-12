@@ -46,29 +46,29 @@ runtime_storage_layout: Storage_Layout_Manifest
 PENDING_QUEUE_CAPACITY :: 16384
 
 NRC_Server :: struct {
-	sock:                       net.TCP_Socket,
-	threads:                    []^thread.Thread,
-	closing:                    bool,
-	fatal_storage_error:        bool,
-	cached_rss_mb:              u32, // Service-thread sample, accessed atomically.
-	shutdown_requested:         bool, // For SIGINT edge detection (first vs second signal)
-	main_thread:                int,
-	wg:                         sync.Wait_Group,
+	sock:                        net.TCP_Socket,
+	threads:                     []^thread.Thread,
+	closing:                     bool,
+	fatal_storage_error:         bool,
+	cached_rss_mb:               u32, // Service-thread sample, accessed atomically.
+	shutdown_requested:          bool, // For SIGINT edge detection (first vs second signal)
+	main_thread:                 int,
+	wg:                          sync.Wait_Group,
 	// The queue will hold socket descriptors for handoff.
-	pending_connections:        []Pending_Connection_Queue,
-	worker_startup:             chan.Chan(bool),
-	shard_compaction_jobs:      chan.Chan(Shard_Compaction_Job),
-	storage_control_jobs:       chan.Chan(Shard_Compaction_Job),
-	storage_control_streak:     int, // Service-owned; bounded priority without starving bulk work.
+	pending_connections:         []Pending_Connection_Queue,
+	worker_startup:              chan.Chan(bool),
+	shard_compaction_jobs:       chan.Chan(Shard_Compaction_Job),
+	storage_control_jobs:        chan.Chan(Shard_Compaction_Job),
+	storage_control_streak:      int, // Service-owned; bounded priority without starving bulk work.
 	storage_bulk_executor_count: int,
-	storage_bulk_threads:       [MAX_STORAGE_BULK_EXECUTORS]^thread.Thread,
-	storage_bulk_results:       chan.Chan(Shard_Compaction_Result),
-	storage_bulk_pending:       [MAX_STORAGE_BULK_EXECUTORS]Shard_Compaction_Result,
-	storage_bulk_pending_valid: [MAX_STORAGE_BULK_EXECUTORS]bool, // Service-owned backpressure slots.
+	storage_bulk_threads:        [MAX_STORAGE_BULK_EXECUTORS]^thread.Thread,
+	storage_bulk_results:        chan.Chan(Shard_Compaction_Result),
+	storage_bulk_pending:        [MAX_STORAGE_BULK_EXECUTORS]Shard_Compaction_Result,
+	storage_bulk_pending_valid:  [MAX_STORAGE_BULK_EXECUTORS]bool, // Service-owned backpressure slots.
 	// One compactor producer and one owning-worker consumer per result queue.
 	// Main drains leftovers only after the wait group synchronizes completion.
-	shard_compaction_results:   []^spsc.Queue(Shard_Compaction_Result),
-	shard_compactor_thread:     ^thread.Thread,
+	shard_compaction_results:    []^spsc.Queue(Shard_Compaction_Result),
+	shard_compactor_thread:      ^thread.Thread,
 }
 
 Server_State :: enum {
@@ -306,7 +306,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:a8d946e9"
+BUILD_VERSION :: "dev-2026-10:fabf095"
 PROTOCOL_VERSION :: 8 // Calendar appointment rows carry an explicit time interval.
 
 jwt_auth_secret: string
@@ -389,8 +389,12 @@ main :: proc() {
 	bulk_cpus_text := os.get_env_alloc("NRC_STORAGE_BULK_CPUS", context.allocator); defer delete(bulk_cpus_text)
 	bulk_ok: bool
 	storage_bulk_config, bulk_ok = parse_storage_bulk_config(bulk_count_text, bulk_cpus_text)
-	if !bulk_ok || (storage_bulk_config.cpu_count > 0 && cpu_affinity_disabled()) || !reserve_storage_bulk_cpus(&cpu_topology, &storage_bulk_config, service_cpu_override) {
-		log.error("Invalid storage bulk configuration: use 1–64 executors and unique allowed CPUs, leave worker/control CPUs available, and do not combine a bulk CPU list with disabled affinity or an overlapping service CPU")
+	if !bulk_ok ||
+	   (storage_bulk_config.cpu_count > 0 && cpu_affinity_disabled()) ||
+	   !reserve_storage_bulk_cpus(&cpu_topology, &storage_bulk_config, service_cpu_override) {
+		log.error(
+			"Invalid storage bulk configuration: use 1–64 executors and unique allowed CPUs, leave worker/control CPUs available, and do not combine a bulk CPU list with disabled affinity or an overlapping service CPU",
+		)
 		os.exit(2)
 	}
 	if storage_bulk_config.cpu_count > 0 {
@@ -416,7 +420,12 @@ main :: proc() {
 			cpu_role_plan.topology_aware,
 		)
 	}
-	log.infof("Storage bulk: %d executors, CPUs %v (empty: share service CPU %d)", storage_bulk_config.executor_count, storage_bulk_config.cpus[:storage_bulk_config.cpu_count], cpu_role_plan.service_cpu)
+	log.infof(
+		"Storage bulk: %d executors, CPUs %v (empty: share service CPU %d)",
+		storage_bulk_config.executor_count,
+		storage_bulk_config.cpus[:storage_bulk_config.cpu_count],
+		cpu_role_plan.service_cpu,
+	)
 
 	// Initialize ULID time package (logs TSC availability)
 	ulid.init()

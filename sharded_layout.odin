@@ -46,9 +46,9 @@ active_sharded_generation_structure_is_valid :: proc(data_dir: string, generatio
 		valid := manifest_found && manifest_ok
 		if !manifest_found {
 			active_path := sharded_active_wal_path(generation_dir, shard)
-			info, stat_err := os.lstat(active_path, context.temp_allocator)
+			info, stat_err := os.lstat(active_path, context.allocator)
 			valid = stat_err == nil && info.type == .Regular
-			if stat_err == nil do os.file_info_delete(info, context.temp_allocator)
+			if stat_err == nil do os.file_info_delete(info, context.allocator)
 			delete(active_path)
 		}
 		delete(shard_dir)

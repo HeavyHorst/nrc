@@ -169,6 +169,7 @@ parseTransactionAssetCreate :: proc(data: []byte) -> (r: TransactionAssetCreate,
 	if r.parent_type !=
 	   .None {expected := TransactionEntityType.Task; if r.parent_type == .Asset do expected = .Asset; r.parent, err = transaction_read_ref(data, &o, expected); if err != nil do return}
 	if len(data) - o < 5 do return r, .TooShort; r.payload_encoding = PayloadEncoding(data[o]); o += 1; r.payload_raw_len, _ = endian.get_u32(data[o:], .Big); o += 4
+	if r.payload_raw_len > MAX_PAYLOAD_LENGTH do return r, .ContentLengthExceedsMax
 	r.preview, err = transaction_read_bytes(
 		data,
 		&o,
@@ -185,6 +186,7 @@ parseTransactionAssetPatch :: proc(data: []byte) -> (r: TransactionAssetPatch, e
 	if r.present & TRANSACTION_ASSET_PATCH_PREVIEW != 0 {r.preview, err = transaction_read_bytes(data, &o, MAX_PREVIEW_LENGTH); if err != nil do return}
 	if r.present & TRANSACTION_ASSET_PATCH_PAYLOAD !=
 	   0 {if len(data) - o < 5 do return r, .TooShort; r.payload_encoding = PayloadEncoding(data[o]); o += 1; r.payload_raw_len, _ = endian.get_u32(data[o:], .Big); o += 4; r.payload, err = transaction_read_bytes(data, &o, MAX_PAYLOAD_LENGTH); if err != nil do return}
+	if r.payload_raw_len > MAX_PAYLOAD_LENGTH do return r, .ContentLengthExceedsMax
 	if o != len(data) do return r, .ContentLengthMismatch
 	return r, nil
 }

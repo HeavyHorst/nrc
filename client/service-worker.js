@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261011overload1";
+const CACHE_NAME = "nrc-terminal-20261012radios1";
 
 const APP_SHELL = [
   "./",
@@ -8,9 +8,9 @@ const APP_SHELL = [
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261008files1",
+  "./css/main.css?v=20261012radios1",
   "./css/foundation.css?v=20261005danger1",
-  "./css/workspace.css?v=20261007search1",
+  "./css/workspace.css?v=20261012radios1",
   "./css/entities.css?v=20261008files1",
   "./css/ledger.css?v=20261006shareborder1",
   "./css/mobile-tasks.css?v=20261007people1",
@@ -37,7 +37,7 @@ const APP_SHELL = [
   "./task-search.js?v=20260917taskscroll1",
   "./detail-ui.js?v=20261007people1",
   "./column-resize.js?v=20260913tables2",
-  "./tasks.js?v=20261008description1",
+  "./tasks.js?v=20261012radios1",
   "./attention.js?v=20260926why4",
   "./calendar.js?v=20260928atomic1",
   "./appointments.js?v=20260928appointment8",

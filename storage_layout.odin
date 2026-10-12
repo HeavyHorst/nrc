@@ -93,9 +93,9 @@ storage_layout_path :: proc(dir, name: string) -> string {
 }
 
 storage_layout_is_real_directory :: proc(path: string) -> bool {
-	info, err := os.lstat(path, context.temp_allocator)
+	info, err := os.lstat(path, context.allocator)
 	if err != nil do return false
-	defer os.file_info_delete(info, context.temp_allocator)
+	defer os.file_info_delete(info, context.allocator)
 	return info.type == .Directory
 }
 
@@ -150,9 +150,9 @@ install_storage_layout_manifest :: proc(dir: string, m: Storage_Layout_Manifest)
 }
 
 data_directory_is_cold :: proc(dir: string) -> bool {
-	entries, read_err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	entries, read_err := os.read_all_directory_by_path(dir, context.allocator)
 	if read_err != nil do return false
-	defer os.file_info_slice_delete(entries, context.temp_allocator)
+	defer os.file_info_slice_delete(entries, context.allocator)
 	for entry in entries {
 		if entry.name == STORAGE_LAYOUT_LOCK_NAME do continue
 		if entry.name == STORAGE_LAYOUT_MANIFEST_NAME do continue
@@ -200,7 +200,8 @@ load_storage_layout_manifest :: proc(dir: string) -> (m: Storage_Layout_Manifest
 	path := storage_layout_path(dir, STORAGE_LAYOUT_MANIFEST_NAME)
 	defer delete(path)
 	if !os.exists(path) do return m, false, true
-	data, err := os.read_entire_file(path, context.temp_allocator)
+	data, err := os.read_entire_file(path, context.allocator)
+	defer delete(data)
 	if err != nil do return m, true, false
 	m, ok = decode_storage_layout_manifest(data)
 	return m, true, ok

@@ -70,7 +70,14 @@ Deleting a slice removes its memberships, not the tasks, notes or files.
 A reminder tracks a deadline, with an optional start for the work window and a
 configurable urgency period. Use one for "Submit the rollout documents by Friday"
 or "Renew the certificate during this window". It can link to a note with details.
-Unlike a task, it has no assignee or completion status: it is a workspace reminder.
+Unlike a task, it has no assignee or completion status.
+
+Choose **Personal** (the default) for your own deadlines, or **Team** for shared
+workspace deadlines. Only the creator can read, change or delete a personal
+reminder; teammates do not receive it in their lists, calendar or notifications.
+Team reminders keep the existing shared behavior, and older reminders remain
+Team. Visibility is fixed at creation. Personal reminders can reference a shared
+note, but cannot have shared graph relations, parent/child records or attachments.
 
 The Reminders view shows its state from the current time:
 
@@ -118,7 +125,8 @@ It is not a durable history of chat notifications.
 ## Browser notifications
 
 With browser permission, reminder notifications report urgent and late states.
-They default to all workspace reminders. Appointment notifications default to
+They default to all reminders visible to you: your Personal reminders and Team
+reminders. Appointment notifications default to
 appointments assigned to your nickname and alert within 15 minutes before start.
 The two notification settings are independent.
 

@@ -2,6 +2,7 @@ package main
 
 import "core:encoding/json"
 import "core:mem"
+import "core:mem/virtual"
 import "core:strings"
 import pr "protocol"
 
@@ -177,15 +178,12 @@ parse_appointment_preview :: proc(data: []byte, allocator: mem.Allocator) -> (r:
 	return r, true
 }
 
-validate_appointment_asset :: proc(
-	asset_type: pr.AssetType,
-	encoding: pr.PayloadEncoding,
-	raw_len: u32,
-	preview, payload: []byte,
-	allocator: mem.Allocator,
-) -> bool {
+validate_appointment_asset :: proc(asset_type: pr.AssetType, encoding: pr.PayloadEncoding, raw_len: u32, preview, payload: []byte) -> bool {
 	if asset_type != .Appointment do return true
 	if encoding != .Plain || raw_len != 0 || len(payload) != 0 do return false
-	_, ok := parse_appointment_preview(preview, allocator)
+	arena: virtual.Arena
+	if virtual.arena_init_growing(&arena) != nil do return false
+	defer virtual.arena_destroy(&arena)
+	_, ok := parse_appointment_preview(preview, virtual.arena_allocator(&arena))
 	return ok
 }

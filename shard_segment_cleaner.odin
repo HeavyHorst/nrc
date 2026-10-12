@@ -510,7 +510,8 @@ shard_segment_raw_retained_bytes :: proc(
 	ok: bool,
 ) {
 	if keys == nil do return
-	retained_positions := make(map[u64]bool, len(keys.latest), context.temp_allocator)
+	retained_positions := make(map[u64]bool, len(keys.latest), context.allocator)
+	defer delete(retained_positions)
 	for _, position in keys.latest do retained_positions[position] = true
 	for metadata in records {
 		physical_size := u64(metadata.physical_size)
@@ -1249,14 +1250,7 @@ build_shard_segment_catalog_into :: proc(
 		}
 	}
 	when SHARD_SEGMENT_METADATA_INDEX_ENABLED do if !fast_raw && group_end < len(source.segments) {
-		tail_bytes, tail_fallbacks, tail_metadata_written, tail_ok := shard_segment_clean_apply_tail_metadata(
-			storage,
-			shard_dir,
-			source,
-			source_sizes,
-			group_end,
-			&latest_ctx,
-		)
+		tail_bytes, tail_fallbacks, tail_metadata_written, tail_ok := shard_segment_clean_apply_tail_metadata(storage, shard_dir, source, source_sizes, group_end, &latest_ctx)
 		result.latest_read_bytes += tail_bytes
 		result.metadata_fallbacks += tail_fallbacks
 		result.metadata_written_bytes += tail_metadata_written

@@ -65,9 +65,13 @@ slice_preview_name :: proc(preview: []byte, allocator: mem.Allocator) -> (name: 
 // the name. Renaming is not offered, so the only caller passes 0.
 slice_name_taken :: proc(conv: ^Conversation_State, name: string, except: pr.AssetID) -> bool {
 	if conv == nil do return false
+	arena: virtual.Arena
+	if virtual.arena_init_growing(&arena) != nil do return true
+	defer virtual.arena_destroy(&arena)
 	for id, asset in conv.assets {
 		if id == except || asset.asset_type != .Slice do continue
-		m, ok := slice_preview(asset, context.temp_allocator)
+		virtual.arena_free_all(&arena)
+		m, ok := slice_preview(asset, virtual.arena_allocator(&arena))
 		if ok && m.name == name do return true
 	}
 	return false

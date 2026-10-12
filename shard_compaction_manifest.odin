@@ -189,9 +189,9 @@ shard_compaction_regular_file_host :: proc(path: string) -> bool {
 
 shard_compaction_regular_file_with_storage :: proc(storage: storage_io.Context, path: string) -> bool {
 	if storage_io.context_is_host(storage) {
-		info, stat_err := os.lstat(path, context.temp_allocator)
+		info, stat_err := os.lstat(path, context.allocator)
 		if stat_err != nil do return false
-		defer os.file_info_delete(info, context.temp_allocator)
+		defer os.file_info_delete(info, context.allocator)
 		return info.type == .Regular
 	}
 	file, open_err := storage_io.open(storage, path, {.Read})
@@ -259,8 +259,9 @@ load_shard_compaction_manifest_with_storage :: proc(storage: storage_io.Context,
 	path_exists, exists_err := storage_io.exists(storage, path)
 	if exists_err != nil do return manifest, false, false
 	if !path_exists do return manifest, false, true
-	data, read_err := storage_io.read_entire_file(storage, path, context.temp_allocator)
+	data, read_err := storage_io.read_entire_file(storage, path, context.allocator)
 	if read_err != nil do return manifest, true, false
+	defer delete(data)
 	manifest, ok = decode_shard_compaction_manifest(data)
 	if ok do ok = shard_compaction_manifest_files_are_valid(storage, shard_dir, manifest)
 	return manifest, true, ok

@@ -29,7 +29,7 @@ try {
       const id = i === 3 ? 123456789012n : BigInt(i);
       tasks.set(id, { id, convId: 0n, title: `Task ${i}: Tabellenkonvention prüfen`, status: 1, priority: i * 60, color: 0, createdAt: stamp, attachments: [], assignee: "tester", project: "NRC" });
       assets.set(id, { assetId: id, convId: 0n, assetType: AssetType.Note, owner: "tester", createdAt: stamp, updatedAt: stamp, preview: JSON.stringify({ title: `Note ${i}: Interface-Prinzipien`, project: "NRC", tags: ["review"] }), payload: "Review content", attachments: [] });
-      assets.set(id + 30n, { assetId: id + 30n, convId: 0n, assetType: AssetType.Reminder, owner: "tester", createdAt: stamp, updatedAt: stamp, attachments: [], payload: JSON.stringify({ title: `Reminder ${i}: UI-Review vorbereiten`, deadline_at: String(stamp + BigInt(i - 2) * 86400000000000n), window_start_at: "0", note_asset_id: "1" }) });
+      assets.set(id + 30n, { assetId: id + 30n, convId: 0n, assetType: AssetType.Reminder, owner: "tester", createdAt: stamp, updatedAt: stamp, attachments: [], payload: JSON.stringify({ title: `Reminder ${i}: UI-Review vorbereiten`, visibility: i === 1 ? undefined : i === 2 ? "personal" : "team", deadline_at: String(stamp + BigInt(i - 2) * 86400000000000n), window_start_at: "0", note_asset_id: "1" }) });
     }
     Object.assign(tasks.get(123456789012n), {
       status: 2,
@@ -139,6 +139,8 @@ try {
       assert.equal(await page.locator('[data-reminder-row-id="32"] .reminder-marker').textContent(), "›");
       assert.equal(await page.locator('[data-reminder-row-id="32"] .reminder-title').getAttribute("aria-current"), "true");
       assert.equal(await page.locator(".reminder-row-selected").count(), 1);
+      assert.match(await page.locator(".reminder-detail-panel").innerText(), /VISIBILITY · FIXED AT CREATION\s+PERSONAL/);
+      assert.equal(await page.locator(".reminder-detail-panel select[id*=Visibility]").count(), 0);
       await page.screenshot({ path: `.amp/in/artifacts/entity-selected-${theme}-${width}.png` });
       // Cancel the real confirmation: it must identify the selected reminder,
       // and neither the local asset nor the selected row may disappear.
@@ -149,10 +151,38 @@ try {
       await page.keyboard.press("Escape");
       assert.equal(await page.evaluate(() => NRCAssets.roomAssets.get(0n).has(32n)), true);
       await page.evaluate(() => NRCInspector.close());
+      await page.evaluate(() => { void createReminder(); });
+      const personalRadio = page.getByRole("radio", { name: "PERSONAL — ONLY YOU" });
+      const teamRadio = page.getByRole("radio", { name: "TEAM — WORKSPACE" });
+      await personalRadio.waitFor({ state: "visible" });
+      assert.equal(await personalRadio.isChecked(), true);
+      assert.equal(await teamRadio.isChecked(), false);
+      assert.equal(await page.getByRole("group", { name: "VISIBILITY · FIXED AT CREATION" }).count(), 1);
+      await page.screenshot({ path: `.amp/in/artifacts/reminder-create-${theme}-${width}.png` });
+      await personalRadio.focus();
+      await page.keyboard.press("ArrowDown");
+      assert.equal(await teamRadio.isChecked(), true);
+      assert.equal(await personalRadio.isChecked(), false);
+      await page.screenshot({ path: `.amp/in/artifacts/reminder-create-team-${theme}-${width}.png` });
+      await page.keyboard.press("Escape");
       if (width === 390) {
         assert.equal(await page.locator("#reminderQueueBody").evaluate(el => { el.scrollLeft = 100; return el.scrollLeft; }), 100);
       }
     }
+  }
+  for (const visibility of ["personal", "team"]) {
+    await page.evaluate(() => {
+      window.reminderCreated = null;
+      NRCAssets.sendCreateAsset = (...args) => { window.reminderCreated = { preview: args[4], payload: args[5] }; };
+      NRCDialog.prompt = async message => message.startsWith("Reminder title") ? "Visibility contract" : message.startsWith("Deadline") ? "2027-01-01T12:00" : "";
+      void createReminder();
+    });
+    await page.locator(`input[name="reminderCreateVisibility"][value="${visibility}"]`).check();
+    await page.getByRole("button", { name: "NEXT", exact: true }).click();
+    await page.waitForFunction(() => window.reminderCreated);
+    const sent = await page.evaluate(() => window.reminderCreated);
+    assert.equal(sent.preview, sent.payload);
+    assert.equal(JSON.parse(sent.payload).visibility, visibility);
   }
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.evaluate(() => {

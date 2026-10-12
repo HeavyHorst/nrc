@@ -8,8 +8,10 @@ package main
 
 import "btree"
 import "core:log"
+import "core:mem/virtual"
 import "core:net"
 import "core:slice"
+import "core:strings"
 
 import "byte_pool"
 import pr "protocol"
@@ -20,7 +22,7 @@ import pr "protocol"
 
 handle_create_asset :: proc(c: ^NRC_Connection, req: pr.CreateAssetRequest) {
 	workspace_id := c.workspace_id
-	if !validate_appointment_asset(req.asset_type, req.payload_encoding, req.payload_raw_len, req.preview, req.payload, context.temp_allocator) {
+	if !validate_appointment_asset(req.asset_type, req.payload_encoding, req.payload_raw_len, req.preview, req.payload) {
 		send_error_response(c, .C_CreateAsset, "Invalid appointment record", req.correlation_id)
 		return
 	}
@@ -66,7 +68,10 @@ handle_create_asset :: proc(c: ^NRC_Connection, req: pr.CreateAssetRequest) {
 	// resolves by it and `slice assign` takes it. Two slices with one name would
 	// make all three ambiguous, so the name is unique per conversation.
 	if req.asset_type == .Slice {
-		name, ok := slice_preview_name(req.preview, context.temp_allocator)
+		arena: virtual.Arena
+		if virtual.arena_init_growing(&arena) != nil do return
+		defer virtual.arena_destroy(&arena)
+		name, ok := slice_preview_name(req.preview, virtual.arena_allocator(&arena))
 		if !ok {
 			send_error_response(c, .C_CreateAsset, "Slice record must carry a version and a name", req.correlation_id)
 			return
@@ -78,6 +83,15 @@ handle_create_asset :: proc(c: ^NRC_Connection, req: pr.CreateAssetRequest) {
 	}
 
 	asset_id := pr.AssetID(td.asset_seq + 1)
+	if (req.parent_type == .Task && conv.tasks[pr.TaskID(req.parent_id)] == nil) ||
+	   (req.parent_type == .Asset && !asset_visible_to(conv.assets[pr.AssetID(req.parent_id)], get_connection_nickname(c))) {
+		send_error_response(c, .C_CreateAsset, "Asset parent not found", req.correlation_id)
+		return
+	}
+	if entity_is_personal_reminder(conv, .Asset, req.parent_id) && req.parent_type == .Asset {
+		send_error_response(c, .C_CreateAsset, "Personal reminders cannot have shared children", req.correlation_id)
+		return
+	}
 	if asset_parent_would_cycle(conv, asset_id, req.parent_type, req.parent_id) {
 		send_error_response(c, .C_CreateAsset, "Asset parent cycle not allowed", req.correlation_id)
 		return
@@ -104,6 +118,11 @@ handle_create_asset :: proc(c: ^NRC_Connection, req: pr.CreateAssetRequest) {
 	new_asset.conv_id = req.conv_id
 	new_asset.payload_encoding = req.payload_encoding
 	new_asset.payload_raw_len = req.payload_raw_len
+	if !validate_reminder_asset(new_asset) || (reminder_is_personal(new_asset) && asset_has_children(conv, asset_id)) {
+		free_asset(new_asset)
+		send_error_response(c, .C_CreateAsset, "Invalid reminder visibility or personal reminder links/attachments", req.correlation_id)
+		return
+	}
 
 	// Stage the WAL transaction before changing speculative in-memory state.
 	// The outbox holds responses and broadcasts until the batch is fsynced.
@@ -146,7 +165,7 @@ handle_update_asset :: proc(c: ^NRC_Connection, req: pr.UpdateAssetRequest) {
 	}
 
 	existing := conv.assets[req.asset_id]
-	if existing == nil {
+	if !asset_visible_to(existing, get_connection_nickname(c)) {
 		log.warnf("[T%d] Asset %d not found for update", td.thread_index, req.asset_id)
 		send_error_response(c, .C_UpdateAsset, "Asset not found", req.correlation_id)
 		return
@@ -155,7 +174,7 @@ handle_update_asset :: proc(c: ^NRC_Connection, req: pr.UpdateAssetRequest) {
 		send_error_response(c, .C_UpdateAsset, "Room mappings are immutable", req.correlation_id)
 		return
 	}
-	if !validate_appointment_asset(existing.asset_type, req.payload_encoding, req.payload_raw_len, req.preview, req.payload, context.temp_allocator) {
+	if !validate_appointment_asset(existing.asset_type, req.payload_encoding, req.payload_raw_len, req.preview, req.payload) {
 		send_error_response(c, .C_UpdateAsset, "Invalid appointment record", req.correlation_id)
 		return
 	}
@@ -165,12 +184,15 @@ handle_update_asset :: proc(c: ^NRC_Connection, req: pr.UpdateAssetRequest) {
 	// so an update carries the record forward and cannot rename the slice or empty
 	// the identity that every command addresses it by.
 	if existing.asset_type == .Slice {
-		name, ok := slice_preview_name(req.preview, context.temp_allocator)
+		arena: virtual.Arena
+		if virtual.arena_init_growing(&arena) != nil do return
+		defer virtual.arena_destroy(&arena)
+		name, ok := slice_preview_name(req.preview, virtual.arena_allocator(&arena))
 		if !ok {
 			send_error_response(c, .C_UpdateAsset, "Slice record must carry a version and a name", req.correlation_id)
 			return
 		}
-		if current, has_current := slice_preview_name(existing.preview, context.temp_allocator); has_current && current != name {
+		if current, has_current := slice_preview_name(existing.preview, virtual.arena_allocator(&arena)); has_current && current != name {
 			send_error_response(c, .C_UpdateAsset, "A slice name is fixed at creation", req.correlation_id)
 			return
 		}
@@ -197,6 +219,11 @@ handle_update_asset :: proc(c: ^NRC_Connection, req: pr.UpdateAssetRequest) {
 	new_asset.conv_id = existing.conv_id
 	new_asset.payload_encoding = req.payload_encoding
 	new_asset.payload_raw_len = req.payload_raw_len
+	if !validate_reminder_asset(new_asset) || reminder_is_personal(new_asset) != reminder_is_personal(existing) {
+		free_asset(new_asset)
+		send_error_response(c, .C_UpdateAsset, "Reminder visibility is fixed at creation", req.correlation_id)
+		return
+	}
 
 	// Persist before replacing indexes/map ownership or acknowledging.
 	if !persist_asset_updated(workspace_id, new_asset) {
@@ -265,7 +292,7 @@ handle_delete_asset :: proc(c: ^NRC_Connection, req: pr.DeleteAssetRequest) {
 	}
 
 	asset := conv.assets[req.asset_id]
-	if asset == nil {
+	if !asset_visible_to(asset, get_connection_nickname(c)) {
 		log.warnf("[T%d] Asset %d not found for delete", td.thread_index, req.asset_id)
 		send_error_response(c, .C_DeleteAsset, "Asset not found", req.correlation_id)
 		return
@@ -341,13 +368,15 @@ handle_delete_asset :: proc(c: ^NRC_Connection, req: pr.DeleteAssetRequest) {
 		}
 	}
 
+	personal_owner := reminder_is_personal(asset) ? strings.clone(string(asset.owner)) : ""
+	defer if personal_owner != "" do delete(personal_owner)
 	asset_store_remove(ws, conv, req.asset_id)
 
 	// Send to requester
 	send_asset_deleted(c, req.conv_id, req.asset_id, req.correlation_id)
 
 	// Broadcast to other subscribers
-	broadcast_asset_deleted_to_room(req.conv_id, req.asset_id, c.sock, ws)
+	broadcast_asset_deleted_to_room(req.conv_id, req.asset_id, c.sock, ws, personal_owner)
 
 	log.debugf("[T%d] Deleted asset %d from conv %d", td.thread_index, req.asset_id, req.conv_id)
 }
@@ -513,7 +542,7 @@ handle_get_asset :: proc(c: ^NRC_Connection, req: pr.GetAssetRequest) {
 	}
 
 	asset := conv.assets[req.asset_id]
-	if asset == nil {
+	if !asset_visible_to(asset, get_connection_nickname(c)) {
 		log.warnf("[T%d] Asset %d not found for get", td.thread_index, req.asset_id)
 		send_error_response(c, .C_GetAsset, "Asset not found", req.correlation_id)
 		return
@@ -545,7 +574,7 @@ handle_list_assets :: proc(c: ^NRC_Connection, req: pr.ListAssetsRequest) {
 	defer delete(assets)
 
 	for _, asset in conv.assets {
-		if asset == nil {
+		if !asset_visible_to(asset, get_connection_nickname(c)) {
 			continue
 		}
 		if req.filter_by_type && asset.asset_type != req.asset_type {
@@ -693,12 +722,18 @@ collect_note_page :: proc(
 
 // Non-note assets use the same descending (updated_at, asset_id) cursor as notes.
 // Only references are sorted; previews and payloads remain conversation-owned.
-collect_typed_asset_page :: proc(conv: ^Conversation_State, req: pr.ListAssetsPagedRequest, limit: u16, assets: ^[dynamic]pr.Asset) -> Note_Page_Collection {
+collect_typed_asset_page :: proc(
+	conv: ^Conversation_State,
+	req: pr.ListAssetsPagedRequest,
+	limit: u16,
+	assets: ^[dynamic]pr.Asset,
+	username := "",
+) -> Note_Page_Collection {
 	result: Note_Page_Collection
 	candidates := make([dynamic]^pr.Asset, 0, len(conv.assets))
 	defer delete(candidates)
 	for _, asset in conv.assets {
-		if asset == nil || asset.asset_type != req.asset_type do continue
+		if !asset_visible_to(asset, username) || asset.asset_type != req.asset_type do continue
 		result.total_count += 1
 		if req.has_cursor && !is_note_after_cursor_desc({asset.updated_at, asset.asset_id}, req.cursor_updated_at, req.cursor_asset_id) do continue
 		append(&candidates, asset)
@@ -750,7 +785,7 @@ handle_list_assets_paged :: proc(c: ^NRC_Connection, req: pr.ListAssetsPagedRequ
 	if req.asset_type == .Note {
 		result = collect_note_page(conv, .Global, "", page_limit, req.has_cursor, req.cursor_updated_at, req.cursor_asset_id, &assets)
 	} else {
-		result = collect_typed_asset_page(conv, req, page_limit, &assets)
+		result = collect_typed_asset_page(conv, req, page_limit, &assets, get_connection_nickname(c))
 	}
 	send_asset_list_page(
 		c,
@@ -1152,7 +1187,9 @@ broadcast_asset_created_with_workspace :: proc(asset: pr.Asset, excluded_sock: n
 	shared_buf := create_shared_asset_created_buffer(msg)
 	if shared_buf == nil do return
 
-	send_shared_to_subscribers_except(conv, excluded_sock, shared_buf)
+	asset_copy := asset
+	owner := reminder_is_personal(&asset_copy) ? string(asset.owner) : ""
+	send_shared_to_subscriber_entries(conv, excluded_sock, shared_buf, personal_owner = owner)
 }
 
 broadcast_asset_created :: proc {
@@ -1177,7 +1214,9 @@ broadcast_asset_updated_with_workspace :: proc(asset: pr.Asset, excluded_sock: n
 	shared_buf := create_shared_asset_updated_buffer(msg)
 	if shared_buf == nil do return
 
-	send_shared_to_subscribers_except(conv, excluded_sock, shared_buf)
+	asset_copy := asset
+	owner := reminder_is_personal(&asset_copy) ? string(asset.owner) : ""
+	send_shared_to_subscriber_entries(conv, excluded_sock, shared_buf, personal_owner = owner)
 }
 
 broadcast_asset_updated :: proc {
@@ -1185,11 +1224,23 @@ broadcast_asset_updated :: proc {
 	broadcast_asset_updated_with_workspace,
 }
 
-broadcast_asset_deleted_to_room_by_id :: proc(conv_id: pr.ConversationID, asset_id: pr.AssetID, excluded_sock: net.TCP_Socket, workspace_id: string) {
-	broadcast_asset_deleted_to_room_with_workspace(conv_id, asset_id, excluded_sock, get_workspace(workspace_id))
+broadcast_asset_deleted_to_room_by_id :: proc(
+	conv_id: pr.ConversationID,
+	asset_id: pr.AssetID,
+	excluded_sock: net.TCP_Socket,
+	workspace_id: string,
+	personal_owner := "",
+) {
+	broadcast_asset_deleted_to_room_with_workspace(conv_id, asset_id, excluded_sock, get_workspace(workspace_id), personal_owner)
 }
 
-broadcast_asset_deleted_to_room_with_workspace :: proc(conv_id: pr.ConversationID, asset_id: pr.AssetID, excluded_sock: net.TCP_Socket, ws: ^Workspace_State) {
+broadcast_asset_deleted_to_room_with_workspace :: proc(
+	conv_id: pr.ConversationID,
+	asset_id: pr.AssetID,
+	excluded_sock: net.TCP_Socket,
+	ws: ^Workspace_State,
+	personal_owner := "",
+) {
 	if ws == nil do return
 
 	conv := get_conversation(ws, conv_id)
@@ -1203,7 +1254,7 @@ broadcast_asset_deleted_to_room_with_workspace :: proc(conv_id: pr.ConversationI
 	shared_buf := create_shared_asset_deleted_buffer(msg)
 	if shared_buf == nil do return
 
-	send_shared_to_subscribers_except(conv, excluded_sock, shared_buf)
+	send_shared_to_subscriber_entries(conv, excluded_sock, shared_buf, personal_owner = personal_owner)
 }
 
 broadcast_asset_deleted_to_room :: proc {

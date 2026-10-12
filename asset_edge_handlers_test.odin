@@ -1,5 +1,6 @@
 package main
 
+import "core:encoding/endian"
 import "core:log"
 import "core:mem/virtual"
 import "core:testing"
@@ -518,6 +519,56 @@ test_asset_create_persistence_failure_is_not_visible_or_acknowledged :: proc(t: 
 	testing.expect(t, persistence.wal_write_fault_triggered_for_test(), "create failure should reach the WAL fault")
 	testing.expect(t, td.shard_writers.writers[0].poisoned, "failed create should poison the shard writer")
 	testing.expect_value(t, send_queue_len(&c), 0)
+}
+
+@(test)
+test_personal_reminder_rejects_legacy_children_and_frees_escaped_metadata :: proc(t: ^testing.T) {
+	workspace_id := "private-reminder-ownership"
+	if !init_room_mapping_test_state("private_reminder_ownership.log", workspace_id) {
+		testing.expect(t, false)
+		return
+	}
+	defer cleanup_room_mapping_test_state()
+	c := make_room_mapping_test_connection(workspace_id)
+	defer send_queue_destroy(&c)
+	ws := get_or_create_connection_workspace(&c)
+	conv := get_or_create_conversation(ws, 0)
+	// Simulate a dangling parent persisted by older builds. The next allocated
+	// asset ID must not silently become its private parent.
+	child := alloc_asset(nil, nil, nil, nil)
+	child.asset_id = 99
+	child.asset_type = .Note
+	child.parent_type = .Asset
+	child.parent_id = 1
+	asset_store_put(ws, workspace_id, conv, child)
+	record := `{"visibil\u0069ty":"p\u0065rsonal","title":"private"}`
+	asset_handler_test_create(&c, 0, .Reminder, .None, 0, record, record)
+	testing.expect_value(t, td.asset_seq, u64(0))
+	testing.expect(t, conv.assets[1] == nil)
+	body: [512]byte
+	endian.put_u16(body[8:], .Big, u16(pr.AssetType.Reminder))
+	endian.put_u32(body[13:], .Big, u32(len(record)))
+	endian.put_u16(body[17:], .Big, u16(len(record)))
+	copy(body[19:], record)
+	endian.put_u16(body[19 + len(record):], .Big, u16(len(record)))
+	copy(body[21 + len(record):], record)
+	ops := []pr.TransactionOperation{{op_type = .AssetCreate, body = body[:21 + 2 * len(record)]}}
+	process_apply_transaction(&c, pr.ApplyTransactionRequest{operations = ops})
+	testing.expect_value(t, td.asset_seq, u64(0))
+	testing.expect(t, conv.assets[1] == nil)
+	asset_store_remove(ws, conv, 99)
+	asset_handler_test_create(&c, 0, .Reminder, .None, 0, record, record)
+	testing.expect_value(t, td.asset_seq, u64(1))
+	testing.expect(t, conv.assets[1] != nil)
+	if conv.assets[1] == nil do return
+	handle_update_asset(
+		&c,
+		pr.UpdateAssetRequest{asset_id = 1, preview = transmute([]byte)record, payload = transmute([]byte)record, payload_raw_len = u32(len(record))},
+	)
+	asset_handler_test_create(&c, 0, .Reminder, .None, 0, record, `{"visibility":"team"}`)
+	testing.expect_value(t, td.asset_seq, u64(1))
+	handle_delete_asset(&c, pr.DeleteAssetRequest{asset_id = 1})
+	testing.expect_value(t, len(conv.assets), 0)
 }
 
 @(test)
