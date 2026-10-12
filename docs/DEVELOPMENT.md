@@ -81,6 +81,33 @@ connections, state, subscriptions and persistence I/O through io_uring.
 `NRC_THREAD_COUNT` counts workers, not all process threads. By default a service
 core is reserved when possible, and workers use the remaining physical cores.
 
+The storage bulk pool executes retained-message seals, segment cleanup and shard
+compaction. Configure it at startup with `NRC_STORAGE_BULK_EXECUTORS` (1–64,
+default 2) and `NRC_STORAGE_BULK_CPUS` (comma-separated logical CPU IDs/ranges,
+for example `24-29`). With no CPU list, executors retain the existing behavior
+of sharing the service CPU; increasing their count alone adds no CPU capacity.
+With a list, executors are pinned round-robin in list order. The list must be
+unique, inside the process's allowed cpuset, and no longer than the executor
+count. Bulk physical cores, including allowed SMT siblings, are excluded from
+worker/control placement when topology is known; otherwise only the listed
+logical CPUs are excluded. At least two non-bulk physical cores must remain
+(two logical CPUs when topology is unknown). The automatic worker count accounts
+for the reservation; an explicit `NRC_THREAD_COUNT` can still oversubscribe the
+remaining worker CPUs. An overlapping `NRC_SERVICE_CPU`, invalid reservation or
+combination with `NRC_DISABLE_CPU_AFFINITY` exits with status 2 before opening
+storage. CPU IDs must be chosen from the actual host topology, not core labels.
+
+For example, on a suitable 32-core host, reserve six bulk CPUs:
+
+```sh
+NRC_STORAGE_BULK_EXECUTORS=6 NRC_STORAGE_BULK_CPUS=24-29 ./server
+```
+
+The control thread remains separate from an explicit bulk pool. Ownership,
+one outstanding seal per shard, fsync-before-ACK and recovery formats are
+unchanged. More executors increase concurrent memory and I/O demand; benchmark
+throughput, queue age, latency and RSS rather than assuming linear scaling.
+
 Workspace bytes hash to one of 256 logical shards; the shard maps to a worker.
 Changing worker count changes ownership, not storage identity. Durable task,
 asset and edge mutations share atomic shard transactions. Background compaction

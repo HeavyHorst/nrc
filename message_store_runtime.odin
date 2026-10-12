@@ -1012,7 +1012,8 @@ message_store_active_dedup :: proc(
 	found: bool,
 ) {
 	existing, present := store.active_dedup[key]
-	if !present && store.frozen != nil && !store.frozen_published do existing, present = store.frozen.active_dedup[key]
+	// Publication does not invalidate the holder retained by history readers.
+	if !present && store.frozen != nil do existing, present = store.frozen.active_dedup[key]
 	if present {
 		cutoff := message_store_dedup_cutoff(store, message.accepted_at_ns)
 		if existing.accepted_at_ns < cutoff do return .Invalid, 0, false

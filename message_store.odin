@@ -49,6 +49,7 @@ Message_Store_Result :: enum u8 {
 	Capacity,
 	Poisoned,
 	Invalid,
+	Overloaded,
 }
 
 Retained_Message :: struct {
@@ -237,8 +238,9 @@ Message_Pending_Append :: struct {
 }
 
 Message_Deferred_Append :: struct {
-	ctx:       rawptr,
-	dedup_key: string,
+	ctx:         rawptr,
+	dedup_key:   string,
+	deferred_at: time.Time,
 }
 
 Message_Store_Registry :: struct {

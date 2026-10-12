@@ -365,6 +365,59 @@ Note index maintenance.
 8. Overrides: `NRC_MESSAGE_BENCH_RECORDS`, `NRC_MESSAGE_BENCH_CONTENT_BYTES`, `NRC_MESSAGE_BENCH_HISTORY_ROUNDS`, `NRC_MESSAGE_BENCH_HISTORY_READERS`, `NRC_MESSAGE_BENCH_LIVE_WRITERS`, and `NRC_MESSAGE_BENCH_LIVE_WRITE_RATE`. Profilers may set `NRC_MESSAGE_BENCH_SKIP_BASELINE=1` to isolate the loaded phase.
 9. Initial append timing includes write flushes and threshold-triggered production fsyncs, but excludes shutdown's final sync. Recovery uses direct-I/O WAL inspection. The separately reported seal/index phase includes final WAL sync plus durable index and manifest publication.
 
+### Unordered sealing and explicit overload-retry workloads
+
+`retained-message-bench` defaults remain one workspace/conversation, closed waves
+of at most four requests per connection, fail-fast on errors, and a ten-second
+socket read deadline. For production sealing analysis, assume physically unordered
+WALs: use interleaved conversations and colliding workspaces, not just the ordered
+single-conversation control. The harness supports:
+
+- `--conversations=4`: round-robin chat conversations 1..4 per publisher.
+- `--workspaces=name1,name2`: assign publisher connections round-robin across
+  explicit workspaces. Every listed workspace must have at least one publisher.
+  Repeated names can weight the connection mix; they do not guarantee a per-workspace
+  arrival rate. Use separate processes with separate `--rate` values for hot/cold
+  offered-load controls. Mixed-workspace/multi-conversation fanout is not supported;
+  these configurations require `--subscribers=0`.
+- `--retry-overload`: opt into same-ID, byte-identical retries only after a correlated
+  terminal SendMessageV2 overload response (`retained_send_overloaded`, or the legacy
+  connection/store count-limit texts). Storage failures, conflicts, unknown origins,
+  unknown/duplicate correlations and socket timeouts remain fatal. No reconnect or
+  ambiguous timeout retry is added. Attempts of one ID never overlap: the current
+  wave's replies drain before rejected slots are retried.
+- `--retry-budget=30s`: first-write-to-ACK budget, capped at 60 s. Backoff uses
+  exponential jitter (initial 50–100 ms, capped at 2 s); neither backoff nor retries
+  reset the budget. Exhaustion fails the sample as unconfirmed. This remains a
+  bounded closed-wave workload, not an open-loop overload generator.
+
+Example collision control (both names hash to shard 82 with seed-zero XXH64).
+Use a disposable fresh server/storage directory per sample: identities restart
+at the same values in each harness process and must not silently deduplicate
+against an earlier run.
+
+```sh
+/tmp/retained-message-bench --clients=32 --depth=4 \
+  --workspaces=sealing-mix-6,sealing-mix-14 --conversations=4 \
+  --rate=20000 --warmup=100ms --duration=8s
+# Repeat with --retry-overload only as a separately labelled retry-aware control.
+```
+
+JSON records workspace names/shards, conversation count and retry mode. `ops`,
+`durable_acked` and throughput count successful logical durable ACKs, not attempts
+or refusals. `logical_offered`, `attempts`, `overload_rejects`, `retries` and
+`unresolved` are separate counters, excluding warmup. `latency_ms` includes all
+retry backoff and wave drain from the first write; `attempt_latency_ms` in retry
+mode measures individual terminal responses. Elapsed time includes final drain.
+Failed phases report partial measured counts on stderr and exit nonzero, without
+assigning a throughput result. Successful samples require every logical message
+to be confirmed. Do not compare different modes/workloads as a server speedup.
+
+Use the same harness in both sides of an A/B; the prior runner defaults are
+unchanged. This extension alone does not raise sealing capacity, implement server
+admission or prove cold-workspace fairness. Realistic unordered service-time/IO
+measurements and subsequent admission changes are separate stages.
+
 ### Retained Message Durable ACK Comparison
 
 Build the baseline and candidate separately with `odin build . -o:speed`, naming the

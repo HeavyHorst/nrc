@@ -200,7 +200,11 @@ let retainedHistoryRequests = new Map(); // correlation ID -> paging state
 let retainedHistoryStarted = new Set(); // Rooms loaded during this connection
 let retainedOperationQueue = [];
 let retainedOperations = new Map(); // correlation ID -> in-flight operation kind
+let retainedSendAttempts = new Map(); // sent attempt correlation -> logical send ID
 const MAX_RETAINED_OPERATIONS_IN_FLIGHT = 1;
+const MAX_PENDING_RETAINED_SENDS = 256;
+const MAX_RETAINED_SEND_ATTEMPTS = 32;
+const RETAINED_SEND_RETRY_BUDGET = 30000;
 let systemLogHistory = []; // Client/operator log, separate from room history
 let systemLogVisible = false;
 let systemLogNextId = 1;
@@ -1443,7 +1447,11 @@ async function connectWebSocket() {
     retainedOperationQueue = [];
     retainedOperations.clear();
     for (const pending of pendingMessages.values()) {
-      if (pending.retained) pending.timestamp = Number.POSITIVE_INFINITY;
+      if (pending.retained) {
+        pending.timestamp = Number.POSITIVE_INFINITY;
+        pending.queued = false;
+        pending.attemptCorrelationId = null;
+      }
     }
     stopPingInterval(); // Stop ping measurements
     stopUptimeTimer(); // Stop uptime timer
@@ -2151,13 +2159,29 @@ function stopRetransmissionLoop() {
 }
 
 function checkRetransmissions() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
   const now = Date.now();
   const RETRY_TIMEOUT = 5000;
   const MAX_RETRIES = 3;
 
   for (const [reqId, msgData] of pendingMessages.entries()) {
+    if (msgData.retained) {
+      if (msgData.firstSentAt !== null && now - msgData.firstSentAt >= RETAINED_SEND_RETRY_BUDGET) {
+        finishPendingRetainedSend(reqId, msgData);
+        logMessage("Error", "RETAINED MESSAGE UNCONFIRMED; RETRY BUDGET EXHAUSTED", msgData.convId);
+        continue;
+      }
+      if (!ws || ws.readyState !== WebSocket.OPEN || retainedRoomStates.get(msgData.convId) !== "enabled" || msgData.queued || now < msgData.retryAt) continue;
+      if (msgData.attemptCorrelationId !== null) {
+        if (now - msgData.timestamp < RETRY_TIMEOUT) continue;
+        // The earlier attempt can still commit. Keep its ACK alias, but free
+        // the client scheduling slot and send a separately correlated retry.
+        retainedOperations.delete(msgData.attemptCorrelationId);
+        msgData.attemptCorrelationId = null;
+      }
+      queuePendingRetainedSend(reqId, msgData);
+      continue;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) continue;
     if (now - msgData.timestamp > RETRY_TIMEOUT) {
       // Time to retry?
       if (msgData.attempts < MAX_RETRIES) {
@@ -2179,13 +2203,8 @@ function checkRetransmissions() {
         console.error(
           `Message ${reqId} has no ACK after ${MAX_RETRIES} retries.`,
         );
-        if (msgData.retained) {
-          msgData.timestamp = Number.POSITIVE_INFINITY;
-          logMessage("Error", "MESSAGE ACK DELAYED; WAITING FOR SERVER OR RECONNECT");
-        } else {
-          pendingMessages.delete(reqId);
-          logMessage("Error", `Failed to send message after ${MAX_RETRIES} attempts.`);
-        }
+        pendingMessages.delete(reqId);
+        logMessage("Error", `Failed to send message after ${MAX_RETRIES} attempts.`);
       }
     }
   }
@@ -2210,7 +2229,8 @@ function parseAckSendMessage(dataView) {
   lastAckTime = Date.now();
 
   // Remove from pending messages (Ack received)
-  const pending = pendingMessages.get(clientReqId);
+  const logicalId = retainedSendAttempts.get(clientReqId) ?? clientReqId;
+  const pending = pendingMessages.get(logicalId);
   if (pending) {
     if (pending.messageData) {
       pending.messageData.sequence = assignedSeq;
@@ -2221,8 +2241,12 @@ function parseAckSendMessage(dataView) {
         loadRoomHistory(pending.messageData.roomId);
       }
     }
-    pendingMessages.delete(clientReqId);
-    completeRetainedOperation(clientReqId);
+    if (pending.retained) {
+      finishPendingRetainedSend(logicalId, pending);
+    } else {
+      pendingMessages.delete(clientReqId);
+      completeRetainedOperation(clientReqId);
+    }
   }
 
   // Don't show ack messages in chat - just log to console for debugging
@@ -2259,17 +2283,19 @@ function parseErrorResponse(dataView) {
   console.error(`[S_ErrorResponse] ${opcodeName}: ${errorMsg} (corr=${correlationId})`);
 
   if (originOpcode === Opcode.C_SendMessageV2) {
-    const pending = pendingMessages.get(correlationId);
-    completeRetainedOperation(correlationId);
-    if (pending && errorMsg === "too many retained message operations" && pending.attempts < 3) {
-      pending.attempts++;
+    const logicalId = retainedSendAttempts.get(correlationId);
+    const pending = pendingMessages.get(logicalId);
+    // Ignore an old attempt's failure; only a valid late ACK can settle it.
+    if (!pending || correlationId !== pending.attemptCorrelationId) return;
+    if (errorMsg === "retained_send_overloaded" || errorMsg === "too many retained message operations" || errorMsg === "too many retained message sends") {
+      const delay = Math.min(2000, 100 * 2 ** Math.min(pending.attempts - 1, 5));
+      pending.retryAt = Date.now() + delay / 2 + Math.random() * delay / 2;
       pending.timestamp = Number.POSITIVE_INFINITY;
-      queueRetainedOperation(correlationId, "send", pending.buffer, () => {
-        pending.timestamp = Date.now();
-      });
+      pending.attemptCorrelationId = null;
+      completeRetainedOperation(correlationId);
       return;
     }
-    pendingMessages.delete(correlationId);
+    finishPendingRetainedSend(logicalId, pending);
   }
   if (originOpcode === Opcode.C_SubscribeConvsV2) retainedSubscriptionRequests.delete(correlationId);
   if (originOpcode === Opcode.C_ListMessagesBefore || originOpcode === Opcode.C_ReplayMessagesAfter) {
@@ -3632,8 +3658,8 @@ function drainRetainedOperationQueue() {
     ws?.readyState === WebSocket.OPEN
   ) {
     const operation = retainedOperationQueue.shift();
+    if (operation.onSend?.() === false) continue;
     retainedOperations.set(operation.correlationId, operation.kind);
-    operation.onSend?.();
     sendPacket(operation.buffer);
   }
 }
@@ -3645,6 +3671,45 @@ function queueRetainedOperation(correlationId, kind, buffer, onSend = null) {
 
 function completeRetainedOperation(correlationId) {
   if (retainedOperations.delete(correlationId)) drainRetainedOperationQueue();
+}
+
+function finishPendingRetainedSend(logicalId, pending) {
+  pendingMessages.delete(logicalId);
+  for (const correlation of pending.attemptCorrelations) {
+    retainedSendAttempts.delete(correlation);
+    retainedOperations.delete(correlation);
+  }
+  retainedOperations.delete(pending.attemptCorrelationId);
+  retainedOperationQueue = retainedOperationQueue.filter(
+    (operation) => operation.correlationId !== pending.attemptCorrelationId && !pending.attemptCorrelations.has(operation.correlationId),
+  );
+  drainRetainedOperationQueue();
+}
+
+function queuePendingRetainedSend(logicalId, pending) {
+  if (pending.queued || pending.attemptCorrelationId !== null || pending.attempts >= MAX_RETAINED_SEND_ATTEMPTS || Date.now() < pending.retryAt) return;
+  const correlationId = pending.attempts === 0 ? logicalId : (clientRequestIdCounter = (clientRequestIdCounter + 1) >>> 0);
+  const buffer = pending.buffer.slice(0);
+  new DataView(buffer).setUint32(26, correlationId, false);
+  pending.queued = true;
+  pending.attemptCorrelationId = correlationId;
+  queueRetainedOperation(correlationId, "send", buffer, () => {
+    pending.queued = false;
+    if (pendingMessages.get(logicalId) !== pending || retainedRoomStates.get(pending.convId) !== "enabled" ||
+        (pending.firstSentAt !== null && Date.now() - pending.firstSentAt >= RETAINED_SEND_RETRY_BUDGET)) return false;
+    const now = Date.now();
+    pending.firstSentAt ??= now;
+    pending.timestamp = now;
+    pending.retryAt = 0;
+    pending.attempts++;
+    pending.attemptCorrelations.add(correlationId);
+    retainedSendAttempts.set(correlationId, logicalId);
+    if (pending.attempts > 1) {
+      retransmitCount++;
+      retransmitHistory.push(now);
+    }
+    return true;
+  });
 }
 
 function requestRetainedHistory(convId, cursor = 0n, loaded = 0, options = {}) {
@@ -3670,13 +3735,7 @@ function requestRetainedHistory(convId, cursor = 0n, loaded = 0, options = {}) {
 function requeuePendingRetainedMessages(convId) {
   for (const [correlationId, pending] of pendingMessages.entries()) {
     if (!pending.retained || pending.convId !== convId) continue;
-    const alreadyQueued = retainedOperationQueue.some(
-      (operation) => operation.correlationId === correlationId,
-    );
-    if (alreadyQueued || retainedOperations.has(correlationId)) continue;
-    queueRetainedOperation(correlationId, "send", pending.buffer, () => {
-      pending.timestamp = Date.now();
-    });
+    queuePendingRetainedSend(correlationId, pending);
   }
 }
 
@@ -3693,7 +3752,7 @@ function parseRetainedSubscriptionReady(dataView) {
       let dropped = 0;
       for (const [correlationId, pending] of pendingMessages.entries()) {
         if (pending.retained && pending.convId === convId) {
-          pendingMessages.delete(correlationId);
+          finishPendingRetainedSend(correlationId, pending);
           dropped++;
         }
       }
@@ -3778,7 +3837,7 @@ function sendRawProtocolMessage(content) {
     logMessage("Error", `MESSAGE EXCEEDS ${MAX_MESSAGE_CONTENT_BYTES.toLocaleString()} BYTE LIMIT`);
     return false;
   }
-  const clientReqId = clientRequestIdCounter++;
+  const clientReqId = (clientRequestIdCounter = (clientRequestIdCounter + 1) >>> 0);
 
   const retainedState = retainedRoomStates.get(currentRoomId);
   if (
@@ -3791,6 +3850,10 @@ function sendRawProtocolMessage(content) {
   }
 
   if (!isDMConversation(currentRoomId) && retainedState === "enabled") {
+    if (pendingMessages.size >= MAX_PENDING_RETAINED_SENDS) {
+      logMessage("Error", "TOO MANY UNCONFIRMED MESSAGES; WAIT FOR ACKS");
+      return false;
+    }
     const clientMessageIdBytes = window.NRCRetainedMessages.createClientMessageId();
     const clientMessageId = window.NRCRetainedMessages.clientMessageIdKey(clientMessageIdBytes);
     const buffer = window.NRCRetainedMessages.encodeSendMessage(
@@ -3805,15 +3868,17 @@ function sendRawProtocolMessage(content) {
       buffer,
       timestamp: Number.POSITIVE_INFINITY,
       attempts: 0,
+      firstSentAt: null,
+      retryAt: 0,
+      queued: false,
+      attemptCorrelationId: null,
+      attemptCorrelations: new Set(),
       retained: true,
       convId: currentRoomId,
       clientMessageId,
       messageData: null,
     });
-    queueRetainedOperation(clientReqId, "send", buffer, () => {
-      const pending = pendingMessages.get(clientReqId);
-      if (pending) pending.timestamp = Date.now();
-    });
+    queuePendingRetainedSend(clientReqId, pendingMessages.get(clientReqId));
     return { clientReqId, clientMessageId, retained: true };
   }
 

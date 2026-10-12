@@ -2,6 +2,48 @@ package main
 
 import "core:testing"
 
+@(test)
+test_storage_bulk_configuration_and_cpu_reservation :: proc(t: ^testing.T) {
+	defaults, ok := parse_storage_bulk_config("", "")
+	testing.expect(t, ok && defaults.executor_count == 2 && defaults.cpu_count == 0)
+	config, valid := parse_storage_bulk_config("6", "4-5,9")
+	testing.expect(t, valid && config.executor_count == 6 && config.cpu_count == 3)
+	testing.expect_value(t, config.cpus[0], 4)
+	testing.expect_value(t, config.cpus[1], 5)
+	testing.expect_value(t, config.cpus[2], 9)
+	for invalid in ([9][2]string{{"0", ""}, {"65", ""}, {"x", ""}, {"2", "4-6"}, {"6", "4,4"}, {"6", "5-4"}, {"6", "4,"}, {"6", "-1"}, {"6", "1024"}}) {
+		_, accepted := parse_storage_bulk_config(invalid[0], invalid[1])
+		testing.expect(t, !accepted)
+	}
+	topology := Cpu_Topology{entry_count = 6, complete = true}
+	topology.entries[0] = cpu_test_topology_entry(0, 0)
+	topology.entries[1] = cpu_test_topology_entry(1, 0)
+	topology.entries[2] = cpu_test_topology_entry(4, 1)
+	topology.entries[3] = cpu_test_topology_entry(5, 1)
+	topology.entries[4] = cpu_test_topology_entry(8, 2)
+	topology.entries[5] = cpu_test_topology_entry(9, 3)
+	cpu_topology_finalize(&topology)
+	bulk, _ := parse_storage_bulk_config("6", "4")
+	conflict := topology
+	testing.expect(t, !reserve_storage_bulk_cpus(&conflict, &bulk, 5), "Service SMT sibling must not share a bulk core")
+	missing, _ := parse_storage_bulk_config("6", "7")
+	testing.expect(t, !reserve_storage_bulk_cpus(&conflict, &missing))
+	testing.expect(t, reserve_storage_bulk_cpus(&topology, &bulk, 8))
+	plan := build_topology_cpu_role_plan(&topology, 3, 8)
+	testing.expect_value(t, plan.service_cpu, 8)
+	testing.expect_value(t, cpu_role_worker_cpu(&plan, 0), 0)
+	testing.expect_value(t, cpu_role_worker_cpu(&plan, 1), 9)
+	testing.expect_value(t, cpu_role_worker_cpu(&plan, 2), 1)
+	// Unknown topology reserves only logical IDs; still never use a bulk CPU.
+	fallback := Cpu_Topology{entry_count = 3}
+	fallback.entries[0].cpu = 4; fallback.entries[1].cpu = 8; fallback.entries[2].cpu = 9
+	testing.expect(t, reserve_storage_bulk_cpus(&fallback, &bulk, 8))
+	plan = build_topology_cpu_role_plan(&fallback, 1, 8)
+	testing.expect_value(t, cpu_role_worker_cpu(&plan, 0), 9)
+	all, _ := parse_storage_bulk_config("6", "8-9")
+	testing.expect(t, !reserve_storage_bulk_cpus(&fallback, &all))
+}
+
 cpu_test_topology_entry :: proc(cpu, core_id: int, core_class := Cpu_Core_Class.Unknown, numa_node := 0, die_id := 0, capacity := 0) -> Cpu_Topology_Entry {
 	return {cpu = cpu, package_id = 0, die_id = die_id, core_id = core_id, numa_node = numa_node, capacity = capacity, core_class = core_class}
 }

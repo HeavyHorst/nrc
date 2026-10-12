@@ -62,6 +62,7 @@ SHARD_COMPACTION_FAULT_MARKER :: ".nrc-compaction-fault-stage"
 
 Shard_Compactor_Thread_Data :: struct {
 	server: ^NRC_Server,
+	bulk_index: int,
 }
 
 Shard_Compaction_Job :: struct {
@@ -825,12 +826,13 @@ discard_queued_shard_compaction_jobs :: proc(server: ^NRC_Server) {
 // force many expensive seals ahead of an already-admitted publication.
 STORAGE_CONTROL_BURST :: 64
 STORAGE_BULK_EXECUTORS :: 2
+MAX_STORAGE_BULK_EXECUTORS :: 64
 
 // Bulk threads never publish to worker SPSC queues. The service retains refused
 // completions in bounded slots so one slow owner cannot discard a seal result.
 service_storage_bulk_results :: proc(server: ^NRC_Server) -> bool {
 	did_work := false
-	for &pending, i in server.storage_bulk_pending {
+	for &pending, i in server.storage_bulk_pending[:server.storage_bulk_executor_count] {
 		if !server.storage_bulk_pending_valid[i] {
 			received: bool
 			pending, received = chan.try_recv(server.storage_bulk_results)
@@ -853,10 +855,12 @@ service_storage_bulk_results :: proc(server: ^NRC_Server) -> bool {
 
 storage_bulk_thread :: proc(data: Shard_Compactor_Thread_Data) {
 	defer sync.wait_group_done(&data.server.wg)
-	// Share the reserved service CPU initially: overlap disk waits without
-	// borrowing a worker or generator core or claiming extra CPU capacity.
-	if !cpu_affinity_disabled() && cpu_role_plan.service_cpu >= 0 {
-		set_thread_cpu_affinity(cpu_role_plan.service_cpu)
+	// An explicit pool is reserved from workers; without one preserve the
+	// original service-CPU sharing default.
+	cpu := cpu_role_plan.service_cpu
+	if storage_bulk_config.cpu_count > 0 do cpu = storage_bulk_config.cpus[data.bulk_index % storage_bulk_config.cpu_count]
+	if !cpu_affinity_disabled() && cpu >= 0 {
+		set_thread_cpu_affinity(cpu)
 	}
 	for !sync.atomic_load(&data.server.closing) {
 		job, received := chan.try_recv(data.server.shard_compaction_jobs)

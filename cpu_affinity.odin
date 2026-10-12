@@ -59,6 +59,76 @@ Cpu_Role_Plan :: struct {
 
 cpu_role_plan: Cpu_Role_Plan
 
+Storage_Bulk_Config :: struct {
+	executor_count: int,
+	cpus: [MAX_STORAGE_BULK_EXECUTORS]int,
+	cpu_count: int,
+}
+
+storage_bulk_config := Storage_Bulk_Config{executor_count = STORAGE_BULK_EXECUTORS}
+
+parse_storage_bulk_config :: proc(count_text, cpus_text: string) -> (config: Storage_Bulk_Config, ok: bool) {
+	config.executor_count = STORAGE_BULK_EXECUTORS
+	if count_text != "" {
+		count, valid := strconv.parse_int(count_text)
+		if !valid || count < 1 || count > MAX_STORAGE_BULK_EXECUTORS do return config, false
+		config.executor_count = int(count)
+	}
+	if cpus_text == "" do return config, true
+	parts := strings.split(cpus_text, ","); defer delete(parts)
+	for part in parts {
+		range_parts := strings.split(part, "-"); defer delete(range_parts)
+		if len(range_parts) < 1 || len(range_parts) > 2 do return config, false
+		first, valid := strconv.parse_int(range_parts[0])
+		if !valid || first < 0 || first >= 1024 do return config, false
+		last := first
+		if len(range_parts) == 2 {
+			last, valid = strconv.parse_int(range_parts[1])
+			if !valid || last < first || last >= 1024 do return config, false
+		}
+		for cpu in first ..= last {
+			if config.cpu_count >= config.executor_count do return config, false
+			for previous in config.cpus[:config.cpu_count] do if previous == int(cpu) do return config, false
+			config.cpus[config.cpu_count] = int(cpu)
+			config.cpu_count += 1
+		}
+	}
+	return config, config.cpu_count > 0
+}
+
+// Reserve whole physical cores when topology is known, logical CPUs otherwise.
+// Invalid reservations are startup errors, never silently shared with workers.
+reserve_storage_bulk_cpus :: proc(topology: ^Cpu_Topology, config: ^Storage_Bulk_Config, service_cpu := -1) -> bool {
+	if config.cpu_count == 0 do return true
+	reserved: [MAX_STORAGE_BULK_EXECUTORS]Cpu_Topology_Entry
+	for cpu, i in config.cpus[:config.cpu_count] {
+		found := false
+		for entry in topology.entries[:topology.entry_count] {
+			if entry.cpu == cpu {reserved[i] = entry; found = true; break}
+		}
+		if !found do return false
+	}
+	remaining := topology^
+	remaining.entry_count = 0
+	for entry in topology.entries[:topology.entry_count] {
+		excluded := false
+		for bulk in reserved[:config.cpu_count] {
+			if entry.cpu == bulk.cpu || (topology.complete && cpu_topology_same_core(entry, bulk)) do excluded = true
+		}
+		if excluded {
+			if entry.cpu == service_cpu do return false
+			continue
+		}
+		remaining.entries[remaining.entry_count] = entry
+		remaining.entry_count += 1
+	}
+	if remaining.entry_count < 2 do return false
+	if remaining.complete do cpu_topology_finalize(&remaining)
+	if remaining.complete && remaining.physical_core_count < 2 do return false
+	topology^ = remaining
+	return true
+}
+
 build_cpu_role_plan :: proc(allowed_cpus: []int, worker_count: int) -> Cpu_Role_Plan {
 	plan := Cpu_Role_Plan {
 		service_cpu = -1,

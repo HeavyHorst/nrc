@@ -26,6 +26,36 @@ Rules:
 - `correlation_id` is echoed when available.
 - If parse fails before correlation can be read, server sends `correlation_id = 0`.
 
+#### Retained-send overload
+
+For `C_SendMessageV2` (48), the exact error text `retained_send_overloaded` is
+retryable. The wire format is unchanged. It means **this attempt was not newly
+staged**, not that the logical message is absent: an earlier attempt with the
+same ID may already have committed. Count limits, transient descriptor/lifecycle
+pressure, expired deferred sends and a blocked second-generation rotation use
+this token. Configured storage quota, corruption and ID/content conflicts do not.
+
+Deferred primaries have a two-second monotonic queue-residence limit, starting
+when they enter the ready-to-append queue, not at admission or during asynchronous
+dedup lookup. Followers share the primary's outcome; younger independent sends
+keep their own deadline. Maintenance checks expiry even during lifecycle work
+and before staging. This is not a two-second end-to-end ACK guarantee: scheduling,
+lookup, staged writes, fsync and response delivery can take longer. Already-staged
+work is never queue-expired. At `rotation_pending && frozen != nil`, known
+in-memory duplicates/conflicts are resolved before unknown IDs receive overload.
+Stores and their limits are shared by all workspaces hashing to the same shard.
+
+Retry with the same `client_message_id` and identical content within the configured
+dedup window (two minutes by default). Retries can change pipelined message order.
+The Web client uses separately correlated attempts, bounded jittered backoff and
+a 30-second budget from the first write, preserved across reconnect. A valid late
+ACK confirms the logical send; a stale attempt's error cannot erase a newer one.
+Exhaustion is shown as **unconfirmed**, not proof of storage failure. Operators
+must keep the dedup window longer than the retry horizon. The CLI exposes
+`retained_send_overloaded` as retryable with a reusable message ID but does not
+automatically retry. Updated Web clients also recognize the older admitted-count
+error texts; old clients receive a conventional correlated error.
+
 ### 2) DM-Specific Error Channel: `S_DMError` (opcode 123)
 
 DM operations use a dedicated error message with DM-specific error codes.

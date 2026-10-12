@@ -1117,7 +1117,9 @@ when NRC_SIMULATION {
 
 		hour_h := (NRC_SIM_TIME_EPOCH_NANOS / i64(time.Hour) + 1) * i64(time.Hour)
 		store.active_started_hour = hour_h / i64(time.Hour)
-		ctx.sim.world.now = time.Duration(hour_h - NRC_SIM_TIME_EPOCH_NANOS)
+		// Cross the hour boundary without aging this shutdown fixture's
+		// never-staged tail past the deferred residence limit.
+		ctx.sim.world.now = time.Duration(hour_h + i64(time.Hour - time.Millisecond) - NRC_SIM_TIME_EPOCH_NANOS)
 		for marker in 1 ..= 2 {
 			req := pr.SendMessageV2Request {
 				conv_id        = 42,
@@ -1128,7 +1130,7 @@ when NRC_SIMULATION {
 			req.client_message_id[0] = byte(marker)
 			process_send_message_v2(conn, req)
 		}
-		ctx.sim.world.now += time.Hour
+		ctx.sim.world.now += 2 * time.Millisecond
 		req_c := pr.SendMessageV2Request {
 			conv_id        = 42,
 			correlation_id = 3,

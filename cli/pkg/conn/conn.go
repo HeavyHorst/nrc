@@ -148,7 +148,11 @@ type Session struct {
 	cancel context.CancelFunc
 }
 
-type ServerError struct{ Message string }
+type ServerError struct {
+	Message       string
+	OriginOpcode  uint16
+	CorrelationID uint32
+}
 
 func (e *ServerError) Error() string { return "server error: " + e.Message }
 
@@ -272,7 +276,7 @@ func DecodeServerError(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("decoding server error response: %w", err)
 	}
-	return &ServerError{Message: resp.ErrorMessage}
+	return &ServerError{Message: resp.ErrorMessage, OriginOpcode: resp.OriginOpcode, CorrelationID: resp.CorrelationID}
 }
 
 // SendAndRecv sends a message and waits for the response, skipping S_ServerReady.
@@ -346,6 +350,9 @@ func Classify(err error) Classification {
 	}
 	var serverErr *ServerError
 	if errors.As(err, &serverErr) {
+		if serverErr.OriginOpcode == protocol.C_SendMessageV2 && serverErr.Message == "retained_send_overloaded" {
+			return Classification{Code: "retained_send_overloaded", Retryable: true}
+		}
 		return Classification{Code: "server_error"}
 	}
 	var connectionErr *ConnectionError

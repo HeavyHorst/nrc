@@ -60,10 +60,11 @@ NRC_Server :: struct {
 	shard_compaction_jobs:      chan.Chan(Shard_Compaction_Job),
 	storage_control_jobs:       chan.Chan(Shard_Compaction_Job),
 	storage_control_streak:     int, // Service-owned; bounded priority without starving bulk work.
-	storage_bulk_threads:       [STORAGE_BULK_EXECUTORS]^thread.Thread,
+	storage_bulk_executor_count: int,
+	storage_bulk_threads:       [MAX_STORAGE_BULK_EXECUTORS]^thread.Thread,
 	storage_bulk_results:       chan.Chan(Shard_Compaction_Result),
-	storage_bulk_pending:       [STORAGE_BULK_EXECUTORS]Shard_Compaction_Result,
-	storage_bulk_pending_valid: [STORAGE_BULK_EXECUTORS]bool, // Service-owned backpressure slots.
+	storage_bulk_pending:       [MAX_STORAGE_BULK_EXECUTORS]Shard_Compaction_Result,
+	storage_bulk_pending_valid: [MAX_STORAGE_BULK_EXECUTORS]bool, // Service-owned backpressure slots.
 	// One compactor producer and one owning-worker consumer per result queue.
 	// Main drains leftovers only after the wait group synchronizes completion.
 	shard_compaction_results:   []^spsc.Queue(Shard_Compaction_Result),
@@ -305,7 +306,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:6a68c8b"
+BUILD_VERSION :: "dev-2026-10:32dbef1"
 PROTOCOL_VERSION :: 8 // Calendar appointment rows carry an explicit time interval.
 
 jwt_auth_secret: string
@@ -384,6 +385,19 @@ main :: proc() {
 	}
 
 	service_cpu_override, has_service_cpu_override := configured_service_cpu()
+	bulk_count_text := os.get_env_alloc("NRC_STORAGE_BULK_EXECUTORS", context.allocator); defer delete(bulk_count_text)
+	bulk_cpus_text := os.get_env_alloc("NRC_STORAGE_BULK_CPUS", context.allocator); defer delete(bulk_cpus_text)
+	bulk_ok: bool
+	storage_bulk_config, bulk_ok = parse_storage_bulk_config(bulk_count_text, bulk_cpus_text)
+	if !bulk_ok || (storage_bulk_config.cpu_count > 0 && cpu_affinity_disabled()) || !reserve_storage_bulk_cpus(&cpu_topology, &storage_bulk_config, service_cpu_override) {
+		log.error("Invalid storage bulk configuration: use 1–64 executors and unique allowed CPUs, leave worker/control CPUs available, and do not combine a bulk CPU list with disabled affinity or an overlapping service CPU")
+		os.exit(2)
+	}
+	if storage_bulk_config.cpu_count > 0 {
+		available_worker_cores = cpu_topology.entry_count
+		if cpu_topology.complete do available_worker_cores = cpu_topology.physical_core_count
+		thread_count = configured_thread_count(default_worker_thread_count(available_worker_cores))
+	}
 	cpu_role_plan = build_topology_cpu_role_plan(&cpu_topology, thread_count, service_cpu_override)
 	if has_service_cpu_override && cpu_role_plan.service_cpu != service_cpu_override {
 		log.warnf("NRC_SERVICE_CPU %d is outside the allowed CPU set; using CPU %d", service_cpu_override, cpu_role_plan.service_cpu)
@@ -402,6 +416,7 @@ main :: proc() {
 			cpu_role_plan.topology_aware,
 		)
 	}
+	log.infof("Storage bulk: %d executors, CPUs %v (empty: share service CPU %d)", storage_bulk_config.executor_count, storage_bulk_config.cpus[:storage_bulk_config.cpu_count], cpu_role_plan.service_cpu)
 
 	// Initialize ULID time package (logs TSC availability)
 	ulid.init()
@@ -517,6 +532,7 @@ server_shutdown_on_interrupt :: proc(s: ^NRC_Server) {
 
 start_server :: proc() -> bool {
 	server: ^NRC_Server = new(NRC_Server)
+	server.storage_bulk_executor_count = storage_bulk_config.executor_count
 	server.main_thread = sync.current_thread_id()
 	// Note: td (thread-local) for the *main* thread is not fully initialized
 	// as a worker thread here. The main thread doesn't run the worker_thread loop.
@@ -568,7 +584,7 @@ start_server :: proc() -> bool {
 	defer chan.destroy(server.storage_control_jobs)
 	{
 		err: runtime.Allocator_Error
-		server.storage_bulk_results, err = chan.create_buffered(chan.Chan(Shard_Compaction_Result), STORAGE_BULK_EXECUTORS, context.allocator)
+		server.storage_bulk_results, err = chan.create_buffered(chan.Chan(Shard_Compaction_Result), server.storage_bulk_executor_count, context.allocator)
 		if err != .None {
 			log.fatalf("Failed to allocate bulk completion channel: %v", err)
 			return false
@@ -606,10 +622,10 @@ start_server :: proc() -> bool {
 
 	// Start worker threads
 	log.infof("Starting server with %d worker threads...", thread_count)
-	sync.wait_group_add(&server.wg, thread_count + 1 + STORAGE_BULK_EXECUTORS)
-	server.shard_compactor_thread = thread.create_and_start_with_poly_data(Shard_Compactor_Thread_Data{server}, shard_compactor_thread, context)
-	for &bulk_thread in server.storage_bulk_threads {
-		bulk_thread = thread.create_and_start_with_poly_data(Shard_Compactor_Thread_Data{server}, storage_bulk_thread, context)
+	sync.wait_group_add(&server.wg, thread_count + 1 + server.storage_bulk_executor_count)
+	server.shard_compactor_thread = thread.create_and_start_with_poly_data(Shard_Compactor_Thread_Data{server = server}, shard_compactor_thread, context)
+	for &bulk_thread, i in server.storage_bulk_threads[:server.storage_bulk_executor_count] {
+		bulk_thread = thread.create_and_start_with_poly_data(Shard_Compactor_Thread_Data{server = server, bulk_index = i}, storage_bulk_thread, context)
 	}
 	server.threads = make([]^thread.Thread, thread_count)
 	for i in 0 ..< thread_count {
@@ -671,7 +687,7 @@ start_server :: proc() -> bool {
 	for t in server.threads do thread.destroy(t)
 	delete(server.threads)
 	thread.destroy(server.shard_compactor_thread)
-	for t in server.storage_bulk_threads do thread.destroy(t)
+	for t in server.storage_bulk_threads[:server.storage_bulk_executor_count] do thread.destroy(t)
 	return workers_ready && !sync.atomic_load(&server.fatal_storage_error)
 }
 

@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/HdrHistogram/hdrhistogram-go"
+	"github.com/cespare/xxhash/v2"
 	"github.com/gorilla/websocket"
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
@@ -236,15 +238,31 @@ func (p *pacer) wait(until time.Time) (bool, time.Duration) {
 }
 
 type worker struct {
-	conn  *websocket.Conn
-	id    uint64
-	next  uint32
-	hist  *hdrhistogram.Histogram
-	count int64
+	conn          *websocket.Conn
+	id            uint64
+	next          uint32
+	hist          *hdrhistogram.Histogram
+	count         int64
+	conversations int
+	retryOverload bool
+	retryBudget   time.Duration
+	logicalSent   int64
+	attempts      int64
+	rejects       int64
+	retries       int64
+	attemptHist   *hdrhistogram.Histogram
 }
 
 func (w *worker) phase(until time.Time, depth, size int, measured bool, tracker *deliveryTracker, pace *pacer) error {
 	starts := make([]time.Time, depth)
+	var wires [][]byte
+	var original []time.Time
+	var rejected []bool
+	if w.retryOverload {
+		wires = make([][]byte, depth)
+		original = make([]time.Time, depth)
+		rejected = make([]bool, depth)
+	}
 	plainContent := strings.Repeat("x", size)
 	// Paced runs drain every scheduled slot, even when an ACK crosses the
 	// deadline. Include that catch-up in elapsed time rather than dropping work.
@@ -269,7 +287,8 @@ func (w *worker) phase(until time.Time, depth, size int, measured bool, tracker 
 					return err
 				}
 			}
-			payload, err := protocol.EncodeSendMessageV2(1, id, w.next, protocol.ContentTypePlainText, content)
+			conversation := uint64(1 + int(w.next-1)%max(1, w.conversations))
+			payload, err := protocol.EncodeSendMessageV2(conversation, id, w.next, protocol.ContentTypePlainText, content)
 			if err != nil {
 				return err
 			}
@@ -279,6 +298,13 @@ func (w *worker) phase(until time.Time, depth, size int, measured bool, tracker 
 			}
 			w.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			starts[i] = time.Now()
+			if measured {
+				w.logicalSent++
+				w.attempts++
+			}
+			if w.retryOverload {
+				wires[i] = wire
+			}
 			if tracker != nil {
 				if err := tracker.setWriteStart(key, starts[i].UnixNano()); err != nil {
 					return err
@@ -291,6 +317,12 @@ func (w *worker) phase(until time.Time, depth, size int, measured bool, tracker 
 		}
 		if sent == 0 {
 			break
+		}
+		if w.retryOverload {
+			if err := w.drainRetryWave(first, starts[:sent], original[:sent], wires[:sent], rejected[:sent], measured); err != nil {
+				return err
+			}
+			continue
 		}
 		for j := 0; j < sent; j++ {
 			readStarted := time.Now()
@@ -312,6 +344,12 @@ func (w *worker) phase(until time.Time, depth, size int, measured bool, tracker 
 				return err
 			}
 			if msg.Opcode != protocol.S_AckSendMessage {
+				if msg.Opcode == protocol.S_ErrorResponse {
+					response, err := protocol.DecodeErrorResponse(msg.Data)
+					if measured && err == nil && isRetainedOverload(response) && response.CorrelationID >= first && response.CorrelationID < first+uint32(sent) && !starts[response.CorrelationID-first].IsZero() {
+						w.rejects++
+					}
+				}
 				return fmt.Errorf("unexpected opcode %d: %x", msg.Opcode, msg.Data)
 			}
 			ack, err := protocol.DecodeAckSendMessage(msg.Data)
@@ -336,6 +374,134 @@ func (w *worker) phase(until time.Time, depth, size int, measured bool, tracker 
 		}
 	}
 	return nil
+}
+
+// Retry only explicit terminal overload responses, never socket timeouts or
+// ambiguous errors. Drain each attempt wave before retrying so attempts of the
+// same logical ID cannot overlap. This is a closed-wave workload, not open-loop.
+func (w *worker) drainRetryWave(first uint32, starts, original []time.Time, wires [][]byte, rejected []bool, measured bool) error {
+	copy(original, starts)
+	retryRound := 0
+	for {
+		pending := 0
+		deadline := time.Now().Add(10 * time.Second)
+		for i, start := range starts {
+			if !start.IsZero() {
+				pending++
+				if limit := original[i].Add(w.retryBudget); limit.Before(deadline) {
+					deadline = limit
+				}
+			}
+		}
+		if pending == 0 {
+			return nil
+		}
+		clear(rejected)
+		anyRejected := false
+		for range pending {
+			w.conn.SetReadDeadline(deadline)
+			_, data, err := w.conn.ReadMessage()
+			if err != nil {
+				return fmt.Errorf("publisher=%d retry wave unresolved (no timeout retry): %w", w.id, err)
+			}
+			arrived := time.Now()
+			msg, err := protocol.ReadMessage(data)
+			if err != nil {
+				return err
+			}
+			var correlation uint32
+			switch msg.Opcode {
+			case protocol.S_AckSendMessage:
+				ack, err := protocol.DecodeAckSendMessage(msg.Data)
+				if err != nil || ack.AssignedSeq == 0 {
+					return fmt.Errorf("invalid ACK: %+v: %v", ack, err)
+				}
+				correlation = ack.ClientReqID
+			case protocol.S_ErrorResponse:
+				response, err := protocol.DecodeErrorResponse(msg.Data)
+				if err != nil {
+					return err
+				}
+				if !isRetainedOverload(response) {
+					return fmt.Errorf("non-retryable server response: %+v", response)
+				}
+				correlation = response.CorrelationID
+			default:
+				return fmt.Errorf("unexpected opcode %d: %x", msg.Opcode, msg.Data)
+			}
+			if correlation < first || uint64(correlation)-uint64(first) >= uint64(len(starts)) {
+				return fmt.Errorf("unknown response correlation %d", correlation)
+			}
+			i := int(correlation - first)
+			if starts[i].IsZero() {
+				return fmt.Errorf("duplicate response correlation %d", correlation)
+			}
+			if !arrived.Before(original[i].Add(w.retryBudget)) {
+				return fmt.Errorf("publisher=%d logical_id=%d retry budget exhausted; unconfirmed", w.id, correlation)
+			}
+			if measured {
+				if err := w.attemptHist.RecordValue(max(1, arrived.Sub(starts[i]).Microseconds())); err != nil {
+					return err
+				}
+			}
+			starts[i] = time.Time{}
+			if msg.Opcode == protocol.S_ErrorResponse {
+				rejected[i] = true
+				anyRejected = true
+				if measured {
+					w.rejects++
+				}
+			} else if measured {
+				if err := w.hist.RecordValue(max(1, arrived.Sub(original[i]).Microseconds())); err != nil {
+					return err
+				}
+				w.count++
+			}
+		}
+		if !anyRejected {
+			return nil
+		}
+		// Shared wave backoff deliberately includes waiting behind other replies
+		// in logical latency. Cap it, jitter it, and preserve the first-write budget.
+		delay := min(2*time.Second, 100*time.Millisecond*time.Duration(1<<min(retryRound, 5)))
+		delay = delay/2 + time.Duration(rand.Int64N(int64(delay/2)+1))
+		retryRound++
+		for i, reject := range rejected {
+			if reject {
+				if !time.Now().Add(delay).Before(original[i].Add(w.retryBudget)) {
+					return fmt.Errorf("publisher=%d logical_id=%d overload retry budget exhausted; unconfirmed", w.id, first+uint32(i))
+				}
+			}
+		}
+		time.Sleep(delay)
+		for i, reject := range rejected {
+			if !reject {
+				continue
+			}
+			limit := original[i].Add(w.retryBudget)
+			if !time.Now().Before(limit) {
+				return fmt.Errorf("publisher=%d overload retry budget exhausted; unconfirmed", w.id)
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			if limit.Before(deadline) {
+				deadline = limit
+			}
+			w.conn.SetWriteDeadline(deadline)
+			starts[i] = time.Now()
+			if measured {
+				w.attempts++
+				w.retries++
+			}
+			if err := w.conn.WriteMessage(websocket.BinaryMessage, wires[i]); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func isRetainedOverload(response *protocol.ErrorResponse) bool {
+	return response.OriginOpcode == protocol.C_SendMessageV2 &&
+		(response.ErrorMessage == "retained_send_overloaded" || response.ErrorMessage == "too many retained message operations" || response.ErrorMessage == "too many retained message sends")
 }
 
 func validateWorkspace(workspace string) error {
@@ -522,12 +688,28 @@ func run() error {
 	rate := flag.Float64("rate", 0, "aggregate fixed publish messages/sec (0 is unlimited)")
 	probe := flag.Bool("probe", false, "sample same-worker ping RTT every 100ms")
 	probeWorkspace := flag.String("probe-workspace", "", "probe workspace (empty uses publication workspace; enable with -probe)")
+	workspacesFlag := flag.String("workspaces", "", "comma-separated publisher workspaces, assigned round-robin; overrides -workspace; no subscribers")
+	conversations := flag.Int("conversations", 1, "round-robin conversations per publisher (1..1024); values above 1 require no subscribers")
+	retryOverload := flag.Bool("retry-overload", false, "bounded same-ID retries of explicit correlated overload responses; socket timeouts still fail")
+	retryBudget := flag.Duration("retry-budget", 30*time.Second, "logical first-write to ACK budget in retry mode (0..60s, exclusive 0)")
 	flag.Parse()
 	if err := validateWorkspace(*workspace); err != nil {
 		return err
 	}
+	workspaces := []string{*workspace}
+	if *workspacesFlag != "" {
+		workspaces = strings.Split(*workspacesFlag, ",")
+		for _, name := range workspaces {
+			if err := validateWorkspace(name); err != nil {
+				return err
+			}
+		}
+	}
+	if len(workspaces) > *clients || *conversations < 1 || *conversations > 1024 || *retryBudget <= 0 || *retryBudget > time.Minute || (*subscribers > 0 && (len(workspaces) > 1 || *conversations != 1)) {
+		return fmt.Errorf("invalid mixed-workload or retry configuration")
+	}
 	if *probeWorkspace == "" {
-		*probeWorkspace = *workspace
+		*probeWorkspace = workspaces[0]
 	}
 	if err := validateWorkspace(*probeWorkspace); err != nil {
 		return fmt.Errorf("probe workspace: %w", err)
@@ -537,12 +719,15 @@ func run() error {
 	}
 	workers := make([]worker, *clients)
 	for i := range workers {
-		c, err := connect(*server, fmt.Sprintf("retained-bench-publisher-%d", i), *workspace)
+		c, err := connect(*server, fmt.Sprintf("retained-bench-publisher-%d", i), workspaces[i%len(workspaces)])
 		if err != nil {
 			return fmt.Errorf("publisher=%d setup failed=%s: %w", i+1, time.Now().Format(time.RFC3339Nano), err)
 		}
 		defer c.Close()
-		workers[i] = worker{c, uint64(i + 1), 0, hdrhistogram.New(1, 10000000, 3), 0}
+		workers[i] = worker{conn: c, id: uint64(i + 1), hist: hdrhistogram.New(1, 60_000_000, 3), conversations: *conversations, retryOverload: *retryOverload, retryBudget: *retryBudget}
+		if *retryOverload {
+			workers[i].attemptHist = hdrhistogram.New(1, 60_000_000, 3)
+		}
 	}
 	var tracker *deliveryTracker
 	receiverConns := make([]*websocket.Conn, *subscribers)
@@ -552,7 +737,7 @@ func run() error {
 		tracker = newDeliveryTracker(*subscribers, *size)
 		for i := range receiverConns {
 			receiverFences[i].correlation = uint32(i + 1)
-			c, err := connect(*server, fmt.Sprintf("retained-bench-subscriber-%d", i), *workspace)
+			c, err := connect(*server, fmt.Sprintf("retained-bench-subscriber-%d", i), workspaces[0])
 			if err != nil {
 				return err
 			}
@@ -590,6 +775,18 @@ func run() error {
 		close(errs)
 		for err := range errs {
 			if err != nil {
+				if !measured {
+					return elapsed, pace, fmt.Errorf("warmup failed; no measured sample: %w", err)
+				}
+				var offered, acknowledged, attempts, rejects, retries int64
+				for _, w := range workers {
+					offered += w.logicalSent
+					acknowledged += w.count
+					attempts += w.attempts
+					rejects += w.rejects
+					retries += w.retries
+				}
+				fmt.Fprintf(os.Stderr, "failed phase measured=%t: logical_offered=%d durable_acked=%d unresolved=%d attempts=%d overload_rejects=%d retries=%d; no throughput assigned\n", measured, offered, acknowledged, offered-acknowledged, attempts, rejects, retries)
 				return elapsed, pace, err
 			}
 		}
@@ -648,7 +845,7 @@ func run() error {
 			return err
 		}
 	}
-	hist := hdrhistogram.New(1, 10000000, 3)
+	hist := hdrhistogram.New(1, 60_000_000, 3)
 	var count int64
 	for _, w := range workers {
 		count += w.count
@@ -660,6 +857,41 @@ func run() error {
 		return fmt.Errorf("invalid sample count")
 	}
 	result := map[string]any{"ops": count, "ops_per_sec": float64(count) / elapsed.Seconds(), "duration_ms": float64(elapsed) / float64(time.Millisecond), "measured_start_ns": measuredPhaseStart.UnixNano(), "measured_end_ns": measuredPhaseStart.Add(elapsed).UnixNano(), "latency_ms": map[string]float64{"p50": float64(hist.ValueAtQuantile(50)) / 1000, "p99": float64(hist.ValueAtQuantile(99)) / 1000, "max": float64(hist.Max()) / 1000}, "subscribers": *subscribers, "offered_rate": *rate, "achieved_publish_rate": float64(count) / elapsed.Seconds()}
+	shards := make([]uint64, len(workspaces))
+	for i, name := range workspaces {
+		shards[i] = xxhash.Sum64String(name) % 256
+	}
+	result["workspaces"] = workspaces
+	result["workspace_shards"] = shards
+	result["conversations"] = *conversations
+	result["retry_overload"] = *retryOverload
+	result["logical_latency_semantics"] = "first websocket write-start to correlated durable ACK, including overload backoff and wave drain"
+	var logicalSent, attempts, rejects, retries int64
+	for _, w := range workers {
+		logicalSent += w.logicalSent
+		attempts += w.attempts
+		rejects += w.rejects
+		retries += w.retries
+	}
+	result["logical_offered"] = logicalSent
+	result["durable_acked"] = count
+	result["unresolved"] = logicalSent - count
+	result["attempts"] = attempts
+	result["overload_rejects"] = rejects
+	result["retries"] = retries
+	if *retryOverload {
+		attemptHist := hdrhistogram.New(1, 60_000_000, 3)
+		for _, w := range workers {
+			if attemptHist.Merge(w.attemptHist) != 0 {
+				return fmt.Errorf("dropped attempt histogram samples")
+			}
+		}
+		if attemptHist.TotalCount() != attempts || attempts != count+rejects || logicalSent != count || retries != rejects {
+			return fmt.Errorf("invalid retry accounting")
+		}
+		result["retry_budget_ms"] = float64(*retryBudget) / float64(time.Millisecond)
+		result["attempt_latency_ms"] = map[string]float64{"p50": float64(attemptHist.ValueAtQuantile(50)) / 1000, "p99": float64(attemptHist.ValueAtQuantile(99)) / 1000, "max": float64(attemptHist.Max()) / 1000}
+	}
 	if probeConn != nil {
 		probeResult["workspace"] = *probeWorkspace
 		probeResult["sample_count"] = len(probeResult["samples"].([]map[string]float64))

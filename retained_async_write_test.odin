@@ -284,6 +284,10 @@ when NRC_SIMULATION {
 					for conn in conns do acks += nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_AckSendMessage)
 					testing.expect_value(t, acks, MAX_RETAINED_SENDS_PER_STORE)
 					testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, rejected.sock, .S_ErrorResponse), 1)
+					payload, valid := nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&ctx.sim, rejected.sock, 0))
+					error, parse_error := pr.parseErrorResponseMessage(payload)
+					testing.expect(t, valid && parse_error == nil && error.origin_opcode == .C_SendMessageV2 && error.correlation_id == retry_id)
+					testing.expect_value(t, string(error.error_msg), "retained_send_overloaded")
 				}
 				nrc_sim_run_all_send_completions(&ctx.sim)
 				if outcome == 2 {
@@ -295,6 +299,251 @@ when NRC_SIMULATION {
 					testing.expect_value(t, conn.pending_io, u32(0))
 				}
 			}
+		}
+	}
+
+	@(test)
+	test_retained_send_retryable_overload_contract :: proc(t: ^testing.T) {
+		for outcome in 0 ..< 6 {
+			ctx: Sim_Test_Context
+			simulation_test_begin(&ctx, 205 + outcome)
+			defer simulation_test_end(&ctx)
+			// Lookup admission also submits the owner's io_uring queue. As in
+			// existing lookup fixtures, initialize it even for virtual file IO.
+			testing.expect_value(t, nbio.init(&td.io), linux.Errno.NONE)
+			defer nbio.destroy(&td.io)
+			storage := sim_world_storage_context(&ctx.sim.world)
+			dir := "/overload-contract"
+			testing.expect(t, storage_io.make_directory(storage, dir) == nil)
+			workspace := "overload-contract"
+			shard := int(shard_for_workspace(transmute([]byte)workspace))
+			for &index in td.message_stores.store_index do index = -1
+			append(&td.message_stores.stores, Message_Store{})
+			store := &td.message_stores.stores[0]
+			testing.expect(t, init_message_store_with_storage(store, storage, dir, shard, time.Hour, outcome == 1 ? 1 : 0))
+			td.message_stores.enabled = true
+			td.message_stores.store_index[shard] = 0
+			defer shutdown_message_store_registry(&td.message_stores)
+			conn := simulation_test_install_client(&ctx.sim, 0, workspace, "alice", true)
+			ctx.conns[0] = conn
+			correlation := u32(5)
+			if outcome == 0 {
+				for id in 1 ..= MAX_RETAINED_IO_PER_CONNECTION do async_test_send(conn, u32(id))
+				async_test_send(conn, correlation)
+				testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+				testing.expect_value(t, store.high_water, u64(4))
+			} else if outcome == 1 {
+				async_test_send(conn, correlation)
+				testing.expect_value(t, store.high_water, u64(0))
+			} else {
+				async_test_send(conn, 1)
+				testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+				testing.expect(t, rotate_message_store(store, nrc_time_unix_nanos()))
+				nrc_sim_clear_inboxes(&ctx.sim)
+				correlation = 1
+				async_test_send(conn, correlation)
+				testing.expect_value(t, store.async_readers, u32(1))
+				// Exercise descriptor exhaustion at both the index and WAL open.
+				if outcome >= 4 do testing.expect(t, nrc_sim_run_next_file_read(&ctx.sim))
+				fault := outcome % 2 == 0 ? linux.Errno.EMFILE : linux.Errno.ENFILE
+				testing.expect(t, nrc_sim_run_next_file_read(&ctx.sim, fault))
+				testing.expect_value(t, store.async_readers, u32(0))
+				testing.expect_value(t, store.high_water, u64(1))
+			}
+			nrc_sim_run_all_send_completions(&ctx.sim)
+			errors := 0
+			for i in 0 ..< nrc_sim_client_frame_count(&ctx.sim, conn.sock) {
+				payload, valid := nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&ctx.sim, conn.sock, i))
+				testing.expect(t, valid)
+				if pr.get_opcode(payload) != .S_ErrorResponse do continue
+				error, parse_error := pr.parseErrorResponseMessage(payload)
+				testing.expect(t, parse_error == nil && error.origin_opcode == .C_SendMessageV2 && error.correlation_id == correlation)
+				testing.expect_value(t, string(error.error_msg), outcome == 1 ? "retained message storage failed" : "retained_send_overloaded")
+				errors += 1
+			}
+			testing.expect_value(t, errors, 1)
+			testing.expect(t, !store.poisoned)
+			testing.expect_value(t, store.retained_send_count, 0)
+			testing.expect_value(t, conn.retained_io, 0)
+			testing.expect_value(t, conn.pending_io, u32(0))
+			if outcome >= 2 {
+				// Same-ID manual retry after descriptor recovery confirms the
+				// original durable message, without assigning another sequence.
+				nrc_sim_clear_inboxes(&ctx.sim)
+				async_test_send(conn, correlation)
+				for nrc_sim_run_next_file_read(&ctx.sim) {}
+				testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+				nrc_sim_run_all_send_completions(&ctx.sim)
+				testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_AckSendMessage), 1)
+				testing.expect_value(t, store.high_water, u64(1))
+				testing.expect_value(t, store.async_readers, u32(0))
+			}
+		}
+	}
+}
+
+@(test)
+test_retained_deferred_residence_and_wall :: proc(t: ^testing.T) {
+	when NRC_SIMULATION {
+		for outcome in 0 ..< 4 {
+			wall := outcome == 1 || outcome == 3
+			published := outcome == 3
+			lookup := outcome == 2
+			ctx: Sim_Test_Context
+			simulation_test_begin(&ctx, 211 + outcome)
+			defer simulation_test_end(&ctx)
+			testing.expect_value(t, nbio.init(&td.io), linux.Errno.NONE)
+			defer nbio.destroy(&td.io)
+			storage := sim_world_storage_context(&ctx.sim.world)
+			dir := "/deferred-residence"
+			testing.expect(t, storage_io.make_directory(storage, dir) == nil)
+			workspace := "deferred-residence"
+			shard := int(shard_for_workspace(transmute([]byte)workspace))
+			for &index in td.message_stores.store_index do index = -1
+			append(&td.message_stores.stores, Message_Store{})
+			store := &td.message_stores.stores[0]
+			testing.expect(t, init_message_store_with_storage(store, storage, dir, shard, time.Hour, 0))
+			td.message_stores.enabled = true
+			td.message_stores.store_index[shard] = 0
+			defer shutdown_message_store_registry(&td.message_stores)
+			conn := simulation_test_install_client(&ctx.sim, 0, workspace, "alice", true)
+			ctx.conns[0] = conn
+			async_test_send(conn, 1)
+			if lookup {
+				testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+				ctx.sim.world.now += 3 * time.Minute
+				async_test_send(conn, 2)
+				testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+				testing.expect(t, rotate_message_store(store, nrc_time_unix_nanos()))
+				nrc_sim_clear_inboxes(&ctx.sim)
+				store.rotation_pending = true
+				// The sealed segment spans both timestamps: ID 1 is found on
+				// disk but is outside dedup, so this is a negative async lookup.
+				async_test_send(conn, 1)
+				testing.expect_value(t, store.async_readers, u32(1))
+				async_test_send(conn, 3) // Ready before the earlier lookup.
+				store.lifecycle_in_flight = true
+				ctx.sim.world.now += 3 * time.Second
+				_, ok := maintain_message_store_registry(&td.message_stores)
+				testing.expect(t, ok)
+				testing.expect(t, store.async_readers == 1, "expiry cannot cancel outstanding IO")
+				for nrc_sim_run_next_file_read(&ctx.sim) {}
+				testing.expect_value(t, store.async_readers, u32(0))
+				ctx.sim.world.now += 1999 * time.Millisecond
+				_, ok = maintain_message_store_registry(&td.message_stores)
+				testing.expect(t, ok)
+				nrc_sim_run_all_send_completions(&ctx.sim)
+				testing.expect(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_ErrorResponse) == 1, "lookup time is not deferred residence")
+				ctx.sim.world.now += time.Millisecond
+				_, ok = maintain_message_store_registry(&td.message_stores)
+				testing.expect(t, ok)
+				store.lifecycle_in_flight = false; store.rotation_pending = false
+				testing.expect_value(t, store.high_water, u64(2))
+			} else if wall {
+				testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+				testing.expect(t, roll_message_store(store, nrc_time_unix_nanos()))
+				async_test_send(conn, 2)
+				testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+				nrc_sim_clear_inboxes(&ctx.sim)
+				if published {
+					subscribe_to_conversation(conn, 42)
+					process_message_history(conn, {conv_id = 42, limit = 10}, true)
+					testing.expect(t, store.async_readers == 1 && store.frozen.async_readers == 1)
+					bytes, built := cluster_message_segment_wal(store, store.frozen.active_generation, store.frozen.active_generation + 1)
+					testing.expect(t, built)
+					store.seal_bytes = bytes
+					testing.expect(t, publish_frozen_message_seal(store))
+					testing.expect(t, store.frozen_published && store.frozen != nil)
+				}
+				store.rotation_pending = true
+				async_test_send(conn, 3) // Unique: never assigned a sequence.
+				async_test_send(conn, 1) // Frozen committed duplicate.
+				async_test_send(conn, 2) // Active committed duplicate.
+				if published {
+					conflict := pr.SendMessageV2Request {
+						conv_id = 42,
+						correlation_id = 4,
+						content = transmute([]byte)string("changed content"),
+					}
+					conflict.client_message_id[0] = 1
+					process_send_message_v2(conn, conflict)
+					for nrc_sim_run_next_file_read(&ctx.sim) {}
+					testing.expect_value(t, store.frozen.async_readers, u32(0))
+				}
+				testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+				store.rotation_pending = false
+				testing.expect_value(t, store.high_water, u64(2))
+			} else {
+				_, ok := flush_pending_retained_message_writes(&td.message_stores)
+				testing.expect(t, ok && store.write_in_flight)
+				ctx.sim.world.now += time.Second
+				async_test_send(conn, 2)
+				ctx.sim.world.now += 1500 * time.Millisecond
+				follower := pr.SendMessageV2Request {
+					conv_id        = 42,
+					correlation_id = 9,
+					content        = transmute([]byte)string("immutable batch"),
+				}
+				follower.client_message_id[0] = 2
+				process_send_message_v2(conn, follower)
+				async_test_send(conn, 3) // A younger independent tail survives.
+				// Expiry must run before the lifecycle early-continue, and must
+				// not touch the older request already leased to the write CQE.
+				store.lifecycle_in_flight = true
+				ctx.sim.world.now += 499 * time.Millisecond
+				_, ok = maintain_message_store_registry(&td.message_stores)
+				testing.expect(t, ok)
+				testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_ErrorResponse), 0)
+				ctx.sim.world.now += time.Millisecond
+				_, ok = maintain_message_store_registry(&td.message_stores)
+				testing.expect(t, ok)
+				store.lifecycle_in_flight = false
+				// Same-ID follower on the surviving tail exercises repaired
+				// deferred indexes after head expiry/compaction.
+				follower.correlation_id = 10; follower.client_message_id[0] = 3
+				process_send_message_v2(conn, follower)
+				testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+				testing.expect_value(t, store.high_water, u64(2))
+			}
+			nrc_sim_run_all_send_completions(&ctx.sim)
+			errors, acks := 0, 0
+			for i in 0 ..< nrc_sim_client_frame_count(&ctx.sim, conn.sock) {
+				payload, valid := nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&ctx.sim, conn.sock, i))
+				testing.expect(t, valid)
+				if pr.get_opcode(payload) == .S_ErrorResponse {
+					error, parse_error := pr.parseErrorResponseMessage(payload)
+					testing.expect(t, parse_error == nil && error.origin_opcode == .C_SendMessageV2)
+					if published && error.correlation_id == 4 {
+						testing.expect_value(t, string(error.error_msg), "client message id conflicts with an earlier message")
+					} else if lookup {
+						testing.expect_value(t, string(error.error_msg), "retained_send_overloaded")
+						testing.expect(t, error.correlation_id == 1 || error.correlation_id == 3)
+					} else {
+						testing.expect_value(t, string(error.error_msg), "retained_send_overloaded")
+						testing.expect(t, wall ? error.correlation_id == 3 : (error.correlation_id == 2 || error.correlation_id == 9))
+					}
+					errors += 1
+				} else if pr.get_opcode(payload) == .S_AckSendMessage {
+					ack, parse_error := pr.parseAckSendMessageMessage(payload)
+					testing.expect(t, parse_error == nil)
+					if wall {
+						testing.expect(t, ack.client_req_id == 1 && ack.assigned_seq == 1 || ack.client_req_id == 2 && ack.assigned_seq == 2)
+					} else {
+						testing.expect(
+							t,
+							ack.client_req_id == 1 && ack.assigned_seq == 1 || (ack.client_req_id == 3 || ack.client_req_id == 10) && ack.assigned_seq == 2,
+						)
+					}
+					acks += 1
+				}
+			}
+			testing.expect_value(t, errors, wall && !published ? 1 : 2)
+			testing.expect_value(t, acks, lookup ? 0 : (wall ? 2 : 3))
+			testing.expect_value(t, store.retained_send_count, 0)
+			testing.expect_value(t, store.async_readers, u32(0))
+			testing.expect_value(t, conn.retained_io, 0)
+			testing.expect_value(t, conn.pending_io, u32(0))
+			testing.expect(t, !store.poisoned)
 		}
 	}
 }

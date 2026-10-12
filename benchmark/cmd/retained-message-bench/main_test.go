@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -40,6 +41,7 @@ func TestRunWorkspacePropagation(t *testing.T) {
 		{name: "subscriber", workspace: "Store_2.test-1", stopAt: 2, args: []string{"--workspace=Store_2.test-1", "--subscribers=1"}},
 		{name: "probe", workspace: "Store_2.test-1", stopAt: 2, args: []string{"--workspace=Store_2.test-1", "--probe"}},
 		{name: "separate probe", workspace: "Store_2.test-1", probeWorkspace: "Idle_3", stopAt: 2, args: []string{"--workspace=Store_2.test-1", "--probe", "--probe-workspace=Idle_3"}},
+		{name: "mixed publishers", workspace: "Store_2.test-1", probeWorkspace: "Idle_3", stopAt: 2, args: []string{"--workspaces=Store_2.test-1,Idle_3", "--clients=2"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			paths := make(chan string, 2)
@@ -504,5 +506,286 @@ func TestProbeValidatesCorrelation(t *testing.T) {
 		if valid && len(result["samples"].([]map[string]float64)) != 1 {
 			t.Fatal("missing probe sample")
 		}
+	}
+}
+
+func TestOverloadRetryContract(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		retry       bool
+		text        string
+		origin      uint16
+		correlation uint32
+		budget      time.Duration
+		repeated    bool
+		multiWave   bool
+		wantError   string
+	}{
+		{name: "opt-in token", retry: true, text: "retained_send_overloaded", origin: protocol.C_SendMessageV2, correlation: 2, budget: time.Second, multiWave: true},
+		{name: "legacy connection cap", retry: true, text: "too many retained message operations", origin: protocol.C_SendMessageV2, correlation: 2, budget: time.Second},
+		{name: "legacy store cap", retry: true, text: "too many retained message sends", origin: protocol.C_SendMessageV2, correlation: 2, budget: time.Second},
+		{name: "default fail-fast", text: "retained_send_overloaded", origin: protocol.C_SendMessageV2, correlation: 2, budget: time.Second, wantError: "unexpected opcode"},
+		{name: "storage failure", retry: true, text: "retained message storage failed", origin: protocol.C_SendMessageV2, correlation: 2, budget: time.Second, wantError: "non-retryable"},
+		{name: "wrong origin", retry: true, text: "retained_send_overloaded", origin: protocol.C_Ping, correlation: 2, budget: time.Second, wantError: "non-retryable"},
+		{name: "unknown correlation", retry: true, text: "retained_send_overloaded", origin: protocol.C_SendMessageV2, correlation: 5, budget: time.Second, wantError: "unknown response"},
+		{name: "duplicate response", retry: true, text: "retained_send_overloaded", origin: protocol.C_SendMessageV2, correlation: 4, budget: time.Second, wantError: "duplicate response"},
+		{name: "bounded exhaustion", retry: true, text: "retained_send_overloaded", origin: protocol.C_SendMessageV2, correlation: 2, budget: 20 * time.Millisecond, wantError: "unconfirmed"},
+		{name: "budget survives repeated rejects", retry: true, text: "retained_send_overloaded", origin: protocol.C_SendMessageV2, correlation: 2, budget: 180 * time.Millisecond, repeated: true, wantError: "unconfirmed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			serverDone := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer close(serverDone)
+				conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer conn.Close()
+				conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+				original := make([][]byte, 4)
+				for i := range original {
+					_, original[i], err = conn.ReadMessage()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					msg, err := protocol.ReadMessage(original[i])
+					if err != nil || binary.BigEndian.Uint64(msg.Data[:8]) != uint64(1+i%3) {
+						t.Errorf("conversation selection: %+v: %v", msg, err)
+						return
+					}
+				}
+				sendACK := func(id uint32) {
+					payload := make([]byte, 20)
+					binary.BigEndian.PutUint32(payload, id)
+					binary.BigEndian.PutUint64(payload[4:], 100+uint64(id))
+					wire, _ := (&protocol.Message{Opcode: protocol.S_AckSendMessage, Data: payload}).Write()
+					_ = conn.WriteMessage(websocket.BinaryMessage, wire)
+				}
+				// Responses are out-of-order; only request 2 is refused.
+				sendACK(4)
+				payload := make([]byte, 8+len(tc.text))
+				binary.BigEndian.PutUint16(payload, tc.origin)
+				binary.BigEndian.PutUint16(payload[2:], uint16(len(tc.text)))
+				copy(payload[4:], tc.text)
+				binary.BigEndian.PutUint32(payload[4+len(tc.text):], tc.correlation)
+				wire, _ := (&protocol.Message{Opcode: protocol.S_ErrorResponse, Data: payload}).Write()
+				_ = conn.WriteMessage(websocket.BinaryMessage, wire)
+				sendACK(1)
+				sendACK(3)
+				_, retry, err := conn.ReadMessage()
+				if tc.repeated {
+					for err == nil {
+						if !bytes.Equal(retry, original[1]) {
+							t.Error("repeated retry changed request")
+							return
+						}
+						_ = conn.WriteMessage(websocket.BinaryMessage, wire)
+						_, retry, err = conn.ReadMessage()
+					}
+					return
+				}
+				if tc.wantError != "" {
+					if err == nil {
+						t.Error("unexpected retry after fatal response or exhaustion")
+					}
+					return
+				}
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if !bytes.Equal(retry, original[1]) {
+					t.Error("retry changed logical ID, content, conversation or correlation")
+					return
+				}
+				sendACK(2)
+				if tc.multiWave {
+					for i := range original {
+						_, original[i], err = conn.ReadMessage()
+						if err != nil {
+							t.Error(err)
+							return
+						}
+					}
+					// Change the rejected slot, then end with a partial wave.
+					binary.BigEndian.PutUint32(payload[4+len(tc.text):], 7)
+					wire, _ = (&protocol.Message{Opcode: protocol.S_ErrorResponse, Data: payload}).Write()
+					sendACK(8)
+					_ = conn.WriteMessage(websocket.BinaryMessage, wire)
+					sendACK(5)
+					sendACK(6)
+					_, retry, err = conn.ReadMessage()
+					if err != nil || !bytes.Equal(retry, original[2]) {
+						t.Errorf("second wave retry: %v; byte-identical=%t", err, bytes.Equal(retry, original[2]))
+						return
+					}
+					sendACK(7)
+					_, final, err := conn.ReadMessage()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					msg, err := protocol.ReadMessage(final)
+					if err != nil || binary.BigEndian.Uint32(msg.Data[24:]) != 9 {
+						t.Errorf("partial wave request: %+v: %v", msg, err)
+						return
+					}
+					sendACK(9)
+				}
+			}))
+			defer server.Close()
+			conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := worker{conn: conn, id: 9, conversations: 3, retryOverload: tc.retry, retryBudget: tc.budget, hist: hdrhistogram.New(1, 60_000_000, 3), attemptHist: hdrhistogram.New(1, 60_000_000, 3)}
+			start := time.Now().Add(-time.Second)
+			pace := &pacer{start: start, interval: time.Millisecond}
+			messages, rejects := int64(4), int64(1)
+			if tc.multiWave {
+				messages, rejects = 9, 2
+			}
+			err = w.phase(start.Add(time.Duration(messages)*time.Millisecond), 4, 256, true, nil, pace)
+			conn.Close()
+			<-serverDone
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("got %v, want %s", err, tc.wantError)
+				}
+				if !tc.repeated && w.retries != 0 {
+					t.Fatalf("retried fatal outcome: %d", w.retries)
+				}
+				if tc.repeated && (w.count != 3 || w.retries < 1 || w.rejects != w.retries+1) {
+					t.Fatalf("invalid repeated-reject accounting: %+v", w)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if w.logicalSent != messages || w.count != messages || w.attempts != messages+rejects || w.rejects != rejects || w.retries != rejects || w.hist.TotalCount() != messages || w.attemptHist.TotalCount() != messages+rejects {
+				t.Fatalf("invalid logical/attempt accounting: %+v", w)
+			}
+			if w.hist.Max() < 50_000 {
+				t.Fatal("logical latency omitted retry backoff")
+			}
+		})
+	}
+}
+
+func TestRetryDoesNotHideReadDeadline(t *testing.T) {
+	serverDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(serverDone)
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Error(err)
+			return
+		}
+		// No response. The client must fail rather than retry an ambiguous send.
+		if _, _, err := conn.ReadMessage(); err == nil {
+			t.Error("retried a timeout")
+		}
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := worker{conn: conn, id: 1, retryOverload: true, retryBudget: 30 * time.Millisecond, hist: hdrhistogram.New(1, 60_000_000, 3), attemptHist: hdrhistogram.New(1, 60_000_000, 3)}
+	start := time.Now().Add(-time.Second)
+	err = w.phase(start.Add(time.Millisecond), 1, 256, true, nil, &pacer{start: start, interval: time.Millisecond})
+	conn.Close()
+	<-serverDone
+	if err == nil || !strings.Contains(err.Error(), "no timeout retry") || w.logicalSent != 1 || w.count != 0 || w.retries != 0 {
+		t.Fatalf("timeout swallowed: %v, worker=%+v", err, w)
+	}
+}
+
+func TestRunReportsLogicalAndAttemptCounts(t *testing.T) {
+	serverDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(serverDone)
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		ready, _ := (&protocol.Message{Opcode: protocol.S_ServerReady}).Write()
+		_ = conn.WriteMessage(websocket.BinaryMessage, ready)
+		rejected := false
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			msg, err := protocol.ReadMessage(data)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			id := binary.BigEndian.Uint32(msg.Data[24:28])
+			var response protocol.Message
+			if id == 2 && !rejected {
+				rejected = true
+				text := "retained_send_overloaded"
+				payload := make([]byte, len(text)+8)
+				binary.BigEndian.PutUint16(payload, protocol.C_SendMessageV2)
+				binary.BigEndian.PutUint16(payload[2:], uint16(len(text)))
+				copy(payload[4:], text)
+				binary.BigEndian.PutUint32(payload[4+len(text):], id)
+				response = protocol.Message{Opcode: protocol.S_ErrorResponse, Data: payload}
+			} else {
+				payload := make([]byte, 20)
+				binary.BigEndian.PutUint32(payload, id)
+				binary.BigEndian.PutUint64(payload[4:], uint64(id))
+				response = protocol.Message{Opcode: protocol.S_AckSendMessage, Data: payload}
+			}
+			wire, _ := response.Write()
+			if err := conn.WriteMessage(websocket.BinaryMessage, wire); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	oldFlags, oldArgs, oldStdout := flag.CommandLine, os.Args, os.Stdout
+	defer func() { flag.CommandLine, os.Args, os.Stdout = oldFlags, oldArgs, oldStdout }()
+	flag.CommandLine = flag.NewFlagSet(t.Name(), flag.ContinueOnError)
+	os.Args = []string{"retained-message-bench", "--server=ws" + strings.TrimPrefix(server.URL, "http"), "--workspace=sealing-mix-6", "--clients=1", "--depth=4", "--conversations=3", "--retry-overload", "--rate=1000", "--warmup=100us", "--duration=3ms"}
+	output, err := os.CreateTemp(t.TempDir(), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	os.Stdout = output
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	<-serverDone
+	if _, err := output.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := json.NewDecoder(output).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]float64{"ops": 3, "durable_acked": 3, "logical_offered": 3, "attempts": 4, "overload_rejects": 1, "retries": 1, "unresolved": 0, "offered_messages": 3, "conversations": 3} {
+		if result[key] != want {
+			t.Errorf("%s=%v, want %v", key, result[key], want)
+		}
+	}
+	if result["retry_overload"] != true || result["workspace_shards"].([]any)[0] != float64(82) {
+		t.Fatalf("missing workload provenance: %+v", result)
+	}
+	if result["duration_ms"].(float64) < 50 || result["latency_ms"].(map[string]any)["max"].(float64) < 50 {
+		t.Fatal("throughput denominator or logical latency excludes backoff/drain")
 	}
 }

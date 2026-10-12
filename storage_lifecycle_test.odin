@@ -123,7 +123,7 @@ test_storage_control_admission_fairness_and_discard :: proc(t: ^testing.T) {
 
 @(test)
 test_storage_bulk_completion_backpressure_preserves_control_progress :: proc(t: ^testing.T) {
-	server: NRC_Server
+	server := NRC_Server{storage_bulk_executor_count = STORAGE_BULK_EXECUTORS}
 	server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
 	defer chan.destroy(server.storage_control_jobs)
 	server.storage_bulk_results, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Result), STORAGE_BULK_EXECUTORS, context.allocator)
@@ -190,16 +190,17 @@ test_storage_bulk_completion_backpressure_preserves_control_progress :: proc(t: 
 
 @(test)
 test_storage_bulk_executors_shutdown_with_full_completions :: proc(t: ^testing.T) {
-	server: NRC_Server
-	server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 2, context.allocator)
+	server := NRC_Server{storage_bulk_executor_count = 6}
+	server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 6, context.allocator)
 	defer chan.destroy(server.shard_compaction_jobs)
-	server.storage_bulk_results, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Result), STORAGE_BULK_EXECUTORS, context.allocator)
+	server.storage_bulk_results, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Result), 6, context.allocator)
 	defer chan.destroy(server.storage_bulk_results)
 	dir := test_wal_path("bulk-shutdown-full-completions"); defer os.remove_all(dir)
 	assert(os.make_directory(dir) == nil)
-	paths: [2]string
+	paths: [6]string
 	defer for path in paths do delete(path)
-	for generation, i in ([2]u64{17, 19}) {
+	for i in 0 ..< len(paths) {
+		generation := u64(17 + 2 * i)
 		paths[i] = message_store_path(dir, generation, "wal")
 		assert(os.write_entire_file(paths[i], []byte{1}) == nil)
 		assert(
@@ -214,21 +215,26 @@ test_storage_bulk_executors_shutdown_with_full_completions :: proc(t: ^testing.T
 			),
 		)
 	}
-	for _ in 0 ..< STORAGE_BULK_EXECUTORS do assert(chan.try_send(server.storage_bulk_results, Shard_Compaction_Result{}))
-	sync.wait_group_add(&server.wg, STORAGE_BULK_EXECUTORS)
-	for &executor in server.storage_bulk_threads do executor = thread.create_and_start_with_poly_data(Shard_Compactor_Thread_Data{&server}, storage_bulk_thread, context)
+	for _ in 0 ..< server.storage_bulk_executor_count do assert(chan.try_send(server.storage_bulk_results, Shard_Compaction_Result{}))
+	sync.wait_group_add(&server.wg, server.storage_bulk_executor_count)
+	for &executor, i in server.storage_bulk_threads[:server.storage_bulk_executor_count] do executor = thread.create_and_start_with_poly_data(Shard_Compactor_Thread_Data{server = &server, bulk_index = i}, storage_bulk_thread, context)
 	defer {
 		sync.atomic_store(&server.closing, true)
 		sync.wait(&server.wg)
-		for executor in server.storage_bulk_threads {thread.join(executor); thread.destroy(executor)}
+		for executor in server.storage_bulk_threads[:server.storage_bulk_executor_count] {thread.join(executor); thread.destroy(executor)}
 		discard_queued_shard_compaction_jobs(&server)
 		discard_queued_shard_compaction_results(&server)
 	}
-	// One executor cannot finish both jobs: its first completion is blocked.
-	// Both deleted files therefore demonstrate concurrent bulk progress.
+	// Each executor blocks on its first completion. All six deleted files
+	// therefore demonstrate concurrent progress beyond the old two-thread limit.
 	started := time.tick_now()
-	for (os.exists(paths[0]) || os.exists(paths[1])) && time.tick_since(started) < 5 * time.Second do time.sleep(time.Millisecond)
-	testing.expect(t, !os.exists(paths[0]) && !os.exists(paths[1]))
+	for time.tick_since(started) < 5 * time.Second {
+		remaining := false
+		for path in paths do remaining = remaining || os.exists(path)
+		if !remaining do break
+		time.sleep(time.Millisecond)
+	}
+	for path in paths do testing.expect(t, !os.exists(path))
 	// The deferred join must finish even though nobody frees completion capacity.
 }
 

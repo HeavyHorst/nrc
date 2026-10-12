@@ -20,6 +20,8 @@ when !NRC_SIMULATION {
 
 MAX_RETAINED_IO_PER_CONNECTION :: 4
 MAX_RETAINED_SENDS_PER_STORE :: 512
+RETAINED_SEND_OVERLOADED_TEXT :: "retained_send_overloaded"
+RETAINED_DEFERRED_MAX_WAIT :: 2 * time.Second
 RETAINED_PAGE_ARENA_BLOCK_BYTES :: 128 * 1024
 RETAINED_COMMIT_WINDOW :: time.Millisecond
 RETAINED_COMMIT_MAX_BYTES :: 128 * 1024
@@ -173,6 +175,7 @@ finish_retained_send :: proc(ctx: ^Retained_Dedup_Context, result: Message_Store
 		if result == .Appended do broadcast_retained_message(&ctx.message, ctx.sender_sock, ctx.sender_handle)
 	} else if conn != nil {
 		text := result == .Conflict ? "client message id conflicts with an earlier message" : "retained message storage failed"
+		if result == .Overloaded do text = RETAINED_SEND_OVERLOADED_TEXT
 		send_error_response(conn, .C_SendMessageV2, text, ctx.correlation_id)
 	}
 	// Followers retain their admitted primary, even across rotation or ID reuse.
@@ -192,7 +195,28 @@ retained_message_fail_deferred :: proc(store: ^Message_Store) {
 	store.deferred_dedup = nil
 }
 
+retained_message_expire_deferred :: proc(store: ^Message_Store) -> bool {
+	if store.deferred_head == len(store.deferred_appends) do return false
+	now := nrc_time_now_monotonic()
+	expired := false
+	// Entry order, unlike admission/lookup order, is monotonic. Followers
+	// inherit their primary's deadline and are finished by finish_retained_send.
+	for store.deferred_head < len(store.deferred_appends) {
+		item := store.deferred_appends[store.deferred_head]
+		if time.diff(item.deferred_at, now) < RETAINED_DEFERRED_MAX_WAIT do break
+		store.deferred_appends[store.deferred_head] = {}
+		store.deferred_head += 1
+		delete_key(&store.deferred_dedup, item.dedup_key)
+		delete(item.dedup_key)
+		finish_retained_send((^Retained_Dedup_Context)(item.ctx), .Overloaded, 0)
+		expired = true
+	}
+	if expired do retained_message_compact_deferred(store)
+	return expired
+}
+
 retained_message_stage_deferred :: proc(store: ^Message_Store) {
+	_ = retained_message_expire_deferred(store)
 	// Consume only what fits; preserve the untouched tail and its dedup keys.
 	end := len(store.deferred_appends)
 	for store.deferred_head < end && !store.rotation_pending {
@@ -207,6 +231,10 @@ retained_message_stage_deferred :: proc(store: ^Message_Store) {
 		store.deferred_appends[index] = {}
 		store.deferred_head += 1
 	}
+	retained_message_compact_deferred(store)
+}
+
+retained_message_compact_deferred :: proc(store: ^Message_Store) {
 	if store.deferred_head == len(store.deferred_appends) {
 		clear(&store.deferred_appends)
 		store.deferred_head = 0
@@ -399,10 +427,10 @@ flush_pending_retained_message_writes :: proc(registry: ^Message_Store_Registry)
 
 retained_message_defer_append :: proc(store: ^Message_Store, ctx: ^Retained_Dedup_Context, key: string) -> bool {
 	if len(store.deferred_appends) - store.deferred_head >= 256 {
-		delete(key); finish_retained_send(ctx, .Capacity, 0); return false
+		delete(key); finish_retained_send(ctx, .Overloaded, 0); return false
 	}
 	deferred_index := len(store.deferred_appends)
-	_, append_err := append(&store.deferred_appends, Message_Deferred_Append{ctx = ctx, dedup_key = key})
+	_, append_err := append(&store.deferred_appends, Message_Deferred_Append{ctx = ctx, dedup_key = key, deferred_at = nrc_time_now_monotonic()})
 	if append_err != nil {
 		delete(key); finish_retained_send(ctx, .Poisoned, 0); return false
 	}
@@ -469,9 +497,15 @@ retained_message_queue_append :: proc(ctx: ^Retained_Dedup_Context, sealed_check
 		if append_err != nil do finish_retained_send(ctx, .Poisoned, 0)
 		return
 	}
+	// Known duplicates/conflicts above retain their original outcome. Unknown
+	// IDs may retry, but this attempt must not wait behind the frozen wall.
+	if store.rotation_pending && store.frozen != nil {
+		delete(key); finish_retained_send(ctx, .Overloaded, 0)
+		return
+	}
 	if store.lifecycle_in_flight && !sealed_checked {
 		// Protocol dispatch normally gates new lookups before admission.
-		delete(key); finish_retained_send(ctx, .Capacity, 0)
+		delete(key); finish_retained_send(ctx, .Overloaded, 0)
 		return
 	}
 	if !sealed_checked && message_store_next_dedup_segment(store, len(store.segments) - 1, ctx.dedup_cutoff_ns, &ctx.message) >= 0 {
@@ -483,7 +517,7 @@ retained_message_queue_append :: proc(ctx: ^Retained_Dedup_Context, sealed_check
 		_ = nbio.submit_pending(&td.io)
 		return
 	}
-	if !retained_message_try_stage_append(ctx, key) {
+	if store.deferred_head < len(store.deferred_appends) || !retained_message_try_stage_append(ctx, key) {
 		_ = retained_message_defer_append(store, ctx, key)
 	}
 }
@@ -604,7 +638,7 @@ retained_dedup_open_segment :: proc(ctx: ^Retained_Dedup_Context) {
 
 retained_dedup_on_index_open :: proc(user: rawptr, file: ^storage_io.File, err: linux.Errno) {
 	ctx := (^Retained_Dedup_Context)(user)
-	if err == .EMFILE || err == .ENFILE {finish_retained_send(ctx, .Capacity, 0); return}
+	if err == .EMFILE || err == .ENFILE {finish_retained_send(ctx, .Overloaded, 0); return}
 	if err != .NONE {ctx.store.poisoned = true; finish_retained_send(ctx, .Poisoned, 0); return}
 	ctx.index_file = file
 	path := message_store_path(ctx.store.directory, ctx.store.segments[ctx.segment_index].generation, "wal"); defer delete(path)
@@ -613,7 +647,7 @@ retained_dedup_on_index_open :: proc(user: rawptr, file: ^storage_io.File, err: 
 
 retained_dedup_on_wal_open :: proc(user: rawptr, file: ^storage_io.File, err: linux.Errno) {
 	ctx := (^Retained_Dedup_Context)(user)
-	if err == .EMFILE || err == .ENFILE {finish_retained_send(ctx, .Capacity, 0); return}
+	if err == .EMFILE || err == .ENFILE {finish_retained_send(ctx, .Overloaded, 0); return}
 	if err != .NONE {ctx.store.poisoned = true; finish_retained_send(ctx, .Poisoned, 0); return}
 	ctx.wal_file = file
 	ctx.phase = .Header
@@ -705,12 +739,12 @@ process_send_message_v2 :: proc(c: ^NRC_Connection, req: pr.SendMessageV2Request
 	store := message_store_for_workspace(&td.message_stores, transmute([]byte)c.workspace_id)
 	if store == nil {send_error_response(c, .C_SendMessageV2, "message retention is disabled", req.correlation_id); return}
 	if c.retained_io >= MAX_RETAINED_IO_PER_CONNECTION {
-		send_error_response(c, .C_SendMessageV2, "too many retained message operations", req.correlation_id); return
+		send_error_response(c, .C_SendMessageV2, RETAINED_SEND_OVERLOADED_TEXT, req.correlation_id); return
 	}
 	// Bound all admitted sends, including duplicate followers and disk lookups,
 	// before cloning payloads. Leave room beyond the 256 unique deferred IDs.
 	if store.retained_send_count >= MAX_RETAINED_SENDS_PER_STORE {
-		send_error_response(c, .C_SendMessageV2, "too many retained message sends", req.correlation_id); return
+		send_error_response(c, .C_SendMessageV2, RETAINED_SEND_OVERLOADED_TEXT, req.correlation_id); return
 	}
 	ctx := new(Retained_Dedup_Context); ctx.store = store; ctx.correlation_id = req.correlation_id; ctx.sender_sock = c.sock; ctx.sender_handle = c.handle
 	store.retained_send_count += 1
