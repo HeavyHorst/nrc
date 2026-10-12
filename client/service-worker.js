@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261012slicebars3";
+const CACHE_NAME = "nrc-terminal-20261012overview5";
 
 const APP_SHELL = [
   "./",
@@ -8,7 +8,7 @@ const APP_SHELL = [
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261012slicebars3",
+  "./css/main.css?v=20261012overview5",
   "./css/foundation.css?v=20261012slicebars1",
   "./css/workspace.css?v=20261012radios1",
   "./css/entities.css?v=20261012slicebars3",
@@ -26,8 +26,8 @@ const APP_SHELL = [
   "./edges.js?v=20260924slicelive1",
   "./files.js?v=20261008files1",
   "./links-ui.js?v=20260929prefetch1",
-  "./inspector.js?v=20261007search2",
-  "./view-manager.js?v=20261007search1",
+  "./inspector.js?v=20261012overview2",
+  "./view-manager.js?v=20261012overview1",
   "./list-navigation.js?v=20260805b",
   "./virtual-list.js?v=20260908a",
   "./page-loader.js?v=20260924pager1",
@@ -44,14 +44,15 @@ const APP_SHELL = [
   "./appointment-notify.js?v=20260927appointment2",
   "./reminder-notify.js?v=20260923attention7",
   "./task-query.js?v=20260927calendar8",
-  "./slices.js?v=20261012slicebars3",
+  "./slices.js?v=20261012overview5",
+  "./overview.js?v=20261012overview4",
   "./note-html.js?v=20261007fragments1",
   "./notes.js?v=20261007htmlamp2",
   "./task-references.js?v=20260914workspace1",
   "./ai.js?v=20261008description1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20260923attention7",
-  "./app.js?v=20261011overload1",
+  "./app.js?v=20261012overview1",
   "./customers.js?v=20261007customersearch1",
   "./mobile-shell.js?v=20260914chats1",
   "./latency-worker.js",

@@ -87,5 +87,6 @@ run node client/record-document.e2e.mjs
 run node client/mobile-shell.e2e.mjs
 run node client/reminder-notify.e2e.mjs
 run node client/attention.e2e.mjs
+run node client/overview.e2e.mjs
 
 printf '\nAll test suites passed.\n'

@@ -1475,6 +1475,8 @@ test("a headless read walks every page without touching the register", async () 
     hasMore: true,
     nextCursor: { closed: false, sortAt: 9000n, sliceId: 77n },
     total: 2,
+    assignedTasks: 21,
+    unassignedTasks: 7,
     slices: [{ name: "Mine 1", sliceId: 77n, owner: "rene", todo: 2 }],
   }));
   // The walk asks for the next page on its own.
@@ -1487,6 +1489,9 @@ test("a headless read walks every page without touching the register", async () 
   const listing = await read;
   assert.deepEqual(Array.from(listing.slices, (slice) => slice.name), ["Mine 1", "Mine 2"]);
   assert.equal(listing.total, 2, "the listing says how many work streams it matched");
+  assert.equal(listing.complete, true);
+  assert.equal(listing.assignedTasks, 21, "coverage belongs to the first page, not the final page");
+  assert.equal(listing.unassignedTasks, 7);
 
   assert.deepEqual(Array.from(slices.getState().slices, (slice) => slice.name), ["Register row"],
     "the register's window is untouched");
@@ -1506,6 +1511,7 @@ test("a headless read ends when a page cannot advance the cursor", async () => {
   const listing = await read;
   assert.deepEqual(Array.from(listing.slices), []);
   assert.equal(listing.total, 5);
+  assert.equal(listing.complete, false, "a stalled walk is not a complete empty workspace");
   assert.equal(slices.__sent.length, 1, "a page that cannot advance the cursor ends the walk");
 });
 

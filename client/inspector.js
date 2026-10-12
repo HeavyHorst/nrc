@@ -580,7 +580,10 @@
     state.activeView = view;
     if (view !== "systemLog") document.body.classList.remove("system-log-inspector-empty");
     shell()?.classList.toggle("inspector-entity-only", ["kanban", "notes", "customers", "reminders", "attention", "calendar", "search"].includes(view));
-    const focused = view === "noteShare" || view === "sullivanShare";
+    // Overview has no inspector operations; preserve the record for return but
+    // give its rail back to the charts, rather than displaying empty context.
+    shell()?.classList.toggle("inspector-overview-hidden", view === "overview");
+    const focused = view === "noteShare" || view === "sullivanShare" || view === "overview";
     shell()?.classList.toggle("inspector-unavailable", focused);
     if (focused) setDrawer(false);
     else if (!current()) showContext();

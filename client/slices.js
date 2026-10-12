@@ -496,6 +496,7 @@
   }
 
   function invalidate({ debounce = true } = {}) {
+    window.NRCOverview?.refreshSoon();
     clearTimeout(listRefreshTimer);
     if (!debounce) {
       requestList({ force: true });
@@ -550,17 +551,19 @@
     const slices = [];
     let cursor = null;
     let total = 0;
+    let coverage = {};
     for (let page = 0; page < MAX_READ_PAGES; page++) {
       const result = await readPage(filters, cursor);
       if (result == null || !result.success) return null;
+      if (page === 0) coverage = { assignedTasks: result.assignedTasks, unassignedTasks: result.unassignedTasks };
       slices.push(...result.slices);
       total = result.total;
       // A page that carries no row cannot advance the cursor, so the walk ends
       // rather than asking for the same page again.
-      if (!result.hasMore || !result.cursor || result.slices.length === 0) return { slices, total };
+      if (!result.hasMore || !result.cursor || result.slices.length === 0) return { slices, total, ...coverage, complete: !result.hasMore };
       cursor = result.cursor;
     }
-    return { slices, total };
+    return { slices, total, ...coverage, complete: false };
   }
 
   // A read is abandoned when the connection it was asked over is gone: the answer

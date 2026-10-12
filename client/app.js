@@ -1396,6 +1396,7 @@ async function connectWebSocket() {
     updateConnectionStatus(true);
     serverReady = false; // Reset server ready flag
     window.NRCCalendar?.disconnect();
+    window.NRCOverview?.disconnect();
     window.NRCAppointmentNotify?.disconnect();
     logSystem("CONNECTED; WAITING FOR SERVER READY", "websocket");
 
@@ -1437,6 +1438,7 @@ async function connectWebSocket() {
     updateConnectionStatus(false);
     serverReady = false; // Reset server ready flag
     window.NRCCalendar?.disconnect();
+    window.NRCOverview?.disconnect();
     window.NRCAppointmentNotify?.disconnect();
     window.NRCCustomers?.onDisconnect();
     pendingInitialization = null; // Clear any pending initialization
@@ -1570,6 +1572,7 @@ async function initializeSession() {
   window.NRCAppointmentNotify?.restart();
   window.NRCAttention?.onSessionStarted?.();
   window.NRCCalendar?.refresh();
+  window.NRCOverview?.refresh();
 }
 
 // --- Reconnection Logic ---
@@ -1859,6 +1862,7 @@ function handleBinaryMessage(arrayBuffer) {
       case Opcode.S_TaskQueryPage:
         window.NRCTaskQuery?.handlePage(dataView);
         window.NRCAttention?.handleTaskQueryPage?.(dataView);
+        window.NRCOverview?.handlePage(dataView);
         break;
       case Opcode.S_TaskProjects:
         window.NRCTaskQuery?.handleProjects(dataView);
@@ -4711,6 +4715,7 @@ function saveUIState() {
       kanban: "task",
       reminders: "reminders",
       attention: "attention",
+      overview: "overview",
       calendar: "calendar",
       search: "search",
       notes: "notes",
@@ -6616,6 +6621,7 @@ function updateHeaderButtons() {
 
   const view = window.NRCViewManager ? window.NRCViewManager.getActiveView() : "chat";
   if (attentionBtn) attentionBtn.classList.toggle("active", view === "attention");
+  document.getElementById("overviewBtn")?.classList.toggle("active", view === "overview");
   document.getElementById("calendarBtn")?.classList.toggle("active", view === "calendar");
   document.getElementById("searchBtn")?.classList.toggle("active", view === "search");
   document.getElementById("customersBtn")?.classList.toggle("active", view === "customers");
@@ -7081,6 +7087,7 @@ window.addEventListener("hashchange", handleShareHashChange);
   initImageModal(); // Initialize image modal functionality
   initKanban(); // Initialize kanban board
   window.NRCAttention?.init?.(); // Attention register
+  window.NRCOverview?.init();
   window.NRCCalendar?.init();
   window.NRCWorkspaceSearch?.init();
   window.NRCReminderNotify?.init?.(); // Reminder deadline timer and NOTIFY switch
@@ -7104,6 +7111,8 @@ window.addEventListener("hashchange", handleShareHashChange);
       showSystemLog();
     } else if (savedUIState.mode === "attention") {
       window.NRCViewManager.setActiveView("attention");
+    } else if (savedUIState.mode === "overview") {
+      window.NRCViewManager.setActiveView("overview");
     } else if (savedUIState.mode === "calendar") {
       window.NRCViewManager.setActiveView("calendar");
     } else if (savedUIState.mode === "search") {

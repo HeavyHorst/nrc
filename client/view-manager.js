@@ -21,6 +21,7 @@ const viewPageTitles = {
   kanban: "TASKS",
   reminders: "REMINDERS",
   attention: "ATTENTION",
+  overview: "OVERVIEW",
   calendar: "CALENDAR",
   search: "SEARCH",
   notes: "NOTES",
@@ -101,6 +102,8 @@ function setActiveView(view, options = {}) {
   if (attentionPanel) attentionPanel.style.display = "none";
   if (calendarPanel) calendarPanel.style.display = "none";
   if (searchPanel) searchPanel.style.display = "none";
+  const overviewPanel = document.getElementById("overviewPanel");
+  if (overviewPanel) overviewPanel.style.display = "none";
 
   // Hide input panel for non-chat views. Sullivan share is still an interactive chat.
   if (inputPanel) inputPanel.style.display = view === "chat" || view === "sullivan" || view === "sullivanShare" ? "" : "none";
@@ -124,8 +127,12 @@ function setActiveView(view, options = {}) {
   window.NRCChatUnread?.onViewChanged?.(view);
   window.NRCAttention?.onViewChanged?.(view);
   window.NRCCalendar?.onViewChanged?.(view);
+  window.NRCOverview?.onViewChanged(view);
 
   switch (view) {
+    case "overview":
+      if (overviewPanel) overviewPanel.style.display = "flex";
+      break;
     case "chat":
       if (chatDialog) chatDialog.style.display = "flex";
       break;
