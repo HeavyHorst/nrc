@@ -7,9 +7,9 @@ import "core:testing"
 import "core:time"
 
 import "byte_pool"
+import "clock"
 import hgl "hegel"
 import nbio "nbio/poly"
-import "ulid"
 
 @(thread_local)
 connection_completion_callback_count: int
@@ -2250,7 +2250,7 @@ test_connection_close_cleanup_and_leaks :: proc(t: ^testing.T) {
 	connection_close(conn, false)
 
 	// Tick IO to complete the close
-	start := ulid.time_now()
+	start := clock.now()
 	for td.retained_connection_count > 0 && time.since(start) < time.Second {
 		// Trigger peer EOF without releasing the FD before its deferred close.
 		// Repeated close calls can close another test's WAL after descriptor reuse.
@@ -2303,14 +2303,14 @@ test_check_idle_connections_reaping :: proc(t: ^testing.T) {
 	td.connection_count += 1
 
 	// Set last activity to be very old
-	conn.last_activity = time.time_add(ulid.time_now_monotonic(), -(Idle_Timeout + time.Second))
+	conn.last_activity = time.time_add(clock.now_monotonic(), -(Idle_Timeout + time.Second))
 
 	// Position the bounded idle scan over this test socket and run one slice.
 	td.idle_scan_cursor = int(accepted_sock)
 	check_idle_connections(nrc_time_now_monotonic())
 
 	// Tick IO to complete the close frame send and actual connection close
-	start := ulid.time_now()
+	start := clock.now()
 	for td.connection_count > 0 && time.since(start) < time.Second {
 		if time.since(start) > time.Millisecond * 50 {
 			net.shutdown(client_sock, .Both)
@@ -2358,7 +2358,7 @@ test_send_watchdog_closes_send_started_after_empty_scan_at_its_deadline :: proc(
 	// Model a watchdog pass followed immediately by a new send. Its exact
 	// deadline must become the next scan time instead of waiting for a fixed
 	// periodic scan that could add almost another full timeout interval.
-	started_at := ulid.time_now_monotonic()
+	started_at := clock.now_monotonic()
 	check_stalled_sends(started_at)
 	testing.expect(t, td.next_send_watchdog_at == {}, "empty watchdog should have no scheduled deadline")
 	send_watchdog_started(conn, time.time_add(started_at, time.Nanosecond))
@@ -2375,7 +2375,7 @@ test_send_watchdog_closes_send_started_after_empty_scan_at_its_deadline :: proc(
 	testing.expect(t, connection_get(accepted_sock) == nil, "logical close detaches the socket before reclaiming its allocation")
 	// connection_count reaches zero at detach, before the close completion
 	// releases the handle and its queues. Wait for that final owner too.
-	start := ulid.time_now()
+	start := clock.now()
 	for connection_get_by_handle(handle) != nil && time.since(start) < time.Second {
 		nbio.tick(&td.io, time.Millisecond)
 	}

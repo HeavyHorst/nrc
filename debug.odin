@@ -8,16 +8,16 @@
 //
 package main
 
+import "clock"
 import "core:fmt"
 import "core:log"
 import "core:time"
-import "ulid"
 
 // Suppress unused import warnings when ODIN_DEBUG is false
 _ :: fmt.eprintf
 _ :: log.info
 _ :: time.clock_from_time
-_ :: ulid.time_now
+_ :: clock.now
 
 when ODIN_DEBUG {
 	init_debug_logger :: proc() {
@@ -27,7 +27,7 @@ when ODIN_DEBUG {
 	debug_log :: #force_inline proc(fmt_str: string, args: ..any, loc := #caller_location) {
 		// Direct output - bypasses log level filtering entirely
 		// Format: [timestamp] [DEBUG] file:line: message
-		now := ulid.time_now()
+		now := clock.now()
 		hour, min, sec := time.clock_from_time(now)
 		fmt.eprintf("[%02d:%02d:%02d] [DEBUG] %s(%d): ", hour, min, sec, loc.file_path, loc.line)
 		fmt.eprintfln(fmt_str, ..args)

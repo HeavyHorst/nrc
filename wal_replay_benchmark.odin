@@ -11,9 +11,9 @@ import "core:thread"
 import "core:time"
 import mem_tlsf "vendor/tlsf"
 
+import "clock"
 import "persistence"
 import pr "protocol"
-import "ulid"
 
 Replay_Bench_Worker :: struct {
 	dir, kind:                                string,
@@ -61,7 +61,7 @@ replay_bench_worker :: proc(raw: rawptr) {
 	// than timing its potentially two-second TSC calibration as WAL replay.
 	clock_watch: time.Stopwatch
 	time.stopwatch_start(&clock_watch)
-	ulid.init()
+	clock.init()
 	d.clock_setup = time.stopwatch_duration(clock_watch)
 	sync.wait_group_done(d.ready)
 	for sync.atomic_load(d.start) == 0 do time.sleep(100 * time.Microsecond)

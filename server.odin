@@ -30,11 +30,11 @@ import "core:time"
 
 import "btree"
 import "byte_pool"
+import "clock"
 import nbio "nbio/poly"
 import "persistence"
 import pr "protocol"
 import "spsc"
-import "ulid"
 
 // Suppress unused import warnings when ODIN_DEBUG is false.
 _ :: mem.tracking_allocator_init
@@ -306,7 +306,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:4743e59"
+BUILD_VERSION :: "dev-2026-10:f3f7ef4"
 PROTOCOL_VERSION :: 8 // Calendar appointment rows carry an explicit time interval.
 
 jwt_auth_secret: string
@@ -427,8 +427,8 @@ main :: proc() {
 		cpu_role_plan.service_cpu,
 	)
 
-	// Initialize ULID time package (logs TSC availability)
-	ulid.init()
+	// Initialize clock package (logs TSC availability)
+	clock.init()
 
 	bot_auth_secret = os.get_env_alloc("NRC_BOT_SECRET", context.allocator)
 	if bot_auth_secret == "" {

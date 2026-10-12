@@ -1,4 +1,4 @@
-package ulid
+package clock
 
 import "core:log"
 import "core:sys/linux"
@@ -188,7 +188,7 @@ ensure_tsc_frequency :: proc "contextless" () -> bool {
 // Returns true on success, false on failure.
 //
 // REENTRANCY NOTE: This procedure calls time.now(), which is Odin's stdlib
-// clock, not this package's time_now(). TSC frequency calibration is cached by
+// clock, not this package's now(). TSC frequency calibration is cached by
 // ensure_tsc_frequency(), so normal resync does not repeat the potentially slow
 // stdlib fallback calibration.
 sync_tsc_with_clock :: proc "contextless" () -> bool {
@@ -197,7 +197,7 @@ sync_tsc_with_clock :: proc "contextless" () -> bool {
 	}
 
 	// Capture current TSC and wall-clock time
-	// NOTE: time.now() is Odin stdlib, not our time_now()
+	// NOTE: time.now() is Odin stdlib, not our now()
 	base_tsc = time.read_cycle_counter()
 	wall_time := time.now()
 	base_ns = u64(wall_time._nsec)
@@ -228,7 +228,7 @@ initialize_timing :: proc "contextless" () {
 	}
 }
 
-// Initialize time package and log TSC availability
+// Initialize clock package and log TSC availability
 // Should be called once at startup
 init :: proc() {
 	initialize_timing()
@@ -249,14 +249,14 @@ init :: proc() {
 	}
 }
 
-time_now_monotonic :: proc "contextless" () -> time.Time {
-	return time_now(monotonic = true)
+now_monotonic :: proc "contextless" () -> time.Time {
+	return now(monotonic = true)
 }
 
 // Optimized version of time.now() with tiered fallback: TSC -> vDSO -> syscall
 // monotonic: if true, doesn't resync TSC (ensuring monotonicity) and uses CLOCK_MONOTONIC_RAW
 //            if false, periodically resyncs TSC and uses CLOCK_REALTIME
-time_now :: proc "contextless" (monotonic: bool = false) -> time.Time {
+now :: proc "contextless" (monotonic: bool = false) -> time.Time {
 	if !tsc_checked {
 		initialize_timing()
 	}

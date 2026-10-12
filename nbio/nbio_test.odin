@@ -18,8 +18,8 @@ import "core:testing"
 import "core:thread"
 import "core:time"
 
+import "../clock"
 import hgl "../hegel"
-import ulid "../ulid"
 import io_uring "_io_uring"
 
 expect :: testing.expect
@@ -1727,7 +1727,7 @@ test_deferred_timed_send_expiration_uses_normal_callback_wave :: proc(t: ^testin
 	completion := _send(&io, net.TCP_Socket(-1), payload, &ctx, send_timeout_guard_on_sent, all = true, timeout = time.Millisecond * 10)
 	context.user_index = original_user_index
 	expect(t, queue.len(io.unqueued) == 1, "timed send should begin deferred")
-	completion.start_time = time.to_unix_nanoseconds(ulid.time_now_monotonic()) - i64(20 * time.Millisecond)
+	completion.start_time = time.to_unix_nanoseconds(clock.now_monotonic()) - i64(20 * time.Millisecond)
 
 	expect(t, submit_all_pending(&io) == .NONE, "expired deferred send should leave submission queues cleanly")
 	expect(t, queue.len(io.unqueued) == 0, "expired send should leave the deferred queue")
@@ -1768,7 +1768,7 @@ test_deferred_timed_writev_expiration_uses_normal_callback_wave :: proc(t: ^test
 	completion := _writev(&io, net.TCP_Socket(-1), iov[:], &ctx, writev_timeout_on_sent, all = true, timeout = time.Millisecond * 10)
 	context.user_index = original_user_index
 	expect(t, queue.len(io.unqueued) == 1, "timed writev should begin deferred")
-	completion.start_time = time.to_unix_nanoseconds(ulid.time_now_monotonic()) - i64(20 * time.Millisecond)
+	completion.start_time = time.to_unix_nanoseconds(clock.now_monotonic()) - i64(20 * time.Millisecond)
 
 	expect(t, submit_all_pending(&io) == .NONE, "expired deferred writev should leave submission queues cleanly")
 	expect(t, queue.len(io.unqueued) == 0, "expired writev should leave the deferred queue")
@@ -2665,7 +2665,7 @@ test_clamp_remaining_send_timeout_semantics :: proc(t: ^testing.T) {
 	// Simulate an operation that started in the past by anchoring start_time
 	// relative to the current monotonic clock. As "elapsed" grows the remaining
 	// budget must shrink monotonically and stay strictly below the full budget.
-	now := time.to_unix_nanoseconds(ulid.time_now_monotonic())
+	now := time.to_unix_nanoseconds(clock.now_monotonic())
 
 	elapsed_a: i64 = 10 * i64(time.Millisecond)
 	spec_a := linux.Time_Spec{}
@@ -2746,7 +2746,7 @@ test_send_timeout_budget_clamped_on_retry :: proc(t: ^testing.T) {
 	// clearly-reduced remaining budget. clamp_remaining_send_timeout reads
 	// completion.start_time on every retry.
 	first_elapsed: i64 = 100 * i64(time.Millisecond)
-	completion.start_time = time.to_unix_nanoseconds(ulid.time_now_monotonic()) - first_elapsed
+	completion.start_time = time.to_unix_nanoseconds(clock.now_monotonic()) - first_elapsed
 
 	// First injected EWOULDBLOCK: should clamp (not reset) and re-enqueue.
 	completion.result = -i32(linux.Errno.EWOULDBLOCK)
@@ -2839,7 +2839,7 @@ test_writev_timeout_deadline_exhausted_fires_once :: proc(t: ^testing.T) {
 
 	// Record start time well beyond the budget so the very first EWOULDBLOCK retry
 	// observes an exhausted deadline.
-	completion.start_time = time.to_unix_nanoseconds(ulid.time_now_monotonic()) - (full_budget + 20 * i64(time.Millisecond))
+	completion.start_time = time.to_unix_nanoseconds(clock.now_monotonic()) - (full_budget + 20 * i64(time.Millisecond))
 	completion.result = -i32(linux.Errno.EWOULDBLOCK)
 	writev_callback(&io, completion, op)
 
@@ -3307,10 +3307,10 @@ p3_soak_worker :: proc(data: P3_Soak_Worker_Data) {
 	}
 	defer sync.wait_group_done(data.wg)
 	defer _ = chan.try_send(data.results, result)
-	// ULID timing state is thread-local. On virtualized CI hosts the first call
+	// Clock timing state is thread-local. On virtualized CI hosts the first call
 	// may perform Odin's two-second fallback TSC calibration, so keep that
 	// one-time startup cost outside the lifecycle phase deadlines.
-	_ = ulid.time_now_monotonic()
+	_ = clock.now_monotonic()
 	for cycle in 0 ..< P3_SOAK_CYCLES {
 		phase, callbacks := p3_soak_cycle(data.worker_index, cycle)
 		if phase != .None {
@@ -3790,7 +3790,7 @@ test_tick_external_wake_interrupts_idle_wait :: proc(t: ^testing.T) {
 	if wake_err != .NONE do return
 	defer linux.close(wake_fd)
 	// Keep one-time per-thread TSC calibration outside the measured wait.
-	_ = ulid.time_now_monotonic()
+	_ = clock.now_monotonic()
 
 	data := External_Wake_Test_Data {
 		wake_fd = wake_fd,

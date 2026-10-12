@@ -13,10 +13,10 @@ import "core:testing"
 import "core:time"
 
 import "byte_pool"
+import "clock"
 import hgl "hegel"
 import nbio "nbio/poly"
 import pr "protocol"
-import "ulid"
 
 when !NRC_SIMULATION {
 	_ :: hgl.run
@@ -195,7 +195,7 @@ fast_ack_test_accept_loopback_pair :: proc(t: ^testing.T, io: ^nbio.IO) -> (list
 		return
 	}
 
-	start := ulid.time_now()
+	start := clock.now()
 	for !accept_ctx.accepted && !accept_ctx.failed && time.since(start) < time.Second {
 		terr := nbio.tick(io, time.Millisecond * 2)
 		testing.expect(t, terr == .NONE, fmt.tprintf("nbio.tick error during accept: %v", terr))
@@ -215,7 +215,7 @@ fast_ack_test_accept_loopback_pair :: proc(t: ^testing.T, io: ^nbio.IO) -> (list
 
 fast_ack_test_recv_until :: proc(t: ^testing.T, client_sock: net.TCP_Socket, buf: []byte, min_bytes: int, deadline: time.Duration, io: ^nbio.IO = nil) -> int {
 	total := 0
-	start := ulid.time_now()
+	start := clock.now()
 	for total < min_bytes && time.since(start) < deadline {
 		if io != nil {
 			terr := nbio.tick(io, time.Millisecond)
@@ -1553,7 +1553,7 @@ test_process_send_queue_sends_priority_before_normal :: proc(t: ^testing.T) {
 	testing.expect(t, n_recv >= len(priority), fmt.tprintf("expected at least priority frame bytes, got %d", n_recv))
 	testing.expect(t, string(recv_buf[:len(priority)]) == string(priority[:]), "priority frame should be sent before queued normal frames")
 
-	start := ulid.time_now()
+	start := clock.now()
 	for send_ctx.callback_count < 3 && !send_ctx.failed && time.since(start) < time.Second {
 		terr := nbio.tick(&td.io, time.Millisecond)
 		testing.expect(t, terr == .NONE, fmt.tprintf("nbio.tick error while draining sends: %v", terr))
@@ -1614,7 +1614,7 @@ test_send_ack_message_direct_submits_before_tick :: proc(t: ^testing.T) {
 	testing.expect_value(t, parsed.assigned_seq, ack.assigned_seq)
 	testing.expect_value(t, parsed.timestamp, ack.timestamp)
 
-	start := ulid.time_now()
+	start := clock.now()
 	for conn.is_sending && time.since(start) < time.Second {
 		terr := nbio.tick(&td.io, time.Millisecond)
 		testing.expect(t, terr == .NONE, fmt.tprintf("nbio.tick error while draining ACK completion: %v", terr))

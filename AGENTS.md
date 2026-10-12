@@ -53,7 +53,7 @@ odin build . -out:server -o:speed
 - `websocket/` - WebSocket protocol implementation
 - `protocol/` - Custom protocol definitions
 - `persistence/`, `storage_io/` - WAL and storage I/O
-- `ulid/` - ULID (Universally Unique Lexicographically Sortable Identifier) generation
+- `clock/` - Optimized TSC clock with vDSO and syscall fallbacks
 - `byte_pool/` - Transient asynchronous send buffers
 
 ### Client Examples:
@@ -83,7 +83,7 @@ Theme values are defined in `client/css/foundation.css`, not in this document.
 - **Async/network send buffers**: Short-lived dynamically allocated buffers that cross an async send boundary (`nrc_send_frame`, `websocket_send_all`, queued sends, `nbio.send_all`/writev) should be allocated through `byte_pool` (`byte_pool.alloc(td.spool, ...)`) and released in the send completion callback with `byte_pool.release(td.spool, buf)`. This ownership/accounting layer shares the worker TLSF heap; it is not a separate arena allocator. Stable connection-owned buffers, static storage, and explicitly ref-counted shared broadcast buffers are acceptable when their lifetime is guaranteed to exceed the async operation. Do not bypass the ownership layer with bare `make`/`delete`, and never bulk-reset the shared worker heap while records or I/O leases are live.
 - **Logging**: Uses structured logging with thread IDs and context information
 - **Constants**: ALL_CAPS with underscores (e.g., `PENDING_QUEUE_CAPACITY`)
-- **Time**: Always use `ulid.time_now()` instead of `time.now()` for better performance (syscall optimization)
+- **Time**: Always use `clock.now()` and `clock.now_monotonic()` from the local `clock/` package instead of `core:time.now()` for better performance (syscall optimization).
 - **Stack allocation for bounded arrays**: When array size is bounded by a constant (e.g., MAX_ATTACHMENTS_PER_TASK=10), use stack-allocated fixed arrays during parsing and slice to actual size. This avoids all heap allocations for parsing.
 
 ## Testing

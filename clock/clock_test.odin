@@ -1,16 +1,16 @@
-package ulid
+package clock
 
 import "core:fmt"
 import "core:math"
 import "core:testing"
 import "core:time"
 
-// Comprehensive test suite for the ulid time package.
+// Comprehensive test suite for the clock package.
 // Tests all timing variants: TSC -> vDSO -> syscall fallback chain.
 //
 // Test coverage:
-// - test_time_now: Verifies time_now() advances correctly
-// - test_time_now_monotonic: Verifies monotonic time advances
+// - test_now: Verifies now() advances correctly
+// - test_now_monotonic: Verifies monotonic time advances
 // - test_fallback_method: Confirms which timing method is active
 // - test_vdso_clock_gettime: Tests glibc vDSO directly
 // - test_fallback_clock_gettime: Tests raw syscall fallback
@@ -21,42 +21,42 @@ import "core:time"
 // Helper to report errors in tests
 @(private)
 test_error :: proc(t: ^testing.T, msg: string) {
-	fmt.panicf("[time_test] %s", msg)
+	fmt.panicf("[clock_test] %s", msg)
 }
 
 @(test)
-test_time_now :: proc(t: ^testing.T) {
+test_now :: proc(t: ^testing.T) {
 	init()
 
 	// Get current time
-	t1 := time_now()
+	t1 := now()
 
 	// Sleep a bit
 	time.sleep(1 * time.Millisecond)
 
 	// Get time again
-	t2 := time_now()
+	t2 := now()
 
 	// Should have advanced
 	if time.since(t1) < 1 * time.Millisecond {
-		test_error(t, fmt.tprintf("time_now() did not advance enough: t1=%v, t2=%v", t1, t2))
+		test_error(t, fmt.tprintf("now() did not advance enough: t1=%v, t2=%v", t1, t2))
 	}
 }
 
 @(test)
-test_time_now_lazy_init :: proc(t: ^testing.T) {
+test_now_lazy_init :: proc(t: ^testing.T) {
 	// Simulate a fresh thread where init() was not called.
 	tsc_checked = false
 	tsc_available = false
 	fallback_method = .TSC
 
-	now := time_now()
+	now := now()
 	if now._nsec <= 0 {
-		test_error(t, "time_now() returned invalid timestamp during lazy init")
+		test_error(t, "now() returned invalid timestamp during lazy init")
 	}
 
 	if !tsc_checked {
-		test_error(t, "time_now() did not set tsc_checked during lazy init")
+		test_error(t, "now() did not set tsc_checked during lazy init")
 	}
 
 	if tsc_available {
@@ -71,21 +71,21 @@ test_time_now_lazy_init :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_time_now_monotonic :: proc(t: ^testing.T) {
+test_now_monotonic :: proc(t: ^testing.T) {
 	init()
 
 	// Get monotonic time
-	t1 := time_now_monotonic()
+	t1 := now_monotonic()
 
 	// Sleep a bit
 	time.sleep(1 * time.Millisecond)
 
 	// Get time again
-	t2 := time_now_monotonic()
+	t2 := now_monotonic()
 
 	// Should have advanced
 	if time.diff(t1, t2) < 1 * time.Millisecond {
-		test_error(t, fmt.tprintf("time_now_monotonic() did not advance enough: t1=%v, t2=%v", t1, t2))
+		test_error(t, fmt.tprintf("now_monotonic() did not advance enough: t1=%v, t2=%v", t1, t2))
 	}
 }
 
@@ -96,11 +96,11 @@ test_fallback_method :: proc(t: ^testing.T) {
 	// Log which fallback method is being used
 	switch fallback_method {
 	case .TSC:
-		fmt.println("[time_test] Using TSC-based timing")
+		fmt.println("[clock_test] Using TSC-based timing")
 	case .VDSO:
-		fmt.println("[time_test] Using glibc vDSO clock_gettime")
+		fmt.println("[clock_test] Using glibc vDSO clock_gettime")
 	case .SYSCALL:
-		fmt.println("[time_test] Using raw syscall clock_gettime")
+		fmt.println("[clock_test] Using raw syscall clock_gettime")
 	}
 
 	// At least one method should be available
@@ -170,15 +170,15 @@ test_monotonic_no_resync :: proc(t: ^testing.T) {
 	init()
 
 	if !tsc_available {
-		fmt.println("[time_test] TSC not available, skipping monotonic test")
+		fmt.println("[clock_test] TSC not available, skipping monotonic test")
 		return
 	}
 
 	// Get wall-clock time
-	t1 := time_now(monotonic = false)
+	t1 := now(monotonic = false)
 
 	// Get monotonic time (no resync)
-	_ = time_now(monotonic = true)
+	_ = now(monotonic = true)
 
 	// Both should be close in time
 	diff := time.since(t1)
@@ -186,14 +186,14 @@ test_monotonic_no_resync :: proc(t: ^testing.T) {
 		test_error(t, fmt.tprintf("monotonic=true returned unexpected time: diff=%v", diff))
 	}
 
-	fmt.println("[time_test] monotonic mode correctly disables resync")
+	fmt.println("[clock_test] monotonic mode correctly disables resync")
 }
 
 @(test)
 test_tsc_sync :: proc(t: ^testing.T) {
 	// Test TSC synchronization
 	if success := sync_tsc_with_clock(); !success {
-		fmt.println("[time_test] TSC sync failed (may be unavailable on this system)")
+		fmt.println("[clock_test] TSC sync failed (may be unavailable on this system)")
 		return
 	}
 
@@ -213,7 +213,7 @@ test_time_comparison_all_methods :: proc(t: ^testing.T) {
 	init()
 
 	// Get times from all three methods (REALTIME)
-	tsc_time := time_now(monotonic = false)
+	tsc_time := now(monotonic = false)
 	vdso_time := vdso_clock_gettime(monotonic = false)
 	syscall_time := fallback_clock_gettime(monotonic = false)
 
@@ -231,11 +231,11 @@ test_time_comparison_all_methods :: proc(t: ^testing.T) {
 
 	// All timestamps should be from the same general time period (within 100ms)
 	if tsc_ns > vdso_ns + MAX_DIFF_NS || tsc_ns < vdso_ns - MAX_DIFF_NS {
-		fmt.printf("[time_test] Large diff between TSC and vDSO: %d ns\n", vdso_ns - tsc_ns)
+		fmt.printf("[clock_test] Large diff between TSC and vDSO: %d ns\n", vdso_ns - tsc_ns)
 	}
 
 	if vdso_ns > syscall_ns + MAX_DIFF_NS || vdso_ns < syscall_ns - MAX_DIFF_NS {
-		fmt.printf("[time_test] Large diff between vDSO and syscall: %d ns\n", syscall_ns - vdso_ns)
+		fmt.printf("[clock_test] Large diff between vDSO and syscall: %d ns\n", syscall_ns - vdso_ns)
 	}
 }
 
@@ -244,7 +244,7 @@ test_time_comparison_all_methods_monotonic :: proc(t: ^testing.T) {
 	init()
 
 	// Get times from all three methods (MONOTONIC_RAW)
-	tsc_time := time_now(monotonic = true)
+	tsc_time := now(monotonic = true)
 	vdso_time := vdso_clock_gettime(monotonic = true)
 	syscall_time := fallback_clock_gettime(monotonic = true)
 
@@ -317,18 +317,18 @@ test_monotonicity_strict :: proc(t: ^testing.T) {
 	init()
 
 	if !tsc_available {
-		fmt.println("[time_test] TSC not available, skipping strict monotonicity test")
+		fmt.println("[clock_test] TSC not available, skipping strict monotonicity test")
 		return
 	}
 
 	ITERATIONS :: 10_000
-	prev := time_now_monotonic()
+	prev := now_monotonic()
 
 	violations := 0
 	max_backward_jump: i64 = 0
 
 	for _ in 0 ..< ITERATIONS {
-		curr := time_now_monotonic()
+		curr := now_monotonic()
 		curr_ns := curr._nsec
 		prev_ns := prev._nsec
 
@@ -350,24 +350,24 @@ test_monotonicity_strict :: proc(t: ^testing.T) {
 	}
 }
 
-// Test that time_now (non-monotonic) also doesn't go backward under normal conditions.
+// Test that now (non-monotonic) also doesn't go backward under normal conditions.
 // Note: This can fail if system clock is adjusted during test, which is expected.
 @(test)
-test_time_now_no_backward :: proc(t: ^testing.T) {
+test_now_no_backward :: proc(t: ^testing.T) {
 	init()
 
 	if !tsc_available {
-		fmt.println("[time_test] TSC not available, skipping backward test")
+		fmt.println("[clock_test] TSC not available, skipping backward test")
 		return
 	}
 
 	ITERATIONS :: 10_000
-	prev := time_now()
+	prev := now()
 
 	violations := 0
 
 	for _ in 0 ..< ITERATIONS {
-		curr := time_now()
+		curr := now()
 		if curr._nsec < prev._nsec {
 			violations += 1
 		}
@@ -378,7 +378,7 @@ test_time_now_no_backward :: proc(t: ^testing.T) {
 	// (resync can cause small jumps if system clock drifted)
 	MAX_ALLOWED_VIOLATIONS :: 10
 	if violations > MAX_ALLOWED_VIOLATIONS {
-		test_error(t, fmt.tprintf("Too many backward jumps in time_now: %d violations in %d iterations", violations, ITERATIONS))
+		test_error(t, fmt.tprintf("Too many backward jumps in now: %d violations in %d iterations", violations, ITERATIONS))
 	}
 }
 
@@ -396,7 +396,7 @@ sample_tsc_vdso_offset :: proc "contextless" () -> i64 {
 
 	for _ in 0 ..< SAMPLE_ATTEMPTS {
 		vdso_before := vdso_clock_gettime(monotonic = true)._nsec
-		tsc_ns := time_now(monotonic = true)._nsec
+		tsc_ns := now(monotonic = true)._nsec
 		vdso_after := vdso_clock_gettime(monotonic = true)._nsec
 		span := vdso_after - vdso_before
 
@@ -415,7 +415,7 @@ test_tsc_drift_over_time :: proc(t: ^testing.T) {
 	init()
 
 	if !tsc_available {
-		fmt.println("[time_test] TSC not available, skipping drift test")
+		fmt.println("[clock_test] TSC not available, skipping drift test")
 		return
 	}
 
@@ -438,8 +438,8 @@ test_tsc_drift_over_time :: proc(t: ^testing.T) {
 	// TSC should be very stable, allowing ~1 microsecond per second of drift max
 	MAX_DRIFT_NS_PER_SECOND :: 1_000
 
-	fmt.println("[time_test] TSC drift test starting...")
-	fmt.printf("[time_test] TSC frequency: %d Hz\n", tsc_freq)
+	fmt.println("[clock_test] TSC drift test starting...")
+	fmt.printf("[clock_test] TSC frequency: %d Hz\n", tsc_freq)
 
 	for interval in test_intervals {
 		// Force resync before each interval test
@@ -468,14 +468,14 @@ test_tsc_drift_over_time :: proc(t: ^testing.T) {
 			max_drift = min_threshold
 		}
 
-		fmt.printf("[time_test] Interval %v: drift=%d ns (max allowed: %d ns)\n", interval, drift_ns, max_drift)
+		fmt.printf("[clock_test] Interval %v: drift=%d ns (max allowed: %d ns)\n", interval, drift_ns, max_drift)
 
 		if math.abs(drift_ns) > max_drift {
 			test_error(t, fmt.tprintf("TSC drift too large at interval %v: drift=%d ns, max=%d ns", interval, drift_ns, max_drift))
 		}
 	}
 
-	fmt.println("[time_test] TSC drift test completed successfully")
+	fmt.println("[clock_test] TSC drift test completed successfully")
 }
 
 // Test TSC accuracy at the resync boundary.
@@ -485,7 +485,7 @@ test_tsc_accuracy_near_resync :: proc(t: ^testing.T) {
 	init()
 
 	if !tsc_available {
-		fmt.println("[time_test] TSC not available, skipping resync accuracy test")
+		fmt.println("[clock_test] TSC not available, skipping resync accuracy test")
 		return
 	}
 
@@ -517,7 +517,7 @@ test_tsc_accuracy_near_resync :: proc(t: ^testing.T) {
 	// Allow max 100 microseconds of drift growth over 3 seconds
 	MAX_DRIFT_GROWTH :: 100_000 // 100 microseconds
 
-	fmt.printf("[time_test] TSC accuracy test: initial_delta=%d ns, final_delta=%d ns, growth=%d ns\n", initial_delta, final_delta, drift_growth)
+	fmt.printf("[clock_test] TSC accuracy test: initial_delta=%d ns, final_delta=%d ns, growth=%d ns\n", initial_delta, final_delta, drift_growth)
 
 	if drift_growth > MAX_DRIFT_GROWTH {
 		test_error(t, fmt.tprintf("TSC drift growth too large over %v: %d ns (max %d ns)", DURATION, drift_growth, MAX_DRIFT_GROWTH))

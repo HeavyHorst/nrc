@@ -12,7 +12,7 @@ import "core:sync"
 import "core:sys/linux"
 import "core:time"
 
-import ulid "../ulid"
+import "../clock"
 import io_uring "_io_uring"
 
 NANOSECONDS_PER_SECOND :: 1e+9
@@ -194,7 +194,7 @@ sq_capacity_remaining :: #force_inline proc(io: ^IO) -> u32 {
 // already exhausted (caller must complete the operation with .Timeout).
 clamp_remaining_send_timeout :: #force_inline proc(start_time: i64, full_timeout_ns: i64, timeout_spec: ^linux.Time_Spec) -> bool {
 	if start_time <= 0 do return true
-	now := time.to_unix_nanoseconds(ulid.time_now_monotonic())
+	now := time.to_unix_nanoseconds(clock.now_monotonic())
 	elapsed := now - start_time
 	remaining := full_timeout_ns - elapsed
 	if remaining <= 0 do return false
@@ -519,7 +519,7 @@ dispatch_cqe :: proc(io: ^IO, cqe: io_uring.io_uring_cqe) {
 		#partial switch &op in completion.operation {
 		case Op_Send:
 			if completion.sampled && completion.start_time > 0 {
-				now := time.to_unix_nanoseconds(ulid.time_now_monotonic())
+				now := time.to_unix_nanoseconds(clock.now_monotonic())
 				latency := u64(now - completion.start_time)
 				io.total_latency_ns += latency
 				io.latency_sample_count += 1

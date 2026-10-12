@@ -9,10 +9,10 @@ import "core:sync/chan"
 import "core:sys/linux"
 import "core:time"
 
+import "clock"
 import "persistence"
 import "spsc"
 import "storage_io"
-import "ulid"
 
 SHARD_WAL_SEGMENT_MAX_BYTES :: #config(NRC_SHARD_COMPACTION_SIZE_THRESHOLD, 500 * 1024 * 1024)
 SHARD_COMPACTION_FAULT_STAGE_ENV :: "NRC_TEST_COMPACTION_PAUSE_STAGE"
@@ -61,7 +61,7 @@ SHARD_COMPACTION_FAULT_MARKER :: ".nrc-compaction-fault-stage"
 // the wal-N.wal names shown above.
 
 Shard_Compactor_Thread_Data :: struct {
-	server: ^NRC_Server,
+	server:     ^NRC_Server,
 	bulk_index: int,
 }
 
@@ -296,7 +296,7 @@ rotate_shard_writer_for_compaction :: proc(writer: ^Shard_Transaction_Writer) ->
 	if storage_lifecycle_available() && writer != nil && writer.batch_writes {
 		return enqueue_shard_lifecycle(writer, .Shard_Rotate)
 	}
-	rotation_started := ulid.time_now()
+	rotation_started := clock.now()
 	if writer == nil ||
 	   !writer.managed ||
 	   writer.poisoned ||
@@ -333,9 +333,9 @@ rotate_shard_writer_for_compaction :: proc(writer: ^Shard_Transaction_Writer) ->
 		next_generation, generation_ok = shard_compaction_next_file_generation(writer.storage, writer.shard_dir, writer.manifest)
 		if !generation_ok do return false
 	}
-	prepare_elapsed := time.diff(rotation_started, ulid.time_now())
+	prepare_elapsed := time.diff(rotation_started, clock.now())
 
-	stage_started := ulid.time_now()
+	stage_started := clock.now()
 	injected_sync_failure := shard_compaction_fault_hit(.Sealed_WAL_Sync)
 	if injected_sync_failure do persistence.set_wal_sync_failure_for_test()
 	persistence.force_fsync(&writer.wal)
@@ -348,8 +348,8 @@ rotate_shard_writer_for_compaction :: proc(writer: ^Shard_Transaction_Writer) ->
 	// The old prefix is durable even if later rotation preparation fails. Wake
 	// its waiters only after the rotation's final state is settled.
 	defer if !writer.poisoned && writer.wal.enabled do resume_shard_durable_outboxes(writer)
-	wal_sync_elapsed := time.diff(stage_started, ulid.time_now())
-	stage_started = ulid.time_now()
+	wal_sync_elapsed := time.diff(stage_started, clock.now())
+	stage_started = clock.now()
 	new_active_path := shard_generation_wal_path(writer.shard_dir, next_generation)
 	defer delete(new_active_path)
 	if !prepared_active {
@@ -384,9 +384,9 @@ rotate_shard_writer_for_compaction :: proc(writer: ^Shard_Transaction_Writer) ->
 		}
 	}
 	shard_compaction_pause_for_process_fault_test("rotation")
-	new_active_elapsed := time.diff(stage_started, ulid.time_now())
+	new_active_elapsed := time.diff(stage_started, clock.now())
 
-	stage_started = ulid.time_now()
+	stage_started = clock.now()
 	next_catalog := Shard_Segment_Catalog {
 		shard              = writer.shard,
 		catalog_generation = next_generation,
@@ -404,9 +404,9 @@ rotate_shard_writer_for_compaction :: proc(writer: ^Shard_Transaction_Writer) ->
 		delete(catalog_path)
 		return false
 	}
-	catalog_elapsed := time.diff(stage_started, ulid.time_now())
+	catalog_elapsed := time.diff(stage_started, clock.now())
 
-	stage_started = ulid.time_now()
+	stage_started = clock.now()
 	next_manifest := writer.manifest
 	if next_manifest.manifest_generation == max(u64) {
 		if prepared_active do writer.prepared_active_generation = 0
@@ -438,9 +438,9 @@ rotate_shard_writer_for_compaction :: proc(writer: ^Shard_Transaction_Writer) ->
 		return false
 	}
 	if prepared_active do writer.prepared_active_generation = 0
-	manifest_elapsed := time.diff(stage_started, ulid.time_now())
+	manifest_elapsed := time.diff(stage_started, clock.now())
 
-	stage_started = ulid.time_now()
+	stage_started = clock.now()
 	old_floors := writer.floors
 	persistence.shutdown_wal(&writer.wal)
 	writer.durability_generation += 1
@@ -469,8 +469,8 @@ rotate_shard_writer_for_compaction :: proc(writer: ^Shard_Transaction_Writer) ->
 		delete(old_catalog)
 	}
 	if !shard_compaction_fault_hit(.Cleanup_Directory_Sync) do _ = storage_io.sync_directory(writer.storage, writer.shard_dir)
-	finalize_elapsed := time.diff(stage_started, ulid.time_now())
-	total_elapsed := time.diff(rotation_started, ulid.time_now())
+	finalize_elapsed := time.diff(stage_started, clock.now())
+	total_elapsed := time.diff(rotation_started, clock.now())
 	log.infof(
 		"[T%d] Shard %d rotation timing total=%v prepare=%v wal_sync=%v new_active=%v catalog=%v manifest=%v finalize=%v prepared_active=%v generation=%d members=%d",
 		writer.owner_worker,
@@ -694,7 +694,7 @@ run_shard_compaction_job :: proc(input: Shard_Compaction_Job) -> Shard_Compactio
 			owner_worker = job.owner_worker,
 			shard = job.shard,
 			available_disk_bytes = space.available_bytes,
-			space_checked_at = ulid.time_now(),
+			space_checked_at = clock.now(),
 			ok = err == nil,
 		}
 	}
@@ -961,7 +961,7 @@ shard_compactor_thread :: proc(data: Shard_Compactor_Thread_Data) {
 			discard_queued_shard_compaction_jobs(data.server)
 			return
 		}
-		now := ulid.time_now()
+		now := clock.now()
 		if last_rss_update == (time.Time{}) || time.diff(last_rss_update, now) >= time.Second {
 			sync.atomic_store(&data.server.cached_rss_mb, get_rss_memory_mb())
 			last_rss_update = now

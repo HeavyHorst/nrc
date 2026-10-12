@@ -5,7 +5,7 @@ import "core:net"
 import "core:sys/linux"
 import "core:time"
 
-import ulid "../ulid"
+import "../clock"
 import io_uring "_io_uring"
 
 REQUIRED_RING_FLAGS :: io_uring.IORING_SETUP_COOP_TASKRUN | io_uring.IORING_SETUP_SINGLE_ISSUER
@@ -20,7 +20,7 @@ set_start_time_disabled :: #force_inline proc(completion: ^Completion) {
 // send deadlines but are not part of the latency-sampling population.
 set_start_time_for_deadline :: #force_inline proc(completion: ^Completion, has_timeout: bool) {
 	completion.sampled = false
-	completion.start_time = time.to_unix_nanoseconds(ulid.time_now_monotonic()) if has_timeout else 0
+	completion.start_time = time.to_unix_nanoseconds(clock.now_monotonic()) if has_timeout else 0
 }
 
 should_sample_send_latency :: #force_inline proc(io: ^IO) -> bool {
@@ -46,7 +46,7 @@ set_start_time_for_send :: #force_inline proc(io: ^IO, completion: ^Completion, 
 	// start_time without feeding the latency accumulator.
 	completion.sampled = should_sample_send_latency(io)
 	if has_timeout || completion.sampled {
-		completion.start_time = time.to_unix_nanoseconds(ulid.time_now_monotonic())
+		completion.start_time = time.to_unix_nanoseconds(clock.now_monotonic())
 	} else {
 		completion.start_time = 0
 	}
@@ -190,7 +190,7 @@ wait_for_ring_events :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linu
 		return .NONE
 	}
 
-	wait_started_at := ulid.time_now_monotonic()
+	wait_started_at := clock.now_monotonic()
 	remaining := timeout_nsec
 	poll_fds: [2]linux.Poll_Fd = {{fd = io.ring.fd, events = {.IN, .ERR, .HUP}}, {fd = wake_fd, events = {.IN, .ERR, .HUP}}}
 	poll_count := 1
@@ -223,7 +223,7 @@ wait_for_ring_events :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linu
 			return err
 		}
 
-		elapsed := time.diff(wait_started_at, ulid.time_now_monotonic())
+		elapsed := time.diff(wait_started_at, clock.now_monotonic())
 		if elapsed >= timeout_nsec {
 			timed_out^ = true
 			return .NONE
@@ -247,7 +247,7 @@ tick :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd = -1, yield
 		return .NONE
 	}
 
-	started_at := ulid.time_now_monotonic()
+	started_at := clock.now_monotonic()
 	for {
 		if has_userspace_work(io) {
 			if ferr, had_callbacks := flush(io, 0); ferr != .NONE {
@@ -257,7 +257,7 @@ tick :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd = -1, yield
 			}
 		}
 
-		elapsed := time.diff(started_at, ulid.time_now_monotonic())
+		elapsed := time.diff(started_at, clock.now_monotonic())
 		if elapsed >= timeout_nsec do break
 
 		if has_userspace_work(io) {

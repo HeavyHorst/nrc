@@ -12,11 +12,11 @@ import "core:sys/linux"
 import "core:time"
 
 import "byte_pool"
+import "clock"
 import nbio_raw "nbio"
 import nbio "nbio/poly"
 import "persistence"
 import "storage_io"
-import "ulid"
 
 NRC_SIMULATION :: #config(NRC_SIMULATION, false)
 
@@ -26,7 +26,7 @@ nrc_time_now :: #force_inline proc() -> time.Time {
 			return nrc_sim_time_now()
 		}
 	}
-	return ulid.time_now()
+	return clock.now()
 }
 
 nrc_time_now_monotonic :: #force_inline proc() -> time.Time {
@@ -35,7 +35,7 @@ nrc_time_now_monotonic :: #force_inline proc() -> time.Time {
 			return nrc_sim_time_now()
 		}
 	}
-	return ulid.time_now_monotonic()
+	return clock.now_monotonic()
 }
 
 nrc_time_unix_nanos :: #force_inline proc() -> i64 {
@@ -47,7 +47,7 @@ nrc_time_unix_seconds :: #force_inline proc() -> u64 {
 }
 
 nrc_wal_time_now :: #force_inline proc "contextless" () -> time.Time {
-	return ulid.time_now_monotonic()
+	return clock.now_monotonic()
 }
 
 nrc_persistence_data_dir :: #force_inline proc() -> string {

@@ -6,9 +6,9 @@ import "core:sync/chan"
 import "core:time"
 
 import "byte_pool"
+import "clock"
 import "persistence"
 import "storage_io"
-import "ulid"
 
 SHARD_DISK_SOFT_AVAILABLE_BYTES :: #config(NRC_SHARD_DISK_SOFT_AVAILABLE_BYTES, 2 * 1024 * 1024 * 1024)
 SHARD_DISK_HARD_AVAILABLE_BYTES :: #config(NRC_SHARD_DISK_HARD_AVAILABLE_BYTES, 1024 * 1024 * 1024)
@@ -134,7 +134,7 @@ refresh_shard_writer_catalog_bytes :: proc(writer: ^Shard_Transaction_Writer) ->
 
 refresh_shard_writer_storage_space :: proc(writer: ^Shard_Transaction_Writer, force := false) -> bool {
 	if writer == nil do return false
-	now := ulid.time_now()
+	now := clock.now()
 	if !force && writer.space_known && writer.space_checked_at != (time.Time{}) && time.diff(writer.space_checked_at, now) < SHARD_STORAGE_SPACE_CACHE_TTL do return true
 	if !force && writer.batch_writes && td.server != nil {
 		// Request paths consume bounded-age cached samples, never statfs().

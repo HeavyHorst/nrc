@@ -10,9 +10,9 @@ import "core:testing"
 import "core:time"
 
 import "byte_pool"
+import "clock"
 import io_uring "nbio/_io_uring"
 import nbio "nbio/poly"
-import "ulid"
 import tlsf "vendor/tlsf"
 
 Connection_Close_Barrier_Kind :: enum {
@@ -109,7 +109,7 @@ connection_close_barrier_run :: proc(t: ^testing.T, kind: Connection_Close_Barri
 		if remaining := connection_get_by_handle(handle); remaining != nil {
 			connection_close(remaining, false)
 		}
-		start := ulid.time_now()
+		start := clock.now()
 		for nbio.num_waiting(&td.io) > 0 && time.since(start) < 2 * time.Second {
 			if nbio.tick(&td.io, time.Millisecond) != .NONE {
 				testing.fail_now(t, "cannot drain fixture I/O safely")
@@ -206,7 +206,7 @@ connection_close_barrier_run :: proc(t: ^testing.T, kind: Connection_Close_Barri
 	if partial {
 		// Observe but do not consume the real kernel CQE. Close is requested before
 		// nbio dispatches this partial success and submits the remainder.
-		start := ulid.time_now()
+		start := clock.now()
 		for io_uring.cq_ready(&td.io.ring) == 0 && time.since(start) < time.Second {
 			time.sleep(time.Millisecond)
 		}
@@ -224,7 +224,7 @@ connection_close_barrier_run :: proc(t: ^testing.T, kind: Connection_Close_Barri
 	_, fd_err := linux.fcntl_getfd(linux.Fd(server_sock), linux.F_GETFD)
 	testing.expect(t, fd_err == .NONE, "server FD must remain owned while a non-close pin is pending")
 
-	start := ulid.time_now()
+	start := clock.now()
 	for ctx.terminal_callbacks == 0 && time.since(start) < time.Second {
 		terr := nbio.tick(&td.io, time.Millisecond)
 		testing.expect(t, terr == .NONE, fmt.tprintf("nbio.tick error: %v", terr))

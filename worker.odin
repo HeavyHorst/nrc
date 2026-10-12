@@ -22,10 +22,10 @@ import "core:time"
 import tlsf "vendor/tlsf"
 
 import "byte_pool"
+import "clock"
 import nbio "nbio/poly"
 import "persistence"
 import pr "protocol"
-import ulid "ulid"
 
 WORKER_TICK_ACTIVE_TIMEOUT :: 250 * time.Microsecond
 WORKER_TICK_IDLE_TIMEOUT :: 10 * time.Millisecond
@@ -325,7 +325,7 @@ worker_state_init_core :: proc(server: ^NRC_Server, thread_index: int, connectio
 	// Deterministic simulation uses the virtual runtime clock and must not trigger
 	// the stdlib's potentially sleep-based per-thread TSC calibration.
 	when !NRC_SIMULATION {
-		ulid.init()
+		clock.init()
 	}
 }
 

@@ -12,12 +12,12 @@ import "core:sys/posix"
 import "core:testing"
 import "core:time"
 
+import "clock"
 import hgl "hegel"
 import "nbio"
 import "persistence"
 import pr "protocol"
 import "storage_io"
-import "ulid"
 
 when !NRC_SIMULATION {
 	_ :: hgl.Test_Case
@@ -49,7 +49,7 @@ test_shard_storage_probe_uses_cache_and_rejects_stale_or_failed_samples :: proc(
 		shard_dir            = "/nrc-storage-probe-missing-directory",
 		storage              = storage_io.host_context(),
 		space_known          = true,
-		space_checked_at     = time.time_add(ulid.time_now(), -1500 * time.Millisecond),
+		space_checked_at     = time.time_add(clock.now(), -1500 * time.Millisecond),
 		available_disk_bytes = 123456,
 	}
 	// A synchronous statfs on the missing directory would fail instead.
@@ -64,7 +64,7 @@ test_shard_storage_probe_uses_cache_and_rejects_stale_or_failed_samples :: proc(
 	testing.expect(t, !refresh_shard_writer_storage_space(writer))
 	_, received = chan.try_recv(server.storage_control_jobs)
 	testing.expect(t, !received, "probe retries must be rate limited")
-	sample := ulid.time_now()
+	sample := clock.now()
 	testing.expect(
 		t,
 		process_shard_compaction_result({storage_space_probe = true, shard = 7, ok = true, available_disk_bytes = 654321, space_checked_at = sample}),
@@ -75,7 +75,7 @@ test_shard_storage_probe_uses_cache_and_rejects_stale_or_failed_samples :: proc(
 	)
 	testing.expect(t, writer.space_known && refresh_shard_writer_storage_space(writer))
 	testing.expect_value(t, writer.available_disk_bytes, u64(654321))
-	writer.space_checked_at = time.time_add(ulid.time_now(), -3 * time.Second)
+	writer.space_checked_at = time.time_add(clock.now(), -3 * time.Second)
 	testing.expect(t, !refresh_shard_writer_storage_space(writer), "old samples must not admit writes")
 }
 
@@ -109,7 +109,7 @@ test_stale_shard_space_probe_replies_busy_instead_of_dropping_request :: proc(t:
 		writer.batch_writes = true; writer.managed = true
 		writer.shard_dir = fmt.aprintf("/missing-probe-%d", td.thread_index)
 		writer.space_known = true
-		writer.space_checked_at = time.time_add(ulid.time_now(), -3 * time.Second)
+		writer.space_checked_at = time.time_add(clock.now(), -3 * time.Second)
 		conn := simulation_test_install_client(&ctx.sim, 0, workspace, "writer", init_send_queue = true)
 		ctx.conns[0] = conn
 		payload: [512]byte
@@ -679,7 +679,7 @@ test_worker_durability_sweep_fsyncs_idle_batched_writes :: proc(t: ^testing.T) {
 	testing.expect(t, !writer.poisoned && writer.compaction == .Idle)
 	testing.expect(t, !append_shard_transaction(writer, &test_data.tx), "leased batch cannot be changed")
 	testing.expect(t, consume_shard_append_backpressure())
-	write_started := ulid.time_now()
+	write_started := clock.now()
 	for writer.write_in_flight && time.since(write_started) < time.Second {
 		testing.expect_value(t, nbio.tick(&td.io, time.Millisecond, yield_after_callbacks = true), linux.Errno.NONE)
 	}
@@ -1326,7 +1326,7 @@ test_shard_append_backpressure_rejects_without_poisoning_writer :: proc(t: ^test
 		managed              = true,
 		available_disk_bytes = SHARD_DISK_HARD_AVAILABLE_BYTES,
 		space_known          = true,
-		space_checked_at     = ulid.time_now(),
+		space_checked_at     = clock.now(),
 	}
 	testing.expect(t, shard_writer_backpressured(&disk_pressure_writer))
 	unknown_space_writer := Shard_Transaction_Writer {

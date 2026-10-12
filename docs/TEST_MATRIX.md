@@ -79,7 +79,7 @@ odin test persistence/ -o:speed -define:ODIN_TEST_LOG_LEVEL=error
 odin test persistence/ -o:speed -define:NRC_SIMULATION=true -define:ODIN_TEST_LOG_LEVEL=error
 odin test btree/ -o:speed -define:HEGEL_REQUIRED=true -define:ODIN_TEST_LOG_LEVEL=error
 odin test byte_pool/ -o:speed -define:HEGEL_REQUIRED=true -define:ODIN_TEST_LOG_LEVEL=error
-odin test ulid/ -o:speed -define:HEGEL_REQUIRED=true -define:ODIN_TEST_LOG_LEVEL=error
+odin test clock/ -o:speed -define:ODIN_TEST_LOG_LEVEL=error
 odin test nbio/ -o:speed -define:ODIN_TEST_LOG_LEVEL=error
 odin test hegel/ -o:speed -define:HEGEL_REQUIRED=true -define:ODIN_TEST_LOG_LEVEL=error
 ```

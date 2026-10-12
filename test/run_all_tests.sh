@@ -36,7 +36,7 @@ run "$odin_tests" btree/ "${odin_common[@]}" "${odin_hegel[@]}"
 run "$odin_tests" vendor/tlsf/ "${odin_common[@]}"
 run "$odin_tests" byte_pool/ "${odin_common[@]}" "${odin_hegel[@]}"
 run "$odin_tests" spsc/ "${odin_common[@]}" "${odin_hegel[@]}"
-run "$odin_tests" ulid/ "${odin_common[@]}" "${odin_hegel[@]}"
+run "$odin_tests" clock/ "${odin_common[@]}"
 run "$odin_tests" nbio/ "${odin_common[@]}"
 run "$odin_tests" hegel/ "${odin_common[@]}" "${odin_hegel[@]}"
 

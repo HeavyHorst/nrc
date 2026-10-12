@@ -11,9 +11,9 @@ import "core:strings"
 import "core:sys/linux"
 import "core:time"
 
+import "clock"
 import "persistence"
 import "storage_io"
-import "ulid"
 
 foreign import attachment_gc_libc "system:c"
 
@@ -638,7 +638,7 @@ run_attachment_gc :: proc(options: Attachment_GC_Options) -> bool {
 		log.error("Attachment GC refused to modify files because canonical shard replay failed")
 		return false
 	}
-	now_ns := time.to_unix_nanoseconds(ulid.time_now())
+	now_ns := time.to_unix_nanoseconds(clock.now())
 	stats, ok := attachment_gc_sweep(options, live, now_ns, persistence.DATA_DIR)
 	if !ok {
 		log.error("Attachment GC failed without completing the requested operation")
