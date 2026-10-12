@@ -212,8 +212,8 @@
 
   // A register holds counters and nothing else: the wire carries no member
   // identity and no member order for a listing, so a register's shape is the
-  // share each status holds, and the blocked share drawn against the whole
-  // slice. It can never look like the record's strip, which is the one surface
+  // share each status holds. Blocked is a separate text count in the register.
+  // It can never look like the record's strip, which is the one surface
   // that draws members, because it is the one surface that holds them.
   function renderShape(slice, { wide = false } = {}) {
     const tasks = taskCount(slice);
@@ -221,16 +221,17 @@
     // share of the task members and can never exceed them.
     const blocked = tasks ? Math.min(slice.blocked, tasks) : 0;
     const segment = (status, count) => count ?
-      `<span class="slice-bar-seg slice-bar-seg--${status}" style="--slice-share:${count}"></span>` : "";
+      `<span class="slice-bar-seg slice-bar-seg--${status}" style="--slice-share:${count}" title="${status.toUpperCase()} · ${count}">${wide ? "" : `<span class="slice-bar-count" data-digits="${String(count).length}">${count}</span>`}</span>` : "";
     const bar = tasks ?
       `<div class="slice-bar">${SHAPE_SEGMENTS.map(([status, counter]) => segment(status, slice[counter])).join("")}</div>` :
       // A slice that carries no task members has no share to draw. The band stays
       // so the register keeps its rhythm and says so instead of showing nothing.
       `<div class="slice-bar slice-bar--empty"></div>`;
-    const blockedBar = blocked ?
+    const blockedBar = wide && blocked ?
       `<div class="slice-bar slice-bar--blocked">${segment("blocked", blocked)}` +
         `<span class="slice-bar-track" style="--slice-share:${tasks - blocked}"></span></div>` : "";
-    return `<div class="slice-bar-group${wide ? " slice-bar-group--wide" : ""}">${bar}${blockedBar}</div>`;
+    const summary = SHAPE_SEGMENTS.map(([status, counter]) => `${status.toUpperCase()}: ${slice[counter]}`).join(", ");
+    return `<div class="slice-bar-group${wide ? " slice-bar-group--wide" : ""}" role="img" aria-label="${summary}" title="${summary}">${bar}${blockedBar}</div>`;
   }
 
   // The record's strip is one mark per task member, in creation order, and the
@@ -252,16 +253,11 @@
     }));
   }
 
-  // The register's first token is whose work stream a row is, because that is
-  // what the owner filter narrows by; a slice nobody owns says so rather than
-  // drawing nothing.
+  // Keep owner, exceptional state and movement on one compact metadata row,
+  // without repeating the task counters already shown in the bar.
   function metaLine(slice) {
-    const open = openCount(slice);
-    const parts = [escape(slice.owner || "UNASSIGNED"), `<span class="${open > 6 ? "slice-alert" : ""}">${open} OPEN</span>`];
+    const parts = [escape(slice.owner || "UNASSIGNED")];
     if (slice.blocked) parts.push(`<span class="slice-alert">${slice.blocked} BLOCKED</span>`);
-    parts.push(`${slice.done} DONE`);
-    if (slice.notes) parts.push(`${slice.notes} NOTE${slice.notes === 1 ? "" : "S"}`);
-    if (slice.files) parts.push(`${slice.files} FILE${slice.files === 1 ? "" : "S"}`);
     const idleHours = ageHours(slice.lastMovedAt);
     if (idleHours !== null) {
       parts.push(`<span class="${idleHours >= REGISTER_STALE_HOURS ? "slice-cold" : ""}">MOVED ${formatAge(slice.lastMovedAt)}</span>`);

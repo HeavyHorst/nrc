@@ -494,9 +494,8 @@ test("the strip renders one mark per member and caps the row", () => {
 });
 
 // The register holds counters, not members: its shape is the share each status
-// holds, and the blocked share drawn against the whole slice. A blocked count
-// cannot name the member it belongs to, so it is never drawn in a member's
-// place — which is what the register's red spike used to do.
+// holds. Blocked overlaps those statuses and is named separately in the row,
+// never placed as if it named an individual member.
 test("the register draws counters as shares, never as member marks", () => {
   const slices = loadSlices();
   const html = slices.renderShape({ backlog: 2, todo: 1, inProgress: 1, done: 1, blocked: 2 });
@@ -509,11 +508,9 @@ test("the register draws counters as shares, never as member marks", () => {
   assert.match(html, /slice-bar-seg--done" style="--slice-share:1"/);
   assert.doesNotMatch(html, /slice-mark/, "a register never draws a member");
 
-  // Blocked is its own bar: the track is the whole slice and the red segment is
-  // the share of it that is blocked.
-  assert.match(html, /slice-bar--blocked/);
-  assert.match(html, /slice-bar-seg--blocked" style="--slice-share:2"/);
-  assert.match(html, /slice-bar-track" style="--slice-share:3"/);
+  assert.equal((html.match(/slice-bar-count/g) ?? []).length, 4);
+  assert.match(html, /aria-label="BACKLOG: 2, TODO: 1, INPROGRESS: 1, DONE: 1"/);
+  assert.doesNotMatch(html, /slice-bar--blocked/, "blocked overlaps the status counts, not another segment");
 
   // A status without members has no segment, and a slice without a blocked
   // member has no blocked bar at all.
@@ -523,7 +520,7 @@ test("the register draws counters as shares, never as member marks", () => {
 
   // A blocked count larger than the member count cannot invent members, so the
   // share never exceeds the whole and the track that is left is empty.
-  const overcounted = slices.renderShape({ backlog: 1, todo: 0, inProgress: 0, done: 0, blocked: 5 });
+  const overcounted = slices.renderShape({ backlog: 1, todo: 0, inProgress: 0, done: 0, blocked: 5 }, { wide: true });
   assert.match(overcounted, /slice-bar-seg--blocked" style="--slice-share:1"/);
   assert.match(overcounted, /slice-bar-track" style="--slice-share:0"/);
 

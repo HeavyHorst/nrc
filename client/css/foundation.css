@@ -138,6 +138,10 @@
     --status-inprogress: #0076a2;
     --status-done: #00a651;
     --status-blocked: #f04e30;
+    --status-backlog-text: #111111;
+    --status-inprogress-text: #ffffff;
+    --status-todo-text: #111111;
+    --status-done-text: #111111;
 
     /* Selection and selected rows */
     --selection-bg: #000000;
@@ -325,6 +329,8 @@
     --status-inprogress: #00aeef;
     --status-done: #40c870;
     --status-blocked: #e84040;
+    --status-backlog-text: #ffffff;
+    --status-inprogress-text: #111111;
 
     /* Selection and selected rows */
     --selection-bg: #fcb300;
@@ -863,6 +869,8 @@
     --status-inprogress: #00aeef;
     --status-done: #40c870;
     --status-blocked: #e84040;
+    --status-backlog-text: #ffffff;
+    --status-inprogress-text: #111111;
     --selection-bg: var(--omarchy-selection);
     --selection-text: var(--omarchy-bright-foreground, var(--omarchy-foreground));
     --selected-row-accent: var(--omarchy-accent);
@@ -918,6 +926,8 @@
     --status-inprogress: #0076a2;
     --status-done: #00a651;
     --status-blocked: #f04e30;
+    --status-backlog-text: #111111;
+    --status-inprogress-text: #ffffff;
 }
 
 [data-theme="rose-pine"] {

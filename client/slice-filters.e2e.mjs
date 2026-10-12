@@ -240,6 +240,42 @@ try {
   assert.equal(await page.locator("#sliceOwnerFilter").inputValue(), "");
   assert.equal(await page.locator("#sliceStatus").isVisible(), false);
 
+  // A single digit fits the narrow Done segment of a 5:3:2:1 distribution.
+  // Longer counts need more room, but neither may widen the status share.
+  await page.evaluate(() => {
+    const state = NRCSlices.getState();
+    state.slices = [{ ...state.slices[0], name: "SEARCH AND DISCOVERY", backlog: 5, todo: 3, inProgress: 2, done: 1 }];
+    state.total = 1;
+    state.selected = null;
+    state.hasMore = false;
+    NRCSlices.render();
+    document.querySelector("#sliceView .slice-register").scrollTop = 0;
+  });
+  await page.evaluate(() => document.fonts.ready);
+  const bar = page.locator("#sliceRegisterList .slice-bar");
+  const doneLabel = bar.locator(".slice-bar-seg--done .slice-bar-count");
+  assert.equal(await doneLabel.isVisible(), true, "the green 1 is visible when it fits");
+  for (const count of [1, 10, 100, 1000, 10000]) {
+    await page.evaluate(count => {
+      const slice = NRCSlices.getState().slices[0];
+      Object.assign(slice, { backlog: 5 * count, todo: 3 * count, inProgress: 2 * count, done: count });
+      NRCSlices.render();
+    }, count);
+    const required = await doneLabel.evaluate(e => {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      const style = getComputedStyle(e);
+      ctx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      return ctx.measureText(e.textContent).width + ctx.measureText("0").width / 2;
+    });
+    for (const extra of [-1, 1]) {
+      await bar.evaluate((e, width) => { e.style.width = `${width}px`; }, (required + extra) * 11);
+      assert.equal(await doneLabel.isVisible(), extra > 0, `${count} requires its own digit width`);
+      const fraction = await bar.evaluate(e => e.querySelector(".slice-bar-seg--done").getBoundingClientRect().width / e.getBoundingClientRect().width);
+      assert.ok(Math.abs(fraction - 1 / 11) < 0.001, "label visibility does not distort proportions");
+    }
+  }
+
   assert.deepEqual(errors, []);
   console.log("PASS: slice filters are asked of the server, pages fill as the register is walked, and the head and status report what is drawn");
 } finally {
