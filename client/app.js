@@ -5350,7 +5350,7 @@ function sendNotification(title, options = {}, onClickUrl = null) {
 // =============================================================================
 // FAVICON BADGE (unread indicator on browser tab)
 // =============================================================================
-const originalFaviconHref = "favicon.png";
+const originalFaviconHref = "favicon.png?v=20261013fold1";
 const defaultPageTitle = "NRC TERMINAL";
 let pageTitle = defaultPageTitle;
 let faviconBadgeActive = false;

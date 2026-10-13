@@ -1,12 +1,15 @@
-const CACHE_NAME = "nrc-terminal-20261013retaineddm2";
+const CACHE_NAME = "nrc-terminal-20261013fold1";
 
 const APP_SHELL = [
   "./",
   "./index.html",
   "./favicon.png",
+  "./favicon.png?v=20261013fold1",
+  "./favicon.ico?v=20261013fold1",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
+  "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
   "./css/main.css?v=20261013overviewactions2",
   "./css/foundation.css?v=20261012slicebars1",
@@ -53,7 +56,7 @@ const APP_SHELL = [
   "./ai.js?v=20261008description1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20261013retaineddm1",
-  "./app.js?v=20261013retaineddm1",
+  "./app.js?v=20261013fold1",
   "./customers.js?v=20261013loading1",
   "./mobile-shell.js?v=20260914chats1",
   "./latency-worker.js",
