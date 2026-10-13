@@ -57,6 +57,8 @@ let selectedNoteRow = null;
 const noteRowsByIdentity = new Map();
 let renderedNotesRoomId = null;
 let notesListDirty = true;
+let notesLoadingIndicator = null;
+let sharedNoteLoadingIndicator = null;
 
 const NOTES_PAGE_SIZE = 25;
 const ESTIMATED_NOTE_ROW_HEIGHT = 28;
@@ -567,6 +569,9 @@ function renderNotesView({ append = false, debounce = false } = {}) {
   const searchTerm = (notesSearchInput?.value || "").trim();
 
   if (searchTerm && searchServiceAvailable !== false) {
+    notesLoadingIndicator?.update(false);
+    notesList.inert = false;
+    notesList.setAttribute("aria-busy", "false");
     pauseNotesPageLoader();
     renderNotesSearchResults(notesList, searchTerm, { debounce });
   } else {
@@ -578,6 +583,12 @@ function renderNotesView({ append = false, debounce = false } = {}) {
 }
 
 function renderNotesLocal(notesList, searchTerm, { append = false } = {}) {
+  const pageState = getNotesPaginationState(0n);
+  notesLoadingIndicator ||= window.createLoadingIndicator(() => renderNotesView());
+  const showLoading = notesLoadingIndicator.update(pageState.loading);
+  notesList.setAttribute("aria-busy", String(pageState.loading));
+  notesList.inert = pageState.loading && !pageState.initialized;
+  if (pageState.loading && !pageState.initialized && !showLoading) return;
   if (!notesList.virtualList) {
     window.NRCVirtualList?.capture(notesList, document.querySelector("#notesPanel .notes-container"),
       notesList.querySelectorAll(".note-card"), (row) => `${row.dataset.convId}:${row.dataset.noteId}`);
@@ -596,8 +607,6 @@ function renderNotesLocal(notesList, searchTerm, { append = false } = {}) {
       emptyState.remove();
     }
   }
-  const pageState = getNotesPaginationState(0n);
-
   const allNotes = getNotesForRoom(0n);
   const searchLower = searchTerm.toLowerCase();
 
@@ -1093,6 +1102,10 @@ function renderSharedNoteView(statusText = "") {
   const docxBtn = document.getElementById("noteShareDownloadDocx");
   const content = document.getElementById("noteShareContent");
   if (!panel || !content) return;
+  sharedNoteLoadingIndicator ||= window.createLoadingIndicator(() => renderSharedNoteView("LOADING NOTE…"));
+  const loading = sharedNoteLoading || statusText === "LOADING NOTE…";
+  const showLoading = sharedNoteLoadingIndicator.update(loading);
+  content.setAttribute("aria-busy", String(loading));
 
   if (openBtn && !openBtn.dataset.bound) {
     openBtn.dataset.bound = "1";
@@ -1119,7 +1132,7 @@ function renderSharedNoteView(statusText = "") {
   }
 
   if (!sharedNoteAsset) {
-    content.innerHTML = `<div class="note-share-status">${escapeHtml(statusText || (sharedNoteLoading ? "LOADING NOTE…" : "NOTE NOT LOADED"))}</div>`;
+    content.innerHTML = loading && !showLoading ? "" : `<div class="note-share-status">${escapeHtml(statusText || (sharedNoteLoading ? "LOADING NOTE…" : "NOTE NOT LOADED"))}</div>`;
     return;
   }
 

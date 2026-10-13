@@ -79,11 +79,14 @@ try {
         handleBinaryMessage(view.buffer);
       }
     }
-    ws = { readyState: WebSocket.OPEN, send: buffer => queueMicrotask(() => reply(buffer)) };
+    ws = { readyState: WebSocket.OPEN, send: buffer => {
+      if (window.overviewFixture.hold && new DataView(buffer).getUint16(0) === 59) window.overviewFixture.release = () => reply(buffer);
+      else queueMicrotask(() => reply(buffer));
+    } };
     // Overview sends one fixed-size request through the production dispatcher.
   });
   await page.click("#overviewBtn");
-  await page.waitForFunction(() => document.getElementById("overviewStatus").hidden);
+  await page.waitForFunction(() => document.getElementById("overviewBody").getAttribute("aria-busy") === "false");
   assert.deepEqual(await page.evaluate(() => window.overviewFixture.requests), [59], "one overview request, no slice pages or task queries");
   assert.match(await page.locator("#overviewBody").innerText(), /48 UNIQUE TASKS/);
   assert.equal(await page.locator("[data-overview-status]").count(), 4);
@@ -102,6 +105,47 @@ try {
   await page.locator(".overview-explanation summary").click();
   assert.equal(await page.locator(".overview-explanation p").isVisible(), true);
   await page.locator(".overview-explanation summary").click();
+  // Deterministic presentation timing through the production request/dispatcher.
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  const originalTop = (await page.locator(".overview-chart").first().boundingBox()).y;
+  for (const width of [1600, 390]) {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+    const top = (await page.locator(".overview-chart").first().boundingBox()).y;
+    await page.evaluate(() => { window.overviewFixture.hold = true; window.NRCOverview.refresh(); });
+    assert.equal(await page.locator("#overviewBody").getAttribute("aria-busy"), "true");
+    await page.clock.runFor(100);
+    assert.equal(await page.locator("#overviewStatus").isVisible(), false);
+    assert.equal((await page.locator(".overview-chart").first().boundingBox()).y, top, "fast reads do not move the existing chart");
+    await page.evaluate(() => window.overviewFixture.release());
+    await page.clock.runFor(75);
+    assert.equal(await page.locator("#overviewStatus").isVisible(), false, "no delayed flash after a fast completion");
+    assert.equal(await page.locator("#overviewBody").getAttribute("aria-busy"), "false");
+
+    await page.evaluate(() => { window.NRCOverview.refresh(); });
+    await page.clock.runFor(149);
+    assert.equal(await page.locator("#overviewStatus").isVisible(), false);
+    await page.clock.runFor(1);
+    assert.equal(await page.locator("#overviewStatus").isVisible(), true);
+    assert.match(await page.locator("#overviewStatus").innerText(), /LOADING WORKSPACE OVERVIEW/);
+    assert.match(await page.locator("#overviewBody").innerText(), /48 UNIQUE TASKS/, "slow refresh retains the snapshot");
+    if (process.env.OVERVIEW_SCREENSHOTS) {
+      const dir = fileURLToPath(new URL("../.amp/in/artifacts/", import.meta.url));
+      fs.mkdirSync(dir, { recursive: true });
+      await page.clock.resume();
+      if (width === 390) await page.setViewportSize({ width, height: 1400 });
+      await page.screenshot({ path: `${dir}overview-loading-${width}.png` });
+      if (width === 390) await page.setViewportSize({ width, height: 844 });
+      await page.clock.pauseAt(await page.evaluate(() => new Date().toISOString()));
+    }
+    await page.evaluate(() => window.overviewFixture.release());
+    await page.clock.runFor(1);
+    assert.equal(await page.locator("#overviewStatus").isVisible(), false);
+  }
+  await page.evaluate(() => { window.overviewFixture.hold = false; });
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  assert.equal((await page.locator(".overview-chart").first().boundingBox()).y, originalTop);
+  await page.clock.resume();
   await page.evaluate(() => { window.overviewFixture.fail = true; });
   await page.click("#overviewRefresh");
   await page.waitForFunction(() => document.getElementById("overviewStatus").textContent.includes("READ FAILED"));
@@ -112,7 +156,7 @@ try {
   assert.match(await page.locator("#overviewBody").innerText(), /48 UNIQUE TASKS/);
   await page.evaluate(() => { window.overviewFixture.malformed = false; });
   await page.click("#overviewRefresh");
-  await page.waitForFunction(() => document.getElementById("overviewStatus").hidden);
+  await page.waitForFunction(() => document.getElementById("overviewBody").getAttribute("aria-busy") === "false");
   if (process.env.OVERVIEW_SCREENSHOTS) {
     const dir = fileURLToPath(new URL("../.amp/in/artifacts/", import.meta.url));
     fs.mkdirSync(dir, { recursive: true });
@@ -138,10 +182,10 @@ try {
   // Overview's own requests (it is not a request made by Overview).
   await page.waitForTimeout(250);
   await page.click("#overviewBtn");
-  await page.waitForFunction(() => document.getElementById("overviewStatus").hidden);
+  await page.waitForFunction(() => document.getElementById("overviewBody").getAttribute("aria-busy") === "false");
   await page.evaluate(() => { window.overviewFixture.large = true; window.overviewFixture.requests = []; });
   await page.click("#overviewRefresh");
-  await page.waitForFunction(() => document.getElementById("overviewStatus").hidden && document.getElementById("overviewBody").textContent.includes("1000 UNIQUE TASKS"));
+  await page.waitForFunction(() => document.getElementById("overviewBody").getAttribute("aria-busy") === "false" && document.getElementById("overviewBody").textContent.includes("1000 UNIQUE TASKS"));
   assert.equal(await page.locator(".overview-bucket").count(), 13, "100 slices produce the same fixed-size distributions as three slices");
   assert.equal(await page.locator("[data-overview-slice]").count(), 0);
   assert.doesNotMatch(await page.locator("#overviewBody").innerText(), /CUSTOMER MIGRATION|MOBILE \/ 100/);

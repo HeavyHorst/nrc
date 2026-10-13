@@ -2702,6 +2702,8 @@ function hideReminders() {
   }
 }
 
+let taskLoadingIndicator = null;
+
 function prepareTaskRender() {
   const tasksMap = roomTasks.get(0n);
   const searchState = window.NRCTaskSearch?.getState?.();
@@ -2713,6 +2715,9 @@ function prepareTaskRender() {
     searchState.query === TaskViewState.filters.search &&
     searchState.roomId === 0n,
   );
+  taskLoadingIndicator ||= window.createLoadingIndicator(() => renderCurrentTaskView());
+  const loading = (querying && queryState.mode === "loading") || (searching && searchState.mode === "loading");
+  const showLoading = taskLoadingIndicator.update(loading);
   let sourceTasks = tasksMap;
   let applyTextSearch = true;
   let ranked = false;
@@ -2738,7 +2743,7 @@ function prepareTaskRender() {
   }
   if (!filtered) filtered = getFilteredTasks(sourceTasks, { applyTextSearch });
   const taskResultsCount = document.getElementById("taskResultsCount");
-  if (taskResultsCount) {
+  if (taskResultsCount && (!loading || showLoading)) {
     const total = sourceTasks?.size || 0;
     if (querying) taskResultsCount.textContent = queryState.mode === "error"
       ? `${total} LOADED · QUERY FAILED`
@@ -2757,9 +2762,11 @@ function prepareTaskRender() {
       : `${filtered.length} / ${total} RESULTS`;
   }
 
-  const metrics = calculateMetrics(new Map(filtered.map((task) => [task.id, task])));
-  currentMetrics = metrics;
-  updateMetricsDisplay(metrics);
+  if (!loading || showLoading) {
+    const metrics = calculateMetrics(new Map(filtered.map((task) => [task.id, task])));
+    currentMetrics = metrics;
+    updateMetricsDisplay(metrics);
+  }
   updateFilterStatus();
   if (typeof populateAssigneeFilter === "function") {
     populateAssigneeFilter();
@@ -2768,7 +2775,7 @@ function prepareTaskRender() {
     populateProjectFilter();
   }
 
-  return { tasksMap, filtered, searchState: searching ? searchState : null, queryState: querying ? queryState : null, ranked };
+  return { tasksMap, filtered, searchState: searching ? searchState : null, queryState: querying ? queryState : null, ranked, loading, showLoading };
 }
 
 function loadMoreTasksNearEnd() {
@@ -2823,7 +2830,12 @@ function renderTaskList() {
   }
 
   const validUntilMs = getTaskListValidUntil(roomTasks.get(0n));
-  const { filtered, searchState, queryState, ranked } = prepareTaskRender();
+  const { filtered, searchState, queryState, ranked, loading, showLoading } = prepareTaskRender();
+  tbody.setAttribute("aria-busy", String(loading));
+  tbody.inert = loading && (searchState?.mode === "loading" || !queryState?.tasks.size);
+  // A fast filter/search response replaces the previous rows directly, without
+  // first swapping them for a one-frame loading row.
+  if (loading && !showLoading) return;
   const sorted = ranked ? filtered : getSortedTasks(filtered);
 
   window.NRCColumnResize?.init({

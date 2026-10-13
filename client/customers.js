@@ -35,6 +35,7 @@
   let searchTimer;
   let detailTimer;
   let contactLinksGeneration = 0;
+  let loadingIndicator = null;
   const el = id => document.getElementById(id);
   const active = () => window.NRCViewManager?.getActiveView() === "customers";
   const connected = () => typeof serverReady !== "undefined" && serverReady && ws?.readyState === WebSocket.OPEN;
@@ -418,7 +419,14 @@
     edgeObserver = null;
     const query = el("customersSearch").value.trim().toLocaleLowerCase();
     const companies = [...companyIds].map(id => companySearchResults.get(id) || records.get(id)).filter(asset => asset && metadata(asset));
-    el("customersState").textContent = companyPageError ? "CUSTOMER QUERY FAILED" : loading && companies.length === 0 ? "LOADING…" : searchMode === "results" ? `${companies.length} RESULTS` : `${companies.length} / ${companyTotal} CUSTOMERS`;
+    loadingIndicator ||= window.createLoadingIndicator(render);
+    const showLoading = loadingIndicator.update(loading && active());
+    el("customersList").setAttribute("aria-busy", String(loading));
+    if (!loading || companies.length || showLoading || companyPageError) {
+      el("customersState").textContent = companyPageError ? "CUSTOMER QUERY FAILED" :
+        loading && companies.length === 0 ? "LOADING…" : searchMode === "results" ?
+        `${companies.length} RESULTS` : `${companies.length} / ${companyTotal} CUSTOMERS`;
+    }
     el("customersPager").setState({
       hasMore: companyHasMore, loading, error: companyPageError, active: active(),
       disabled: !connected(), label: "LOAD MORE CUSTOMERS",
@@ -431,7 +439,7 @@
     updateHtml(el("customersList"), companies.map(a => {
       const d = metadata(a);
       return `<button type="button" class="customer-row" data-company="${a.assetId}" aria-pressed="${selected === a.assetId}" title="${escape(d.title)}"><span class="customer-row-copy"><strong class="customer-row-title">${escape(d.title)}</strong><span class="customer-meta customer-row-meta">${escape(d.city || "—")} · ${escape(d.assignee || "UNASSIGNED")}${d.archived ? ' · <span class="customer-row-state">ARCHIVED</span>' : ""}</span></span></button>`;
-    }).join("") || (companyPageError ? "" : `<p class="customer-empty">${loading ? "Loading customer register…" : query ? "No matching customers." : "No customers. Create the first company in this room."}</p>`));
+    }).join("") || (companyPageError || (loading && !showLoading) ? "" : `<p class="customer-empty">${loading ? "Loading customer register…" : query ? "No matching customers." : "No customers. Create the first company in this room."}</p>`));
     // Keep the previous detail DOM intact until every endpoint in the page is
     // hydrated. Its actions must not operate on the newly selected company.
     el("customerRecord").inert = !detailReady;
@@ -678,7 +686,10 @@
     const request = ++contactLinksGeneration;
     const editor = editorGeneration;
     const cancelled = () => request !== contactLinksGeneration || editor !== editorGeneration || !enabled || !connected();
-    if (!host.hasChildNodes()) host.innerHTML = '<p class="customer-empty" role="status">LOADING LINKED COMPANIES…</p>';
+    const indicator = window.createLoadingIndicator(() => {
+      if (!cancelled() && !host.hasChildNodes()) host.innerHTML = '<p class="customer-empty" role="status">LOADING LINKED COMPANIES…</p>';
+    });
+    indicator.update(true);
     host.inert = true;
     host.setAttribute("aria-busy", "true");
     try {
@@ -752,6 +763,7 @@
         host.querySelector("button").onclick = () => loadContactCompanies(ref);
       }
     } finally {
+      indicator.update(false);
       if (request === contactLinksGeneration && editor === editorGeneration) {
         host.inert = false;
         host.setAttribute("aria-busy", "false");

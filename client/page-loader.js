@@ -4,6 +4,7 @@ class NRCPageLoader extends HTMLElement {
   state = { hasMore: false, loading: false, error: "", disabled: false, active: true, root: null, label: "LOAD MORE" };
   observer = null;
   requested = false;
+  loadingIndicator = window.createLoadingIndicator(() => this.render());
 
   connectedCallback() {
     if (!this.button) {
@@ -22,6 +23,7 @@ class NRCPageLoader extends HTMLElement {
   disconnectedCallback() {
     this.observer?.disconnect();
     this.observer = null;
+    this.loadingIndicator.update(false);
   }
 
   // Partial updates also let a persistent but hidden view suspend observation.
@@ -45,11 +47,12 @@ class NRCPageLoader extends HTMLElement {
     this.observer?.disconnect();
     this.observer = null;
     const { active, disabled, loading, hasMore, error, root, label } = this.state;
-    this.hidden = !hasMore && !loading && !error;
+    const showLoading = this.loadingIndicator.update(loading && active && this.isConnected);
+    this.hidden = !hasMore && !showLoading && !error;
     this.setAttribute("aria-busy", String(loading));
     this.status.textContent = error;
     this.status.hidden = !error;
-    this.button.textContent = loading ? "LOADING…" : error ? "RETRY" : label;
+    this.button.textContent = error ? "RETRY" : showLoading ? "LOADING…" : label;
     this.button.disabled = !active || disabled || loading || (!hasMore && !error);
     if (!active || disabled || loading || !hasMore || error || this.requested ||
         typeof IntersectionObserver === "undefined") return;

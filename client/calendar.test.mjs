@@ -4,7 +4,8 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { execFileSync } from "node:child_process";
 
-const calendarSource = fs.readFileSync(new URL("./calendar.js", import.meta.url), "utf8");
+const calendarSource = fs.readFileSync(new URL("./loading-indicator.js", import.meta.url), "utf8") +
+  fs.readFileSync(new URL("./calendar.js", import.meta.url), "utf8");
 const querySource = fs.readFileSync(new URL("./task-query.js", import.meta.url), "utf8");
 const ns = value => BigInt(Date.parse(value)) * 1000000n;
 
@@ -38,7 +39,7 @@ function harness({ ready = true } = {}) {
   const document = { activeElement: null, hidden: false, getElementById: id => elements[id] || null,
     querySelectorAll: () => [], addEventListener: (name, fn) => { listeners[name] = fn; } };
   const window = { NRCViewManager: { getActiveView: () => "calendar" }, NRCInspector: { openEntity: ref => opened.push(ref) } };
-  const detachedTimeout = (fn, delay) => { const timer = setTimeout(fn, delay); timer.unref(); return timer; };
+  const detachedTimeout = (fn, delay) => { const timer = setTimeout(fn, delay); timer.unref?.(); return timer; };
   const context = { window, document, TextEncoder, TextDecoder, ArrayBuffer, DataView, Uint8Array, Date, Intl, BigInt, Number,
     String, Math, Array, Object, Set, Map, JSON, WebSocket: { OPEN: 1 }, serverReady: ready,
     ws: { readyState: ready ? 1 : 0 }, myNickname: "rene", getRpcCorrelationId: () => ++id,
@@ -122,11 +123,19 @@ test("pagination is staged, stale correlations are ignored, and no arbitrary pag
   assert.equal(h.elements.calendarControls.inert, false);
 });
 
-test("the calendar stays unchanged until rows and all metadata are loaded", () => {
+test("the calendar stays unchanged until rows and all metadata are loaded", t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const h = harness();
   h.calendar.refresh();
+  assert.equal(h.elements.calendarStatus.hidden, true);
+  t.mock.timers.tick(149);
+  assert.equal(h.elements.calendarStatus.hidden, true);
+  t.mock.timers.tick(1);
+  assert.equal(h.elements.calendarStatus.hidden, false);
+  assert.match(h.elements.calendarStatus.textContent, /LOADING/);
   h.metadata();
   h.reply(h.requests(58)[0], [task(1, "Complete snapshot")]);
+  assert.equal(h.elements.calendarStatus.hidden, true);
   const complete = h.elements.calendarBody.innerHTML;
   assert.match(complete, /Complete snapshot/);
 
@@ -146,6 +155,8 @@ test("the calendar stays unchanged until rows and all metadata are loaded", () =
   assert.equal(h.elements.calendarBody.inert, false);
   assert.equal(h.elements.calendarControls.inert, false);
   assert.equal(h.elements.calendarBody.attributes["aria-busy"], "false");
+  t.mock.timers.tick(150);
+  assert.equal(h.elements.calendarStatus.hidden, true, "fast replacement reads cannot flash a cancelled loading hint");
 });
 
 test("month and grid calculations remain local and stable through DST", () => {

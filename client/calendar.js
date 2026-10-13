@@ -23,6 +23,7 @@ window.NRCCalendar = (() => {
   let query = null, timer = null, pending = null, loaded = [];
   let waitingFor = new Set();
   let rendered = false;
+  let loadingIndicator = null;
   const encoder = new TextEncoder(), decoder = new TextDecoder("utf-8", { ignoreBOM: true });
   const active = () => window.NRCViewManager?.getActiveView?.() === "calendar";
   const ready = () => typeof serverReady !== "undefined" && serverReady && typeof ws !== "undefined" && ws?.readyState === WebSocket.OPEN;
@@ -175,6 +176,8 @@ window.NRCCalendar = (() => {
   }
   function render() {
     const body = el("calendarBody");
+    loadingIndicator ||= window.createLoadingIndicator(render);
+    const showLoading = loadingIndicator.update(state.status === "loading" && active());
     if (!body || !active()) return;
     const loading = state.status === "loading";
     body.inert = loading;
@@ -184,7 +187,7 @@ window.NRCCalendar = (() => {
       el("calendarControls").inert = loading;
       el("calendarControls").hidden = (loading || state.status === "error") && !rendered;
     }
-    el("calendarStatus").textContent = loading ? "LOADING WORKSPACE DEADLINES…" :
+    el("calendarStatus").textContent = loading ? (showLoading ? "LOADING WORKSPACE DEADLINES…" : "") :
       state.status === "error" ? "DEADLINE READ FAILED · SHOWING LAST COMPLETE RESULTS · RETRY" :
       state.status === "offline" ? "OFFLINE · RECONNECT TO LOAD DEADLINES" :
       "";

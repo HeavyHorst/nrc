@@ -53,6 +53,7 @@
 
   const encoder = new TextEncoder();
   const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+  const loadingIndicator = window.createLoadingIndicator(render);
 
   // Entity and relation kinds come from the edge module, so a slice and a link
   // cannot disagree about what a task or a member-of edge is.
@@ -1403,6 +1404,9 @@
     const createButton = document.getElementById("sliceCreateBtn");
 
     const loaded = state.slices.length;
+    const loading = connected() && (state.mode === "loading" || state.loadingMore);
+    const showLoading = loadingIndicator.update(loading);
+    list?.setAttribute("aria-busy", String(loading));
     if (count) {
       const open = state.slices.reduce((sum, slice) => sum + openCount(slice), 0);
       // The server says how many slices the filters match; the register draws the
@@ -1410,14 +1414,16 @@
       // open count is folded from the drawn rows, like the task register's alerts.
       const scope = state.hasMore ? `${loaded} / ${state.total} SLICES` : `${state.total} SLICES`;
       const unassigned = state.unassignedTasks ? ` · ${state.unassignedTasks} TASKS WITHOUT A SLICE` : "";
-      count.textContent = state.mode === "loading" && !loaded ? "LOADING SLICES…" : `${scope} / ${open} OPEN${unassigned}`;
+      if (state.mode !== "loading" || loaded || showLoading) {
+        count.textContent = state.mode === "loading" && !loaded ? "LOADING SLICES…" : `${scope} / ${open} OPEN${unassigned}`;
+      }
     }
 
     if (status) {
       const message = state.mode === "error" ? state.error :
         state.pageError ? state.pageError :
-        state.mode === "loading" && !loaded ? "LOADING SLICES…" :
-        state.loadingMore ? "LOADING MORE SLICES…" :
+        state.mode === "loading" && !loaded ? (showLoading ? "LOADING SLICES…" : "") :
+        state.loadingMore ? (showLoading ? "LOADING MORE SLICES…" : "") :
         state.mode === "ready" && !loaded && filterActive() ? "NO SLICES MATCH THE FILTER" :
         state.mode === "ready" && !loaded ? "NO SLICES IN THIS WORKSPACE" : "";
       status.textContent = message;

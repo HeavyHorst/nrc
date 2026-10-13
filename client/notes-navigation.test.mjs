@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 
-const source = fs.readFileSync(path.resolve("client/notes.js"), "utf8");
+const source = fs.readFileSync(path.resolve("client/loading-indicator.js"), "utf8") +
+  fs.readFileSync(path.resolve("client/notes.js"), "utf8");
 
 function makeRow(convId, noteId) {
   const classes = new Set(["note-card"]);
@@ -51,6 +52,7 @@ function loadNotes() {
     },
     querySelectorAll() { return []; },
     appendChild(row) { renderedRows.push(row); return row; },
+    setAttribute(name, value) { (this.attributes ||= {})[name] = value; },
   };
   const document = {
     addEventListener() {},

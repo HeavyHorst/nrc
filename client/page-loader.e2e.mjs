@@ -80,6 +80,28 @@ try {
   });
   for (const [name, passed] of Object.entries(result)) assert.equal(passed, true, name);
 
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await page.evaluate(() => {
+    window.delayedPager = document.createElement("nrc-page-loader");
+    document.body.append(delayedPager);
+    delayedPager.setState({ loading: true });
+  });
+  assert.equal(await page.evaluate(() => delayedPager.hidden && delayedPager.button.disabled && delayedPager.getAttribute("aria-busy") === "true"), true);
+  await page.clock.runFor(149);
+  assert.equal(await page.evaluate(() => delayedPager.hidden), true);
+  await page.clock.runFor(1);
+  assert.equal(await page.evaluate(() => !delayedPager.hidden && delayedPager.button.textContent === "LOADING…"), true);
+  await page.evaluate(() => delayedPager.setState({ loading: false, error: "Read failed" }));
+  assert.equal(await page.evaluate(() => !delayedPager.hidden && delayedPager.button.textContent === "RETRY" && delayedPager.status.textContent === "Read failed"), true);
+  await page.evaluate(() => delayedPager.setState({ loading: true, error: "" }));
+  await page.clock.runFor(100);
+  await page.evaluate(() => delayedPager.setState({ loading: false }));
+  await page.clock.runFor(100);
+  assert.equal(await page.evaluate(() => delayedPager.hidden), true, "a fast completed page never flashes its loading UI");
+  await page.evaluate(() => delayedPager.remove());
+  await page.clock.resume();
+
   // Real observer, virtualized Notes, real paging handler and cursor boundary.
   await page.setViewportSize({ width: 1800, height: 800 });
   await page.evaluate(() => {
@@ -128,14 +150,21 @@ try {
 
   // Initial register errors must retry the first page, not an invalid continuation.
   await page.waitForFunction(() => NRCCustomers.isEnabled());
+  await page.clock.pauseAt(await page.evaluate(() => new Date().toISOString()));
   await page.evaluate(() => {
     serverReady = true;
     window.customerRequests = [];
     NRCAssets.requestCustomerPage = (room, options) => new Promise((resolve, reject) => customerRequests.push({ options, resolve, reject }));
     NRCViewManager.setActiveView("customers");
   });
-  await page.waitForFunction(() => customerRequests.length === 1);
+  assert.equal(await page.evaluate(() => customerRequests.length), 1);
+  await page.clock.runFor(149);
+  assert.doesNotMatch(await page.locator("#customersList").innerText(), /Loading customer register/);
+  assert.equal(await page.locator("#customersList").getAttribute("aria-busy"), "true");
+  await page.clock.runFor(1);
+  assert.match(await page.locator("#customersList").innerText(), /Loading customer register/);
   await page.evaluate(() => customerRequests[0].reject(new Error("CUSTOMER PAGE UNAVAILABLE")));
+  await page.clock.resume();
   await page.getByRole("button", { name: "RETRY", exact: true }).waitFor();
   assert.equal(await page.locator("#customersPager [role=status]").textContent(), "CUSTOMER PAGE UNAVAILABLE");
   assert.equal(await page.locator("#customersState").textContent(), "CUSTOMER QUERY FAILED");
@@ -170,6 +199,9 @@ try {
   await page.evaluate(() => {
     window.customerRequests = [];
     window.edgeRequests = [];
+    // This independent detail/pagination case must not inherit the preceding
+    // search case's unavailable-search notice.
+    document.getElementById("customersSearch").value = "";
     NRCEdges.requestEdgePage = () => new Promise((resolve, reject) => edgeRequests.push({ resolve, reject }));
     NRCCustomers.reload();
   });

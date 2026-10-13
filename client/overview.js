@@ -4,6 +4,7 @@ window.NRCOverview = (() => {
   const colors = ["backlog", "todo", "inprogress", "done"];
   const pending = new Map();
   let generation = 0, timer = null, snapshot = null, mode = "offline";
+  const loadingIndicator = window.createLoadingIndicator(render);
   const el = id => document.getElementById(id);
   const active = () => window.NRCViewManager?.getActiveView() === "overview";
   const ready = () => typeof serverReady !== "undefined" && serverReady && ws?.readyState === WebSocket.OPEN;
@@ -37,6 +38,7 @@ window.NRCOverview = (() => {
   function cancel() {
     generation++;
     clearTimeout(timer);
+    loadingIndicator.update(false);
     for (const request of pending.values()) { clearTimeout(request.timeout); request.resolve(null); }
     pending.clear();
   }
@@ -69,10 +71,11 @@ window.NRCOverview = (() => {
     }).join("")}</div><p class="overview-note">${total} OPEN SLICES · SHARE OF SLICES</p>`);
   }
   function render() {
+    const showLoading = loadingIndicator.update(mode === "loading" && active());
     if (!active() || !el("overviewBody")) return;
-    el("overviewStatus").textContent = mode === "loading" ? "LOADING WORKSPACE OVERVIEW…" : mode === "error" ?
+    el("overviewStatus").textContent = mode === "loading" ? (showLoading ? "LOADING WORKSPACE OVERVIEW…" : "") : mode === "error" ?
       "READ FAILED · RETRY · LAST COMPLETE RESULTS RETAINED" : mode === "offline" ? "OFFLINE · RECONNECT TO REFRESH" : "";
-    el("overviewStatus").hidden = mode === "ready";
+    el("overviewStatus").hidden = !el("overviewStatus").textContent;
     el("overviewBody").setAttribute("aria-busy", String(mode === "loading"));
     if (!snapshot) { el("overviewBody").innerHTML = ""; return; }
     if (mode === "loading" || mode === "error") return;

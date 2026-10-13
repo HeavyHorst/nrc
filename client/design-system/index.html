@@ -517,6 +517,7 @@
                     <nrc-page-loader data-example="ready"></nrc-page-loader>
                     <nrc-page-loader data-example="loading"></nrc-page-loader>
                     <nrc-page-loader data-example="error"></nrc-page-loader>
+                    <p class="catalog-usage"><b>LOADING FEEDBACK</b> Read indicators in Overview, Calendar, Slices, Tasks, Notes, Customers and page loaders appear only after 150 ms of continuous loading. Fast reads replace content directly. Existing content is retained where available. Busy semantics and action guards apply immediately; errors, offline notices and incomplete-data warnings are never delayed. Finishing or cancelling a read cancels its pending indicator.</p>
                     <p class="catalog-usage"><b>CONTRACT</b> Light DOM, shared buttons and status. <code>setState({ hasMore, loading, error, disabled, active, root, label })</code> updates the paging UI. The component requests another page through <code>nrc:load-more</code> when the button approaches the scroll boundary or is activated. The owner immediately publishes loading state and later success or error. Errors stop automatic loading and expose RETRY; exhausted lists hide the control. Hidden, inactive and disconnected loaders do not request pages. Disconnecting releases the observer. Requests, cursors, filters, stale-response guards, rows and virtual scrolling remain with the owner. The examples display fixed states without a data source.</p>
                 </div>
                 <p class="catalog-usage"><b>ROW STATES</b> Tasks, notes, reminders, customers, contacts, slices, slice members and system-log rows share the state rules in <code>css/main.css</code>. Selection uses a tinted background and a 3px left accent; hover never replaces selection. Selection, pointer hover and keyboard focus all show the same 1px inset outline around the whole row, including when its title button has focus. Attention and customer activity rows share hover and focus but have no persistent selection.</p>
@@ -1281,7 +1282,8 @@ status      ← Service Worker</code></pre>
     <script src="../custom-picker.js?v=20260927appointment2"></script>
     <script src="../custom-select.js?v=20260924select1"></script>
     <script src="../note-html.js?v=20261007fragments1"></script>
-    <script src="../page-loader.js?v=20260924pager1"></script>
+    <script src="../loading-indicator.js?v=20261013loading1"></script>
+    <script src="../page-loader.js?v=20261013loading1"></script>
     <script src="catalog.js?v=20260912css1"></script>
     <script src="../attachments.js?v=20261008files1"></script>
     <script>window.NRCAssets = { MAX_PAYLOAD_LENGTH: 65535 };</script>

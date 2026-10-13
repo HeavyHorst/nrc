@@ -131,6 +131,7 @@ function makeHarness({ now = null } = {}) {
   vm.runInContext(`${read("task-state.js")}\nwindow.__TaskViewState = TaskViewState;`, sandbox);
   vm.runInContext(read("query-controller.js"), sandbox);
   vm.runInContext(read("task-search.js"), sandbox);
+  vm.runInContext(read("loading-indicator.js"), sandbox);
   vm.runInContext(`${read("tasks.js")}\nwindow.__renderTaskList = renderTaskList; window.__renderTaskListIfNeeded = renderTaskListIfNeeded; window.__invalidateTaskList = invalidateTaskList; window.__expireTaskList = () => { taskListValidUntilMs = 0; }; window.__getTaskListValidUntil = getTaskListValidUntil; window.__loadMoreTasksNearEnd = loadMoreTasksNearEnd; window.__handleCommentChanged = handleCommentChanged; window.__setKanbanVisible = (visible) => { kanbanVisible = visible; };`, sandbox);
   vm.runInContext(read("inspector.js"), sandbox);
   return { sandbox, window, elements, sent, fetches };
@@ -329,6 +330,7 @@ test("the task register head reads N / M RESULTS while part of the listing is dr
 });
 
 test("a query started while the list is hidden invalidates its previously rendered rows", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const { sandbox, window, elements } = makeHarness();
   window.__renderTaskList();
   const previous = elements.get("taskListBody").innerHTML;
@@ -338,6 +340,11 @@ test("a query started while the list is hidden invalidates its previously render
   window.NRCTaskQuery.update();
   assert.equal(elements.get("taskListBody").innerHTML, previous);
   window.__renderTaskListIfNeeded();
+  assert.equal(elements.get("taskListBody").innerHTML, previous, "fast reads retain the previous rows");
+  assert.equal(elements.get("taskListBody").inert, true, "retained rows cannot act on a replaced query");
+  t.mock.timers.tick(149);
+  assert.equal(elements.get("taskListBody").innerHTML, previous);
+  t.mock.timers.tick(1);
   assert.match(elements.get("taskListBody").innerHTML, /LOADING TASKS/);
 });
 
