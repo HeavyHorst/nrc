@@ -200,6 +200,8 @@ try {
   response = { results: [], stale: true };
   await search("stale");
   assert.match(await page.locator("#workspaceSearchStatus").textContent(), /outdated/);
+  assert.match(await page.locator("#workspaceSearchStatus").textContent(), /background sync/);
+  assert.doesNotMatch(await page.locator("#workspaceSearchStatus").textContent(), /failed/i);
   await capture("stale");
   fail = true;
   await search("failure");

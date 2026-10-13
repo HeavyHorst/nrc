@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261013overviewactions2";
+const CACHE_NAME = "nrc-terminal-20261013searchsync1";
 
 const APP_SHELL = [
   "./",
@@ -34,7 +34,7 @@ const APP_SHELL = [
   "./page-loader.js?v=20261013loading1",
   "./task-state.js?v=20260926calendar7",
   "./query-controller.js?v=20260914workspace1",
-  "./workspace-search.js?v=20261007customersearch1",
+  "./workspace-search.js?v=20261013searchsync1",
   "./task-search.js?v=20260917taskscroll1",
   "./detail-ui.js?v=20261007people1",
   "./column-resize.js?v=20260913tables2",

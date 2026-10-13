@@ -66,7 +66,7 @@
       empty: "No matching records. Try another phrase or record type.",
       error: "Search is unavailable. No complete results can be shown. Retry the search.",
     };
-    const searchNotice = stale ? "Cached results may be outdated: server reconciliation failed. Retry the search." : messages[mode] || "";
+    const searchNotice = stale ? "Search index may be outdated. Refresh the search after the background sync." : messages[mode] || "";
     status.textContent = [!connected && "Workspace connection is offline. Reconnect to open records.", searchNotice].filter(Boolean).join(" ");
     status.hidden = !status.textContent;
     status.dataset.state = mode === "error" || !connected || stale ? "warning" : mode;
