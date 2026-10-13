@@ -237,10 +237,11 @@ body.sullivan-workbench #chatAttach {
 /* Overview compares current workspace facts, independently of Attention. */
 .inspector.ledger-context.agenda-panel.inspector-overview-hidden { display: none !important; }
 .overview-panel { flex: 1; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: var(--surface-content); }
-.overview-panel > .panel-header > div { display: flex; justify-content: space-between; align-items: center; }
 .overview-body { flex: 1; min-height: 0; overflow: auto; padding: 1.5rem; display: grid; align-content: start; gap: 1.5rem; }
 .overview-chart { border-top: var(--content-border); min-width: 0; }
 .overview-chart > .panel-header { height: auto; min-height: 2.5rem; padding: 0.625rem 0; border: 0; background: transparent; font-size: var(--font-sm); }
+.overview-chart > .panel-header > div { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.overview-chart > .panel-header .btn { flex-shrink: 0; }
 .overview-chart > .panel-header > div > span { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.375rem 1rem; }
 .overview-chart .panel-header small { font-size: var(--font-xs); font-weight: normal; color: var(--text-dim); }
 .overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2rem; }
@@ -269,11 +270,11 @@ button.overview-segment { cursor: pointer; }
 .overview-explanation p { max-width: 65rem; line-height: 1.6; }
 @media (max-width: 1100px) { .overview-grid { grid-template-columns: 1fr; } }
 @media (max-width: 768px) {
+    .overview-chart > .panel-header .btn { min-height: 44px; }
     .overview-body { padding: 0.875rem; gap: 1.25rem; font-size: var(--mobile-font-base); }
     .overview-grid { gap: 1.25rem; }
     .overview-bucket { grid-template-columns: 7rem minmax(0, 1fr) 2rem 3rem; font-size: var(--mobile-font-sm); }
     .overview-legend, .overview-note, .overview-explanation, .overview-chart .panel-header small { font-size: var(--mobile-font-sm); }
     .overview-chart > .panel-header { font-size: var(--mobile-font-base); }
     .overview-panel > .panel-header { min-height: 44px; height: auto; flex-shrink: 0; }
-    .overview-panel > .panel-header .btn { min-height: 44px; }
 }

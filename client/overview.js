@@ -61,8 +61,8 @@ window.NRCOverview = (() => {
   function segments(counts, total, interactive = false) {
     return counts.map((value, i) => value ? `<${interactive ? "button type=\"button\"" : "span"} class="overview-segment overview-${colors[i]}" style="flex-grow:${value}" ${interactive ? `data-overview-status="${i}"` : ""} title="${labels[i]}: ${value}" aria-label="${labels[i]}: ${value} of ${total}">${value}</${interactive ? "button" : "span"}>` : "").join("");
   }
-  function section(title, content) {
-    return `<section class="overview-chart"><header class="panel-header"><div><span>${title}</span></div></header>${content}</section>`;
+  function section(title, content, actions = "") {
+    return `<section class="overview-chart"><header class="panel-header"><div><span>${title}</span>${actions}</div></header>${content}</section>`;
   }
   function distribution(title, labels, values, total) {
     return section(title, `<div class="overview-distribution">${labels.map((label, i) => {
@@ -77,13 +77,14 @@ window.NRCOverview = (() => {
       "READ FAILED · RETRY · LAST COMPLETE RESULTS RETAINED" : mode === "offline" ? "OFFLINE · RECONNECT TO REFRESH" : "";
     el("overviewStatus").hidden = !el("overviewStatus").textContent;
     el("overviewBody").setAttribute("aria-busy", String(mode === "loading"));
-    if (!snapshot) { el("overviewBody").innerHTML = ""; return; }
+    const refreshButton = '<button class="btn" id="overviewRefresh" type="button">REFRESH</button>';
+    if (!snapshot) { el("overviewBody").innerHTML = section("WORKSPACE STATUS", "", refreshButton); return; }
     if (mode === "loading" || mode === "error") return;
     const { counts, sizes, blockages, ages, openSlices, assignedTasks, unassignedTasks } = snapshot;
     const total = counts.reduce((a, b) => a + b, 0);
     const legend = `<div class="overview-legend">${labels.map((label, i) => `<span><i class="overview-${colors[i]}"></i>${label}</span>`).join("")}</div>`;
     el("overviewBody").innerHTML = section(`WORKSPACE STATUS <small>${total} UNIQUE TASKS</small>`,
-      total ? `<div class="overview-bar overview-bar--hero">${segments(counts, total, true)}</div>${legend}` : '<p class="overview-note">NO TASKS IN THIS WORKSPACE</p>') +
+      total ? `<div class="overview-bar overview-bar--hero">${segments(counts, total, true)}</div>${legend}` : '<p class="overview-note">NO TASKS IN THIS WORKSPACE</p>', refreshButton) +
       `<div class="overview-grid">` +
       distribution("WORK SIZE <small>TASKS PER SLICE</small>", ["0 TASKS", "1–5 TASKS", "6–15 TASKS", "16–30 TASKS", "31+ TASKS"], sizes, openSlices) +
       distribution("BLOCKAGES <small>BLOCKED TASKS PER SLICE</small>", ["0 BLOCKED", "1–2 BLOCKED", "3+ BLOCKED"], blockages, openSlices) +
@@ -94,8 +95,8 @@ window.NRCOverview = (() => {
   }
   function init() {
     el("overviewBtn").addEventListener("click", () => window.NRCViewManager.setActiveView("overview"));
-    el("overviewRefresh").addEventListener("click", refresh);
     el("overviewBody").addEventListener("click", event => {
+      if (event.target.closest("#overviewRefresh")) { refresh(); return; }
       const status = event.target.closest("[data-overview-status]");
       if (!status) return;
       window.NRCTasks.showKanban(); setTaskGrouping("flat"); resetFilters();

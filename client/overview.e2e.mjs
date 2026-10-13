@@ -91,6 +91,8 @@ try {
   assert.match(await page.locator("#overviewBody").innerText(), /48 UNIQUE TASKS/);
   assert.equal(await page.locator("[data-overview-status]").count(), 4);
   assert.equal(await page.locator(".overview-bucket").count(), 13);
+  assert.equal(await page.locator("#overviewPanel > .panel-header button").count(), 0, "dashboard actions do not belong in its identity header");
+  assert.equal(await page.locator("#overviewBody > .overview-chart:first-child > .panel-header #overviewRefresh").isVisible(), true);
   assert.doesNotMatch(await page.locator("#overviewBody").innerText(), /NEEDS ATTENTION|CLOSED\n/);
   assert.deepEqual(await page.locator(".overview-legend").first().locator("span").allTextContents(), ["BACKLOG", "TODO", "IN PROGRESS", "DONE"]);
   assert.deepEqual(await page.locator(".overview-bar--coverage .overview-segment").allTextContents(), ["39", "9"]);
@@ -218,7 +220,8 @@ try {
   assert.equal(await page.locator("[data-overview-status]").count(), 0);
   await page.evaluate(() => { serverReady = false; window.NRCOverview.disconnect(); });
   assert.match(await page.locator("#overviewStatus").innerText(), /OFFLINE/);
-  assert.equal(await page.locator("#overviewBody").innerText(), "");
+  assert.match(await page.locator("#overviewBody").innerText(), /^WORKSPACE STATUS\s+REFRESH$/);
+  assert.equal(await page.locator(".overview-bar").count(), 0, "offline clears stale chart data but retains the refresh action");
   assert.deepEqual(errors, []);
   console.log("Overview: one 14-byte request / 105-byte response, aggregate decoding, failure/malformed retention, status drill-down, empty/offline and theme/width checks passed");
   console.log("Large fixture: 100 slices, 1000 tasks rendered from one server aggregate; no slice-page or task-query requests");
