@@ -21,6 +21,9 @@ shard_merge_requirements :: proc(dst: ^Shard_High_Water_Requirements, src: Shard
 
 shard_mutation_entity_id :: proc(m: Shard_Mutation) -> (id: u64, ok: bool) {
 	switch m.domain {
+	case .DM:
+		conv_id, _, _, _, valid := decode_dm_state(m.payload)
+		return u64(conv_id), valid
 	case .Task:
 		if m.op == u8(Task_Log_Op.Delete) {
 			if len(m.payload) != 16 do return
@@ -226,6 +229,9 @@ validate_shard_mutation :: proc(m: Shard_Mutation) -> (req: Shard_High_Water_Req
 		return validate_shard_asset_body(m)
 	case .Edge:
 		return validate_shard_edge_body(m)
+	case .DM:
+		_, _, _, _, ok := decode_dm_state(m.payload)
+		return req, ok ? .None : .Malformed
 	}
 	return req, .Unsupported
 }

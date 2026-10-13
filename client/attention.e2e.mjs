@@ -245,19 +245,23 @@ try {
     // ---- chat: one unread mention and one plain message in room 3 ----------
     const newMessage = (roomId, text, seq, author) => {
       const authorBytes = encoder.encode(author), content = encoder.encode(text);
-      const bytes = new Uint8Array(31 + authorBytes.length + content.length);
+      const bytes = new Uint8Array(88 + authorBytes.length + content.length);
       const view = new DataView(bytes.buffer);
-      view.setUint16(0, Opcode.S_NewMessage);
+      view.setUint16(0, Opcode.S_MessagePage);
       view.setBigUint64(2, roomId, false);
-      view.setBigUint64(10, BigInt(seq), false);
-      view.setUint16(18, authorBytes.length, false);
-      bytes.set(authorBytes, 20);
-      let offset = 20 + authorBytes.length;
+      view.setBigUint64(13, BigInt(seq), false);
+      view.setUint16(41, 1, false);
+      let offset = 43;
+      view.setBigUint64(offset, roomId, false); offset += 8;
+      view.setBigUint64(offset, BigInt(seq), false); offset += 8;
+      view.setBigUint64(offset, BigInt(seq), false); offset += 16;
+      view.setUint16(offset, authorBytes.length, false); offset += 2;
+      bytes.set(authorBytes, offset); offset += authorBytes.length;
       view.setBigInt64(offset, BigInt(Date.now()) * 1000000n, false); offset += 8;
       view.setUint8(offset++, 0);
       view.setUint16(offset, content.length, false); offset += 2;
       bytes.set(content, offset);
-      parseNewMessage(view);
+      handleBinaryMessage(bytes.buffer);
     };
     currentRoomId = 2n;
     subscribedRooms.clear(); subscribedRooms.add(2n); subscribedRooms.add(3n);
@@ -297,7 +301,7 @@ try {
       let offset = 43;
       view.setBigUint64(offset, request.convId, false); offset += 8;
       view.setBigUint64(offset, BigInt(sequence), false); offset += 8;
-      offset += 16;
+      view.setBigUint64(offset, BigInt(sequence), false); offset += 16;
       view.setUint16(offset, authorBytes.length, false); offset += 2;
       bytes.set(authorBytes, offset); offset += authorBytes.length;
       view.setBigInt64(offset, BigInt(Date.now()) * 1000000n, false); offset += 8;
@@ -473,6 +477,9 @@ try {
   }
   assert.equal(activated, true, "Enter activates the row the cursor stands on");
   assert.equal(await page.evaluate(() => window.pageRequests.length), 1, "one page request, not two");
+  await page.evaluate(() => window.answerPageRequest({
+    sequence: 42, content: "@rene the key is rotated, please confirm", author: "mara",
+  }));
 
   // Leaving the register hands the view back. The mention that was just read is
   // no longer unread, so its row cleared itself and the count followed the rows:
@@ -496,6 +503,53 @@ try {
     null, { timeout: 10000 });
   assert.equal((await page.locator("#attentionBody").textContent()).trim(), "NOTHING NEEDS ATTENTION");
   assert.equal(await page.locator("#attentionViewCount").isVisible(), false);
+
+  // DM start negotiates retention despite its existing automatic subscription.
+  // An ephemeral message with the same sequence must not become a jump target.
+  await page.evaluate(() => {
+    const id = 0x8000000000000063n;
+    window.dmFixtureID = id;
+    NRCViewManager.setActiveView("notes");
+    const frames = window.dmFrames = [];
+    const send = ws.send;
+    ws.send = (buffer) => { frames.push(buffer.slice(0)); send(buffer); };
+    const name = new TextEncoder().encode("mara");
+    const started = new DataView(new ArrayBuffer(19 + name.length));
+    started.setUint16(0, Opcode.S_DMStarted);
+    started.setBigUint64(2, id);
+    started.setUint16(10, name.length);
+    new Uint8Array(started.buffer, 12, name.length).set(name);
+    started.setUint8(12 + name.length, 1);
+    started.setUint8(13 + name.length, 1);
+    handleBinaryMessage(started.buffer);
+    const probe = new DataView(frames.find((buffer) => new DataView(buffer).getUint16(0) === Opcode.C_SubscribeConvsV2));
+    const ready = new DataView(new ArrayBuffer(32));
+    ready.setUint16(0, Opcode.S_SubscriptionReady);
+    ready.setUint32(2, probe.getUint32(probe.byteLength - 4));
+    ready.setUint16(6, 1);
+    ready.setBigUint64(8, id);
+    handleBinaryMessage(ready.buffer);
+    window.answerPageRequest({ sequence: 87, content: "earlier retained DM", author: "mara" });
+    logMessage("Message", "ephemeral colliding DM", id, { author: "mara", sequence: 88n });
+    window.pushMessage(id, "retained DM jump target", 88, "mara");
+    NRCViewManager.setActiveView("attention");
+  });
+  await page.waitForFunction(() => NRCAttention.getState().rows.some((row) => row.kind === "DM" && row.jumpable));
+  await page.locator('[data-attention-filter="message"]').click();
+  await page.locator('#attentionBody .attention-title').click();
+  assert.equal(await page.evaluate(() => currentRoomId === window.dmFixtureID), true);
+  assert.equal(await page.locator('#logOutput [data-sequence="88"]').count(), 1);
+  assert.match(await page.locator('#logOutput [data-sequence="88"]').textContent(), /retained DM jump target/);
+  await page.evaluate(() => window.answerPageRequest({ sequence: 88, content: "retained DM jump target", author: "mara" }));
+  await page.waitForFunction(() => document.querySelector('#logOutput [data-sequence="88"]')?.classList.contains("chat-target"));
+  await page.evaluate(() => {
+    const result = sendRawProtocolMessage("outgoing retained DM");
+    if (!result.retained || new DataView(window.dmFrames.at(-1)).getUint16(0) !== Opcode.C_SendMessageV2) throw new Error("DM send bypassed retention");
+    const left = new DataView(new ArrayBuffer(14));
+    left.setUint16(0, Opcode.S_DMLeft); left.setBigUint64(2, window.dmFixtureID);
+    handleBinaryMessage(left.buffer);
+    if (retainedRoomStates.has(window.dmFixtureID) || pendingMessages.size) throw new Error("leave kept retained DM state");
+  });
 
   assert.deepEqual(errors, [], "no page errors");
   console.log("attention e2e passed");

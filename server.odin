@@ -132,8 +132,12 @@ MAX_CONNECTIONS_PER_THREAD :: 65535
 
 // DM_Participants stores the two participants of a DM conversation
 DM_Participants :: struct {
-	user_a: string, // alphabetically first (interned)
-	user_b: string, // alphabetically second (interned)
+	user_a:                string, // alphabetically first (interned)
+	user_b:                string, // alphabetically second (interned)
+	persistent:            bool,
+	// Latest metadata mutation must be durable before retaining a message body.
+	durability_generation: u64,
+	durability_record:     u64,
 }
 
 Note_Sort_Key :: struct {
@@ -306,7 +310,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:0d51ec8b"
+BUILD_VERSION :: "dev-2026-10:d437618"
 PROTOCOL_VERSION :: 8 // Calendar appointment rows carry an explicit time interval.
 
 jwt_auth_secret: string

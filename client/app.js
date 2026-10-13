@@ -2305,7 +2305,15 @@ function parseErrorResponse(dataView) {
     }
     finishPendingRetainedSend(logicalId, pending);
   }
-  if (originOpcode === Opcode.C_SubscribeConvsV2) retainedSubscriptionRequests.delete(correlationId);
+  if (originOpcode === Opcode.C_SubscribeConvsV2) {
+    const requested = retainedSubscriptionRequests.get(correlationId);
+    retainedSubscriptionRequests.delete(correlationId);
+    if (errorMsg === "retained subscriptions require a public chat room" &&
+        requested?.length && requested.every((id) => isDMConversation(id))) {
+      for (const id of requested) retainedRoomStates.set(id, "disabled");
+      return;
+    }
+  }
   if (originOpcode === Opcode.C_ListMessagesBefore || originOpcode === Opcode.C_ReplayMessagesAfter) {
     const request = retainedHistoryRequests.get(correlationId);
     completeRetainedOperation(correlationId);
@@ -2555,6 +2563,8 @@ function parseDMStarted(dataView) {
   });
   subscribedRooms.add(convId);
 
+  subscribeToConversations([convId]);
+
   // Update UI
   updateDMListUI();
   updateRoomUI();
@@ -2642,8 +2652,10 @@ function parseDMList(dataView) {
   }
 
   for (const staleDMId of oldDMIds) {
+    clearDMRetention(staleDMId);
     subscribedRooms.delete(staleDMId);
   }
+  subscribeToConversations([...activeDMs.keys()]);
   if (previousSullivanDisplayId != null && !activeDMs.has(BigInt(previousSullivanDisplayId))) {
     window.NRCAI?.onDisplayConversationRemoved?.(previousSullivanDisplayId);
   }
@@ -2697,6 +2709,7 @@ function parseDMError(dataView) {
       }
 
       pendingLeaveDMs.delete(convId);
+      clearDMRetention(convId);
       window.NRCAI?.onDisplayConversationRemoved?.(convId);
       activeDMs.delete(convId);
       subscribedRooms.delete(convId);
@@ -2750,6 +2763,7 @@ function parseDMLeft(dataView) {
   window.NRCAI?.onDisplayConversationRemoved?.(convId);
 
   // Remove from local state
+  clearDMRetention(convId);
   activeDMs.delete(convId);
   subscribedRooms.delete(convId);
 
@@ -3659,6 +3673,26 @@ function parseNewMessage(dataView) {
   }
 }
 
+function clearDMRetention(convId) {
+  retainedRoomStates.delete(convId);
+  retainedHistoryStarted.delete(convId);
+  for (const [correlationId, ids] of retainedSubscriptionRequests) {
+    const remaining = ids.filter((id) => id !== convId);
+    if (remaining.length) retainedSubscriptionRequests.set(correlationId, remaining);
+    else retainedSubscriptionRequests.delete(correlationId);
+  }
+  for (const [correlationId, request] of retainedHistoryRequests) {
+    if (request.convId !== convId) continue;
+    retainedHistoryRequests.delete(correlationId);
+    retainedOperations.delete(correlationId);
+    retainedOperationQueue = retainedOperationQueue.filter((op) => op.correlationId !== correlationId);
+  }
+  for (const [logicalId, pending] of pendingMessages) {
+    if (pending.convId === convId && pending.retained) finishPendingRetainedSend(logicalId, pending);
+  }
+  drainRetainedOperationQueue();
+}
+
 function drainRetainedOperationQueue() {
   while (
     retainedOperations.size < MAX_RETAINED_OPERATIONS_IN_FLIGHT &&
@@ -3749,7 +3783,8 @@ function requeuePendingRetainedMessages(convId) {
 
 function parseRetainedSubscriptionReady(dataView) {
   const ready = window.NRCRetainedMessages.parseSubscriptionReady(dataView);
-  const requestedRooms = retainedSubscriptionRequests.get(ready.correlationId) || [];
+  const requestedRooms = retainedSubscriptionRequests.get(ready.correlationId);
+  if (!requestedRooms) return;
   retainedSubscriptionRequests.delete(ready.correlationId);
   const enabledRooms = new Set(ready.entries.map((entry) => entry.convId));
 
@@ -3768,6 +3803,7 @@ function parseRetainedSubscriptionReady(dataView) {
     }
   }
   for (const entry of ready.entries) {
+    if (!requestedRooms.includes(entry.convId)) continue;
     requeuePendingRetainedMessages(entry.convId);
     if (!retainedHistoryStarted.has(entry.convId)) {
       retainedHistoryStarted.add(entry.convId);
@@ -3814,6 +3850,9 @@ function ingestRetainedMessage(record, suppressNotification) {
 function parseRetainedMessagePage(dataView) {
   const page = window.NRCRetainedMessages.parseMessagePage(dataView);
   const request = retainedHistoryRequests.get(page.correlationId);
+  // Correlation zero is a live broadcast, not a canceled history response.
+  if (page.correlationId !== 0 && (!request || request.convId !== page.convId)) return;
+  if (isDMConversation(page.convId) && !subscribedRooms.has(page.convId)) return;
   if (request) {
     retainedHistoryRequests.delete(page.correlationId);
     completeRetainedOperation(page.correlationId);
@@ -3849,7 +3888,6 @@ function sendRawProtocolMessage(content) {
 
   const retainedState = retainedRoomStates.get(currentRoomId);
   if (
-    !isDMConversation(currentRoomId) &&
     retainedState !== "enabled" &&
     retainedState !== "disabled"
   ) {
@@ -3857,7 +3895,7 @@ function sendRawProtocolMessage(content) {
     return false;
   }
 
-  if (!isDMConversation(currentRoomId) && retainedState === "enabled") {
+  if (retainedState === "enabled") {
     if (pendingMessages.size >= MAX_PENDING_RETAINED_SENDS) {
       logMessage("Error", "TOO MANY UNCONFIRMED MESSAGES; WAIT FOR ACKS");
       return false;
@@ -4015,7 +4053,7 @@ async function sendChatAttachment(file) {
   }
 
   const retainedState = retainedRoomStates.get(currentRoomId);
-  if (!isDMConversation(currentRoomId) && retainedState !== "enabled" && retainedState !== "disabled") {
+  if (retainedState !== "enabled" && retainedState !== "disabled") {
     logMessage("Error", "MESSAGE HISTORY IS INITIALIZING; PLEASE RETRY");
     return;
   }
@@ -4182,21 +4220,27 @@ function subscribeToConversations(convIds) {
     convId !== 0n && !isDMConversation(convId) && retainedRoomStates.get(convId) !== "disabled",
   );
   const legacyIds = convIds.filter((convId) =>
-    convId === 0n || isDMConversation(convId) || retainedRoomStates.get(convId) === "disabled",
+    convId === 0n || retainedRoomStates.get(convId) === "disabled",
+  );
+  const dmIds = convIds.filter((convId) =>
+    isDMConversation(convId) && retainedRoomStates.get(convId) !== "disabled",
   );
 
-  for (let start = 0; start < roomIds.length; start += 64) {
-    const batch = roomIds.slice(start, start + 64);
-    batch.forEach((convId) => {
-      if (!retainedRoomStates.has(convId)) retainedRoomStates.set(convId, "unknown");
-    });
-    const correlationId = (clientRequestIdCounter = (clientRequestIdCounter + 1) >>> 0);
-    retainedSubscriptionRequests.set(correlationId, batch);
-    sendPacket(window.NRCRetainedMessages.encodeSubscribe(
-      Opcode.C_SubscribeConvsV2,
-      batch,
-      correlationId,
-    ));
+  // Never mix DM probes with rooms: old servers reject the entire DM batch.
+  for (const ids of [roomIds, dmIds]) {
+    for (let start = 0; start < ids.length; start += 64) {
+      const batch = ids.slice(start, start + 64);
+      batch.forEach((convId) => {
+        if (!retainedRoomStates.has(convId)) retainedRoomStates.set(convId, "unknown");
+      });
+      const correlationId = (clientRequestIdCounter = (clientRequestIdCounter + 1) >>> 0);
+      retainedSubscriptionRequests.set(correlationId, batch);
+      sendPacket(window.NRCRetainedMessages.encodeSubscribe(
+        Opcode.C_SubscribeConvsV2,
+        batch,
+        correlationId,
+      ));
+    }
   }
 
   for (let start = 0; start < legacyIds.length; start += 64) {
@@ -5131,6 +5175,7 @@ async function clearCurrentRoomMessages(options = {}) {
 
 window.NRCChat = window.NRCChat || {};
 window.NRCChat.clearCurrentRoomMessages = clearCurrentRoomMessages;
+window.NRCChat.getRetentionState = (convId) => retainedRoomStates.get(BigInt(convId));
 
 // --- UI and Logging ---
 

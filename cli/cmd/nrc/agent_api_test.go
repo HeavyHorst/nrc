@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/heavyhorst/nrc/cli/pkg/conn"
 	"github.com/heavyhorst/nrc/cli/pkg/output"
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
@@ -375,6 +376,60 @@ func TestRetainedChatSuccessOutputIncludesRetryIdentity(t *testing.T) {
 	}
 	if result.ID != 9 || result.Details["client_message_id"] != id || result.Details["retained"] != true || result.Details["sequence"] != float64(9) || result.Details["timestamp"] != float64(10) {
 		t.Fatalf("incomplete machine output: %s", machine)
+	}
+}
+
+func TestRetainedDMWatchRendering(t *testing.T) {
+	id, err := conn.ResolveRoomFlag("workspace", "9223372036854775808")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := buildChatSendMessage(id, "hello", protocol.ContentTypePlainText, true, protocol.ClientMessageID{1})
+	if err != nil || binary.BigEndian.Uint64(msg.Data[:8]) != 1<<63 {
+		t.Fatalf("DM send lost bits: %v", err)
+	}
+	var page bytes.Buffer
+	for _, value := range []any{uint64(1 << 63), uint8(1), uint8(0), uint8(0), uint64(9), uint64(0), uint64(9), uint32(0), uint16(2)} {
+		if err := binary.Write(&page, binary.BigEndian, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, sequence := range []uint64{8, 9} {
+		for _, value := range []any{uint64(1 << 63), sequence, protocol.ClientMessageID{1}, uint16(3), []byte("Ada"), int64(10), uint8(protocol.ContentTypePlainText), uint16(5), []byte("hello")} {
+			if err := binary.Write(&page, binary.BigEndian, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	t.Cleanup(func() { _ = output.Configure(false, false, "") })
+	for _, human := range []bool{true, false} {
+		if err := output.Configure(human, false, ""); err != nil {
+			t.Fatal(err)
+		}
+		rendered := captureStdout(t, func() { renderChatWatchMessage(&protocol.Message{Opcode: protocol.S_MessagePage, Data: page.Bytes()}) })
+		lines := strings.Split(strings.TrimSpace(rendered), "\n")
+		if len(lines) != 2 {
+			t.Fatalf("missing page messages: %q", rendered)
+		}
+		for i, line := range lines {
+			if human {
+				if !strings.Contains(line, "Ada") || !strings.Contains(line, "hello") {
+					t.Fatalf("human event: %q", line)
+				}
+			} else {
+				var event chatMessageEvent
+				if err := json.Unmarshal([]byte(line), &event); err != nil {
+					t.Fatal(err)
+				}
+				if event.Event != "message" || event.RoomID != id || event.Sequence != int64(8+i) || event.Timestamp != 10 || event.Username != "Ada" || event.Content != "hello" {
+					t.Fatalf("event: %+v", event)
+				}
+			}
+		}
+		bad := captureStdout(t, func() { renderChatWatchMessage(&protocol.Message{Opcode: protocol.S_MessagePage, Data: []byte{1}}) })
+		if !strings.Contains(bad, "message page too short") {
+			t.Fatalf("missing decode error: %q", bad)
+		}
 	}
 }
 

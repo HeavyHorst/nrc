@@ -367,6 +367,15 @@ Legacy requests ending after the conversation IDs are accepted and use correlati
 `C_SendMessageV2` and `S_MessagePage` are the retained path. `C_SendMessage`
 remains the ephemeral path.
 
+DMs use these same formats whenever `NRC_MESSAGE_RETENTION` enables message
+retention. Send and subscription requests require DM membership; history requires
+membership plus subscription, rechecked when asynchronous reads finish.
+After `S_DMStarted` or `S_DMList`, clients probe DM capability with a correlated
+`C_SubscribeConvsV2`: an authorized DM omitted from `S_SubscriptionReady` uses
+the ephemeral path. DM start/list auto-subscription alone does not negotiate
+retention. `S_MessagePage` with correlation zero is a live retained broadcast;
+nonzero correlations identify requested history pages.
+
 #### C_SendMessageV2 (Client → Server)
 ```
 [ConversationID: 8 bytes] [ClientMessageID: 16 bytes] [CorrelationID: 4 bytes] [ContentType: 1 byte] [ContentLength: 2 bytes] [Content: variable]

@@ -172,6 +172,36 @@ history opens reserve cache capacity; duplicate opens and descriptor exhaustion
 return a retryable capacity error rather than poisoning the store. Startup takes
 the initial sample synchronously.
 
+### Retained DMs
+
+Positive `NRC_MESSAGE_RETENTION` retains V2 messages in both rooms and DMs;
+there is no separate DM setting. The setting takes effect at startup; DMs share room retention,
+deduplication, per-shard quota and storage. The web client negotiates each DM via
+`C_SubscribeConvsV2`; the CLI can send explicitly with
+`nrc chat send --room <unsigned-DM-ID> --retained "message"`.
+V1 messages remain ephemeral, including from older clients.
+
+The shard WAL stores canonical participant pairs and membership post-images
+before retained bodies can be admitted. Replay and compaction preserve inactive
+pairs as well as membership revocations. Established DMs survive restart and can
+be reopened with an offline partner; starting an unknown pair still requires the
+partner online. Presence and unread counters remain session-scoped.
+
+Leaving revokes membership on every device, not message storage. Starting the
+same pair again re-adds both participants, as before, and restores access to its
+unexpired history. Leave is not Block or an invitation/consent mechanism.
+Already admitted sends may finish after leave, but subsequent sends and history
+delivery require current access; history also requires a current subscription.
+
+`NRC_MESSAGE_RETENTION=0` disables retention for both rooms and DMs, with the
+existing store-wide purge-floor behavior: disable/re-enable does not resurrect
+old room or DM history. Existing persistent DM membership changes remain durable
+while retention is disabled.
+Message retention is bounded; persistent pair metadata is not automatically
+garbage-collected when both users leave. Back up data before enabling: older
+binaries do not understand the new DM shard mutation domain, so downgrade after
+writing persistent DM metadata is unsupported. The network formats are unchanged.
+
 Runtime WAL rotation, segment publication and retained-message retention cleanup
 run on the storage service through a separate bounded control queue. Bulk sealing,
 compaction and obsolete-source deletion use two bounded executors that share the

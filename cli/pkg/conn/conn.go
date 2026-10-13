@@ -46,6 +46,12 @@ func ResolveRoom(roomStr string) (int64, error) {
 		return id, nil
 	}
 	id, err := strconv.ParseInt(roomStr, 10, 64)
+	if err != nil && !strings.HasPrefix(roomStr, "-") {
+		unsigned, unsignedErr := strconv.ParseUint(strings.TrimPrefix(roomStr, "+"), 10, 64)
+		if unsignedErr == nil {
+			return int64(unsigned), nil // Preserve DM conversation bits in signed internal IDs.
+		}
+	}
 	if err != nil {
 		return 0, fmt.Errorf("invalid room: '%s' (use room name like 'engineering' or numeric ID)", roomStr)
 	}
@@ -124,6 +130,12 @@ func makeRoomMappingConvID(workspaceID, normalizedName string) int64 {
 // ResolveRoomDynamic resolves a room name to a numeric ID using the same
 // deterministic xxhash the server uses, without any network round-trip.
 func ResolveRoomDynamic(workspaceID, roomName string) (int64, error) {
+	// Numeric IDs must never fall through to hashing, even on overflow.
+	numeric := strings.TrimSpace(roomName)
+	digits := strings.TrimPrefix(strings.TrimPrefix(numeric, "+"), "-")
+	if digits != "" && strings.Trim(digits, "0123456789") == "" {
+		return ResolveRoom(numeric)
+	}
 	normalized, ok := normalizeRoomName(roomName)
 	if !ok {
 		return 0, fmt.Errorf("invalid room name: '%s'", roomName)

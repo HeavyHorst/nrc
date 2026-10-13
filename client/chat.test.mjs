@@ -63,3 +63,33 @@ test("quote text is bounded, multiline, escaped Markdown and preserves an empty 
   assert.ok(quote.endsWith("\n\n"));
   assert.ok(chat.quoteText("anna", "x".repeat(3000)).length < 2050);
 });
+
+test("unread counts include V1 messages but history cursors come only from retained messages", () => {
+  const window = {};
+  const elements = new Map();
+  const roomHistory = new Map([[99n, []], [100n, []]]);
+  vm.runInNewContext(readFileSync(new URL("chat.js", import.meta.url), "utf8"), {
+    window, roomHistory, currentRoomId: 2n, myNickname: "", systemLogVisible: false,
+    isConversationExposed: () => false,
+    document: {
+      getElementById(id) {
+        if (!elements.has(id)) elements.set(id, { hidden: false, value: "", textContent: "" });
+        return elements.get(id);
+      },
+      querySelectorAll: () => [],
+    },
+  });
+  const receive = (roomId, sequence, retained) => {
+    const message = { type: "Message", roomId, sequence, retained, author: "mara", message: "hello" };
+    roomHistory.get(roomId).push(message);
+    window.NRCChat.received(message);
+  };
+  receive(99n, 1n, false);
+  receive(99n, 4n, false); // Collision with a later retained message.
+  receive(99n, 4n, true);
+  receive(100n, 1n, false);
+  assert.equal(window.NRCChat.unreadDetail(99n).count, 3);
+  assert.equal(window.NRCChat.unreadDetail(99n).firstSequence, 4n);
+  assert.equal(window.NRCChat.unreadDetail(100n).count, 1);
+  assert.equal(window.NRCChat.unreadDetail(100n).firstSequence, null);
+});

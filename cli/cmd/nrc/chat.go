@@ -81,6 +81,44 @@ func retainedSendUnknownMessage(clientMessageID string, err error) string {
 	return fmt.Sprintf("Retained message outcome is unknown (client_message_id=%s); retry with --retained --client-message-id %s: %v", clientMessageID, clientMessageID, err)
 }
 
+func renderChatWatchMessage(resp *protocol.Message) {
+	var events []chatMessageEvent
+	var err error
+	switch resp.Opcode {
+	case protocol.S_NewMessage:
+		var msg *protocol.ChatMessage
+		msg, err = protocol.DecodeChatMessage(resp.Data)
+		if err == nil {
+			events = append(events, chatMessageEvent{Event: "message", RoomID: int64(msg.ConvID), Sequence: msg.Sequence, Username: msg.Username, Timestamp: msg.Timestamp, ContentType: uint8(msg.ContentType), Content: msg.Content})
+		}
+	case protocol.S_MessagePage:
+		var page *protocol.MessagePage
+		page, err = protocol.DecodeMessagePage(resp.Data)
+		if err == nil {
+			for _, msg := range page.Messages {
+				events = append(events, chatMessageEvent{Event: "message", RoomID: int64(msg.ConvID), Sequence: int64(msg.Sequence), Username: msg.Username, Timestamp: msg.Timestamp, ContentType: msg.ContentType, Content: msg.Content})
+			}
+		}
+	default:
+		return
+	}
+	if err != nil {
+		if output.Human() {
+			fmt.Printf("[error] %v\n", err)
+		} else {
+			output.OutputJSONLine(map[string]any{"event": "decode_error", "message": err.Error()})
+		}
+		return
+	}
+	for _, event := range events {
+		if output.Human() {
+			fmt.Printf("%-15s: %s\n", event.Username, event.Content)
+		} else {
+			output.OutputJSONLine(event)
+		}
+	}
+}
+
 // receiveChan wraps client.Recv to work with select
 func receiveChan(s *conn.Session) <-chan *protocol.Message {
 	ch := make(chan *protocol.Message, 1)
@@ -227,22 +265,7 @@ var chatWatchCmd = &cobra.Command{
 					return
 				}
 
-				if resp.Opcode == protocol.S_NewMessage {
-					chatMsg, err := protocol.DecodeChatMessage(resp.Data)
-					if err != nil {
-						if output.Human() {
-							fmt.Printf("[error] %v\n", err)
-						} else {
-							output.OutputJSONLine(map[string]any{"event": "decode_error", "message": err.Error()})
-						}
-					} else {
-						if output.Human() {
-							fmt.Printf("%-15s: %s\n", chatMsg.Username, chatMsg.Content)
-						} else {
-							output.OutputJSONLine(chatMessageEvent{Event: "message", RoomID: int64(chatMsg.ConvID), Sequence: chatMsg.Sequence, Username: chatMsg.Username, Timestamp: chatMsg.Timestamp, ContentType: uint8(chatMsg.ContentType), Content: chatMsg.Content})
-						}
-					}
-				}
+				renderChatWatchMessage(resp)
 			}
 		}
 	},
@@ -252,7 +275,7 @@ func init() {
 	chatCmd.PersistentFlags().String("room", "", "Room name or ID (default: configured room)")
 
 	chatSendCmd.Flags().Bool("markdown", false, "Send as markdown")
-	chatSendCmd.Flags().Bool("retained", false, "Store the room message for the server's configured retention window")
+	chatSendCmd.Flags().Bool("retained", false, "Store the room or DM message for the server's configured retention window")
 	chatSendCmd.Flags().String("client-message-id", "", "Reuse a retained message ID for a safe retry (32 hex characters; hyphens allowed)")
 
 	chatCmd.AddCommand(chatSendCmd)

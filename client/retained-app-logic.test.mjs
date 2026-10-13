@@ -222,3 +222,94 @@ test("retained state and attempt aliases are bounded, and storage errors do not 
   assert.equal(session.sent.length, 32);
   assert.equal(session.context.retainedSendAttempts.size, 32);
 });
+
+test("DM negotiation isolates probes, gates sends and only exact old-server rejection permits legacy", () => {
+  const { context: c, sent, errors } = retainedSession();
+  c.Opcode.C_SubscribeConvsV2 = 47;
+  c.Opcode.C_SubscribeConvs = 4;
+  c.isDMConversation = (id) => id === 9n;
+  c.getRoomName = String;
+  c.logSystem = () => {};
+  vm.runInNewContext(extractFunction("subscribeToConversations"), c);
+  c.subscribeToConversations([2n, 9n]);
+  assert.equal(sent.length, 2);
+  assert.equal(new DataView(sent[0]).getBigUint64(4), 2n);
+  assert.equal(new DataView(sent[1]).getBigUint64(4), 9n);
+  c.currentRoomId = 9n;
+  assert.equal(c.sendRawProtocolMessage("unknown"), false);
+  const correlation = new DataView(sent[1]).getUint32(12);
+  sendError(c, correlation, "access denied", 47);
+  assert.equal(c.sendRawProtocolMessage("still blocked"), false);
+  assert.match(errors.at(-2), /access denied/);
+  c.subscribeToConversations([9n]);
+  sendError(c, new DataView(sent.at(-1)).getUint32(12), "retained subscriptions require a public chat room", 47);
+  assert.equal(c.sendRawProtocolMessage("ephemeral").retained, false);
+  c.retainedRoomStates.set(9n, "enabled");
+  assert.equal(c.sendRawProtocolMessage("retained").retained, true);
+  assert.equal(new DataView(sent.at(-1)).getUint16(0), 48);
+});
+
+test("removed DM cancels sends/history and ignores late correlated readiness and pages", () => {
+  const { context: c, sent } = retainedSession();
+  c.currentRoomId = 9n;
+  c.retainedRoomStates.set(9n, "enabled");
+  c.sendRawProtocolMessage("unconfirmed");
+  c.retainedSubscriptionRequests.set(80, [9n]);
+  c.retainedHistoryStarted.add(9n);
+  c.retainedHistoryRequests.set(81, { convId: 9n });
+  c.queueRetainedOperation(81, "history", new ArrayBuffer(2));
+  c.window.NRCRetainedMessages.parseSubscriptionReady = () => ({ correlationId: 80, entries: [{ convId: 9n }] });
+  c.window.NRCRetainedMessages.parseMessagePage = () => ({ correlationId: 81, convId: 9n, messages: [{}] });
+  c.requestRetainedHistory = () => assert.fail("removed DM history requested");
+  c.ingestRetainedMessage = () => assert.fail("removed DM page ingested");
+  vm.runInNewContext(["clearDMRetention", "parseRetainedSubscriptionReady", "parseRetainedMessagePage"].map(extractFunction).join("\n"), c);
+  c.clearDMRetention(9n);
+  c.parseRetainedSubscriptionReady(null);
+  c.parseRetainedMessagePage(null);
+  assert.equal(c.retainedRoomStates.has(9n), false);
+  assert.equal(c.pendingMessages.size, 0);
+  assert.equal(c.retainedHistoryRequests.size, 0);
+  assert.equal(c.retainedOperations.size, 0);
+  assert.equal(c.retainedOperationQueue.length, 0);
+  assert.equal(sent.length, 1);
+});
+
+test("DM readiness omission means ephemeral; enabled entries start history once", () => {
+  for (const enabled of [false, true]) {
+    const { context: c } = retainedSession();
+    c.currentRoomId = 9n;
+    c.retainedRoomStates.set(9n, "unknown");
+    c.retainedSubscriptionRequests.set(80, [9n]);
+    const history = [];
+    c.requestRetainedHistory = (id) => history.push(id);
+    c.window.NRCRetainedMessages.parseSubscriptionReady = () => ({
+      correlationId: 80, entries: enabled ? [{ convId: 9n }] : [],
+    });
+    vm.runInNewContext(extractFunction("parseRetainedSubscriptionReady"), c);
+    c.parseRetainedSubscriptionReady(null);
+    c.parseRetainedSubscriptionReady(null);
+    assert.equal(c.retainedRoomStates.get(9n), enabled ? "enabled" : "disabled");
+    assert.deepEqual(history, enabled ? [9n] : []);
+    assert.equal(c.sendRawProtocolMessage("negotiated").retained, enabled);
+  }
+});
+
+test("live retained pages are delivered while canceled history and departed DM pages are ignored", () => {
+  const { context: c } = retainedSession();
+  c.isDMConversation = (id) => id === 9n;
+  c.subscribedRooms = new Set([9n]);
+  const received = [];
+  c.ingestRetainedMessage = (record, history) => received.push([record.content, history]);
+  let page = { correlationId: 0, convId: 9n, messages: [{ convId: 9n, content: "live DM" }] };
+  c.window.NRCRetainedMessages.parseMessagePage = () => page;
+  vm.runInNewContext(extractFunction("parseRetainedMessagePage"), c);
+  c.parseRetainedMessagePage(null);
+  page = { ...page, correlationId: 17 };
+  c.parseRetainedMessagePage(null);
+  page = { ...page, correlationId: 0 };
+  c.subscribedRooms.delete(9n);
+  c.parseRetainedMessagePage(null);
+  page = { correlationId: 0, convId: 2n, messages: [{ convId: 2n, content: "live room" }] };
+  c.parseRetainedMessagePage(null);
+  assert.deepEqual(received, [["live DM", false], ["live room", false]]);
+});

@@ -12,6 +12,8 @@ apply_shard_mutation :: proc(workspace: []byte, mutation: Shard_Mutation) -> boo
 		id = apply_asset_log_record_for_workspace(string(workspace), Asset_Log_Op(mutation.op), mutation.entity_record_version, mutation.payload)
 	case .Edge:
 		id = apply_edge_log_record_for_workspace(string(workspace), Edge_Log_Op(mutation.op), mutation.payload)
+	case .DM:
+		return apply_dm_state(string(workspace), mutation.payload)
 	}
 	return id != 0
 }

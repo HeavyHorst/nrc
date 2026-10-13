@@ -252,13 +252,12 @@ window.NRCAttention = (() => {
     setTimeout(() => row.classList.remove("chat-target"), FLASH_MS);
   }
 
-  // A jump is the chat's own navigation plus one page around the target. DMs
-  // have no retained history and a room with retention off has nothing to fetch,
-  // so those rows simply open the conversation.
+  // Only negotiated retained DMs can fetch a page around the jump target.
   function openConversation(convId, sequence) {
     if (typeof openChatRoom !== "function") return;
     openChatRoom(convId);
-    if (sequence == null || isDirectMessage(convId)) return;
+    if (sequence == null) return;
+    if (isDirectMessage(convId) && window.NRCChat?.getRetentionState?.(convId) !== "enabled") return;
     if (typeof retainedRoomStates !== "undefined" && retainedRoomStates.get(convId) === "disabled") {
       logSystem(`NO RETAINED HISTORY IN ${conversationName(convId)} · OPENED LATEST`, "chat", "DEBUG");
       return;
@@ -295,7 +294,7 @@ window.NRCAttention = (() => {
           : { label: `${entry.count} NEW`, tone: "new" },
         age: formatAge(entry.oldestTimestamp),
         sortKey: Number(entry.oldestTimestamp || 0n),
-        jumpable: !direct && sequence != null,
+        jumpable: sequence != null && (!direct || window.NRCChat?.getRetentionState?.(entry.convId) === "enabled"),
         open: () => openConversation(entry.convId, sequence),
       });
     }

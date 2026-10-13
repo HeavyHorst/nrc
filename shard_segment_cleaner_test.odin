@@ -10,6 +10,77 @@ import "core:testing"
 import "persistence"
 import pr "protocol"
 
+@(test)
+test_retained_dm_membership_survives_cleaning_and_checkpoint :: proc(t: ^testing.T) {
+	for members in ([2]u8{0, 1}) {
+		workspace := "dm-compaction"
+		shard := int(shard_for_workspace(transmute([]byte)workspace))
+		data_dir := test_wal_path("dm-compaction")
+		defer os.remove_all(data_dir)
+		testing.expect(t, os.make_directory(data_dir) == nil)
+		testing.expect(t, storage_layout_test_create_generation(data_dir, 1))
+		generation_dir := sharded_generation_path(data_dir, 1)
+		defer delete(generation_dir)
+		dir := sharded_shard_path(generation_dir, shard)
+		defer delete(dir)
+		writer: Shard_Transaction_Writer
+		if !testing.expect(t, init_managed_shard_transaction_writer(&writer, dir, shard, shard, LOGICAL_SHARD_COUNT)) do return
+		defer shutdown_shard_transaction_writer(&writer)
+		id := pr.make_dm_conversation_id("alice", "bob")
+		// First clean raw WALs; the next pass merges indexed post-images.
+		for mask in ([3]u8{3, 2, members}) {
+			built: Shard_Mutation_Transaction
+			built.payload = encode_dm_state(id, "alice", "bob", mask)
+			testing.expect(t, finish_shard_mutation_transaction(&built, transmute([]byte)workspace, .DM, 1, 1, writer.floors))
+			testing.expect(t, append_shard_transaction(&writer, &built.tx))
+			destroy_shard_mutation_transaction(&built)
+			testing.expect(t, rotate_shard_writer_for_compaction(&writer))
+			result := shard_compaction_test_build_result(&writer)
+			testing.expect(t, result.ok && publish_shard_compaction_result(&writer, result))
+			destroy_shard_segment_clean_result(&result.segments)
+		}
+		shard_replay_state_init()
+		_, replay_ok := replay_shard_compaction_sequence(dir, writer.manifest, true, false)
+		testing.expect(t, replay_ok)
+		ws := get_workspace(workspace)
+		conv := get_conversation(ws, id)
+		if !testing.expect(t, conv != nil && conv.dm_participants != nil) {
+			shard_replay_state_destroy(); return
+		}
+		testing.expect_value(t, dm_membership_mask(ws, id, conv.dm_participants), members)
+		maybe_cleanup_orphaned_dm(ws, id)
+		testing.expect(t, get_conversation(ws, id) != nil, "persistent inactive pair is not orphaned")
+		digest := shard_checkpoint_state_digest(shard)
+		checkpoint := test_wal_path("dm-checkpoint")
+		defer os.remove(checkpoint)
+		testing.expect(t, build_shard_checkpoint_from_replayed_state(checkpoint, shard, writer.floors))
+		shard_replay_state_destroy()
+		shard_replay_state_init()
+		_, _, checkpoint_ok := replay_shard_transaction_wal(checkpoint, shard)
+		testing.expect(t, checkpoint_ok)
+		testing.expect_value(t, shard_checkpoint_state_digest(shard), digest)
+		ws = get_workspace(workspace)
+		alice := NRC_Connection {
+			workspace_id      = workspace,
+			authenticated     = true,
+			verified_username = "alice",
+		}
+		bob := NRC_Connection {
+			workspace_id      = workspace,
+			authenticated     = true,
+			verified_username = "bob",
+		}
+		mallory := NRC_Connection {
+			workspace_id      = workspace,
+			authenticated     = true,
+			verified_username = "mallory",
+		}
+		testing.expect_value(t, validate_dm_access(&alice, id), members & 1 != 0)
+		testing.expect(t, !validate_dm_access(&bob, id) && !validate_dm_access(&mallory, id))
+		shard_replay_state_destroy()
+	}
+}
+
 shard_segment_test_append_task :: proc(writer: ^Shard_Transaction_Writer, workspace: string, op: Task_Log_Op, task: ^pr.Task) -> bool {
 	built, ok := build_shard_task_mutation(transmute([]byte)workspace, op, task, writer.floors)
 	if !ok do return false

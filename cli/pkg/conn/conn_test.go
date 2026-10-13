@@ -13,6 +13,40 @@ import (
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
 
+func TestResolveDMConversationIDs(t *testing.T) {
+	resolvers := map[string]func(string) (int64, error){
+		"direct":  ResolveRoom,
+		"dynamic": func(value string) (int64, error) { return ResolveRoomDynamic("workspace", value) },
+		"flag":    func(value string) (int64, error) { return ResolveRoomFlag("workspace", value) },
+	}
+	for name, resolve := range resolvers {
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				value string
+				bits  uint64
+			}{
+				{"9223372036854775808", 1 << 63},
+				{" 18446744073709551615 ", ^uint64(0)},
+				{"-1", ^uint64(0)},
+				{"42", 42},
+			} {
+				id, err := resolve(tc.value)
+				if err != nil || uint64(id) != tc.bits {
+					t.Fatalf("%q = %d, %v", tc.value, id, err)
+				}
+			}
+			for _, value := range []string{"18446744073709551616", "9999999999999999999999999999999999999999", "-9223372036854775809"} {
+				if id, err := resolve(value); err == nil {
+					t.Fatalf("overflow %q became room %d", value, id)
+				}
+			}
+		})
+	}
+	if id, err := ResolveRoomFlag("workspace", "release-2026"); err != nil || id <= 0 {
+		t.Fatalf("dynamic room regressed: %d, %v", id, err)
+	}
+}
+
 func TestDurableSessionIgnoresConfiguredChatRoom(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

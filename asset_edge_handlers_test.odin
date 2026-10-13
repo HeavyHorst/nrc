@@ -85,7 +85,7 @@ asset_cascade_wal_visit_mutation :: proc(mutation: Shard_Mutation, data: rawptr)
 	if err != .None do return false
 	inspection := cast(^Asset_Cascade_WAL_Inspection)data
 	inspection.mutation_count += 1
-	switch mutation.domain {
+	#partial switch mutation.domain {
 	case .Asset:
 		if mutation.op != u8(Asset_Log_Op.Delete) {
 			inspection.candidate = false

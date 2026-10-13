@@ -251,7 +251,7 @@ test_shard_semantic_deletes_all_domains_are_exact_and_nonzero :: proc(t: ^testin
 	for i in 0 ..< 3 {
 		req, err := validate_shard_mutation({domain = domains[i], op = ops[i], entity_record_version = 1, payload = body[:16]})
 		testing.expect_value(t, err, Shard_Transaction_Error.None)
-		switch domains[i] {
+		#partial switch domains[i] {
 		case .Task:
 			testing.expect_value(t, req.task, u64(77))
 		case .Asset:

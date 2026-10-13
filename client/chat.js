@@ -341,7 +341,8 @@ window.NRCChat = (() => {
     const firstSequence = (list) => {
       let lowest = null;
       for (const message of list) {
-        if (message.sequence == null) continue;
+        // V1 and retained stores allocate independent, possibly colliding IDs.
+        if (message.retained !== true || message.sequence == null) continue;
         if (lowest === null || message.sequence < lowest) lowest = message.sequence;
       }
       return lowest;

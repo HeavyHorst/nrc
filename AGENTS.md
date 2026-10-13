@@ -9,7 +9,7 @@ Workers own workspace state and non-blocking connection I/O. Start with
 nrc combines real-time chat with persistent workspace records.
 
 - **NRC-300**: Standard nomenclature for the terminal interface.
-- **Messages**: Ephemeral by default. Operators can enable bounded room-message retention; DMs remain ephemeral.
+- **Messages**: Ephemeral by default. `NRC_MESSAGE_RETENTION` enables bounded retention for both room messages and DMs with the same retention window. Persistent DM membership is private shard metadata, not a public workspace asset.
 - **Tasks**: Persistent. Kanban tasks are stored server-side and persist across sessions.
 
 ## Programming Language & Framework

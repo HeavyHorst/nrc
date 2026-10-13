@@ -733,8 +733,19 @@ process_send_message_v2 :: proc(c: ^NRC_Connection, req: pr.SendMessageV2Request
 	}
 	if req.client_message_id == {} {send_error_response(c, .C_SendMessageV2, "client message id must not be zero", req.correlation_id); return}
 	if pr.is_dm_conversation(req.conv_id) {
-		// DM membership is currently volatile; retained history must not outlive its access-control metadata.
-		send_error_response(c, .C_SendMessageV2, "retained direct messages are not enabled", req.correlation_id); return
+		if !validate_dm_access(c, req.conv_id) {
+			send_error_response(c, .C_SendMessageV2, "DM access denied", req.correlation_id); return
+		}
+		if !td.message_stores.enabled {
+			send_error_response(c, .C_SendMessageV2, "retained direct messages are not enabled", req.correlation_id); return
+		}
+		if !dm_metadata_durable(c, req.conv_id) {
+			writer := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)c.workspace_id)
+			if !defer_current_shard_protocol_request(writer) {
+				send_error_response(c, .C_SendMessageV2, "DM metadata not durable; retry", req.correlation_id)
+			}
+			return
+		}
 	}
 	store := message_store_for_workspace(&td.message_stores, transmute([]byte)c.workspace_id)
 	if store == nil {send_error_response(c, .C_SendMessageV2, "message retention is disabled", req.correlation_id); return}
@@ -910,6 +921,20 @@ retained_history_capacity :: proc(ctx: ^Retained_History_Context) {
 
 retained_history_finish :: proc(ctx: ^Retained_History_Context) {
 	conn := connection_from_io_context(ctx.io_ctx)
+	if conn != nil && pr.is_dm_conversation(pr.ConversationID(ctx.conversation_id)) {
+		id := pr.ConversationID(ctx.conversation_id)
+		conv := get_conversation(get_connection_workspace(conn), id)
+		if conn.state >= .Will_Close ||
+		   conn.workspace_id != ctx.workspace ||
+		   !td.message_stores.enabled ||
+		   !validate_dm_access(conn, id) ||
+		   conv == nil ||
+		   !conversation_has_subscriber(conv, conn.sock) {
+			send_error_response(conn, ctx.ascending ? .C_ReplayMessagesAfter : .C_ListMessagesBefore, "DM access denied", ctx.correlation_id)
+			destroy_retained_history_context(ctx)
+			return
+		}
+	}
 	if conn != nil {
 		when NRC_SIMULATION {
 			retained_history_profile_end_decode(ctx)
@@ -1532,9 +1557,19 @@ process_message_history :: proc(c: ^NRC_Connection, req: pr.MessageRangeRequest,
 	}
 	if c.retained_io >=
 	   MAX_RETAINED_IO_PER_CONNECTION {send_error_response(c, ascending ? .C_ReplayMessagesAfter : .C_ListMessagesBefore, "too many retained message operations", req.correlation_id); return}
-	if pr.is_dm_conversation(
-		req.conv_id,
-	) {send_error_response(c, ascending ? .C_ReplayMessagesAfter : .C_ListMessagesBefore, "retained direct messages are not enabled", req.correlation_id); return}
+	if pr.is_dm_conversation(req.conv_id) {
+		if !validate_dm_access(c, req.conv_id) {
+			send_error_response(c, ascending ? .C_ReplayMessagesAfter : .C_ListMessagesBefore, "DM access denied", req.correlation_id); return
+		}
+		if !td.message_stores.enabled {
+			send_error_response(
+				c,
+				ascending ? .C_ReplayMessagesAfter : .C_ListMessagesBefore,
+				"retained direct messages are not enabled",
+				req.correlation_id,
+			); return
+		}
+	}
 	ws := get_connection_workspace(c); conv := get_conversation(ws, req.conv_id)
 	if conv == nil ||
 	   !conversation_has_subscriber(
@@ -1602,8 +1637,12 @@ retained_history_snapshot_active :: proc(ctx: ^Retained_History_Context, source:
 
 process_subscribe_conversations_v2 :: proc(c: ^NRC_Connection, req: pr.SubscribeConvsV2Request) {
 	for conv_id in req.conv_ids {
-		if pr.is_dm_conversation(conv_id) || conv_id == pr.WORKSPACE_DATA_ID {
-			send_error_response(c, .C_SubscribeConvsV2, "retained subscriptions require a public chat room", req.correlation_id)
+		if conv_id == pr.WORKSPACE_DATA_ID {
+			send_error_response(c, .C_SubscribeConvsV2, "Workspace data scope is not a chat", req.correlation_id)
+			return
+		}
+		if pr.is_dm_conversation(conv_id) && !validate_dm_access(c, conv_id) {
+			send_error_response(c, .C_SubscribeConvsV2, "DM access denied", req.correlation_id)
 			return
 		}
 	}

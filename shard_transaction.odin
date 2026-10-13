@@ -15,6 +15,7 @@ Shard_Mutation_Domain :: enum u8 {
 	Task  = 1,
 	Asset = 2,
 	Edge  = 3,
+	DM    = 4,
 }
 Shard_Transaction_Error :: enum {
 	None,
@@ -59,6 +60,8 @@ shard_mutation_supported :: proc(domain: Shard_Mutation_Domain, op: u8, version:
 		return version >= 1 && version <= 3 && (op == 1 || op == 2 || op == 3)
 	case .Edge:
 		return version == 1 && (op == 1 || op == 2)
+	case .DM:
+		return version == 1 && op == 1
 	}
 	return false
 }

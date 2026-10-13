@@ -82,6 +82,7 @@ function harness({ tasks = [], counts = {}, taskPages = null, dependencyPages = 
 
   const viewState = { active: activeView };
   const window = {
+    NRCChat: { getRetentionState: (id) => retained?.convId === id ? retained.state : undefined },
     NRCChatUnread: { snapshot: () => unread },
     matchMedia: () => ({ matches: false }),
     createTaskQueryController: (options) => ({
@@ -440,6 +441,28 @@ test("a direct message is its own kind and never claims a jump", () => {
   assert.equal(row.title, "MARA");
   assert.equal(row.detail, "DIRECT · 1 UNREAD");
   assert.equal(row.jumpable, false, "retained direct messages are not enabled");
+});
+
+test("negotiated retained DM jumps fetch one page and flash the target; ephemeral DMs only open", () => {
+  for (const state of ["enabled", "disabled", "unknown"]) {
+    const h = harness({
+      unread: [{ convId: 99n, count: 1, firstSequence: 8n, oldestTimestamp: nanos(now) }],
+      dms: [{ convId: 99n, username: "mara", authenticated: true }],
+      retained: { convId: 99n, state },
+    });
+    h.attention.refresh();
+    const row = h.attention.getState().rows[0];
+    assert.equal(row.jumpable, state === "enabled");
+    row.open();
+    assert.deepEqual(h.openedRooms, [99n]);
+    assert.equal(h.historyRequests.length, state === "enabled" ? 1 : 0);
+    if (state === "enabled") {
+      assert.equal(h.historyRequests[0].cursor, 9n);
+      assert.equal(h.historyRequests[0].options.single, true);
+      h.historyRequests[0].options.onPage({ retentionCutoffSeq: 0n });
+      assert.deepEqual(h.scrolls, [["8", "center"]]);
+    }
+  }
 });
 
 test("a jump opens the room, asks for one page and flashes the target", () => {

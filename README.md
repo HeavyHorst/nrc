@@ -3,7 +3,9 @@
 NRC is a single-node collaboration server written in Odin, with a web client and
 a Go CLI. It combines real-time chat and DMs with persistent tasks, notes, files,
 customers, appointments and relationships between them. Chat is ephemeral by
-default; operators can enable bounded room-message retention. Durable data
+default; operators can enable bounded retention for both room messages and DMs
+with `NRC_MESSAGE_RETENTION`. Both share the same retention window.
+See [retained DM semantics](docs/DEVELOPMENT.md#retained-dms). Durable workspace data
 belongs to the workspace, not to individual chat rooms.
 
 ## Quickstart

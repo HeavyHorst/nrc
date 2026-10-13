@@ -183,7 +183,7 @@ test_workspace_migration_collisions_cross_segments_and_tombstones_without_trunca
 		for scope in ([?]pr.ConversationID{pr.WORKSPACE_DATA_ID, 78}) {
 			remove: Shard_Mutation_Transaction
 			ok: bool
-			switch domain {
+			#partial switch domain {
 			case .Task:
 				remove, ok = build_shard_task_delete_mutation(transmute([]byte)workspace, scope, 1, writer.floors)
 			case .Asset:

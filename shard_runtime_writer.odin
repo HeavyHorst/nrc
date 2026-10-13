@@ -640,6 +640,8 @@ shard_mutation_advances_append_only_floor :: proc(mutation: Shard_Mutation, floo
 	case .Edge:
 		if id <= floors.edge do return false
 		floors.edge = id
+	case .DM:
+		return false
 	}
 	return true
 }
@@ -652,6 +654,8 @@ shard_mutation_is_create :: proc(mutation: Shard_Mutation) -> bool {
 		return mutation.op == u8(Asset_Log_Op.Create)
 	case .Edge:
 		return mutation.op == u8(Edge_Log_Op.Create)
+	case .DM:
+		return false // Full membership post-images can replace earlier state.
 	}
 	return false
 }

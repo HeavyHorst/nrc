@@ -99,6 +99,14 @@ shard_checkpoint_state_digest :: proc(shard: int) -> (digest: [32]byte) {
 		slice.sort_by(conv_ids[:], proc(a, b: pr.ConversationID) -> bool {return a < b})
 		for conv_id in conv_ids {
 			conv := workspace.state.conversations[conv_id]
+			if pair := conv.dm_participants; pair != nil && pair.persistent {
+				shard_checkpoint_sha_u8(&ctx, u8(Shard_Mutation_Domain.DM))
+				shard_checkpoint_sha_bytes(&ctx, transmute([]byte)workspace.id)
+				shard_checkpoint_sha_u64(&ctx, u64(conv_id))
+				shard_checkpoint_sha_bytes(&ctx, transmute([]byte)pair.user_a)
+				shard_checkpoint_sha_bytes(&ctx, transmute([]byte)pair.user_b)
+				shard_checkpoint_sha_u8(&ctx, dm_membership_mask(workspace.state, conv_id, pair))
+			}
 			task_ids := make([dynamic]pr.TaskID, 0, len(conv.tasks))
 			asset_ids := make([dynamic]pr.AssetID, 0, len(conv.assets))
 			edge_ids := make([dynamic]pr.EdgeID, 0, len(conv.edges))
@@ -257,6 +265,12 @@ build_shard_checkpoint_from_replayed_state_with_storage :: proc(
 		slice.sort_by(conv_ids[:], proc(a, b: pr.ConversationID) -> bool {return a < b})
 		for conv_id in conv_ids {
 			conv := workspace.state.conversations[conv_id]
+			if pair := conv.dm_participants; pair != nil && pair.persistent {
+				payload := encode_dm_state(conv_id, pair.user_a, pair.user_b, dm_membership_mask(workspace.state, conv_id, pair))
+				if !shard_checkpoint_add(&emitter, workspace.id, floors, .DM, 1, 1, payload) {
+					delete(payload); delete(conv_ids); return false
+				}
+			}
 			task_ids := make(
 				[dynamic]pr.TaskID,
 				0,

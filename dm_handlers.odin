@@ -306,22 +306,34 @@ process_start_dm :: proc(c: ^NRC_Connection, req: pr.StartDMRequest) {
 
 	ws := get_or_create_connection_workspace(c)
 
-	if !find_user_in_workspace(ws, target) {
+	if len(username) + 1 + len(target) > 512 || target == "" {
+		send_dm_error(c, .User_Not_Found, target, "Invalid DM identity", req.correlation_id)
+		return
+	}
+	a, b := username, target
+	if a > b do a, b = b, a
+	conv_id := pr.make_dm_conversation_id(a, b)
+	conv := get_conversation(ws, conv_id)
+	if conv != nil && conv.dm_participants != nil && (conv.dm_participants.user_a != a || conv.dm_participants.user_b != b) {
+		send_dm_error(c, .DM_Not_Found, target, "DM identity conflict", req.correlation_id)
+		return
+	}
+	persistent := conv != nil && conv.dm_participants != nil && conv.dm_participants.persistent
+	if !persistent && !find_user_in_workspace(ws, target) {
 		send_dm_error(c, .User_Not_Found, target, "User not found", req.correlation_id)
 		return
 	}
 
-	conv_id := pr.make_dm_conversation_id(username, target)
-	conv := get_or_create_conversation(ws, conv_id)
-
 	already_tracked_target := is_user_in_dm(ws, target, conv_id)
-
+	if persistent || td.message_stores.enabled {
+		if !persist_dm_state(c.workspace_id, conv_id, a, b, 3) {
+			persistent_mutation_failed("dm", "start", c.workspace_id)
+			return
+		}
+	}
+	conv = get_or_create_conversation(ws, conv_id)
 	if conv.dm_participants == nil {
 		conv.dm_participants = new(DM_Participants)
-		a, b := username, target
-		if a > b {
-			a, b = b, a
-		}
 		conv.dm_participants.user_a = intern_username(a)
 		conv.dm_participants.user_b = intern_username(b)
 	}
@@ -428,6 +440,16 @@ process_leave_dm :: proc(c: ^NRC_Connection, req: pr.LeaveDMRequest) {
 		return
 	}
 
+	conv := get_conversation(ws, conv_id)
+	if conv != nil && conv.dm_participants != nil && conv.dm_participants.persistent {
+		pair := conv.dm_participants
+		members := dm_membership_mask(ws, conv_id, pair)
+		members &= ~(username == pair.user_a ? u8(1) : u8(2))
+		if !persist_dm_state(c.workspace_id, conv_id, pair.user_a, pair.user_b, members) {
+			persistent_mutation_failed("dm", "leave", c.workspace_id)
+			return
+		}
+	}
 	remove_user_dm(ws, username, conv_id)
 
 	my_sockets := get_user_sockets(ws, username)
@@ -475,6 +497,8 @@ maybe_cleanup_orphaned_dm :: proc(ws: ^Workspace_State, conv_id: pr.Conversation
 	user_a := conv.dm_participants.user_a
 	user_b := conv.dm_participants.user_b
 
+	// Even an inactive pair must survive restart: leave is not message deletion.
+	if conv.dm_participants.persistent do return
 	a_in := is_user_in_dm(ws, user_a, conv_id)
 	b_in := is_user_in_dm(ws, user_b, conv_id)
 
