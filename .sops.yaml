@@ -1,0 +1,8 @@
+creation_rules:
+  - path_regex: ^mobile/signing/debug\.sops\.json$
+    # Public recipients only; private identities never belong in Git.
+    # Build: project-scoped Amp Secret SOPS_AGE_KEY.
+    # Recovery: owner-controlled private identity outside Amp.
+    age: >-
+      age18x40xgcw855nev3ll2xykee7xx2vw38pnumde5kqw9ms98a7hqnq88c6qy,
+      age1ttr25f00f4kc7uz48dmgjtvuasxtup9euxhvqf7yqmyskq8mgqgq9le8zn
