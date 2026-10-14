@@ -395,6 +395,113 @@ func TestIndexedAttachmentReferences(t *testing.T) {
 	}
 }
 
+func TestPublishedNoteReferences(t *testing.T) {
+	a := testApp(t)
+	// Simulate a snapshot written before reference resolution existed.
+	legacy := candidate()
+	legacy.ID, legacy.Slug, legacy.Markdown = "legacy", "legacy", "Siehe [note:999]."
+	if err := a.store.db.Update(func(tx *bolt.Tx) error {
+		if err := putJSON(tx.Bucket([]byte("revisions")), legacy.ID, legacy); err != nil {
+			return err
+		}
+		if err := tx.Bucket([]byte("published")).Put([]byte(legacy.Slug), []byte(legacy.ID)); err != nil {
+			return err
+		}
+		return tx.Bucket([]byte("drafts")).Put([]byte(legacy.ID), []byte(legacy.ID))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := request(a.public(), "GET", "/articles/legacy", nil, false); got.Code != 200 || !strings.Contains(got.Body.String(), "Siehe [note:999].") {
+		t.Fatal("legacy article no longer readable")
+	}
+	if err := a.store.approve(legacy.ID, "human"); err == nil {
+		t.Fatal("legacy unresolved draft approved")
+	}
+	target := candidate()
+	target.SourceID, target.Slug, target.Title = 18446744073709551615, "ziel-artikel", "Öffentlich & geprüft"
+	published, err := a.store.create(target, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := a.source.(*fixtureSource)
+	note := source.assets[41]
+	note.Payload = "Siehe [note:18446744073709551615] und **[note:18446744073709551615]**.\n\n`[note:999]`\n\n```text\n[note:998]\n```"
+	source.assets[41] = note
+	if _, err := a.prepareDraft(context.Background(), candidate()); err == nil {
+		t.Fatal("unapproved target accepted")
+	}
+	if err := a.store.approve(published.ID, "human"); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := a.prepareDraft(context.Background(), candidate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := `<a href="/articles/ziel-artikel">Öffentlich &amp; geprüft</a>`
+	preview := request(a.admin(), "GET", "/drafts/"+draft.ID, nil, true)
+	if preview.Code != 200 || strings.Count(preview.Body.String(), link) != 2 || !strings.Contains(preview.Body.String(), "<code>[note:999]</code>") {
+		t.Fatalf("incorrect review links: %d %s", preview.Code, preview.Body.String())
+	}
+	if got := request(a.admin(), "GET", "/articles/ziel-artikel", nil, true); got.Code != 200 || !strings.Contains(got.Body.String(), "Öffentlich &amp; geprüft") {
+		t.Fatalf("review target unavailable: %d %s", got.Code, got.Body.String())
+	}
+	if got := request(a.admin(), "GET", "/articles/ziel-artikel", nil, false); got.Code != 401 {
+		t.Fatal("review article accessible without authentication")
+	}
+	if got := request(a.admin(), "GET", "/articles/einrichtung", nil, true); got.Code != 404 {
+		t.Fatal("unpublished draft accessible as review article")
+	}
+	// Changing the public target title cannot alter links already reviewed.
+	target.Title = "Neuer Titel"
+	updated, err := a.store.create(target, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.approve(updated.ID, "human"); err != nil {
+		t.Fatal(err)
+	}
+	approve := url.Values{"csrf": {a.csrf}, "confirmed": {"yes"}}
+	if got := request(a.admin(), "POST", "/drafts/"+draft.ID+"/approve", approve, true); got.Code != 303 {
+		t.Fatalf("approve: %d %s", got.Code, got.Body.String())
+	}
+	article := request(a.public(), "GET", "/articles/einrichtung", nil, false)
+	if article.Code != 200 || strings.Count(article.Body.String(), link) != 2 {
+		t.Fatalf("published links changed: %d %s", article.Code, article.Body.String())
+	}
+	second, err := a.prepareDraft(context.Background(), candidate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.withdraw(updated.Slug, updated.ID, "human"); err != nil {
+		t.Fatal(err)
+	}
+	if got := request(a.admin(), "POST", "/drafts/"+second.ID+"/approve", approve, true); got.Code != 400 {
+		t.Fatal("withdrawn target accepted at approval")
+	}
+	for _, token := range []string{"[note:999]", "[note:0]", "[note:18446744073709551616]"} {
+		note.Payload = token
+		source.assets[41] = note
+		if _, err := a.prepareDraft(context.Background(), candidate()); err == nil {
+			t.Fatalf("invalid/missing reference accepted: %s", token)
+		}
+	}
+	for _, slug := range []string{"ziel-artikel", "zweites-ziel"} {
+		target.Slug = slug
+		r, err := a.store.create(target, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := a.store.approve(r.ID, "human"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	note.Payload = "[note:18446744073709551615]"
+	source.assets[41] = note
+	if _, err := a.prepareDraft(context.Background(), candidate()); err == nil || !strings.Contains(err.Error(), "mehrere") {
+		t.Fatalf("ambiguous target: %v", err)
+	}
+}
+
 func TestArticleLinkBoundary(t *testing.T) {
 	for _, target := range []string{
 		"/articles/../notes",

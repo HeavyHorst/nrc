@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,10 @@ import (
 )
 
 type section struct{ ID, Title string }
+
+var noteReferencePattern = regexp.MustCompile(`\[note:([0-9]+)\]`)
+
+type articleReference struct{ Slug, Title string }
 
 func nodeText(n *html.Node) string {
 	var b strings.Builder
@@ -34,6 +39,10 @@ func nodeText(n *html.Node) string {
 // Goldmark deliberately leaves raw HTML disabled. Inspect generated HTML to
 // rewrite ONLY explicitly attached files; never fetch URLs from note content.
 func renderMarkdown(r revision) (template.HTML, []section, error) {
+	return renderMarkdownWithReferences(r, nil)
+}
+
+func renderMarkdownWithReferences(r revision, resolve func(string) (articleReference, error)) (template.HTML, []section, error) {
 	md := goldmark.New(goldmark.WithExtensions(extension.Table, extension.Strikethrough), goldmark.WithParserOptions(parser.WithAutoHeadingID()))
 	var output bytes.Buffer
 	if err := md.Convert([]byte(r.Markdown), &output); err != nil {
@@ -47,6 +56,46 @@ func renderMarkdown(r revision) (template.HTML, []section, error) {
 	var body *html.Node
 	var walk func(*html.Node) error
 	walk = func(n *html.Node) error {
+		if n.Type == html.TextNode {
+			// Pre-existing snapshots remain readable without changing approved text.
+			if resolve == nil && r.NoteReferences == nil {
+				return nil
+			}
+			for p := n.Parent; p != nil; p = p.Parent {
+				if p.Data == "code" || p.Data == "pre" || p.Data == "a" {
+					return nil
+				}
+			}
+			matches := noteReferencePattern.FindAllStringSubmatchIndex(n.Data, -1)
+			if len(matches) > 0 {
+				end := 0
+				for _, match := range matches {
+					id := n.Data[match[2]:match[3]]
+					value, err := strconv.ParseUint(id, 10, 64)
+					if err != nil || value == 0 {
+						return fmt.Errorf("Ungültige Notizreferenz: [note:%s]", id)
+					}
+					id = strconv.FormatUint(value, 10)
+					ref, ok := r.NoteReferences[id]
+					if resolve != nil {
+						ref, err = resolve(id)
+						if err != nil {
+							return err
+						}
+						ok = true
+					}
+					if !ok {
+						return fmt.Errorf("Notiz [note:%s] hat keinen veröffentlichten Artikel.", id)
+					}
+					n.Parent.InsertBefore(&html.Node{Type: html.TextNode, Data: n.Data[end:match[0]]}, n)
+					link := &html.Node{Type: html.ElementNode, Data: "a", Attr: []html.Attribute{{Key: "href", Val: "/articles/" + ref.Slug}}}
+					link.AppendChild(&html.Node{Type: html.TextNode, Data: ref.Title})
+					n.Parent.InsertBefore(link, n)
+					end = match[1]
+				}
+				n.Data = n.Data[end:]
+			}
+		}
 		if n.Type == html.ElementNode {
 			if n.Data == "body" {
 				body = n
@@ -112,6 +161,9 @@ func renderMarkdown(r revision) (template.HTML, []section, error) {
 			if err := walk(c); err != nil {
 				return err
 			}
+		}
+		if n.Type == html.ElementNode && (n.Data == "h2" || n.Data == "h3") {
+			sections[len(sections)-1].Title = nodeText(n)
 		}
 		return nil
 	}

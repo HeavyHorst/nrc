@@ -128,6 +128,7 @@ func (a *app) admin() http.Handler {
 	agent := a.agentAPI()
 	mux.HandleFunc("GET /style.css", a.style)
 	mux.HandleFunc("GET /{$}", a.dashboard)
+	mux.HandleFunc("GET /articles/{slug}", a.article)
 	mux.HandleFunc("GET /notes", a.notes)
 	mux.HandleFunc("GET /drafts/{id}", a.draft)
 	mux.HandleFunc("POST /drafts", a.createDraft)

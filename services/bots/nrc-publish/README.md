@@ -7,6 +7,18 @@ does not change the public article; each update needs a new draft and human appr
 Readers can browse categories, search article text and download published files.
 Pages are server-rendered, with no JavaScript, external fonts or tracking.
 
+In Markdown prose, `[note:123]` becomes a link to the published article for that
+source note, labelled with its public title. The target must already be published
+in this publisher's workspace. Missing or ambiguous targets prevent draft creation;
+if one note has several published URLs, use an explicit `/articles/<slug>` link.
+Code spans, code blocks and existing link labels are left unchanged.
+Resolved URLs and titles are stored with the draft, so review and publication show
+the same links even if the target's title changes. Approval is refused if a target
+was withdrawn during review. A later withdrawal can still break links in articles
+that were already published; those articles need a separately reviewed update.
+Older published snapshots remain unchanged. To resolve their note references,
+create and approve a new draft; old drafts with unresolved references cannot be approved.
+
 ## Start
 
 First set up the [core deployment](../../../README.md#quickstart).

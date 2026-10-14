@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -35,6 +36,8 @@ type revision struct {
 	Attachments                                    []protocol.Attachment
 	CreatedAt                                      time.Time
 	CreatedBy                                      string
+	// Only public titles and URLs, frozen for human review.
+	NoteReferences map[string]articleReference
 	// Publication generation seen when preparing this draft. Approval uses CAS.
 	Base string
 }
@@ -164,10 +167,6 @@ func (s *store) create(r revision, filesDir string) (revision, error) {
 	}
 	r.ID = randomID()
 	r.CreatedAt = time.Now().UTC()
-	// Validate every rendered link before any draft can be approved.
-	if _, _, err := renderMarkdown(r); err != nil {
-		return r, err
-	}
 	files := map[string][]byte{}
 	if len(r.Attachments) > 0 {
 		if filesDir == "" {
@@ -208,6 +207,37 @@ func (s *store) create(r revision, filesDir string) (revision, error) {
 	}
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		r.Base = string(tx.Bucket([]byte("heads")).Get([]byte(r.Slug)))
+		r.NoteReferences = map[string]articleReference{}
+		// Resolve and store links in the same transaction as the draft snapshot.
+		if _, _, err := renderMarkdownWithReferences(r, func(id string) (articleReference, error) {
+			if ref, ok := r.NoteReferences[id]; ok {
+				return ref, nil
+			}
+			var ref articleReference
+			err := tx.Bucket([]byte("published")).ForEach(func(_, v []byte) error {
+				target, err := readRevision(tx, string(v))
+				if err != nil {
+					return err
+				}
+				if strconv.FormatUint(target.SourceID, 10) == id {
+					if ref.Slug != "" {
+						return fmt.Errorf("Notiz [note:%s] hat mehrere veröffentlichte Artikel. Bitte eine explizite /articles/<slug>-Verknüpfung verwenden.", id)
+					}
+					ref = articleReference{Slug: target.Slug, Title: target.Title}
+				}
+				return nil
+			})
+			if err != nil {
+				return ref, err
+			}
+			if ref.Slug == "" {
+				return ref, fmt.Errorf("Notiz [note:%s] hat keinen veröffentlichten Artikel.", id)
+			}
+			r.NoteReferences[id] = ref
+			return ref, nil
+		}); err != nil {
+			return err
+		}
 		// A slug is permanently tied to its source, even after withdrawal.
 		if err := tx.Bucket([]byte("revisions")).ForEach(func(_, v []byte) error {
 			var previous revision
@@ -246,6 +276,22 @@ func (s *store) approve(id, actor string) error {
 		b := tx.Bucket([]byte("published"))
 		if string(tx.Bucket([]byte("heads")).Get([]byte(r.Slug))) != r.Base {
 			return errConflict
+		}
+		// Old drafts with unresolved tokens must be recreated, not silently approved.
+		if r.NoteReferences == nil {
+			r.NoteReferences = map[string]articleReference{}
+		}
+		if _, _, err := renderMarkdown(r); err != nil {
+			return err
+		}
+		for noteID, ref := range r.NoteReferences {
+			_, err := readRevision(tx, string(b.Get([]byte(ref.Slug))))
+			if errors.Is(err, errNotFound) {
+				return fmt.Errorf("Zielartikel für [note:%s] wurde zurückgezogen. Bitte einen neuen Entwurf erstellen.", noteID)
+			}
+			if err != nil {
+				return err
+			}
 		}
 		if err := b.Put([]byte(r.Slug), []byte(id)); err != nil {
 			return err

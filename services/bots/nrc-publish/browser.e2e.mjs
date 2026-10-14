@@ -136,6 +136,12 @@ try {
   );
   assert.equal(await page.locator(".toc nav a").count(), 4);
   assert.equal(await page.locator(".prose pre code").count(), 1);
+  const noteLink = page.locator('.prose a[href="/articles/benutzer-rechte"]');
+  assert.equal(await noteLink.textContent(), "Benutzer und Rechte verstehen");
+  assert.equal(await page.locator(".prose code").filter({ hasText: "[note:999]" }).count(), 1);
+  await noteLink.click();
+  assert.equal(await page.locator("h1").textContent(), "Benutzer und Rechte verstehen");
+  await page.goto(`${publicURL}/articles/api-schluessel`);
   await page.locator(".toc a").filter({ hasText: "Erster Request" }).click();
   assert.match(page.url(), /#erster-request$/);
   await page.goto(`${publicURL}/articles/api-schluessel`);
@@ -252,6 +258,14 @@ try {
     })
     .click();
   assert.equal(await admin.locator(".comparison .review-card").count(), 2);
+  assert.equal(await admin.locator('.comparison .prose a[href="/articles/benutzer-rechte"]').count(), 2);
+  const reviewURL = admin.url();
+  await admin.locator('.comparison .prose a[href="/articles/benutzer-rechte"]').last().click();
+  assert.equal(admin.url(), `${adminURL}/articles/benutzer-rechte`);
+  assert.equal(await admin.locator("h1").textContent(), "Benutzer und Rechte verstehen");
+  await admin.goBack();
+  assert.equal(admin.url(), reviewURL);
+  assert.equal(await admin.getByRole("checkbox").isChecked(), false);
   assert.equal(
     await admin.getByRole("heading", { name: "Schlüssel widerrufen" }).count(),
     1,
