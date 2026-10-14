@@ -90,6 +90,55 @@ func request(h http.Handler, method, path string, form url.Values, auth bool) *h
 	return w
 }
 
+func TestDashboardLatestArticleHTTP(t *testing.T) {
+	a := testApp(t)
+	create := func(slug, title string) revision {
+		t.Helper()
+		r := candidate()
+		r.Slug, r.Title = slug, title
+		draft, err := a.store.create(r, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return draft
+	}
+	live := create("einrichtung", "Veröffentlichter Titel")
+	if err := a.store.approve(live.ID, "reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	old := create("einrichtung", "Alter Entwurf")
+	latest := create("einrichtung", "Zweiter Titel")
+	// Same title and source, different URL: this is a separate new article.
+	other := create("zweite-url", "Zweiter Titel")
+	body := request(a.admin(), "GET", "/", nil, true).Body.String()
+	for _, id := range []string{latest.ID, other.ID} {
+		if strings.Count(body, `href="/drafts/`+id+`"`) != 1 {
+			t.Fatalf("latest draft %s missing or duplicated", id)
+		}
+	}
+	if strings.Contains(body, `href="/drafts/`+old.ID+`"`) || strings.Count(body, `href="/drafts/`) != 2 {
+		t.Fatal("dashboard includes superseded drafts")
+	}
+	for _, label := range []string{`class="pill">Update`, `class="pill">Neuer Artikel`, `class="count">2`} {
+		if !strings.Contains(body, label) {
+			t.Fatalf("dashboard missing %s", label)
+		}
+	}
+	for _, tc := range []struct{ id, label string }{{latest.ID, "Update"}, {other.ID, "Neuer Artikel"}} {
+		body := request(a.admin(), "GET", "/drafts/"+tc.id, nil, true).Body.String()
+		if !strings.Contains(body, `class="pill">`+tc.label) {
+			t.Fatalf("review missing %s", tc.label)
+		}
+	}
+	if err := a.store.approve(latest.ID, "reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	body = request(a.admin(), "GET", "/", nil, true).Body.String()
+	if strings.Count(body, `href="/drafts/`) != 1 || strings.Contains(body, old.ID) {
+		t.Fatal("older draft reappeared after publication")
+	}
+}
+
 func TestPublishingLifecycleHTTP(t *testing.T) {
 	a := testApp(t)
 	public, admin := a.public(), a.admin()

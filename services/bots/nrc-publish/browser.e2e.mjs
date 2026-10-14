@@ -251,6 +251,13 @@ try {
   const admin = await adminContext.newPage();
   admin.on("pageerror", (error) => errors.push(error.message));
   await admin.goto(adminURL);
+  assert.equal(await admin.locator("a.result").count(), 2);
+  const draftLabels = await admin.locator("a.result .pill").allTextContents();
+  assert.deepEqual(draftLabels.map(label => label.trim()).sort(), ["Neuer Artikel", "Update"]);
+  await noOverflow(admin);
+  if (artifacts) {
+    await admin.screenshot({ path: resolve(artifacts, "publish-dashboard.png"), fullPage: true });
+  }
   await admin
     .locator("a.result")
     .filter({
@@ -283,6 +290,7 @@ try {
       .getByRole("button", { name: /Diesen Stand öffentlich/ })
       .isVisible(),
   );
+  await admin.evaluate(() => window.scrollTo(0, 0));
   if (artifacts)
     await admin.screenshot({
       path: resolve(artifacts, "knowledge-update-review-narrow.png"),

@@ -52,6 +52,7 @@ type page struct {
 	FooterText, ImprintURL, PrivacyURL, TermsURL, ContactURL string
 	Categories                                               []category
 	Articles, Drafts                                         []revision
+	PublishedSlugs                                           map[string]bool
 	Article, Previous                                        revision
 	HTML, PreviousHTML                                       template.HTML
 	Sections                                                 []section
@@ -248,7 +249,35 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Speicher nicht verfügbar", 500)
 		return
 	}
-	p := page{Title: "Veröffentlichungen", Mode: "admin", Articles: rows, Drafts: drafts, Categories: group(rows)}
+	// An article is identified by its public URL, not its mutable title.
+	latest := make(map[string]revision)
+	for _, row := range rows {
+		latest[row.Slug] = row
+	}
+	for _, draft := range drafts {
+		previous, ok := latest[draft.Slug]
+		if !ok || draft.CreatedAt.After(previous.CreatedAt) || (draft.CreatedAt.Equal(previous.CreatedAt) && draft.ID > previous.ID) {
+			latest[draft.Slug] = draft
+		}
+	}
+	published := make(map[string]bool)
+	for _, row := range rows {
+		published[row.Slug] = true
+		if latest[row.Slug].ID == row.ID {
+			delete(latest, row.Slug)
+		}
+	}
+	drafts = drafts[:0]
+	for _, draft := range latest {
+		drafts = append(drafts, draft)
+	}
+	sort.Slice(drafts, func(i, j int) bool {
+		if drafts[i].Title == drafts[j].Title {
+			return drafts[i].Slug < drafts[j].Slug
+		}
+		return drafts[i].Title < drafts[j].Title
+	})
+	p := page{Title: "Veröffentlichungen", Mode: "admin", Articles: rows, Drafts: drafts, PublishedSlugs: published, Categories: group(rows)}
 	if value := r.URL.Query().Get("source"); value != "" {
 		id, err := strconv.ParseUint(value, 10, 64)
 		if err != nil || id == 0 {

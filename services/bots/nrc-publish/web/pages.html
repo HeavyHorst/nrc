@@ -435,7 +435,7 @@
         {{ range .Drafts }}
           <a class="result" href="/drafts/{{ .ID }}"
             ><div>
-              <span class="pill">Entwurf</span
+              <span class="pill">{{ if index $.PublishedSlugs .Slug }}Update{{ else }}Neuer Artikel{{ end }}</span
               ><span class="muted small"
                 >{{ .Category }} · {{ date .CreatedAt }}</span
               >
@@ -522,6 +522,7 @@
     <a class="text-link" href="/">← Zur Verwaltung</a
     ><span class="eyebrow">NICHT ÖFFENTLICHER ENTWURF</span>
     <h1>Entwurf prüfen & freigeben</h1>
+    <p><span class="pill">{{ if .Previous.ID }}Update{{ else }}Neuer Artikel{{ end }}</span></p>
     <p class="muted">
       Gespeichert am {{ date .Article.CreatedAt }} von
       {{ .Article.CreatedBy }}
