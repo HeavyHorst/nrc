@@ -1,0 +1,61 @@
+CREATE TABLE IF NOT EXISTS chat_cache (
+    server TEXT NOT NULL,
+    workspace TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (server, workspace)
+);
+
+CREATE TABLE IF NOT EXISTS chat_message (
+    server TEXT NOT NULL,
+    workspace TEXT NOT NULL,
+    conversation_id INTEGER NOT NULL,
+    message_key TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (server, workspace, conversation_id, message_key)
+);
+
+CREATE TABLE IF NOT EXISTS chat_receipt (
+    server TEXT NOT NULL,
+    workspace TEXT NOT NULL,
+    conversation_id INTEGER NOT NULL,
+    chunk INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (server, workspace, conversation_id, chunk)
+);
+
+readCache:
+SELECT payload FROM chat_cache WHERE server = ? AND workspace = ?;
+
+cacheLength:
+SELECT length(payload) FROM chat_cache WHERE server = ? AND workspace = ?;
+
+readCacheChunk:
+SELECT substr(payload, :start, :size) FROM chat_cache WHERE server = :server AND workspace = :workspace;
+
+writeCache:
+INSERT OR REPLACE INTO chat_cache(server, workspace, payload) VALUES (?, ?, ?);
+
+readMessages:
+SELECT payload FROM chat_message WHERE server = ? AND workspace = ? ORDER BY conversation_id, position;
+
+writeMessage:
+INSERT OR REPLACE INTO chat_message(server, workspace, conversation_id, message_key, position, payload) VALUES (?, ?, ?, ?, ?, ?);
+
+deleteMessage:
+DELETE FROM chat_message WHERE server = ? AND workspace = ? AND conversation_id = ? AND message_key = ?;
+
+deleteMessages:
+DELETE FROM chat_message WHERE server = ? AND workspace = ?;
+
+readReceipts:
+SELECT conversation_id, payload FROM chat_receipt WHERE server = ? AND workspace = ? ORDER BY conversation_id, chunk;
+
+writeReceipts:
+INSERT OR REPLACE INTO chat_receipt(server, workspace, conversation_id, chunk, payload) VALUES (?, ?, ?, ?, ?);
+
+deleteReceipts:
+DELETE FROM chat_receipt WHERE server = ? AND workspace = ? AND conversation_id = ?;
+
+deleteProfileReceipts:
+DELETE FROM chat_receipt WHERE server = ? AND workspace = ?;

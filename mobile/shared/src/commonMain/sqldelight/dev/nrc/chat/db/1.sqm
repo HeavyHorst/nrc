@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS chat_receipt (
+    server TEXT NOT NULL,
+    workspace TEXT NOT NULL,
+    conversation_id INTEGER NOT NULL,
+    chunk INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (server, workspace, conversation_id, chunk)
+);

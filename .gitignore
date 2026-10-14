@@ -13,6 +13,7 @@ services/bots/nrc-ai/nrc-ai
 .env
 .env.*
 !.env.example
+*.agekey
 /publish.env
 /publish-branding/
 

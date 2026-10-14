@@ -1,0 +1,11 @@
+.gradle/
+.kotlin/
+**/build/
+local.properties
+*.jks
+*.keystore
+*.p12
+signing/*.json
+!signing/*.sops.json
+signing/keys.txt
+google-services.json

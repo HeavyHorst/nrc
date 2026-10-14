@@ -11,7 +11,7 @@ step() {
 }
 
 step "Installing missing system packages"
-packages=(build-essential ca-certificates clang containerd.io curl docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin ffmpeg git jq libopus-dev libzstd-dev libnginx-mod-http-brotli-static linux-perf llvm nginx poppler-utils procps psmisc python3 strace unzip)
+packages=(age build-essential ca-certificates clang containerd.io curl docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin ffmpeg git jq libopus-dev libzstd-dev libnginx-mod-http-brotli-static linux-perf llvm nginx poppler-utils procps psmisc python3 strace unzip)
 missing=()
 for package in "${packages[@]}"; do
 	if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq 'install ok installed'; then
@@ -33,6 +33,19 @@ fi
 if [[ "$(dpkg --print-architecture)" != "amd64" ]]; then
 	echo "Unsupported orb architecture: $(dpkg --print-architecture)" >&2
 	exit 1
+fi
+
+step "Installing SOPS 3.13.3 (no key generation or decryption)"
+sops_sha256="e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b"
+if [[ ! -x "$local_bin/sops" ]] || [[ "$(sha256sum "$local_bin/sops" | cut -d ' ' -f 1)" != "$sops_sha256" ]]; then
+	(
+		tmp_dir="$(mktemp -d)"
+		trap 'rm -rf "$tmp_dir"' EXIT
+		curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL \
+			https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64 -o "$tmp_dir/sops"
+		echo "$sops_sha256  $tmp_dir/sops" | sha256sum -c -
+		install -m 0755 "$tmp_dir/sops" "$local_bin/sops"
+	)
 fi
 
 step "Installing Odin"

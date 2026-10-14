@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Same geometry as logo/logo.svg; safe padding for launcher masks. -->
+    <!-- Optical centering balances the upper-right visual weight, not just the SVG canvas. -->
+    <group android:translateX="19.7" android:translateY="24.6" android:scaleX="0.45" android:scaleY="0.45">
+        <group android:translateX="14">
+            <path android:fillColor="#FFFFFF" android:pathData="M24 42 88 11C95 8 100 10 100 18V43C100 47 98 49 94 51L56 73 24 58.6C13 53.65 13 47.33 24 42Z" />
+            <path android:fillColor="#FFFFFF" android:pathData="M16 61C16 65 20 65.8 24 67.6L94 99.1C98 100.9 100 104 100 109V119C100 126 96 129 90 126L24 91C19 88 16 85 16 79Z" />
+        </group>
+    </group>
+</vector>
