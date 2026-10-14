@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261014sliceids1";
+const CACHE_NAME = "nrc-terminal-20261014references1";
 
 const APP_SHELL = [
   "./",
@@ -56,7 +56,7 @@ const APP_SHELL = [
   "./ai.js?v=20261008description1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20261013retaineddm1",
-  "./app.js?v=20261014sliceids1",
+  "./app.js?v=20261014references1",
   "./customers.js?v=20261013loading1",
   "./mobile-shell.js?v=20260914chats1",
   "./latency-worker.js",

@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs/promises";
 
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, serviceWorkers: "block" });
@@ -21,8 +22,8 @@ async function openNoteEdit(id) {
 }
 
 try {
-  await page.routeWebSocket("**/*", socket => socket.onMessage(() => {}));
-  await page.route("http://nrc.test/**", async route => {
+  await page.context().routeWebSocket("**/*", socket => socket.onMessage(() => {}));
+  await page.context().route("http://nrc.test/**", async route => {
     const path = new URL(route.request().url()).pathname;
     try { await route.fulfill({ path: fileURLToPath(new URL(`.${path === "/" ? "/index.html" : path}`, import.meta.url)) }); }
     catch { await route.fulfill({ status: 404, body: "Not found" }); }
@@ -62,12 +63,116 @@ try {
     };
   });
 
+  // Markdown references share the inspector's cache, lazy reads and history.
+  await page.evaluate(async () => {
+    const source = NRCAssets.roomAssets.get(0n).get(1n);
+    source.payload = "Der Shop-Link führt zum externen Kaufangebot. Siehe [note:2].\n\nPrüfen: [TASK:18446744073709551615].\n\n`[note:2]` [existing [note:2]](https://example.test) [task:0] [task:18446744073709551616]";
+    window.__originalReferenceTaskRequest = NRCTasks.requestTask;
+    window.__referenceReads = [];
+    NRCTasks.requestTask = (room, id, options) => {
+      window.__referenceReads.push(String(id));
+      window.__resolveReference = () => {
+        const task = { id, convId: 0n, title: "Kaufangebot prüfen", description: "Details: [note:2].", status: 0, priority: 128,
+          orderIndex: 0, color: 0, assignee: "", project: "", attachments: [], createdAt: source.createdAt, updatedAt: source.updatedAt };
+        if (!NRCTasks.roomTasks.has(0n)) NRCTasks.roomTasks.set(0n, new Map());
+        NRCTasks.roomTasks.get(0n).set(id, task);
+        options.onSuccess({ task });
+      };
+    };
+    NRCViewManager.setActiveView("notes");
+    await NRCInspector.openEntity({ type: "note", id: 1n });
+  });
+  const body = page.locator(".note-preview-body");
+  await body.waitFor();
+  assert.equal(await body.locator('a[data-nrc-reference]').count(), 2, "code, existing links and invalid IDs stay unchanged");
+  assert.equal(await body.locator('a[title="NOTE #2"]').textContent(), "Note two", "cached title is immediate");
+  const taskLink = body.locator('a[title="TASK #18446744073709551615"]');
+  assert.equal(await taskLink.textContent(), "[task:18446744073709551615]", "unresolved references keep their ID");
+  await page.waitForFunction(() => window.__referenceReads.includes("18446744073709551615"));
+  await page.evaluate(() => window.__resolveReference());
+  await page.waitForFunction(() => document.querySelector('a[title="TASK #18446744073709551615"]')?.textContent === "Kaufangebot prüfen");
+  assert.match(await taskLink.getAttribute("href"), /#\/inspect\/note-panel\/task\/18446744073709551615$/);
+
+  // All references resolve, even in hidden content and without cache entries.
+  await page.evaluate(() => {
+    window.__originalReferenceAssetRequest = NRCAssets.requestAsset;
+    NRCAssets.requestAsset = (_room, id, options) => {
+      if (id === 9999n) { options.onError?.({ message: "Not found" }); return; }
+      const asset = { assetId: id, convId: 0n, assetType: AssetType.Note, preview: JSON.stringify({ title: "Medienpakete verkaufen" }) };
+      NRCAssets.roomAssets.get(0n).set(id, asset);
+      options.onSuccess({ asset });
+    };
+    const hidden = document.createElement("div");
+    hidden.id = "hiddenReference";
+    hidden.hidden = true;
+    hidden.innerHTML = parseMarkdown("[task:987] [note:4700] [note:9999]");
+    document.body.append(hidden);
+  });
+  await page.waitForFunction(() => window.__referenceReads.includes("987"));
+  await page.evaluate(() => window.__resolveReference());
+  assert.equal(await page.locator('#hiddenReference a[title="TASK #987"]').textContent(), "Kaufangebot prüfen", "hidden task references resolve without becoming visible");
+  assert.equal(await page.locator('#hiddenReference a[title="NOTE #4700"]').textContent(), "Medienpakete verkaufen", "uncached notes resolve too");
+  assert.equal(await page.locator('#hiddenReference a[title="NOTE #9999"]').textContent(), "[note:9999]", "missing targets retain an actionable ID fallback");
+  await page.evaluate(() => {
+    document.getElementById("hiddenReference").remove();
+    NRCTasks.requestTask = window.__originalReferenceTaskRequest;
+    NRCAssets.requestAsset = window.__originalReferenceAssetRequest;
+  });
+
+  const popupPromise = page.context().waitForEvent("page");
+  await taskLink.click({ button: "middle" });
+  const popup = await popupPromise;
+  await popup.waitForFunction(() => window.NRCInspector && currentWorkspaceId === "note-panel");
+  assert.match(popup.url(), /#\/inspect\/note-panel\/task\/18446744073709551615$/);
+  await popup.evaluate(() => {
+    serverReady = true;
+    NRCLinksUI.loadLinks = async () => {};
+    NRCTasks.requestTask = (_room, id, options) => options.onSuccess({ task: {
+      id, convId: 0n, title: "New tab target", description: "Loaded by URL", status: 0, priority: 128,
+      orderIndex: 0, color: 0, assignee: "", project: "", attachments: [], createdAt: 1n, updatedAt: 1n,
+    } });
+    handleShareHashChange();
+  });
+  await popup.waitForFunction(() => NRCInspector.current()?.type === "task" && !NRCInspector.isLoading());
+  assert.equal(await popup.evaluate(() => String(NRCInspector.current().id)), "18446744073709551615");
+  assert.equal(await page.evaluate(() => String(NRCInspector.current().id)), "1", "modified click leaves the source inspector unchanged");
+  await popup.close();
+
+  for (const theme of ["light", "dark"]) {
+    for (const width of [1600, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      await page.evaluate(() => NRCInspector.openEntity({ type: "note", id: 1n }));
+      await page.waitForFunction(() => !NRCInspector.isLoading());
+      if (process.env.NRC_REFERENCE_SCREENSHOTS) {
+        await fs.mkdir(process.env.NRC_REFERENCE_SCREENSHOTS, { recursive: true });
+        await page.locator("#inspector").screenshot({ path: `${process.env.NRC_REFERENCE_SCREENSHOTS}/note-${theme}-${width}.png` });
+      }
+      await taskLink.click();
+      await page.waitForFunction(() => NRCInspector.current()?.type === "task" && !NRCInspector.isLoading());
+      assert.equal(await page.evaluate(() => String(NRCInspector.current().id)), "18446744073709551615");
+      assert.equal(await page.locator('.task-detail-doc-body a[title="NOTE #2"]').textContent(), "Note two", "task descriptions render the same references");
+      if (process.env.NRC_REFERENCE_SCREENSHOTS) {
+        await page.locator("#inspector").screenshot({ path: `${process.env.NRC_REFERENCE_SCREENSHOTS}/task-${theme}-${width}.png` });
+      }
+      await page.locator("#inspectorBack").click();
+      await page.waitForFunction(() => NRCInspector.current()?.type === "note" && !NRCInspector.isLoading());
+      assert.equal(await page.evaluate(() => String(NRCInspector.current().id)), "1", "back restores the source note");
+    }
+  }
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.evaluate(async () => {
+    await NRCInspector.close();
+    NRCAssets.roomAssets.get(0n).get(1n).payload = "# Note one\n\nbody";
+  });
+  console.log("PASS: note/task Markdown links, cached and uncached titles including hidden content, new-tab URLs, exact 64-bit IDs, exclusions and inspector back navigation");
+
   // Several renders of the panel: the container keeps one handler per event.
   // click belongs to the resource registers, input and keydown to the edit form.
   await openNoteEdit(1);
   await openNoteEdit(2);
   await openNoteEdit(1);
-  assert.deepEqual(await page.evaluate(() => window.__panelListeners), ["click", "input", "keydown"], "one panel-level handler per event");
+  assert.deepEqual(await page.evaluate(() => window.__panelListeners), ["click", "input", "keydown", "input", "change", "keydown"], "note and task panels each bind their handlers once");
 
   // The preview has no form fields: the panel-level shortcut must stay silent.
   await page.locator("#noteDetailToggleView").click();

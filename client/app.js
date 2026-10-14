@@ -1434,6 +1434,8 @@ async function connectWebSocket() {
       if (currentSullivanShareRoute && window.NRCAI?.openSullivanWithContext) {
         window.NRCAI.openSullivanWithContext(currentSullivanShareRoute.contextConvId, { focused: true });
       }
+      if (parseInspectorRouteFromHash()) handleShareHashChange();
+      document.querySelectorAll("a[data-nrc-reference]").forEach(resolveMarkdownReference);
     };
   };
 
@@ -5066,7 +5068,7 @@ function attachMarkdownCheckboxHandlers(container, getMarkdown, onToggle) {
 
 // --- Markdown Support ---
 
-function parseMarkdown(text) {
+function parseMarkdown(text, { entityReferences = true } = {}) {
   marked.setOptions({
     breaks: true,
     gfm: true,
@@ -5076,6 +5078,36 @@ function parseMarkdown(text) {
   const renderedHtml = marked.parse(source);
   const container = document.createElement("div");
   container.innerHTML = renderedHtml;
+
+  if (entityReferences) {
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) {
+      if (!walker.currentNode.parentElement.closest("a, code, pre, script, style")) nodes.push(walker.currentNode);
+    }
+    for (const node of nodes) {
+      const fragment = document.createDocumentFragment();
+      const value = node.nodeValue;
+      let offset = 0;
+      for (const match of value.matchAll(/\[\s*(note|task)\s*:\s*(\d+)\s*\]/gi)) {
+        const id = BigInt(match[2]);
+        if (id === 0n || id > 18446744073709551615n) continue;
+        const type = match[1].toLowerCase();
+        fragment.append(value.slice(offset, match.index));
+        const link = document.createElement("a");
+        link.href = `#/inspect/${encodeURIComponent(currentWorkspaceId)}/${type}/${id}`;
+        link.dataset.nrcReference = "";
+        link.title = `${type.toUpperCase()} #${id}`;
+        link.textContent = markdownReferenceTitle(type, id) || `[${type}:${match[2]}]`;
+        fragment.append(link);
+        offset = match.index + match[0].length;
+      }
+      if (offset) {
+        fragment.append(value.slice(offset));
+        node.replaceWith(fragment);
+      }
+    }
+  }
 
   container.querySelectorAll("img").forEach((image) => {
     image.classList.add("markdown-image");
@@ -6148,7 +6180,8 @@ function displayMessage(messageData) {
     }
   } else if (messageData.type === "Message" || messageData.type === "Sent") {
     // Parse markdown first (converts to HTML)
-    const htmlContent = parseMarkdown(messageData.message);
+    // Chat retains its source-aware reference previews and navigation.
+    const htmlContent = parseMarkdown(messageData.message, { entityReferences: false });
     colMessage.innerHTML = htmlContent;
 
     const taskRefRoomId = messageData.aiContextRoomId ?? messageData.roomId;
@@ -7000,6 +7033,73 @@ window.NRCRooms = {
   normalizeRoomName,
 };
 
+function markdownReferenceTitle(type, id, entity = null) {
+  if (type === "task") return (entity || window.NRCTasks?.roomTasks?.get(0n)?.get(id))?.title || "";
+  const note = entity || window.NRCAssets?.roomAssets?.get(0n)?.get(id);
+  return note?.assetType === AssetType.Note ? window.NRCNotes?.parseNotePreview(note.preview)?.title || "" : "";
+}
+
+// Resolve every mounted reference, including hidden and off-screen content.
+// Exact-read APIs already coalesce
+// duplicate requests and populate the caches used by the inspector on click.
+function resolveMarkdownReference(link) {
+  if (!link.isConnected || !serverReady) return;
+  const ref = parseInspectorRouteFromHash(new URL(link.href).hash);
+  if (!ref || ref.workspaceId !== currentWorkspaceId) return;
+  const applyTitle = entity => {
+    if (!link.isConnected || ref.workspaceId !== currentWorkspaceId) return;
+    const title = markdownReferenceTitle(ref.type, ref.id, entity);
+    if (title) link.textContent = title;
+  };
+  const title = markdownReferenceTitle(ref.type, ref.id);
+  if (title) {
+    link.textContent = title;
+    return;
+  }
+  if (ref.type === "task") {
+    window.NRCTasks?.requestTask(0n, ref.id, { onSuccess: detail => applyTitle(detail.task) });
+  } else {
+    window.NRCAssets?.requestAsset(0n, ref.id, { onSuccess: detail => applyTitle(detail.asset) });
+  }
+}
+
+new MutationObserver(records => {
+  for (const record of records) {
+    for (const node of record.addedNodes) {
+      if (node.nodeType !== Node.ELEMENT_NODE) continue;
+      node.querySelectorAll("a[data-nrc-reference]").forEach(resolveMarkdownReference);
+      if (node.matches("a[data-nrc-reference]")) resolveMarkdownReference(node);
+    }
+  }
+}).observe(document.body, { childList: true, subtree: true });
+
+function parseInspectorRouteFromHash(hash = window.location.hash) {
+  const match = hash.match(/^#\/inspect\/([^/]+)\/(note|task)\/([0-9]+)$/);
+  if (!match) return null;
+  try {
+    const id = BigInt(match[3]);
+    if (id === 0n || id > 18446744073709551615n) return null;
+    return { workspaceId: decodeURIComponent(match[1]), roomId: 0n, type: match[2], id };
+  } catch {
+    return null;
+  }
+}
+
+document.addEventListener("click", (event) => {
+  if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  const link = event.target.closest?.("a[href]");
+  if (!link || link.hasAttribute("download") || link.target && link.target !== "_self") return;
+  const url = new URL(link.href);
+  if (url.origin !== location.origin || url.pathname !== location.pathname || url.search !== location.search) return;
+  const ref = parseInspectorRouteFromHash(url.hash);
+  if (!ref || ref.workspaceId !== currentWorkspaceId || !window.NRCInspector) return;
+  event.preventDefault();
+  if (["noteShare", "sullivanShare", "overview"].includes(window.NRCViewManager?.getActiveView())) {
+    window.NRCViewManager.setActiveView("chat");
+  }
+  window.NRCInspector.openEntity(ref);
+});
+
 function parseNoteShareRouteFromHash() {
   const hash = window.location.hash || "";
   const match = hash.match(/^#\/note\/([^/]+)\/(?:([0-9]+)\/)?([0-9]+)$/);
@@ -7035,8 +7135,23 @@ function parseSullivanShareRouteFromHash() {
 
 const initialNoteShareRoute = parseNoteShareRouteFromHash();
 const initialSullivanShareRoute = parseSullivanShareRouteFromHash();
+const initialInspectorRoute = parseInspectorRouteFromHash();
 
 function handleShareHashChange() {
+  const inspectorRoute = parseInspectorRouteFromHash();
+  if (inspectorRoute) {
+    if (inspectorRoute.workspaceId !== currentWorkspaceId) {
+      window.location.reload();
+      return;
+    }
+    if (serverReady) {
+      if (["noteShare", "sullivanShare", "overview"].includes(window.NRCViewManager?.getActiveView())) {
+        window.NRCViewManager.setActiveView("chat");
+      }
+      window.NRCInspector?.openEntity(inspectorRoute);
+    }
+    return;
+  }
   const noteRoute = parseNoteShareRouteFromHash();
   const sullivanRoute = parseSullivanShareRouteFromHash();
   if (!sullivanRoute) {
@@ -7093,7 +7208,7 @@ window.addEventListener("hashchange", handleShareHashChange);
   // Capture before asynchronous initialization lets view modules save defaults.
   const savedUIState = loadUIState();
   // Load workspace from URL (or default)
-  const initialShareRoute = initialNoteShareRoute || initialSullivanShareRoute;
+  const initialShareRoute = initialNoteShareRoute || initialSullivanShareRoute || initialInspectorRoute;
   currentWorkspaceId = initialShareRoute?.workspaceId || await loadWorkspaceFromStorage();
   logSystem(`INITIALIZED WORKSPACE ${currentWorkspaceId}`, "workspace");
 
