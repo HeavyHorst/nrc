@@ -82,6 +82,10 @@ Request-scoped responses echo that correlation value in a trailing `u32`:
 
 `correlation_id = 0` is valid and used for broadcast/non-request-scoped server events.
 
+The batch reads `C_GetTasksByIDs` and `C_GetAssetsByIDs` are exceptions to the
+request layout: their correlation ID follows the workspace scope, before the
+content flag and ID array. Their responses still use a trailing correlation ID.
+
 A response that spans several frames repeats
 the same correlation ID on every frame; the client accumulates until the
 continuation flag is clear. Paged listings — the task query, the task page and
@@ -112,7 +116,7 @@ its own cursor and the client asks for the next one when it needs it.
 invalid before any payload parsing happens, so a new opcode must be added to both
 the enum and the range check in `protocol/protocol.odin`.
 
-- Client to server: `1-3`, `8`, `16-59`
+- Client to server: `1-3`, `8`, `16-61`
 - Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-167`
 
 ### Client to Server
@@ -157,6 +161,7 @@ the enum and the range check in `protocol/protocol.odin`.
 | 57 | `C_ListTaskAssignees` | List distinct workspace task assignees |
 | 58 | `C_QueryCalendar` | Query dated work in a half-open time range |
 | 59 | `C_GetWorkspaceOverview` | Read one complete, unpaged workspace aggregate snapshot |
+| 60 | `C_GetTasksByIDs` | Read tasks by an exact set of IDs |
 
 #### Assets
 
@@ -172,6 +177,7 @@ the enum and the range check in `protocol/protocol.odin`.
 | 37 | `C_ListNoteProjects` | List the distinct note project labels |
 | 38 | `C_ListAssetsPagedByTag` | List assets filtered by one tag |
 | 39 | `C_ListNoteTags` | List the distinct note tags |
+| 61 | `C_GetAssetsByIDs` | Read visible assets by an exact set of IDs |
 
 #### Edges, graph and customer reads
 
@@ -463,6 +469,22 @@ Status bits correspond to task status values. Done pages sort by `CompletedAt` d
 ```
 [ConversationID: 8 bytes] [TaskID: 8 bytes] [CorrelationID: 4 bytes]
 ```
+
+#### C_GetTasksByIDs / C_GetAssetsByIDs (Client → Server)
+```
+[ConversationID: 8 bytes, must be 0] [CorrelationID: 4 bytes] [FullContent: 1 byte] [IDCount: 2 bytes] [ID: 8 bytes] × IDCount
+```
+
+`IDCount` is 0–64 (`MAX_ID_BATCH_SIZE`). `FullContent` must be 0 or 1;
+tasks always return full records, while assets include payloads only when it is 1.
+Duplicate IDs are returned once, in request order. Missing or invisible records
+are omitted.
+
+Responses reuse `S_TaskListPage` or `S_AssetListPage`, with zero cursor fields
+and `TotalCount` equal to the number of returned records across all chunks.
+An empty result still returns one empty page. Byte-bounded chunks share the
+correlation ID; `HasMore` means another response chunk follows without another
+request. These exact-set reads do not make a list or filter cache complete.
 
 #### C_QueryTasks (Client → Server)
 ```
