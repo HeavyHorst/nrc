@@ -15,6 +15,13 @@
   const key = (ref) => ref ? `${ref.roomId}:${ref.type}:${ref.id}` : "";
   const roomName = (roomId) => typeof getRoomName === "function" ? getRoomName(BigInt(roomId)) : String(roomId);
 
+  function rememberDocumentScroll(ref) {
+    // During a read the previous record's document may still be mounted.
+    if (detailLoading || !["note", "task"].includes(ref?.type)) return;
+    const scroller = entityHost()?.querySelector(".record-document-scroll");
+    if (ref && scroller) ref.documentScrollTop = scroller.scrollTop;
+  }
+
   function normalize(ref) {
     if (!ref || ref.id == null) return null;
     return { ...ref, roomId: 0n, id: BigInt(ref.id), type: String(ref.type).toLowerCase() };
@@ -158,7 +165,7 @@
       .finally(() => { prefetchInFlight--; });
   }
 
-  async function loadLinkedEntity(ref, stillCurrent) {
+  async function loadLinkedEntity(ref, stillCurrent, restoreScroll) {
     const isNote = ref.type === "note";
     const isTask = ref.type === "task";
     const cached = isTask ? window.NRCTasks?.roomTasks?.get(ref.roomId)?.get(ref.id)
@@ -189,6 +196,12 @@
       if (!stillCurrent()) return;
       setDetailLoading(false);
       select(entity, {});
+      // Full note/task details render synchronously here. Restore only for this
+      // history navigation, not later editor or comment-driven remounts.
+      if (restoreScroll && ref.documentScrollTop != null) {
+        const scroller = entityHost()?.querySelector(".record-document-scroll");
+        if (scroller) scroller.scrollTop = ref.documentScrollTop;
+      }
       updateActions();
     } catch (error) {
       if (!stillCurrent()) return;
@@ -197,12 +210,12 @@
       const retry = document.createElement("button");
       retry.className = "btn";
       retry.textContent = "RETRY";
-      retry.onclick = () => renderEntity(ref);
+      retry.onclick = () => renderEntity(ref, { restoreScroll });
       entityHost()?.append(retry);
     }
   }
 
-  function renderEntity(ref) {
+  function renderEntity(ref, { restoreScroll = false } = {}) {
     const token = ++state.sequence;
     const stillCurrent = () => token === state.sequence && key(current()) === key(ref);
     setDetailLoading(false);
@@ -210,7 +223,7 @@
     if (["company", "activity"].includes(ref.type) || ref.type === "contact" && !ref.id) {
       window.NRCCustomers?.showInspector(ref);
     } else if (["note", "task", "contact"].includes(ref.type)) {
-      loadLinkedEntity(ref, stillCurrent);
+      loadLinkedEntity(ref, stillCurrent, restoreScroll);
     } else if (ref.type === "reminder") {
       if (!window.NRCTasks?.selectReminder?.(ref.id, { fromInspector: true, roomId: ref.roomId })) {
         renderStatus(ref, "LOADING", `Loading reminder #${ref.id}…`);
@@ -249,6 +262,7 @@
     if (!(await canDispose(existing))) return false;
     if (!isIntentCurrent(intent)) return false;
     const replaceCurrent = Boolean(existing && options.replaceCurrent);
+    rememberDocumentScroll(existing);
     if (!replaceCurrent || existing.type !== ref.type) {
       clearModuleSelection(existing, true);
     }
@@ -300,7 +314,7 @@
     clearModuleSelection(ref, state.stack.length > 1);
     state.stack.pop();
     const previous = current();
-    if (previous) renderEntity(previous);
+    if (previous) renderEntity(previous, { restoreScroll: true });
     else {
       showContext();
       setDrawer(false);
@@ -333,7 +347,7 @@
       state.sequence += 1;
       clearModuleSelection(ref);
       const previous = current();
-      if (previous) renderEntity(previous);
+      if (previous) renderEntity(previous, { restoreScroll: true });
       else {
         showContext();
         setDrawer(false);

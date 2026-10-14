@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261014references1";
+const CACHE_NAME = "nrc-terminal-20261014backscroll1";
 
 const APP_SHELL = [
   "./",
@@ -29,7 +29,7 @@ const APP_SHELL = [
   "./edges.js?v=20260924slicelive1",
   "./files.js?v=20261008files1",
   "./links-ui.js?v=20261014sliceids1",
-  "./inspector.js?v=20261012overview2",
+  "./inspector.js?v=20261014backscroll1",
   "./view-manager.js?v=20261012overview1",
   "./list-navigation.js?v=20260805b",
   "./virtual-list.js?v=20260908a",

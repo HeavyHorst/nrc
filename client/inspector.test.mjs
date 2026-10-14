@@ -128,6 +128,7 @@ function makeTestNode() {
     className: "",
     hidden: false,
     textContent: "",
+    querySelector() { return null; },
     querySelectorAll() { return []; },
     setAttribute(name, value) { this[name] = value; },
     hasChildNodes() { return this.children.length > 0; },

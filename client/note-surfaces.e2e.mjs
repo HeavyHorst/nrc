@@ -138,12 +138,27 @@ try {
   assert.equal(await page.evaluate(() => String(NRCInspector.current().id)), "1", "modified click leaves the source inspector unchanged");
   await popup.close();
 
+  await page.evaluate(() => {
+    const paragraphs = "A paragraph of the source document.\n\n".repeat(45);
+    NRCAssets.roomAssets.get(0n).get(1n).payload = `${paragraphs}[task:18446744073709551615]\n\n${paragraphs}`;
+    NRCTasks.roomTasks.get(0n).get(18446744073709551615n).description = `${paragraphs}[note:2]\n\n${paragraphs}`;
+    NRCInspector.prefetchNote = () => {};
+    window.__pendingLinks = [];
+    NRCLinksUI.loadLinks = (_room, type, id) => new Promise(resolve => {
+      if (window.__holdNoteLinks && type === 1 && id === 1n) window.__pendingLinks.push(resolve);
+      else setTimeout(resolve, 50);
+    });
+  });
+  const scroller = page.locator("#inspectorEntityHost .record-document-scroll");
   for (const theme of ["light", "dark"]) {
     for (const width of [1600, 390]) {
       await page.setViewportSize({ width, height: 1000 });
       await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
       await page.evaluate(() => NRCInspector.openEntity({ type: "note", id: 1n }));
       await page.waitForFunction(() => !NRCInspector.isLoading());
+      await taskLink.scrollIntoViewIfNeeded();
+      const noteScroll = await scroller.evaluate(el => el.scrollTop);
+      assert.ok(noteScroll > 500, "source link is well below the top");
       if (process.env.NRC_REFERENCE_SCREENSHOTS) {
         await fs.mkdir(process.env.NRC_REFERENCE_SCREENSHOTS, { recursive: true });
         await page.locator("#inspector").screenshot({ path: `${process.env.NRC_REFERENCE_SCREENSHOTS}/note-${theme}-${width}.png` });
@@ -152,12 +167,50 @@ try {
       await page.waitForFunction(() => NRCInspector.current()?.type === "task" && !NRCInspector.isLoading());
       assert.equal(await page.evaluate(() => String(NRCInspector.current().id)), "18446744073709551615");
       assert.equal(await page.locator('.task-detail-doc-body a[title="NOTE #2"]').textContent(), "Note two", "task descriptions render the same references");
+      await page.waitForFunction(() => document.querySelector("#inspectorEntityHost .record-document-scroll")?.scrollTop === 0);
+      const noteLink = page.locator('.task-detail-doc-body a[title="NOTE #2"]');
+      await noteLink.scrollIntoViewIfNeeded();
+      const taskScroll = await scroller.evaluate(el => el.scrollTop);
+      assert.ok(taskScroll > 500, "task link is well below the top");
       if (process.env.NRC_REFERENCE_SCREENSHOTS) {
         await page.locator("#inspector").screenshot({ path: `${process.env.NRC_REFERENCE_SCREENSHOTS}/task-${theme}-${width}.png` });
       }
+      await noteLink.click();
+      await page.waitForFunction(() => NRCInspector.current()?.id === 2n && !NRCInspector.isLoading());
       await page.locator("#inspectorBack").click();
+      await page.waitForFunction(() => NRCInspector.current()?.type === "task" && !NRCInspector.isLoading());
+      await page.waitForFunction(top => document.querySelector("#inspectorEntityHost .record-document-scroll")?.scrollTop === top, taskScroll);
+      await scroller.evaluate(el => { el.scrollTop = 137; });
+      await page.evaluate(() => handleCommentChanged({ parentType: 1, parentId: 18446744073709551615n, convId: 0n }, "fetched"));
+      await page.waitForTimeout(80);
+      assert.equal(await scroller.evaluate(el => el.scrollTop), 0, "a task comment remount does not replay the old BACK position");
+
+      await page.evaluate(() => {
+        window.__holdNoteLinks = true;
+        document.dispatchEvent(new CustomEvent("nrc:asset-updated", { detail: { asset: NRCAssets.roomAssets.get(0n).get(1n) } }));
+      });
+      await page.locator("#inspectorBack").click();
+      await page.waitForFunction(() => NRCInspector.current()?.id === 1n && NRCInspector.isLoading() && window.__pendingLinks.length === 1);
+      assert.equal(await page.locator(".task-detail-doc-body").count(), 1, "previous task remains mounted during the pending BACK read");
+      // A main-view selection interrupts BACK while the old task is still mounted.
+      await page.evaluate(() => NRCInspector.openEntity({ type: "note", id: 2n }));
+      await page.waitForFunction(() => NRCInspector.current()?.id === 2n && !NRCInspector.isLoading());
+      await page.evaluate(() => window.__pendingLinks.shift()());
+      await page.locator("#inspectorBack").click();
+      await page.waitForFunction(() => NRCInspector.current()?.id === 1n && NRCInspector.isLoading() && window.__pendingLinks.length === 1);
+      await page.evaluate(() => {
+        window.__holdNoteLinks = false;
+        window.__pendingLinks.shift()();
+      });
       await page.waitForFunction(() => NRCInspector.current()?.type === "note" && !NRCInspector.isLoading());
       assert.equal(await page.evaluate(() => String(NRCInspector.current().id)), "1", "back restores the source note");
+      await page.waitForFunction(top => document.querySelector("#inspectorEntityHost .record-document-scroll")?.scrollTop === top, noteScroll);
+      await scroller.evaluate(el => { el.scrollTop = 137; });
+      await page.waitForTimeout(80);
+      assert.equal(await scroller.evaluate(el => el.scrollTop), 137, "restoration does not lock subsequent scrolling");
+      await page.evaluate(() => handleNoteCommentChanged({ parentType: NRCAssets.ParentType.Asset, parentId: 1n, convId: 0n }, "fetched"));
+      await page.waitForTimeout(80);
+      assert.equal(await scroller.evaluate(el => el.scrollTop), 0, "a note comment remount does not replay the old BACK position");
     }
   }
   await page.setViewportSize({ width: 1600, height: 1000 });
