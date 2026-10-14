@@ -24,14 +24,50 @@ white on a dark padded tile for Android adaptive/themed launcher icons.
   explicit offline/unknown-delivery states. Offline send is disabled.
 - Menu → **System log**: recent connection, protocol and local-storage events,
   with technical causes and copy/clear actions.
+- Native Markdown/GFM chat rendering: headings, emphasis, strikethrough, quotes,
+  nested lists, read-only task lists, links, tables and selectable code blocks.
 
 **This is not yet a production mobile messenger.** There is no durable outbox,
 FCM integration, notification permission flow, attachments, reactions, or read
-receipts. Markdown is shown as text; image messages direct users to the web client.
+receipts. NRC binary image/attachment messages still direct users to the web client;
+Markdown-linked HTTPS images can be loaded explicitly in the transcript.
 The UI does not claim that `sent` means the recipient read or received a message.
 Unacknowledged sends become `delivery unknown`; they are never automatically
 resent, because ephemeral sends cannot safely deduplicate and retained deduplication
 has a bounded retry window.
+
+## Markdown in chat
+
+The renderer is native Compose, not HTML or a WebView. Original UTF-8 message
+text is kept unchanged in the protocol and local history; formatting is a view.
+Long table cells wrap inside consistent columns, delimiter colons determine
+left/center/right alignment, and wide tables scroll horizontally independently
+of the conversation. Fenced code has language-aware highlighting, horizontal
+scrolling and **Copy code**; intentional indentation inside the fence is preserved.
+Task checkboxes are read-only, including uppercase `[X]`.
+
+Links open via the platform handler, limited to HTTP, HTTPS and mailto; embedded
+credentials and file/content/intent/JavaScript destinations are refused. Raw HTML
+is displayed literally, never executed. NRC task/note references, math/KaTeX,
+footnotes and arbitrary embedded HTML are not part of this feature set; this is
+not a claim of complete equivalence to the web renderer or formal GFM conformance.
+
+Overcomplex messages fall back to selectable, unmodified plain text with an
+explicit notice. Before parsing, a conservative line-prefix check refuses more
+than 16 quote markers, even in code examples; this avoids the parser's quadratic
+allocation failure on a valid 50-KiB repeated-quote message. Native rendering
+also has a 64-level/4,096-node AST budget. These are rendering limits, not changes
+to the stored message or NRC's protocol limit, and not a general all-input/device
+performance guarantee.
+
+Markdown images keep an alt-text marker at their source position and show a
+**Load image** control below the message. They are not fetched automatically:
+loading external content shares the phone's IP with that host. Only credential-free
+HTTPS URLs are accepted, with no redirects and a separate unauthenticated client.
+Requests time out after 15 seconds, downloads are capped at 8 MiB even without
+Content-Length, decode requests at 1024 × 1024, and the in-memory image cache at
+16 MiB; no disk image cache is configured. Failed images have an explicit retry.
+This is linked-image viewing, not an attachment uploader or authenticated file reader.
 
 ## Troubleshooting a connection
 

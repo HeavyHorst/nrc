@@ -278,6 +278,7 @@ private fun ColumnScope.Conversations(state: ChatState, onSelect: (Long) -> Unit
 private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation, onDraft: (Long, String) -> Unit,
                                    onSend: () -> Unit, onOlder: (Long) -> Unit, onReopenDM: () -> Unit) {
     val id = conversation.id
+    val markdownImages = rememberMarkdownImageLoader()
     val messages = state.messages[id].orEmpty()
     val draft = state.drafts[id].orEmpty()
     val list = rememberLazyListState()
@@ -322,23 +323,20 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
                 }
             }
             val own = message.author == state.username
-            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 24.dp, top = 12.dp, bottom = 12.dp).height(IntrinsicSize.Min)) {
-                Box(Modifier.width(3.dp).fillMaxHeight().background(if (own) MaterialTheme.colorScheme.primary else Color.Transparent))
-                Column(Modifier.weight(1f).padding(start = 13.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Meta(clockTime(message.timestampNanos), Modifier.width(62.dp))
-                        Text(if (own) "you" else message.author, fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    SelectionContainer {
-                        Text(message.text, Modifier.padding(top = 8.dp), fontSize = 16.sp, lineHeight = 25.sp)
-                    }
-                    if (own && message.delivery != Delivery.Received) Meta(when (message.delivery) {
-                        Delivery.Sending -> "sending…"; Delivery.Sent -> "sent"
-                        Delivery.Unconfirmed -> "delivery unknown · check before resending"
-                        Delivery.Failed -> "not sent"; else -> ""
-                    }, Modifier.padding(top = 7.dp))
+            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp)) {
+                Row {
+                    Text(if (own) "you" else message.author, Modifier.weight(1f, fill = false).alignByBaseline(),
+                        fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Meta(" · ${clockTime(message.timestampNanos)}", Modifier.padding(start = 6.dp).alignByBaseline())
                 }
+                SelectionContainer {
+                    ChatMarkdown(message.text, markdownImages, Modifier.padding(top = 8.dp))
+                }
+                if (own && message.delivery != Delivery.Received && message.delivery != Delivery.Sent) Meta(when (message.delivery) {
+                    Delivery.Sending -> "sending…"
+                    Delivery.Unconfirmed -> "delivery unknown · check before resending"
+                    Delivery.Failed -> "not sent"; else -> ""
+                }, Modifier.padding(top = 7.dp))
             }
         }
     }

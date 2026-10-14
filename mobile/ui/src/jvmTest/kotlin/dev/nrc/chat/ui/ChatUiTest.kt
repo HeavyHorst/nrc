@@ -133,4 +133,28 @@ class ChatUiTest {
         compose.runOnIdle { assertFalse(backEnabled) }
         assertEquals("Draft before opening system log", state.drafts[2])
     }
+
+    @Test fun messageHeadersFollowWebAndOnlyPendingOrProblemStatesShowStatus() {
+        var message by mutableStateOf(Message("outgoing", 2, author = "rene", timestampNanos = 1000,
+            text = "A normal message", delivery = Delivery.Sending))
+        compose.setContent {
+            NrcApp(ChatState(profile = Profile("https://nrc.example", "studio"), username = "rene", selected = 2,
+                connection = Connection.Connected, messages = mapOf(2L to listOf(message))),
+                {}, { _, _ -> }, {}, {}, {}, {}, {}, {})
+        }
+        compose.onNodeWithText("sending…").assertExists()
+        val timestamp = " · " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.ROOT).format(java.util.Date(0))
+        val authorBounds = compose.onNodeWithText("you").fetchSemanticsNode().boundsInRoot
+        val timeBounds = compose.onNodeWithText(timestamp).fetchSemanticsNode().boundsInRoot
+        assertTrue(authorBounds.right <= timeBounds.left, "Sender must precede the timestamp without overlap")
+        compose.runOnIdle { message = message.copy(delivery = Delivery.Sent) }
+        compose.onNodeWithText("A normal message").assertExists()
+        compose.onNodeWithText("sent").assertDoesNotExist()
+        compose.onNodeWithText("sending…").assertDoesNotExist()
+        compose.runOnIdle { message = message.copy(delivery = Delivery.Unconfirmed) }
+        compose.onNodeWithText("delivery unknown · check before resending").assertExists()
+        compose.runOnIdle { message = message.copy(delivery = Delivery.Failed) }
+        compose.onNodeWithText("not sent").assertExists()
+        compose.onNodeWithText("delivery unknown · check before resending").assertDoesNotExist()
+    }
 }
