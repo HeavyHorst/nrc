@@ -58,13 +58,13 @@ func TestPublishDoesNotFollowRedirects(t *testing.T) {
 }
 
 func TestPublishCommandBoundary(t *testing.T) {
-	for _, name := range []string{"list", "draft", "inspect"} {
+	for _, name := range []string{"list", "draft", "inspect", "order", "subtopic"} {
 		cmd, _, err := publishCmd.Find([]string{name})
 		if err != nil || cmd.Name() != name {
 			t.Fatalf("missing command %s", name)
 		}
-		if name == "draft" && cmd.Annotations["mutation"] != "true" {
-			t.Fatal("draft lacks mutation annotation")
+		if (name == "draft" || name == "order" || name == "subtopic") && cmd.Annotations["mutation"] != "true" {
+			t.Fatal("publish mutation lacks annotation")
 		}
 	}
 	for _, cmd := range publishCmd.Commands() {

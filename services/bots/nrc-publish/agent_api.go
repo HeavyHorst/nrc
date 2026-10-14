@@ -28,6 +28,7 @@ type agentRevision struct {
 	Title       string                `json:"title"`
 	Summary     string                `json:"summary"`
 	Category    string                `json:"category"`
+	Subtopic    string                `json:"subtopic,omitempty"`
 	Kind        string                `json:"kind"`
 	CreatedAt   time.Time             `json:"created_at"`
 	CreatedBy   string                `json:"created_by"`
@@ -37,6 +38,7 @@ type agentRevision struct {
 
 func agentView(r revision, content bool) agentRevision {
 	v := agentRevision{ID: r.ID, NoteID: strconv.FormatUint(r.SourceID, 10), Slug: r.Slug, Title: r.Title, Summary: r.Summary, Category: r.Category, Kind: r.Kind, CreatedAt: r.CreatedAt, CreatedBy: r.CreatedBy}
+	v.Subtopic = r.Subtopic
 	if content {
 		v.Markdown, v.Attachments = r.Markdown, r.Attachments
 	}
@@ -82,6 +84,50 @@ func (a *app) agentAPI() http.Handler {
 		}
 		agentJSON(w, 200, result)
 	})
+	mux.HandleFunc("PUT /api/order", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		var input struct {
+			Category string   `json:"category"`
+			NoteIDs  []string `json:"note_ids"`
+		}
+		if err := decoder.Decode(&input); err != nil {
+			agentJSON(w, 400, map[string]string{"error": "Ungültige Reihenfolge"})
+			return
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF || input.NoteIDs == nil {
+			agentJSON(w, 400, map[string]string{"error": "Ein JSON-Dokument mit note_ids erwartet"})
+			return
+		}
+		if err := a.store.setOrder(input.Category, input.NoteIDs); err != nil {
+			agentJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		agentJSON(w, 200, map[string]any{"category": input.Category, "note_ids": input.NoteIDs})
+	})
+	mux.HandleFunc("PUT /api/subtopics", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		var input struct {
+			Category    string            `json:"category"`
+			Assignments map[string]string `json:"assignments"`
+		}
+		if err := decoder.Decode(&input); err != nil {
+			agentJSON(w, 400, map[string]string{"error": "Ungültige Zuordnungen"})
+			return
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			agentJSON(w, 400, map[string]string{"error": "Ein JSON-Dokument erwartet"})
+			return
+		}
+		if err := a.store.setSubtopics(input.Category, input.Assignments); err != nil {
+			agentJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		agentJSON(w, 200, input)
+	})
 	mux.HandleFunc("POST /api/drafts", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
 		decoder := json.NewDecoder(r.Body)
@@ -112,12 +158,12 @@ func (a *app) agentAPI() http.Handler {
 			if draft.ID != r.PathValue("id") {
 				continue
 			}
-			previous, err := a.store.current(draft.Slug)
+			previous, err := a.store.currentForSource(draft.SourceID)
 			if err != nil && !errors.Is(err, errNotFound) {
 				agentJSON(w, 500, map[string]string{"error": "Speicher nicht verfügbar"})
 				return
 			}
-			head, err := a.store.head(draft.Slug)
+			head, err := a.store.head(draft)
 			if err != nil {
 				agentJSON(w, 500, map[string]string{"error": "Speicher nicht verfügbar"})
 				return

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -39,6 +40,13 @@ func TestBrowserPreview(t *testing.T) {
 	a.cfg.Workspace = "test-workspace"
 	a.cfg.ReviewURL = "http://" + env("PUBLISH_PREVIEW_ADMIN_ADDR", "127.0.0.1:8094")
 	src := a.source.(*fixtureSource)
+	for id, target := range map[uint64]uint64{5348: 5349, 5349: 5348} {
+		note := src.assets[41]
+		note.AssetID = id
+		note.Preview = `{"title":"Kreisverweis-Test","format":"markdown"}`
+		note.Payload = fmt.Sprintf("## Zusammenhang\n\nSiehe auch [note:%d].", target)
+		src.assets[id] = note
+	}
 	body := "## Voraussetzungen\n\nSie benötigen ein Benutzerkonto und die Berechtigung, Integrationen zu verwalten.\n\n## Schlüssel erstellen\n\n1. Öffnen Sie die Einstellungen Ihrer Anwendung.\n2. Wählen Sie **Integrationen → API-Schlüssel**.\n3. Geben Sie einen aussagekräftigen Namen ein und erstellen Sie den Schlüssel.\n4. Kopieren Sie den Schlüssel und bewahren Sie ihn sicher auf.\n\n> **Wichtig:** Teilen Sie Ihren Schlüssel nicht mit anderen. Das folgende Beispiel ist illustrative Dokumentation, keine NRC-API.\n\n## Erster Request\n\nSenden Sie den Schlüssel im Authorization-Header Ihrer Anfrage:\n\n```bash\ncurl -H \"Authorization: Bearer YOUR_API_KEY\" \\\n  https://api.example.com/v1/items\n```\n\n## Nächste Schritte\n\nLesen Sie die [API-Referenz](/articles/api-referenz) für weitere Beispiele."
 	body += "\n\nSiehe auch [note:2]. Ein Codebeispiel bleibt unverändert: `[note:999]`."
 	fixtures := []revision{
@@ -62,6 +70,9 @@ func TestBrowserPreview(t *testing.T) {
 	}
 	fixtures[2].Markdown += "\n\n![Beispielabbildung](att:1)\n\n[Beispieldatei herunterladen](att:0)"
 	fixtures[2].Attachments = []protocol.Attachment{{FileId: "att_manual", Filename: "beispiel.txt"}, {FileId: "att_diagram", Filename: "beispiel.png"}}
+	fixtures[6].Markdown += "\n\n![Beispielabbildung](/files/att_diagram?inline=true)\n\n[Beispieldatei herunterladen](/files/att_manual)"
+	fixtures[6].Attachments = fixtures[2].Attachments
+	fixtures[2].Attachments = append(fixtures[2].Attachments, protocol.Attachment{FileId: "att_extra", Filename: "checkliste.txt"})
 	for i, attachment := range fixtures[2].Attachments {
 		data := []byte("Synthetische Beispieldatei\n")
 		if i == 1 {

@@ -46,23 +46,30 @@ type app struct {
 type category struct {
 	Name     string
 	Articles []revision
+	Groups   []category
+	Active   bool
 }
 type page struct {
 	Brand, Title, Mode, Query, Category, Error, CSRF         string
 	FooterText, ImprintURL, PrivacyURL, TermsURL, ContactURL string
 	Categories                                               []category
+	ResultGroups                                             []category
 	Articles, Drafts                                         []revision
-	PublishedSlugs                                           map[string]bool
+	PublishedSources                                         map[uint64]bool
 	Article, Previous                                        revision
 	HTML, PreviousHTML                                       template.HTML
 	Sections                                                 []section
 	Notes                                                    []protocol.Asset
 	Next                                                     string
+	ReviewID                                                 string
+	Reviews                                                  []page
+	Missing                                                  []string
 	Changed, IsDraft                                         bool
 }
 
 func newApp(s *store, source noteSource, cfg config) *app {
 	funcs := template.FuncMap{
+		"inc":       func(i int) int { return i + 1 },
 		"date":      func(t time.Time) string { return t.In(time.FixedZone("UTC", 0)).Format("02.01.2006") },
 		"noteTitle": func(a protocol.Asset) string { title, _, _ := noteMetadata(a); return title },
 		"mediaURL":  func(r revision, a protocol.Attachment) string { return "/media/" + r.ID + "/" + a.FileId },
@@ -109,7 +116,20 @@ func group(rows []revision) []category {
 	sort.Strings(names)
 	groups := []category{}
 	for _, name := range names {
-		groups = append(groups, category{name, m[name]})
+		c := category{Name: name, Articles: m[name]}
+		indices := map[string]int{}
+		for _, row := range m[name] {
+			i, ok := indices[row.Subtopic]
+			if !ok {
+				i = len(c.Groups)
+				indices[row.Subtopic] = i
+				c.Groups = append(c.Groups, category{Name: row.Subtopic})
+			}
+			c.Groups[i].Articles = append(c.Groups[i].Articles, row)
+		}
+		// Direct articles must not visually belong to the preceding subtopic.
+		sort.SliceStable(c.Groups, func(i, j int) bool { return c.Groups[i].Name == "" && c.Groups[j].Name != "" })
+		groups = append(groups, c)
 	}
 	return groups
 }
@@ -120,6 +140,7 @@ func (a *app) public() http.Handler {
 	mux.HandleFunc("GET /style.css", a.style)
 	mux.HandleFunc("GET /{$}", a.home)
 	mux.HandleFunc("GET /articles/{slug}", a.article)
+	mux.HandleFunc("GET /articles/by-note/{id}", a.articleByNote)
 	mux.HandleFunc("GET /media/{revision}/{file}", func(w http.ResponseWriter, r *http.Request) { a.media(w, r, true) })
 	return headers(mux, false)
 }
@@ -129,10 +150,30 @@ func (a *app) admin() http.Handler {
 	agent := a.agentAPI()
 	mux.HandleFunc("GET /style.css", a.style)
 	mux.HandleFunc("GET /{$}", a.dashboard)
+	mux.HandleFunc("GET /order", a.order)
+	mux.HandleFunc("POST /order", a.saveOrder)
+	mux.HandleFunc("POST /subtopics", a.saveSubtopics)
 	mux.HandleFunc("GET /articles/{slug}", a.article)
+	mux.HandleFunc("GET /articles/by-note/{id}", a.articleByNote)
 	mux.HandleFunc("GET /notes", a.notes)
 	mux.HandleFunc("GET /drafts/{id}", a.draft)
 	mux.HandleFunc("POST /drafts", a.createDraft)
+	mux.HandleFunc("POST /reviews", func(w http.ResponseWriter, r *http.Request) {
+		id, err := a.store.createReview(r.PostForm["draft"])
+		if err != nil {
+			a.action(w, r, err)
+			return
+		}
+		http.Redirect(w, r, "/reviews/"+id, http.StatusSeeOther)
+	})
+	mux.HandleFunc("GET /reviews/{id}", a.review)
+	mux.HandleFunc("POST /reviews/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
+		if r.PostForm.Get("confirmed") != "yes" {
+			a.action(w, r, errors.New("Bitte alle ausgewählten Texte, Links und Anhänge ausdrücklich bestätigen."))
+			return
+		}
+		a.action(w, r, a.store.approveReview(r.PathValue("id"), a.cfg.User))
+	})
 	mux.HandleFunc("POST /drafts/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
 		if r.PostForm.Get("confirmed") != "yes" {
 			a.action(w, r, errors.New("Bitte Text, Links und Anhänge ausdrücklich bestätigen."))
@@ -212,7 +253,30 @@ func (a *app) home(w http.ResponseWriter, r *http.Request) {
 		}
 		p.Articles = append(p.Articles, row)
 	}
+	if cat != "" && q == "" && len(p.Articles) > 0 {
+		p.ResultGroups = group(p.Articles)[0].Groups
+	} else {
+		p.ResultGroups = []category{{Articles: p.Articles}}
+	}
 	a.render(w, 200, p)
+}
+
+func (a *app) articleByNote(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	if err != nil || id == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	article, err := a.store.currentForSource(id)
+	if errors.Is(err, errNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Knowledge Base nicht verfügbar", 503)
+		return
+	}
+	http.Redirect(w, r, "/articles/"+article.Slug, http.StatusFound)
 }
 
 func (a *app) article(w http.ResponseWriter, r *http.Request) {
@@ -225,17 +289,32 @@ func (a *app) article(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Knowledge Base nicht verfügbar", 503)
 		return
 	}
-	content, sections, err := renderMarkdown(article)
+	if article.Slug != r.PathValue("slug") {
+		http.Redirect(w, r, "/articles/"+article.Slug, http.StatusFound)
+		return
+	}
+	content, sections, additional, err := renderMarkdown(article)
 	if err != nil {
 		http.Error(w, "Artikel nicht verfügbar", 500)
 		return
 	}
+	article.Attachments = additional
 	rows, err := a.store.entries("published")
 	if err != nil {
 		http.Error(w, "Knowledge Base nicht verfügbar", 503)
 		return
 	}
-	a.render(w, 200, page{Title: article.Title, Mode: "article", Article: article, HTML: content, Sections: sections, Categories: group(rows)})
+	categories := group(rows)
+	for i := range categories {
+		for j := range categories[i].Groups {
+			for _, row := range categories[i].Groups[j].Articles {
+				if row.SourceID == article.SourceID {
+					categories[i].Groups[j].Active = true
+				}
+			}
+		}
+	}
+	a.render(w, 200, page{Title: article.Title, Mode: "article", Article: article, HTML: content, Sections: sections, Categories: categories})
 }
 
 func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
@@ -249,22 +328,25 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Speicher nicht verfügbar", 500)
 		return
 	}
-	// An article is identified by its public URL, not its mutable title.
-	latest := make(map[string]revision)
+	// Show only the newest version of each NRC note, even across URL changes.
+	latest := make(map[uint64]revision)
 	for _, row := range rows {
-		latest[row.Slug] = row
-	}
-	for _, draft := range drafts {
-		previous, ok := latest[draft.Slug]
-		if !ok || draft.CreatedAt.After(previous.CreatedAt) || (draft.CreatedAt.Equal(previous.CreatedAt) && draft.ID > previous.ID) {
-			latest[draft.Slug] = draft
+		previous, ok := latest[row.SourceID]
+		if !ok || row.CreatedAt.After(previous.CreatedAt) || (row.CreatedAt.Equal(previous.CreatedAt) && row.ID > previous.ID) {
+			latest[row.SourceID] = row
 		}
 	}
-	published := make(map[string]bool)
+	for _, draft := range drafts {
+		previous, ok := latest[draft.SourceID]
+		if !ok || draft.CreatedAt.After(previous.CreatedAt) || (draft.CreatedAt.Equal(previous.CreatedAt) && draft.ID > previous.ID) {
+			latest[draft.SourceID] = draft
+		}
+	}
+	published := make(map[uint64]bool)
 	for _, row := range rows {
-		published[row.Slug] = true
-		if latest[row.Slug].ID == row.ID {
-			delete(latest, row.Slug)
+		published[row.SourceID] = true
+		if latest[row.SourceID].ID == row.ID {
+			delete(latest, row.SourceID)
 		}
 	}
 	drafts = drafts[:0]
@@ -277,7 +359,7 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		return drafts[i].Title < drafts[j].Title
 	})
-	p := page{Title: "Veröffentlichungen", Mode: "admin", Articles: rows, Drafts: drafts, PublishedSlugs: published, Categories: group(rows)}
+	p := page{Title: "Veröffentlichungen", Mode: "admin", Articles: rows, Drafts: drafts, PublishedSources: published, Categories: group(rows)}
 	if value := r.URL.Query().Get("source"); value != "" {
 		id, err := strconv.ParseUint(value, 10, 64)
 		if err != nil || id == 0 {
@@ -303,6 +385,71 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.render(w, 200, p)
+}
+
+func (a *app) order(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.store.entries("published")
+	if err != nil {
+		http.Error(w, "Speicher nicht verfügbar", 500)
+		return
+	}
+	a.render(w, 200, page{Title: "Artikel sortieren", Mode: "ordering", Categories: group(rows)})
+}
+
+func (a *app) saveOrder(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.store.entries("published")
+	if err != nil {
+		a.action(w, r, err)
+		return
+	}
+	category := r.PostForm.Get("category")
+	var members []revision
+	for _, row := range rows {
+		if row.Category == category {
+			members = append(members, row)
+		}
+	}
+	ids := make([]string, len(members))
+	for _, row := range members {
+		id := strconv.FormatUint(row.SourceID, 10)
+		position, err := strconv.Atoi(r.PostForm.Get("position_" + id))
+		if err != nil || position < 1 || position > len(ids) || ids[position-1] != "" {
+			a.action(w, r, errors.New("Bitte jede Position von 1 bis zur Artikelanzahl genau einmal vergeben. Falls sich das Thema geändert hat, Seite neu laden."))
+			return
+		}
+		ids[position-1] = id
+	}
+	if err := a.store.setOrder(category, ids); err != nil {
+		a.action(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/order", http.StatusSeeOther)
+}
+
+func (a *app) saveSubtopics(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.store.entries("published")
+	if err != nil {
+		a.action(w, r, err)
+		return
+	}
+	category := r.PostForm.Get("category")
+	assignments := map[string]string{}
+	for _, row := range rows {
+		if row.Category == category {
+			id := strconv.FormatUint(row.SourceID, 10)
+			name, ok := r.PostForm["subtopic_"+id]
+			if !ok || len(name) != 1 {
+				a.action(w, r, errors.New("Bitte Seite neu laden und alle Zuordnungen angeben."))
+				return
+			}
+			assignments[id] = name[0]
+		}
+	}
+	if err := a.store.setSubtopics(category, assignments); err != nil {
+		a.action(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/order", http.StatusSeeOther)
 }
 
 func (a *app) notes(w http.ResponseWriter, r *http.Request) {
@@ -356,31 +503,39 @@ func (a *app) draft(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	content, sections, err := renderMarkdown(draft)
+	content, sections, additional, err := renderMarkdown(draft)
 	if err != nil {
 		a.action(w, r, err)
 		return
 	}
-	previous, err := a.store.current(draft.Slug)
+	draft.Attachments = additional
+	previous, err := a.store.currentForSource(draft.SourceID)
 	if err != nil && !errors.Is(err, errNotFound) {
 		http.Error(w, "Speicher nicht verfügbar", 500)
 		return
 	}
 	previousHTML := template.HTML("")
 	if previous.ID != "" {
-		previousHTML, _, err = renderMarkdown(previous)
+		previousHTML, _, previous.Attachments, err = renderMarkdown(previous)
 		if err != nil {
 			a.action(w, r, err)
 			return
 		}
 	}
 	p := page{Title: "Entwurf prüfen", Mode: "draft", Article: draft, Previous: previous, HTML: content, PreviousHTML: previousHTML, Sections: sections, IsDraft: true}
+	for id, ref := range draft.NoteReferences {
+		if ref.Slug == "" {
+			p.Missing = append(p.Missing, id)
+			p.IsDraft = false
+		}
+	}
+	sort.Strings(p.Missing)
 	if asset, err := a.source.get(r.Context(), draft.SourceID); err == nil {
 		p.Changed = asset.UpdatedAt != draft.SourceUpdated || asset.Payload != draft.Markdown
 	} else {
 		p.Error = "Aktueller Notizstand konnte nicht gelesen werden. Die Vorschau zeigt weiterhin den gespeicherten Entwurf."
 	}
-	head, err := a.store.head(draft.Slug)
+	head, err := a.store.head(draft)
 	if err != nil {
 		http.Error(w, "Speicher nicht verfügbar", 500)
 		return
@@ -388,6 +543,51 @@ func (a *app) draft(w http.ResponseWriter, r *http.Request) {
 	if draft.Base != head {
 		p.Error = "Seit Erstellung wurde eine andere Version veröffentlicht oder der Artikel zurückgezogen. Diesen Entwurf verwerfen und neu erstellen."
 		p.IsDraft = false
+	}
+	a.render(w, 200, p)
+}
+
+func (a *app) review(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.store.review(r.PathValue("id"))
+	if err != nil {
+		a.action(w, r, err)
+		return
+	}
+	p := page{Title: "Gemeinsam prüfen & freigeben", Mode: "review", ReviewID: r.PathValue("id"), IsDraft: true}
+	for _, draft := range rows {
+		content, _, additional, err := renderMarkdown(draft)
+		if err != nil {
+			a.action(w, r, err)
+			return
+		}
+		draft.Attachments = additional
+		previous, err := a.store.currentForSource(draft.SourceID)
+		if err != nil && !errors.Is(err, errNotFound) {
+			a.action(w, r, err)
+			return
+		}
+		previousHTML, _, previousAdditional, err := renderMarkdown(previous)
+		if err != nil {
+			a.action(w, r, err)
+			return
+		}
+		previous.Attachments = previousAdditional
+		head, err := a.store.head(draft)
+		if err != nil {
+			a.action(w, r, err)
+			return
+		}
+		if head != draft.Base {
+			p.IsDraft = false
+			p.Error = "Der Veröffentlichungsstand hat sich geändert. Bitte die Auswahl erneut prüfen."
+		}
+		child := page{Article: draft, Previous: previous, HTML: content, PreviousHTML: previousHTML}
+		if asset, err := a.source.get(r.Context(), draft.SourceID); err == nil {
+			child.Changed = asset.UpdatedAt != draft.SourceUpdated || asset.Payload != draft.Markdown
+		} else {
+			child.Error = "Aktueller Notizstand konnte nicht gelesen werden. Gezeigt wird der gespeicherte Entwurf."
+		}
+		p.Reviews = append(p.Reviews, child)
 	}
 	a.render(w, 200, p)
 }

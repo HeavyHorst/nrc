@@ -7,17 +7,75 @@ does not change the public article; each update needs a new draft and human appr
 Readers can browse categories, search article text and download published files.
 Pages are server-rendered, with no JavaScript, external fonts or tracking.
 
-In Markdown prose, `[note:123]` becomes a link to the published article for that
-source note, labelled with its public title. The target must already be published
-in this publisher's workspace. Missing or ambiguous targets prevent draft creation;
-if one note has several published URLs, use an explicit `/articles/<slug>` link.
-Code spans, code blocks and existing link labels are left unchanged.
-Resolved URLs and titles are stored with the draft, so review and publication show
-the same links even if the target's title changes. Approval is refused if a target
-was withdrawn during review. A later withdrawal can still break links in articles
-that were already published; those articles need a separately reviewed update.
+Reading order is stored per category using NRC note IDs, separately from approved
+article snapshots. Reviewers can choose **Artikelreihenfolge bearbeiten** in the
+dashboard and assign each position once. Agents use the existing private gateway:
+
+```sh
+nrc publish list
+nrc publish order --category "Marketplace" 596 5351 5348
+```
+
+Only already-published articles in that exact category are accepted. Listed IDs
+come first; omitted and newly published articles follow alphabetically. With no
+IDs, `nrc publish order --category "Marketplace"` restores alphabetical order.
+The order applies to category cards, result lists and article navigation, survives
+restarts and slug/title updates, and takes effect immediately without publishing
+any drafts. Concurrent order edits use the last saved order.
+The HTTP operation is `PUT /publish/api/order` with
+`{"category":"Marketplace","note_ids":["596","5351","5348"]}`;
+`GET /publish/api/publications` returns published articles in reading order.
+Note IDs are strings to preserve full uint64 precision.
+
+Categories support one optional subtopic level. In the same editor, enter a name
+beside each article; matching names form a group, and an empty name leaves the
+article directly in its category. Groups follow their first article's reading
+position, and articles within each group retain their reading order. Topic pages
+show group headings; the sidebar has collapsible groups and opens the active
+article's group automatically.
+
+Agents can assign several articles at once:
+
+```sh
+nrc publish subtopic --category "Marketplace" --name "Einstieg & Überblick" 595 596 597
+nrc publish subtopic --category "Marketplace" --name "" 595
+```
+
+`PUT /publish/api/subtopics` accepts
+`{"category":"Marketplace","assignments":{"595":"Einstieg & Überblick","596":""}}`.
+Only specified IDs change, and an invalid assignment rejects the whole request.
+The publication list includes `subtopic` for assigned articles. Assignments are
+separate navigation metadata keyed by category and NRC note ID: they survive
+restart and slug/revision changes without requiring approval. Moving an article
+to a different category does not carry the old category's assignment with it.
+
+The NRC note ID identifies an article. The dashboard shows only the newest pending
+version per note, even if earlier drafts used different slugs. Approval replaces
+the existing public article for that note rather than publishing a second one.
+The comparison and the Update label follow the note ID too.
+
+In Markdown prose, `[note:123]` becomes a link to `/articles/by-note/123`, labelled
+with the reviewed public title. This stable route redirects to the note's current
+published slug with a non-cacheable 302 response. It never reads unpublished NRC
+notes. Retired public slugs also redirect to the current article for that note;
+withdrawal makes both the ID route and old URLs unavailable.
+Missing targets do not block draft creation: the private preview marks each
+unresolved reference and disables individual approval.
+Prepare the target articles too, select the related drafts in the dashboard and
+choose **Auswahl gemeinsam prüfen**. This also works for circular references.
+The group review resolves missing references against the selected drafts and
+published articles in this workspace, then stores the exact URLs and titles for
+human review. Nothing is public until the reviewer confirms the whole selection.
+All selected articles are published in one transaction, or none are.
+
+Group selection rejects multiple versions of the same note. Code spans, code blocks
+and existing link labels are left unchanged. Already-resolved links retain their
+reviewed titles and URLs; new ID-based links keep working after slug changes.
+Approval refuses missing targets outside the selected group, discarded drafts and
+publication conflicts. A target withdrawn after publication can still break links
+in existing articles; those articles need a separately reviewed update.
 Older published snapshots remain unchanged. To resolve their note references,
-create and approve a new draft; old drafts with unresolved references cannot be approved.
+create a new draft or include an existing pending draft in a new group review.
 
 ## Start
 
@@ -87,6 +145,11 @@ your private credential backup mechanism; they are not part of the volume backup
 3. Compare the stored draft with the published version, including metadata,
    Markdown source and downloadable attachments. Check the confirmation box and
    approve. Approval publishes the **stored** revision, never a fresh source read.
+   For missing link targets, prepare their drafts and select all related articles
+   in the dashboard. Review the resolved links and all article comparisons before
+   confirming the group. If the target is already published, the draft's
+   **Linkziele erneut auflösen & prüfen** button prepares a fresh link review
+   without rereading the source note.
 4. Later NRC/agent edits do not update the public article. Prepare another draft
    from the current note, review it and approve it. The review flags source changes
    observed since draft creation; there is no automatic subscription or publishing.
@@ -94,8 +157,8 @@ your private credential backup mechanism; they are not part of the volume backup
    makes its revision's public file URLs inaccessible. Private history is retained.
 
 Approval and withdrawal are atomic bbolt transactions. A draft records a publication
-generation; concurrent approvals or an intervening withdrawal invalidate older
-drafts, even when the article returns to an unpublished state. A stale withdrawal
+generation for its source note; concurrent approvals or an intervening withdrawal
+invalidate older drafts, even when the article returns to an unpublished state. A stale withdrawal
 cannot remove a newer version. Publication audit records retain actor and timestamp.
 Revision history and audit are stored; a history/rollback UI is not provided yet.
 
@@ -112,7 +175,7 @@ Revision history and audit are stored; a history/rollback UI is not provided yet
   checks membership against the fixed publishing workspace. A signed, expiring
   workspace-bound assertion with a dedicated audience authenticates the backend;
   plain identity headers and ordinary NRC JWTs do not grant access. It permits
-  listing and preparing/inspecting drafts, **never approval, withdrawal, HTML
+  listing, preparing/inspecting drafts and changing article order, **never approval, withdrawal, HTML
   administration or attachment downloads**. Workspace members can read all pending
   drafts; this is not per-agent draft isolation. Missing WhoIs always fails closed,
   even with no membership policy. Unlisted workspaces remain tailnet-open, as in NRC.
@@ -235,8 +298,8 @@ not a fresh NRC body. Note IDs are decimal strings, including IDs above JavaScri
 safe integer range; revision IDs are opaque hexadecimal strings. `--human` provides
 an indented view of the same document.
 
-The gateway allowlists `GET /publish/api/publications`, `POST /publish/api/drafts`
-and `GET /publish/api/drafts/{id}` and forwards them without `/publish` to the
+The gateway allowlists `GET /publish/api/publications`, `POST /publish/api/drafts`,
+`GET /publish/api/drafts/{id}` and `PUT /publish/api/order`, forwarding them without `/publish` to the
 backend. Creation accepts `note_id` (decimal string), `slug`,
 `title`, `summary`, `category`, `kind`; source body/files and creator cannot be
 supplied. All snapshot/link/attachment validation is shared with human creation.

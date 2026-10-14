@@ -24,7 +24,7 @@
           >
           <nav aria-label="Hauptnavigation">
             <a href="/"
-              >{{ if or (eq .Mode "admin") (eq .Mode "notes") (eq .Mode "draft") }}
+              >{{ if or (eq .Mode "admin") (eq .Mode "notes") (eq .Mode "draft") (eq .Mode "review") (eq .Mode "ordering") }}
                 Veröffentlichungen
               {{ else }}
                 Knowledge Base
@@ -50,8 +50,10 @@
       {{ if eq .Mode "home" }}{{ template "home" . }}{{ end }}
       {{ if eq .Mode "article" }}{{ template "article" . }}{{ end }}
       {{ if eq .Mode "admin" }}{{ template "admin" . }}{{ end }}
+      {{ if eq .Mode "ordering" }}{{ template "ordering" . }}{{ end }}
       {{ if eq .Mode "notes" }}{{ template "notes" . }}{{ end }}
       {{ if eq .Mode "draft" }}{{ template "draft" . }}{{ end }}
+      {{ if eq .Mode "review" }}{{ template "review" . }}{{ end }}
       {{ if eq .Mode "error" }}
         <main id="main" class="container error-page">
           <span class="eyebrow">KNOWLEDGE BASE</span>
@@ -134,12 +136,31 @@
           {{ len .Articles }}
           Artikel{{ if and .Query .Category }}in „{{ .Category }}“{{ end }}
         </p>
-        <div class="results">
+        {{ $hasGroups := false }}
+        {{ range .ResultGroups }}{{ if .Name }}{{ $hasGroups = true }}{{ end }}{{ end }}
+        {{ if $hasGroups }}
+        <nav class="subtopic-links" aria-label="Unterthemen auf dieser Seite">
+          {{ $number := 0 }}
+          {{ range .ResultGroups }}{{ if .Name }}
+            {{ $number = inc $number }}
+            <a href="#subtopic-{{ $number }}"><span>{{ printf "%02d" $number }}</span> {{ .Name }}</a>
+          {{ end }}{{ end }}
+        </nav>
+        {{ end }}
+        {{ $number := 0 }}
+        {{ range .ResultGroups }}
+        {{ if .Name }}
+          {{ $number = inc $number }}
+          <div class="subtopic-header" id="subtopic-{{ $number }}">
+            <span class="subtopic-number" aria-hidden="true">{{ printf "%02d" $number }}</span>
+            <div><h2 class="subtopic-heading">{{ .Name }}</h2><p class="muted small">{{ len .Articles }} Artikel</p></div>
+          </div>
+        {{ end }}
+        <div class="results article-results">
           {{ range .Articles }}
             <a class="result" href="/articles/{{ .Slug }}"
               ><div>
-                <span class="pill">{{ .Kind }}</span
-                ><span class="muted small">{{ .Category }}</span>
+                {{ if or $.Query (not $.Category) }}<span class="muted small">{{ .Category }}</span>{{ end }}
                 <h3>{{ .Title }}</h3>
                 <p>{{ .Summary }}</p>
               </div>
@@ -156,6 +177,7 @@
             </div>
           {{ end }}
         </div>
+        {{ end }}
       {{ else }}
         <div class="section-heading">
           <div>
@@ -199,28 +221,6 @@
             </div>
           {{ end }}
         </div>
-        {{ if .Articles }}
-          <section class="browse">
-            <div>
-              <span class="eyebrow">ARTIKELREGISTER</span>
-              <h2>Alle Artikel</h2>
-              <p class="muted">Direkt zum passenden Artikel.</p>
-            </div>
-            <div class="browse-list">
-              {{ range .Articles }}
-                <a href="/articles/{{ .Slug }}"
-                  ><div>
-                    <span class="muted small"
-                      >{{ .Category }} · {{ .Kind }}</span
-                    >
-                    <h3>{{ .Title }}</h3>
-                  </div>
-                  <span aria-hidden="true">↗</span></a
-                >
-              {{ end }}
-            </div>
-          </section>
-        {{ end }}
       {{ end }}
 
     </div>
@@ -288,6 +288,8 @@
     <a class="all-topics" href="/">← Alle Themen</a>{{ range .Categories }}
       <section>
         <h2><a href="/?category={{ .Name }}">{{ .Name }}</a></h2>
+        {{ range .Groups }}
+        {{ if .Name }}<details class="subtopic" {{ if .Active }}open{{ end }}><summary>{{ .Name }} <span class="muted">({{ len .Articles }})</span></summary>{{ end }}
         <ul>
           {{ range .Articles }}
             <li>
@@ -299,6 +301,8 @@
             </li>
           {{ end }}
         </ul>
+        {{ if .Name }}</details>{{ end }}
+        {{ end }}
       </section>
     {{ end }}
   </nav>
@@ -340,6 +344,7 @@
     <p class="article-lead">
       Hier geben Sie einen festen Stand Ihrer Notizen zur Veröffentlichung frei.
     </p>
+    <p><a class="text-link" href="/order">Artikelreihenfolge bearbeiten →</a></p>
     <div class="notice">
       Notizänderungen werden niemals automatisch veröffentlicht. Die Freigabe
       gilt ausschließlich für den gespeicherten Entwurf – einschließlich aller
@@ -431,11 +436,16 @@
     </section>
     <section>
       <h2>Zur Prüfung <span class="count">{{ len .Drafts }}</span></h2>
+      <p class="muted">Zusammengehörige Artikel auswählen und gemeinsam prüfen. Noch nichts wird veröffentlicht.</p>
+      <form action="/reviews" method="post">
+      <input type="hidden" name="csrf" value="{{ .CSRF }}" />
       <div class="results">
         {{ range .Drafts }}
+          <div class="draft-choice">
+          <label><input type="checkbox" name="draft" value="{{ .ID }}" /><span class="sr-only">{{ .Title }} zur gemeinsamen Prüfung auswählen</span></label>
           <a class="result" href="/drafts/{{ .ID }}"
             ><div>
-              <span class="pill">{{ if index $.PublishedSlugs .Slug }}Update{{ else }}Neuer Artikel{{ end }}</span
+              <span class="pill">{{ if index $.PublishedSources .SourceID }}Update{{ else }}Neuer Artikel{{ end }}</span
               ><span class="muted small"
                 >{{ .Category }} · {{ date .CreatedAt }}</span
               >
@@ -444,10 +454,13 @@
             </div>
             <span>Prüfen →</span></a
           >
+          </div>
         {{ else }}
           <p class="muted">Keine offenen Entwürfe.</p>
         {{ end }}
       </div>
+      {{ if .Drafts }}<button class="button secondary">Auswahl gemeinsam prüfen →</button>{{ end }}
+      </form>
     </section>
     <section>
       <h2>Öffentlich <span class="count">{{ len .Articles }}</span></h2>
@@ -517,6 +530,43 @@
   </main>
 {{ end }}
 
+{{ define "ordering" }}
+  <main id="main" class="container admin">
+    <a class="text-link" href="/">← Zur Verwaltung</a>
+    <h1>Artikel sortieren</h1>
+    <p class="article-lead">Legen Sie je Thema die Lesereihenfolge fest. Sie gilt für Themenkarten, Listen und Artikelnavigation.</p>
+    <div class="notice">Die Änderung ist sofort öffentlich. Artikelinhalte und Freigaben bleiben unverändert. Neue Artikel werden alphabetisch am Ende ergänzt.</div>
+    {{ range .Categories }}
+      <section class="admin-panel">
+        <h2>{{ .Name }}</h2>
+        <p class="muted">Jede Position von 1 bis {{ len .Articles }} genau einmal vergeben, dann speichern.</p>
+        <form action="/order" method="post">
+          <input type="hidden" name="csrf" value="{{ $.CSRF }}" />
+          <input type="hidden" name="category" value="{{ .Name }}" />
+          {{ $count := len .Articles }}
+          {{ range $i, $article := .Articles }}
+            <label class="order-row">
+              <input type="number" name="position_{{ .SourceID }}" value="{{ inc $i }}" min="1" max="{{ $count }}" required aria-label="Position: {{ .Title }}" />
+              <span>{{ .Title }}<span class="muted small"> · Notiz #{{ .SourceID }}</span></span>
+            </label>
+          {{ end }}
+          <button class="button">Reihenfolge speichern</button>
+        </form>
+        <h3>Unterthemen</h3>
+        <p class="muted">Gleiche Namen bilden eine Gruppe. Leer lassen, um einen Artikel direkt im Thema anzuzeigen. Gruppen folgen der ersten Artikelposition; innerhalb der Gruppe gilt die Lesereihenfolge.</p>
+        <form action="/subtopics" method="post">
+          <input type="hidden" name="csrf" value="{{ $.CSRF }}" />
+          <input type="hidden" name="category" value="{{ .Name }}" />
+          {{ range .Articles }}
+            <label class="subtopic-row"><span>{{ .Title }} <span class="muted small">· #{{ .SourceID }}</span></span><input type="text" name="subtopic_{{ .SourceID }}" value="{{ .Subtopic }}" maxlength="80" placeholder="Direkt im Thema" aria-label="Unterthema: {{ .Title }}" /></label>
+          {{ end }}
+          <button class="button">Unterthemen speichern</button>
+        </form>
+      </section>
+    {{ else }}<p>Noch keine veröffentlichten Artikel.</p>{{ end }}
+  </main>
+{{ end }}
+
 {{ define "draft" }}
   <main id="main" class="container review">
     <a class="text-link" href="/">← Zur Verwaltung</a
@@ -538,6 +588,65 @@
     {{ end }}{{ if .Error }}
       <div class="notice warning">{{ .Error }}</div>
     {{ end }}
+    {{ if .Missing }}
+      <div class="notice warning">
+        <strong>Linkziele fehlen:</strong> {{ range .Missing }}[note:{{ . }}] {{ end }}
+        <p>Der Entwurf ist gespeichert. Bereiten Sie die Zielartikel ebenfalls vor und wählen Sie die zusammengehörigen Entwürfe in der Verwaltung zur gemeinsamen Prüfung aus.</p>
+        <form action="/reviews" method="post">
+          <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+          <input type="hidden" name="draft" value="{{ .Article.ID }}" />
+          <button class="button secondary">Linkziele erneut auflösen & prüfen →</button>
+        </form>
+      </div>
+    {{ end }}
+    {{ template "comparison" . }}
+    <div class="approval">
+      <form action="/drafts/{{ .Article.ID }}/approve" method="post">
+        <input type="hidden" name="csrf" value="{{ .CSRF }}" /><label
+          class="confirmation"
+          ><input type="checkbox" name="confirmed" value="yes" required /> Ich
+          habe Text, Links und alle Anhänge geprüft. Dieser Stand darf
+          öffentlich zugänglich sein.</label
+        ><button class="button" {{ if not .IsDraft }}disabled{{ end }}>
+          Diesen Stand öffentlich veröffentlichen →
+        </button>
+      </form>
+      <form action="/drafts/{{ .Article.ID }}/discard" method="post">
+        <input type="hidden" name="csrf" value="{{ .CSRF }}" /><button
+          class="button secondary"
+        >
+          Entwurf verwerfen
+        </button>
+      </form>
+    </div>
+  </main>
+{{ end }}
+
+{{ define "review" }}
+  <main id="main" class="container review">
+    <a class="text-link" href="/">← Zur Verwaltung</a>
+    <span class="eyebrow">NICHT ÖFFENTLICHE AUSWAHL</span>
+    <h1>Gemeinsam prüfen & freigeben</h1>
+    <p>{{ len .Reviews }} Artikel. Alle werden zusammen veröffentlicht oder keiner. Die hier gezeigten Texte, Linkziele und Anhänge sind für diese Prüfung gespeichert.</p>
+    {{ if .Error }}<div class="notice warning">{{ .Error }}</div>{{ end }}
+    {{ range .Reviews }}
+      <h2>{{ .Article.Title }} <span class="pill">{{ if .Previous.ID }}Update{{ else }}Neuer Artikel{{ end }}</span></h2>
+      <p class="muted">Gespeichert am {{ date .Article.CreatedAt }} von {{ .Article.CreatedBy }} · Quellnotiz #{{ .Article.SourceID }}</p>
+      {{ if .Changed }}<div class="notice">Die Quellnotiz wurde inzwischen geändert. Freigegeben wird ausschließlich die gespeicherte Kopie.</div>{{ end }}
+      {{ if .Error }}<div class="notice warning">{{ .Error }}</div>{{ end }}
+      {{ template "comparison" . }}
+    {{ end }}
+    <div class="approval">
+      <form action="/reviews/{{ .ReviewID }}/approve" method="post">
+        <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+        <label class="confirmation"><input type="checkbox" name="confirmed" value="yes" required /> Ich habe alle ausgewählten Texte, Links und Anhänge geprüft. Alle gezeigten Artikel dürfen öffentlich zugänglich sein.</label>
+        <button class="button" {{ if not .IsDraft }}disabled{{ end }}>Alle {{ len .Reviews }} Artikel gemeinsam veröffentlichen →</button>
+      </form>
+    </div>
+  </main>
+{{ end }}
+
+{{ define "comparison" }}
     <div class="comparison">
       <section class="review-card">
         <span class="eyebrow"
@@ -585,24 +694,4 @@
         </details>
       </section>
     </div>
-    <div class="approval">
-      <form action="/drafts/{{ .Article.ID }}/approve" method="post">
-        <input type="hidden" name="csrf" value="{{ .CSRF }}" /><label
-          class="confirmation"
-          ><input type="checkbox" name="confirmed" value="yes" required /> Ich
-          habe Text, Links und alle Anhänge geprüft. Dieser Stand darf
-          öffentlich zugänglich sein.</label
-        ><button class="button" {{ if not .IsDraft }}disabled{{ end }}>
-          Diesen Stand öffentlich veröffentlichen →
-        </button>
-      </form>
-      <form action="/drafts/{{ .Article.ID }}/discard" method="post">
-        <input type="hidden" name="csrf" value="{{ .CSRF }}" /><button
-          class="button secondary"
-        >
-          Entwurf verwerfen
-        </button>
-      </form>
-    </div>
-  </main>
 {{ end }}

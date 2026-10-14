@@ -92,9 +92,10 @@ func request(h http.Handler, method, path string, form url.Values, auth bool) *h
 
 func TestDashboardLatestArticleHTTP(t *testing.T) {
 	a := testApp(t)
-	create := func(slug, title string) revision {
+	create := func(sourceID uint64, slug, title string) revision {
 		t.Helper()
 		r := candidate()
+		r.SourceID = sourceID
 		r.Slug, r.Title = slug, title
 		draft, err := a.store.create(r, "")
 		if err != nil {
@@ -102,21 +103,22 @@ func TestDashboardLatestArticleHTTP(t *testing.T) {
 		}
 		return draft
 	}
-	live := create("einrichtung", "Veröffentlichter Titel")
+	live := create(41, "einrichtung", "Veröffentlichter Titel")
 	if err := a.store.approve(live.ID, "reviewer"); err != nil {
 		t.Fatal(err)
 	}
-	old := create("einrichtung", "Alter Entwurf")
-	latest := create("einrichtung", "Zweiter Titel")
-	// Same title and source, different URL: this is a separate new article.
-	other := create("zweite-url", "Zweiter Titel")
+	old := create(41, "einrichtung", "Alter Entwurf")
+	oldURL := create(41, "alte-url", "Frühere URL-Variante")
+	latest := create(41, "neue-url", "Zweiter Titel")
+	// Same title, different source: this remains a separate article.
+	other := create(99, "zweite-url", "Zweiter Titel")
 	body := request(a.admin(), "GET", "/", nil, true).Body.String()
 	for _, id := range []string{latest.ID, other.ID} {
 		if strings.Count(body, `href="/drafts/`+id+`"`) != 1 {
 			t.Fatalf("latest draft %s missing or duplicated", id)
 		}
 	}
-	if strings.Contains(body, `href="/drafts/`+old.ID+`"`) || strings.Count(body, `href="/drafts/`) != 2 {
+	if strings.Contains(body, `href="/drafts/`+old.ID+`"`) || strings.Contains(body, oldURL.ID) || strings.Count(body, `href="/drafts/`) != 2 {
 		t.Fatal("dashboard includes superseded drafts")
 	}
 	for _, label := range []string{`class="pill">Update`, `class="pill">Neuer Artikel`, `class="count">2`} {
@@ -136,6 +138,79 @@ func TestDashboardLatestArticleHTTP(t *testing.T) {
 	body = request(a.admin(), "GET", "/", nil, true).Body.String()
 	if strings.Count(body, `href="/drafts/`) != 1 || strings.Contains(body, old.ID) {
 		t.Fatal("older draft reappeared after publication")
+	}
+}
+
+func TestPublishedSourceIdentityHTTP(t *testing.T) {
+	a := testApp(t)
+	public, admin := a.public(), a.admin()
+	create := func(sourceID uint64, slug, body string) revision {
+		t.Helper()
+		r := candidate()
+		r.SourceID, r.Slug, r.Markdown = sourceID, slug, body
+		draft, err := a.store.create(r, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return draft
+	}
+	old := create(5351, "alte-statistiken", "Ursprünglicher Artikel")
+	for _, id := range []string{"5351", "0", "nope", "18446744073709551616"} {
+		if got := request(public, "GET", "/articles/by-note/"+id, nil, false); got.Code != 404 {
+			t.Fatal("invalid or unpublished source ID is publicly reachable")
+		}
+	}
+	if err := a.store.approve(old.ID, "reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	reader := create(41, "anleitung", "Siehe [note:5351].")
+	if err := a.store.approve(reader.ID, "reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	latest := create(5351, "neue-statistiken", "Aktueller Artikel")
+	stale := create(5351, "dritte-url", "Überholter Entwurf")
+	if _, err := a.store.createReview([]string{latest.ID, stale.ID}); err == nil {
+		t.Fatal("two URLs for the same source accepted in a group")
+	}
+	preview := request(admin, "GET", "/drafts/"+latest.ID, nil, true)
+	if preview.Code != 200 || !strings.Contains(preview.Body.String(), "Ursprünglicher Artikel") || !strings.Contains(preview.Body.String(), `class="pill">Update`) {
+		t.Fatal("URL change not shown as update to the same public article")
+	}
+	if err := a.store.approve(latest.ID, "reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.approve(stale.ID, "reviewer"); !errors.Is(err, errConflict) {
+		t.Fatalf("stale alternate URL bypassed source-level conflict: %v", err)
+	}
+	rows, err := a.store.entries("published")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("publication duplicated source or removed unrelated article: %+v %v", rows, err)
+	}
+	for _, row := range rows {
+		if row.SourceID == 5351 && row.ID != latest.ID {
+			t.Fatal("old source version still published")
+		}
+	}
+	for _, path := range []string{"/articles/by-note/5351", "/articles/alte-statistiken"} {
+		got := request(public, "GET", path, nil, false)
+		if got.Code != 302 || got.Header().Get("Location") != "/articles/neue-statistiken" || got.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("source URL does not redirect to current article: %d %v", got.Code, got.Header())
+		}
+	}
+	got := request(public, "GET", "/articles/anleitung", nil, false)
+	if got.Code != 200 || !strings.Contains(got.Body.String(), `href="/articles/by-note/5351"`) {
+		t.Fatal("published reference lost its stable source URL")
+	}
+	if err := a.store.withdraw(old.Slug, old.ID, "reviewer"); !errors.Is(err, errConflict) {
+		t.Fatal("stale withdrawal removed moved article")
+	}
+	if err := a.store.withdraw(latest.Slug, latest.ID, "reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/articles/by-note/5351", "/articles/alte-statistiken", "/articles/neue-statistiken"} {
+		if got := request(public, "GET", path, nil, false); got.Code != 404 {
+			t.Fatal("withdrawn source is still publicly reachable")
+		}
 	}
 }
 
@@ -360,6 +435,9 @@ func TestAttachmentSnapshotAndPublicBoundary(t *testing.T) {
 	if article := request(a.public(), "GET", "/articles/einrichtung", nil, false); article.Code != 200 || !strings.Contains(article.Body.String(), `href="`+path+`"`) {
 		t.Fatal("published attachment reference did not use the stored snapshot")
 	}
+	if article := request(a.public(), "GET", "/articles/einrichtung", nil, false); strings.Contains(article.Body.String(), "Dateien zum Artikel") {
+		t.Fatal("article repeats its inline download in an attachment list")
+	}
 	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +476,7 @@ func TestRenderingSafetyAndLinks(t *testing.T) {
 	r.ID = "snapshot"
 	r.Markdown = "## Erste Schritte\n\n[Abschnitt](#erste-schritte)\n\n<script>alert(1)</script>\n\n![Bild](/files/att_image?inline=true)\n\n| A | B |\n| - | - |\n| 1 | 2 |"
 	r.Attachments = []protocol.Attachment{{FileId: "att_image"}}
-	body, toc, err := renderMarkdown(r)
+	body, toc, _, err := renderMarkdown(r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,13 +488,13 @@ func TestRenderingSafetyAndLinks(t *testing.T) {
 	}
 	for _, markdown := range []string{"[Intern](/notes/41)", "![Remote](https://example.com/tracker.png)", "[Missing](/files/att_unknown)", "[Bad](javascript:alert%281%29)", "[Protocol relative](//example.com/path)"} {
 		r.Markdown = markdown
-		if _, _, err := renderMarkdown(r); err == nil {
+		if _, _, _, err := renderMarkdown(r); err == nil {
 			t.Fatalf("unsafe link accepted: %s", markdown)
 		}
 	}
 	for _, markdown := range []string{"[Website](https://example.com/docs)", "[Artikel](/articles/anderer-artikel)", "[Mail](mailto:help@example.com)"} {
 		r.Markdown = markdown
-		if _, _, err := renderMarkdown(r); err != nil {
+		if _, _, _, err := renderMarkdown(r); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -427,17 +505,25 @@ func TestIndexedAttachmentReferences(t *testing.T) {
 	r.ID = "snapshot"
 	r.Attachments = []protocol.Attachment{{FileId: "att_manual"}, {FileId: "att_unused"}, {FileId: "att_image"}}
 	r.Markdown = "[Manual](att:0)\n\n![Diagram](att:2)"
-	body, _, err := renderMarkdown(r)
+	body, _, additional, err := renderMarkdown(r)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(additional) != 1 || additional[0].FileId != "att_unused" {
+		t.Fatalf("embedded attachments listed again: %+v", additional)
 	}
 	if !strings.Contains(string(body), `href="/media/snapshot/att_manual"`) || !strings.Contains(string(body), `src="/media/snapshot/att_image"`) {
 		t.Fatalf("incorrect attachment indices: %s", body)
 	}
+	r.Markdown = "![Diagram](/files/att_image?inline=true#preview)\n\n[Manual](/files/att_manual)\n\n`[Unused](att:1)`\n\n```markdown\n![Unused](/files/att_unused)\n```"
+	_, _, additional, err = renderMarkdown(r)
+	if err != nil || len(additional) != 1 || additional[0].FileId != "att_unused" {
+		t.Fatalf("rendered links and code examples distinguished incorrectly: %+v %v", additional, err)
+	}
 	for _, target := range []string{"att:3", "att:-1", "att:+1", "att:", "att:1.0", "att:99999999999999999999999", "att:0?x=1", "att:0#fragment", "att://0", "att:%30", "att:01"} {
 		for _, prefix := range []string{"[File]", "![Image]"} {
 			r.Markdown = prefix + "(" + target + ")"
-			if _, _, err := renderMarkdown(r); err == nil {
+			if _, _, _, err := renderMarkdown(r); err == nil {
 				t.Fatalf("invalid attachment reference accepted: %s", r.Markdown)
 			}
 		}
@@ -476,17 +562,31 @@ func TestPublishedNoteReferences(t *testing.T) {
 	note := source.assets[41]
 	note.Payload = "Siehe [note:18446744073709551615] und **[note:18446744073709551615]**.\n\n`[note:999]`\n\n```text\n[note:998]\n```"
 	source.assets[41] = note
-	if _, err := a.prepareDraft(context.Background(), candidate()); err == nil {
-		t.Fatal("unapproved target accepted")
+	unresolved, err := a.prepareDraft(context.Background(), candidate())
+	if err != nil {
+		t.Fatalf("unpublished target blocked draft creation: %v", err)
+	}
+	if err := a.store.approve(unresolved.ID, "human"); err == nil {
+		t.Fatal("unresolved target accepted at approval")
+	}
+	if got := request(a.admin(), "GET", "/drafts/"+unresolved.ID, nil, true); got.Code != 200 || !strings.Contains(got.Body.String(), "Linkziele fehlen:") {
+		t.Fatal("missing target not shown in review")
 	}
 	if err := a.store.approve(published.ID, "human"); err != nil {
 		t.Fatal(err)
+	}
+	resolvedReview := request(a.admin(), "POST", "/reviews", url.Values{"csrf": {a.csrf}, "draft": {unresolved.ID}}, true)
+	if resolvedReview.Code != 303 {
+		t.Fatal("draft could not resolve a newly published target")
+	}
+	if got := request(a.admin(), "GET", resolvedReview.Header().Get("Location"), nil, true); got.Code != 200 || !strings.Contains(got.Body.String(), `href="/articles/by-note/18446744073709551615">Öffentlich &amp; geprüft</a>`) {
+		t.Fatal("newly published target missing from review")
 	}
 	draft, err := a.prepareDraft(context.Background(), candidate())
 	if err != nil {
 		t.Fatal(err)
 	}
-	link := `<a href="/articles/ziel-artikel">Öffentlich &amp; geprüft</a>`
+	link := `<a href="/articles/by-note/18446744073709551615">Öffentlich &amp; geprüft</a>`
 	preview := request(a.admin(), "GET", "/drafts/"+draft.ID, nil, true)
 	if preview.Code != 200 || strings.Count(preview.Body.String(), link) != 2 || !strings.Contains(preview.Body.String(), "<code>[note:999]</code>") {
 		t.Fatalf("incorrect review links: %d %s", preview.Code, preview.Body.String())
@@ -527,7 +627,16 @@ func TestPublishedNoteReferences(t *testing.T) {
 	if got := request(a.admin(), "POST", "/drafts/"+second.ID+"/approve", approve, true); got.Code != 400 {
 		t.Fatal("withdrawn target accepted at approval")
 	}
-	for _, token := range []string{"[note:999]", "[note:0]", "[note:18446744073709551616]"} {
+	note.Payload = "[note:999]"
+	source.assets[41] = note
+	missing, err := a.prepareDraft(context.Background(), candidate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.createReview([]string{missing.ID}); err == nil {
+		t.Fatal("unknown link target accepted in final review")
+	}
+	for _, token := range []string{"[note:0]", "[note:18446744073709551616]"} {
 		note.Payload = token
 		source.assets[41] = note
 		if _, err := a.prepareDraft(context.Background(), candidate()); err == nil {
@@ -546,8 +655,111 @@ func TestPublishedNoteReferences(t *testing.T) {
 	}
 	note.Payload = "[note:18446744073709551615]"
 	source.assets[41] = note
-	if _, err := a.prepareDraft(context.Background(), candidate()); err == nil || !strings.Contains(err.Error(), "mehrere") {
-		t.Fatalf("ambiguous target: %v", err)
+	resolved, err := a.prepareDraft(context.Background(), candidate())
+	if err != nil || resolved.NoteReferences["18446744073709551615"].URL != "/articles/by-note/18446744073709551615" {
+		t.Fatalf("source-ID link failed after URL change: %v", err)
+	}
+}
+
+func TestGroupPublishingHTTP(t *testing.T) {
+	a := testApp(t)
+	admin, public := a.admin(), a.public()
+	source := a.source.(*fixtureSource)
+	for id, body := range map[uint64]string{41: "Alpha verweist auf [note:5348].", 5348: "Beta verweist auf [note:41]."} {
+		note := source.assets[41]
+		note.AssetID, note.Payload = id, body
+		source.assets[id] = note
+	}
+	create := func(id, slug, title string) string {
+		t.Helper()
+		got := request(admin, "POST", "/drafts", url.Values{"csrf": {a.csrf}, "source": {id}, "slug": {slug}, "title": {title}, "category": {"Test"}, "kind": {"Anleitung"}}, true)
+		if got.Code != 303 {
+			t.Fatalf("draft: %d %s", got.Code, got.Body.String())
+		}
+		return strings.TrimPrefix(got.Header().Get("Location"), "/drafts/")
+	}
+	alpha := create("41", "alpha", "Alpha")
+	beta := create("5348", "beta", "Beta & Details")
+	form := url.Values{"csrf": {a.csrf}, "draft": {alpha, beta}}
+	if got := request(admin, "POST", "/reviews", form, false); got.Code != 401 {
+		t.Fatal("anonymous group preparation accepted")
+	}
+	if got := request(admin, "POST", "/reviews", url.Values{"draft": {alpha, beta}}, true); got.Code != 403 {
+		t.Fatal("group preparation without CSRF accepted")
+	}
+	for _, ids := range [][]string{nil, {alpha}, {alpha, alpha}} {
+		got := request(admin, "POST", "/reviews", url.Values{"csrf": {a.csrf}, "draft": ids}, true)
+		if got.Code != 400 {
+			t.Fatalf("invalid/incomplete selection accepted: %v", ids)
+		}
+	}
+	got := request(admin, "POST", "/reviews", form, true)
+	if got.Code != 303 {
+		t.Fatalf("prepare review: %d %s", got.Code, got.Body.String())
+	}
+	path := got.Header().Get("Location")
+	for _, slug := range []string{"alpha", "beta"} {
+		if got := request(public, "GET", "/articles/"+slug, nil, false); got.Code != 404 {
+			t.Fatal("group preparation published an article")
+		}
+	}
+	got = request(admin, "GET", path, nil, true)
+	for _, link := range []string{`href="/articles/by-note/5348">Beta &amp; Details</a>`, `href="/articles/by-note/41">Alpha</a>`} {
+		if got.Code != 200 || !strings.Contains(got.Body.String(), link) {
+			t.Fatalf("review missing resolved link %s: %s", link, got.Body.String())
+		}
+	}
+	if got := request(public, "GET", path, nil, false); got.Code != 404 {
+		t.Fatal("public listener exposes group review")
+	}
+	if got := request(admin, "POST", path+"/approve", form, true); got.Code != 400 {
+		t.Fatal("unconfirmed group approved")
+	}
+	// A newer pending draft must not change the already-reviewed title or body.
+	create("5348", "beta", "Ungeprüfter neuer Titel")
+	// The stored review must survive a restart without resolving links again.
+	dbPath := a.store.db.Path()
+	if err := a.store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openStore(dbPath, "test-workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reopened.db.Close() })
+	a = newApp(reopened, a.source, a.cfg)
+	admin, public = a.admin(), a.public()
+	if got := request(admin, "GET", path, nil, true); got.Code != 200 || !strings.Contains(got.Body.String(), `href="/articles/by-note/5348">Beta &amp; Details</a>`) {
+		t.Fatal("stored review changed after restart")
+	}
+	approve := url.Values{"csrf": {a.csrf}, "confirmed": {"yes"}}
+	if got := request(admin, "POST", path+"/approve", approve, true); got.Code != 303 {
+		t.Fatalf("group approve: %d %s", got.Code, got.Body.String())
+	}
+	for slug, link := range map[string]string{"alpha": `href="/articles/by-note/5348">Beta &amp; Details</a>`, "beta": `href="/articles/by-note/41">Alpha</a>`} {
+		got := request(public, "GET", "/articles/"+slug, nil, false)
+		if got.Code != 200 || !strings.Contains(got.Body.String(), link) || strings.Contains(got.Body.String(), "Ungeprüfter neuer Titel") {
+			t.Fatalf("published content differs from review: %s", got.Body.String())
+		}
+	}
+	// If one selected article is published elsewhere, no other member may commit.
+	alpha = create("41", "alpha", "Alpha Update")
+	beta = create("5348", "beta", "Beta Update")
+	got = request(admin, "POST", "/reviews", url.Values{"csrf": {a.csrf}, "draft": {alpha, beta}}, true)
+	if got.Code != 303 {
+		t.Fatal(got.Body.String())
+	}
+	path = got.Header().Get("Location")
+	concurrent := create("5348", "beta", "Separat veröffentlicht")
+	if err := a.store.approve(concurrent, "human"); err != nil {
+		t.Fatal(err)
+	}
+	if got := request(admin, "POST", path+"/approve", approve, true); got.Code != 409 {
+		t.Fatalf("stale group: %d %s", got.Code, got.Body.String())
+	}
+	current, err := a.store.current("alpha")
+	if err != nil || current.Title != "Alpha" {
+		t.Fatal("stale group partially committed")
 	}
 }
 
@@ -560,11 +772,14 @@ func TestArticleLinkBoundary(t *testing.T) {
 		"/articles/",
 		"/articles/Example",
 		"/articles/" + strings.Repeat("a", 101),
+		"/articles/by-note/0",
+		"/articles/by-note/123/extra",
+		"/articles/by-note/18446744073709551616",
 	} {
 		t.Run(target, func(t *testing.T) {
 			r := candidate()
 			r.Markdown = "[Artikel](" + target + ")"
-			if _, _, err := renderMarkdown(r); err == nil {
+			if _, _, _, err := renderMarkdown(r); err == nil {
 				t.Fatalf("invalid article link accepted: %s", target)
 			}
 		})
@@ -574,12 +789,14 @@ func TestArticleLinkBoundary(t *testing.T) {
 		"/articles/example#section",
 		"/articles/example?q=guide#section",
 		"/articles/" + strings.Repeat("a", 100),
+		"/articles/by-note/5351",
+		"/articles/by-note/18446744073709551615",
 		"#section",
 	} {
 		t.Run(target, func(t *testing.T) {
 			r := candidate()
 			r.Markdown = "[Artikel](" + target + ")"
-			body, _, err := renderMarkdown(r)
+			body, _, _, err := renderMarkdown(r)
 			if err != nil {
 				t.Fatal(err)
 			}

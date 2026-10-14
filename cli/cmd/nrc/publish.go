@@ -126,6 +126,49 @@ func init() {
 	}
 	draft.Flags().String("summary", "", "Public article summary")
 	draft.Flags().String("kind", "Anleitung", "Article kind: Anleitung, Referenz, Fehlerbehebung")
-	publishCmd.AddCommand(list, draft, inspect)
+	order := &cobra.Command{Use: "order [note-id ...]", Short: "Set public reading order in a category; omitted articles follow alphabetically", Args: cobra.ArbitraryArgs, Annotations: map[string]string{"mutation": "true"}, RunE: func(cmd *cobra.Command, args []string) error {
+		category, _ := cmd.Flags().GetString("category")
+		ids := []string{}
+		seen := map[uint64]bool{}
+		for _, value := range args {
+			id, err := strconv.ParseUint(value, 10, 64)
+			if err != nil || id == 0 || seen[id] {
+				return fmt.Errorf("note IDs must be positive and unique")
+			}
+			seen[id] = true
+			ids = append(ids, strconv.FormatUint(id, 10))
+		}
+		result, err := runPublish(cmd.Context(), http.MethodPut, "/api/order", map[string]any{"category": category, "note_ids": ids})
+		if err != nil {
+			return err
+		}
+		publishOutput(cmd, result)
+		return nil
+	}}
+	order.Flags().String("category", "", "Exact published category name; no IDs resets alphabetical order")
+	order.MarkFlagRequired("category")
+	subtopic := &cobra.Command{Use: "subtopic <note-id> [note-id ...]", Short: "Assign published articles to a subtopic, or clear their assignment", Args: cobra.MinimumNArgs(1), Annotations: map[string]string{"mutation": "true"}, RunE: func(cmd *cobra.Command, args []string) error {
+		category, _ := cmd.Flags().GetString("category")
+		name, _ := cmd.Flags().GetString("name")
+		assignments := map[string]string{}
+		for _, value := range args {
+			id, err := strconv.ParseUint(value, 10, 64)
+			if err != nil || id == 0 {
+				return fmt.Errorf("note IDs must be positive integers")
+			}
+			assignments[strconv.FormatUint(id, 10)] = name
+		}
+		result, err := runPublish(cmd.Context(), http.MethodPut, "/api/subtopics", map[string]any{"category": category, "assignments": assignments})
+		if err != nil {
+			return err
+		}
+		publishOutput(cmd, result)
+		return nil
+	}}
+	subtopic.Flags().String("category", "", "Exact published category name")
+	subtopic.Flags().String("name", "", "Subtopic name; empty clears the assignment")
+	subtopic.MarkFlagRequired("category")
+	subtopic.MarkFlagRequired("name")
+	publishCmd.AddCommand(list, draft, inspect, order, subtopic)
 	rootCmd.AddCommand(publishCmd)
 }
