@@ -155,7 +155,14 @@ try {
   assert.equal(await page.locator("#sliceRecord .slice-identity").innerText().then(text => text.includes("OWNER")), false);
   assert.equal(await page.locator('#sliceRecord .slice-field--owner .slice-note').textContent(), "OWNER");
   assert.equal(await page.locator('#sliceRecord label[for="sliceOutcome"]').textContent(), "OUTCOME");
-  assert.equal(await page.locator("#sliceRecord .slice-record-shape .slice-mark").count(), 3);
+  assert.equal(await page.locator("#sliceRecord .slice-bar-group .slice-bar-count").innerText(), "3");
+  assert.deepEqual(await page.locator("#sliceRecord .slice-status-summary .slice-status-legend > span").allTextContents(),
+    ["BACKLOG 0%", "TODO 100%", "IN PROGRESS 0%", "DONE 0%"]);
+  assert.match(await page.locator("#sliceRecord .slice-blocked-summary").innerText(), /BLOCKED 0 \/ 3/);
+  const statusBar = await page.locator("#sliceRecord .slice-bar-group .slice-bar").boundingBox();
+  const blockedBar = await page.locator("#sliceRecord .slice-bar--blocked").boundingBox();
+  assert.ok(blockedBar.x > statusBar.x + statusBar.width, "blocked is a distinct summary to the right, not below status");
+  assert.ok(Math.abs(blockedBar.y - statusBar.y) < 1, "both bars align even when the facts wrap");
 
   // The owner uses the same searchable person editor as task assignees, but
   // commits to the slice draft, not the server. Many names must scroll rather

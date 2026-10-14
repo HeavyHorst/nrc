@@ -28,18 +28,8 @@
   const PAGE_SIZE = 100;
   const LOAD_MORE_MARGIN = 400;
 
-  // The record's strip stays bounded as a slice grows: it shows the first N task
-  // members and the rest become a count. The exact member count is always in the
-  // row header and in the record's facts.
-  const RECORD_MARK_CAP = 64;
   const REGISTER_STALE_HOURS = 168; // one week
 
-  const STATUS_CLASS = {
-    backlog: "slice-mark",
-    todo: "slice-mark slice-mark--todo",
-    inprogress: "slice-mark slice-mark--inprogress",
-    done: "slice-mark slice-mark--done",
-  };
   const STATUS_LABEL = { backlog: "BACKLOG", todo: "TODO", inprogress: "IN PROGRESS", done: "DONE" };
   // The register's bar reads the counters in the order the record's legend names
   // them. Each pair is the mark's class suffix and the counter it draws.
@@ -192,8 +182,7 @@
     return slice.backlog + slice.todo + slice.inProgress + slice.done;
   }
 
-  // Members are every kind the slice carries; the strip is drawn from the task
-  // members, because only tasks have a status to draw.
+  // Only tasks contribute to status shares; MEM also includes notes and files.
   function memberCount(slice) {
     return taskCount(slice) + slice.notes + slice.files;
   }
@@ -211,47 +200,55 @@
     return `${Math.round(hours / 24)}D`;
   }
 
-  // A register holds counters and nothing else: the wire carries no member
-  // identity and no member order for a listing, so a register's shape is the
-  // share each status holds. Blocked is a separate text count in the register.
-  // It can never look like the record's strip, which is the one surface
-  // that draws members, because it is the one surface that holds them.
+  // Both views cover all tasks, regardless of member count. Blocked overlaps
+  // task statuses: the register names it in text; the record gives it a separate
+  // track, never a fifth segment in the status distribution.
   function renderShape(slice, { wide = false } = {}) {
     const tasks = taskCount(slice);
     // A blocked count cannot name the member it belongs to, so it is drawn as a
     // share of the task members and can never exceed them.
     const blocked = tasks ? Math.min(slice.blocked, tasks) : 0;
     const segment = (status, count) => count ?
-      `<span class="slice-bar-seg slice-bar-seg--${status}" style="--slice-share:${count}" title="${status.toUpperCase()} · ${count}">${wide ? "" : `<span class="slice-bar-count" data-digits="${String(count).length}">${count}</span>`}</span>` : "";
+      `<span class="slice-bar-seg slice-bar-seg--${status}" style="--slice-share:${count}" title="${STATUS_LABEL[status] ?? status.toUpperCase()} · ${count}"><span class="slice-bar-count" data-digits="${String(count).length}">${count}</span></span>` : "";
     const bar = tasks ?
       `<div class="slice-bar">${SHAPE_SEGMENTS.map(([status, counter]) => segment(status, slice[counter])).join("")}</div>` :
       // A slice that carries no task members has no share to draw. The band stays
       // so the register keeps its rhythm and says so instead of showing nothing.
       `<div class="slice-bar slice-bar--empty"></div>`;
-    const blockedBar = wide && blocked ?
-      `<div class="slice-bar slice-bar--blocked">${segment("blocked", blocked)}` +
-        `<span class="slice-bar-track" style="--slice-share:${tasks - blocked}"></span></div>` : "";
     const summary = SHAPE_SEGMENTS.map(([status, counter]) => `${status.toUpperCase()}: ${slice[counter]}`).join(", ");
-    return `<div class="slice-bar-group${wide ? " slice-bar-group--wide" : ""}" role="img" aria-label="${summary}" title="${summary}">${bar}${blockedBar}</div>`;
-  }
+    const shape = `<div class="slice-bar-group${wide ? " slice-bar-group--wide" : ""}" role="img" aria-label="${summary}" title="${summary}">${bar}</div>`;
+    if (!wide) return shape;
 
-  // The record's strip is one mark per task member, in creation order, and the
-  // blocked members break out of the band where they sit in that order.
-  function renderStrip(marks, cap, { wide = false } = {}) {
-    const classes = [wide ? "slice-strip slice-strip--wide" : "slice-strip"];
-    if (marks.length > cap) classes.push("slice-strip--overflow");
-    const visible = marks.length > cap ? marks.slice(0, cap) : marks;
-    const rendered = visible.map((mark) => `<span class="${STATUS_CLASS[mark.status]}${mark.blocked ? " slice-mark--blocked" : ""}"></span>`);
-    const overflow = marks.length > visible.length ?
-      `<span class="slice-strip-overflow">+${marks.length - visible.length}</span>` : "";
-    return `<div class="${classes.join(" ")}">${rendered.join("")}${overflow}</div>`;
-  }
-
-  function memberMarks(tasks) {
-    return tasks.map((task) => ({
-      status: ["backlog", "todo", "inprogress", "done"][task.status] ?? "backlog",
-      blocked: Boolean(task.blockedBy && task.blockedBy !== 0n),
-    }));
+    const facts = [
+      ["TASKS", tasks, false],
+      ["OPEN", openCount(slice), openCount(slice) > 6],
+      ["BLOCKED", slice.blocked, slice.blocked > 0],
+      ["DONE", slice.done, false],
+      ["NOTES", slice.notes, false],
+      ["FILES", slice.files, false],
+      ["OLDEST OPEN", formatAge(slice.oldestActiveAt), false],
+      ["LAST MOVED", formatAge(slice.lastMovedAt), false],
+    ];
+    const legend = SHAPE_SEGMENTS.map(([status, counter]) => {
+      const percentage = tasks ? Math.round(slice[counter] * 1000 / tasks) / 10 : 0;
+      const share = slice[counter] && tasks && percentage === 0 ? "&lt;0.1" :
+        percentage === 100 && slice[counter] < tasks ? "&gt;99.9" : percentage;
+      return `<span><i class="slice-bar-seg--${status}" aria-hidden="true"></i>${STATUS_LABEL[status]} ${share}%</span>`;
+    }).join("");
+    const blockedSummary = `BLOCKED ${blocked} / ${tasks} · INCLUDED IN TASK STATUSES`;
+    const blockedBar = tasks ? `<div class="slice-blocked-summary">
+      <span class="slice-note">BLOCKED ${blocked} / ${tasks}</span>
+      <div class="slice-bar slice-bar--blocked" role="img" aria-label="${blockedSummary}" title="${blockedSummary}">
+        <span class="slice-bar-seg slice-bar-seg--blocked" style="--slice-share:${blocked}"></span><span class="slice-bar-track" style="--slice-share:${tasks - blocked}"></span>
+      </div>
+      <div class="slice-status-legend"><span><i class="slice-bar-seg--blocked" aria-hidden="true"></i>INCLUDED IN TASK STATUSES</span></div>
+    </div>` : "";
+    return `<div class="slice-status-summary">
+      <dl class="slice-facts">${facts.map(([label, value, alert]) =>
+        `<div><dt>${label}</dt><dd class="${alert ? "slice-alert" : ""}">${escape(value)}</dd></div>`).join("")}</dl>
+      ${tasks ? shape : `<div><span class="slice-note">NO TASK MEMBERS</span>${shape}</div>`}
+      <div class="slice-status-legend">${legend}</div>
+    </div>${blockedBar}`;
   }
 
   // Keep owner, exceptional state and movement on one compact metadata row,
@@ -1501,22 +1498,6 @@
     const ready = state.detail.mode === "ready";
     const locked = state.writePending || !ready;
 
-    const facts = [
-      ["TASKS", taskCount(slice), false],
-      ["OPEN", openCount(slice), openCount(slice) > 6],
-      ["BLOCKED", slice.blocked, slice.blocked > 0],
-      ["DONE", slice.done, false],
-      ["NOTES", slice.notes, false],
-      ["FILES", slice.files, false],
-      ["OLDEST OPEN", formatAge(slice.oldestActiveAt), false],
-      ["LAST MOVED", formatAge(slice.lastMovedAt), false],
-    ];
-
-    // The detail gate above calls this only after every member has landed. The
-    // record can therefore draw one mark per task without a partial fallback.
-    const stripMarks = members.tasks.length ? memberMarks(members.tasks) : null;
-    const shapeNote = stripMarks ? "CREATION ORDER, OLDEST LEFT" : "NO TASK MEMBERS TO DRAW";
-
     const outcome = fields.outcome;
     const owner = fields.owner;
 
@@ -1537,11 +1518,8 @@
       </div>
       ${state.writeError ? `<p class="slice-status-line" data-state="error">${escape(state.writeError)}</p>` : ""}
       ${state.refreshError ? `<p class="slice-status-line" data-state="error">${escape(state.refreshError)}</p>` : ""}
-      <dl class="slice-facts">${facts.map(([label, value, alert]) =>
-        `<div><dt>${label}</dt><dd class="${alert ? "slice-alert" : ""}">${escape(value)}</dd></div>`).join("")}</dl>
       <div class="slice-record-shape">
-        ${stripMarks ? renderStrip(stripMarks, RECORD_MARK_CAP, { wide: true }) : renderShape(slice, { wide: true })}
-        <p class="slice-strip-legend">${shapeNote}${stripMarks ? " · BACKLOG · TODO · IN PROGRESS · DONE · RED SPIKE BLOCKED" : ""}</p>
+        ${renderShape(slice, { wide: true })}
       </div>
       <div class="slice-record-fields">
         <div class="slice-field slice-field--owner">
@@ -2001,7 +1979,6 @@
     selectedSlice,
     render,
     renderShape,
-    renderStrip,
     onRoomSwitch,
     disconnect,
     // Exposed for tests and for the slice record's own controls; a slice is the

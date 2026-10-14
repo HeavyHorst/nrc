@@ -474,24 +474,34 @@ test("a failed member read does not expose a partially loaded record", async () 
   assert.equal(slices.getState().detail.error, "Member unavailable");
 });
 
-test("the strip renders one mark per member and caps the row", () => {
+test("the record covers all task statuses with counts, percentage legend and a separate blocked share", () => {
   const slices = loadSlices();
-  const marks = [
-    { status: "done", blocked: false },
-    { status: "inprogress", blocked: false },
-    { status: "todo", blocked: true },
-    { status: "backlog", blocked: false },
-  ];
-  const html = slices.renderStrip(marks, 24);
-  assert.equal((html.match(/slice-mark"/g) ?? []).length, 1, "backlog uses the base mark class");
-  assert.match(html, /slice-mark--done/);
-  assert.match(html, /slice-mark--inprogress/);
-  assert.match(html, /slice-mark--todo slice-mark--blocked/, "a blocked member keeps its status and gains the spike");
-  assert.doesNotMatch(html, /slice-strip-overflow/);
-
-  const capped = slices.renderStrip(marks, 2);
-  assert.match(capped, /slice-strip--overflow/);
-  assert.match(capped, /slice-strip-overflow">\+2</);
+  for (const [counts, percentages] of [
+    [{ backlog: 3, todo: 1, inProgress: 1, done: 0, blocked: 2 }, [60, 20, 20, 0]],
+    [{ backlog: 120, todo: 36, inProgress: 24, done: 60, blocked: 12 }, [50, 15, 10, 25]],
+  ]) {
+    const html = slices.renderShape({ ...counts, notes: 22, files: 8 }, { wide: true });
+    const total = counts.backlog + counts.todo + counts.inProgress + counts.done;
+    for (const [index, [status, counter, label]] of [
+      ["backlog", "backlog", "BACKLOG"], ["todo", "todo", "TODO"],
+      ["inprogress", "inProgress", "IN PROGRESS"], ["done", "done", "DONE"],
+    ].entries()) {
+      assert.ok(html.includes(`${label} ${percentages[index]}%`));
+      if (counts[counter]) {
+        assert.ok(html.includes(`--slice-share:${counts[counter]}" title="${label} · ${counts[counter]}"`));
+        assert.ok(html.includes(`>${counts[counter]}</span>`), "counts stay in the bar, without percentages");
+      }
+    }
+    assert.ok(html.includes(`BLOCKED ${counts.blocked} / ${total} · INCLUDED IN TASK STATUSES`));
+    assert.ok(html.includes(`slice-bar-track" style="--slice-share:${total - counts.blocked}"`));
+    assert.doesNotMatch(html, /slice-strip|slice-mark|CREATION ORDER/);
+  }
+  const empty = slices.renderShape({ backlog: 0, todo: 0, inProgress: 0, done: 0, blocked: 0 }, { wide: true });
+  assert.match(empty, /NO TASK MEMBERS/);
+  assert.doesNotMatch(empty, /NaN|Infinity|slice-blocked-summary/);
+  const tiny = slices.renderShape({ backlog: 9999, todo: 1, inProgress: 0, done: 0, blocked: 0 }, { wide: true });
+  assert.match(tiny, /TODO &lt;0.1%/, "a nonzero share must not be labelled zero");
+  assert.match(tiny, /BACKLOG &gt;99.9%/, "an incomplete status must not be labelled complete");
 });
 
 // The register holds counters, not members: its shape is the share each status
@@ -583,11 +593,10 @@ test("the record stays unchanged until the slice and all members are loaded", as
   await settleMicrotasks();
   const ready = element("sliceRecord").innerHTML;
   assert.equal(element("sliceRecord").inert, false);
-  assert.match(ready, /CREATION ORDER, OLDEST LEFT/);
-  assert.match(ready, /slice-strip--wide/);
-  assert.match(ready, /slice-mark--done/, "the loaded member keeps its status mark");
-  assert.match(ready, /slice-strip-legend/, "the legend belongs to the strip it explains");
-  assert.doesNotMatch(ready, /slice-bar-group/);
+  assert.match(ready, /slice-bar-group--wide/);
+  assert.match(ready, /DONE 66.7%/, "the bar covers the server's whole slice, not just loaded task rows");
+  assert.match(ready, /BLOCKED 1 \/ 3/);
+  assert.doesNotMatch(ready, /CREATION ORDER|slice-mark/);
 });
 
 test("write requests are refused while disconnected and do not claim success", () => {
