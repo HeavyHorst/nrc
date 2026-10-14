@@ -468,6 +468,16 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 			log.errorf("[T%d] Failed to parse GetTasksRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_GetTasks, "Failed to parse request")
 		}
+	case .C_GetTasksByIDs, .C_GetAssetsByIDs:
+		ids: [pr.MAX_ID_BATCH_SIZE]u64
+		req, parse_err := pr.parseGetRecordsByIDsRequest(frame_data[2:], ids[:])
+		if parse_err != nil {
+			send_error_response(c, opcode, "Invalid ID batch", req.correlation_id)
+		} else if opcode == .C_GetTasksByIDs {
+			process_get_tasks_by_ids(c, req)
+		} else {
+			handle_get_assets_by_ids(c, req)
+		}
 	case .C_ListTasksPaged:
 		req, parse_err := pr.parseListTasksPagedRequest(frame_data[2:])
 		if parse_err == nil {

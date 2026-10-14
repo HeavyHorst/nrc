@@ -301,8 +301,8 @@
       if (cancelled()) return;
       edgeSession = result.session;
       edgeHasMore = result.hasMore;
-      // Only hydrate objects in this page. Existing exact-read coalescing is shared
-      // with Inspectors; no typed room-wide asset scans are needed here.
+      // Resolve this relationship set in bounded batches, without fetching bodies
+      // or marking a room-wide collection complete.
       const assets = new Set([company]);
       const tasks = new Set();
       for (const edge of selectedEdges()) {
@@ -310,20 +310,14 @@
         if ((outgoing ? edge.targetType : edge.sourceType) === 1) assets.add(outgoing ? edge.targetId : edge.sourceId);
         if ((outgoing ? edge.targetType : edge.sourceType) === 2) tasks.add(outgoing ? edge.targetId : edge.sourceId);
       }
-      await Promise.all([...tasks].map(id => new Promise((resolve, reject) => {
-        window.NRCTasks.requestTask(expectedRoom, id, {
-          onSuccess: resolve,
-          onError: detail => reject(new Error(detail.message || "Linked task could not be loaded")),
-        });
-      })).concat([...assets].map(id => new Promise((resolve, reject) => {
-        const cached = window.NRCAssets.roomAssets.get(expectedRoom)?.get(id);
-        if (cached && !reset) { onAssetChanged(cached); resolve(); return; }
-        window.NRCAssets.requestAsset(expectedRoom, id, {
-          force: reset,
-          onSuccess: ({ asset }) => { if (!cancelled()) onAssetChanged(asset); resolve(); },
-          onError: detail => reject(new Error(detail.message || "Linked asset could not be loaded")),
-        });
-      }))));
+      const [, linkedAssets] = await Promise.all([
+        window.NRCTasks.requestTasksByIds(expectedRoom, [...tasks]),
+        window.NRCAssets.requestAssetsByIds(expectedRoom, [...assets], { force: reset }),
+      ]);
+      if (!cancelled()) for (const { assetId } of linkedAssets) {
+        const current = window.NRCAssets.roomAssets.get(expectedRoom)?.get(assetId);
+        if (current) onAssetChanged(current);
+      }
       if (!cancelled()) detailReady = true;
     } catch (failure) {
       if (!cancelled()) error = failure.message;

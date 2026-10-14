@@ -148,30 +148,29 @@ try {
       }
     }
   }
-  // Release exact reads individually: no partially hydrated company may appear,
+  // Hold each relationship batch: no partially hydrated company may appear,
   // and a superseded selection must not overwrite a newer one.
   await companies.first().click();
   await page.waitForFunction(() => !document.getElementById("customerRecord").inert);
   const original = await page.locator("#customerRecord").innerHTML();
   await page.evaluate(() => {
-    const request = NRCAssets.requestAsset;
+    const request = NRCAssets.requestAssetsByIds;
     window.heldCustomerReads = [];
-    window.restoreCustomerReads = () => { NRCAssets.requestAsset = request; };
-    NRCAssets.requestAsset = (room, id, options) => request(room, id, {
-      ...options,
-      onSuccess: result => window.heldCustomerReads.push(() => options.onSuccess(result)),
-    });
+    window.restoreCustomerReads = () => { NRCAssets.requestAssetsByIds = request; };
+    NRCAssets.requestAssetsByIds = async (...args) => {
+      const result = await request(...args);
+      await new Promise(resolve => window.heldCustomerReads.push(resolve));
+      return result;
+    };
   });
   await companies.nth(1).click();
-  await page.waitForFunction(() => window.heldCustomerReads.length === 4);
+  await page.waitForFunction(() => window.heldCustomerReads.length === 1);
   assert.equal(await page.locator("#customerRecord").innerHTML(), original);
   assert.equal(await page.locator("#customerRecord").getAttribute("aria-busy"), "true");
   assert.equal(await page.locator("#customerRecord").evaluate(el => el.inert), true);
-  await page.evaluate(() => window.heldCustomerReads.shift()());
-  assert.equal(await page.locator("#customerRecord").innerHTML(), original, "one response cannot publish partial details");
   await page.keyboard.press("ArrowDown");
-  await page.waitForFunction(() => window.heldCustomerReads.length === 7);
-  await page.evaluate(() => window.heldCustomerReads.splice(3).forEach(release => release()));
+  await page.waitForFunction(() => window.heldCustomerReads.length === 2);
+  await page.evaluate(() => window.heldCustomerReads.splice(1).forEach(release => release()));
   await page.waitForFunction(() => !document.getElementById("customerRecord").inert);
   assert.equal(await page.locator("#customerRecord h2").textContent(), "Company 2");
   assert.deepEqual(await contacts.locator("strong").allTextContents(), ["Contact 2-0", "Contact 2-1", "Contact 2-2"]);
@@ -199,11 +198,13 @@ try {
     const { task } = await rpc(o => NRCTasks.sendCreateTask(0n, "Linked task ready", "", 128, 0, "", 0n, [], 0, 0, "", o));
     const company = BigInt(document.querySelectorAll("[data-company]")[2].dataset.company);
     await rpc(o => NRCEdges.sendCreateEdge(0n, 2, task.id, 1, company, 2, o));
-    const request = NRCTasks.requestTask;
-    NRCTasks.requestTask = (room, id, options) => request(room, id, {
-      ...options, onSuccess: result => { window.releaseCustomerTask = () => options.onSuccess(result); },
-    });
-    window.restoreCustomerTasks = () => { NRCTasks.requestTask = request; };
+    const request = NRCTasks.requestTasksByIds;
+    NRCTasks.requestTasksByIds = async (...args) => {
+      const result = await request(...args);
+      await new Promise(resolve => { window.releaseCustomerTask = resolve; });
+      return result;
+    };
+    window.restoreCustomerTasks = () => { NRCTasks.requestTasksByIds = request; };
   });
   const beforeTask = await page.locator("#customerRecord").innerHTML();
   await companies.nth(2).click();

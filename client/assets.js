@@ -151,6 +151,7 @@ const AssetOriginOpcode = {
   ListPagedByTag: 38,
   ListTags: 39,
   SearchCustomers: 55,
+  GetByIDs: 61,
 };
 
 function normalizeAssetRequestOptions(options) {
@@ -207,6 +208,8 @@ function getAssetRequestKindFromOriginOpcode(originOpcode) {
       return "delete";
     case AssetOriginOpcode.Get:
       return "get";
+    case AssetOriginOpcode.GetByIDs:
+      return "ids";
     case AssetOriginOpcode.List:
       return "list";
     case AssetOriginOpcode.ListPaged:
@@ -689,6 +692,73 @@ function sendGetAsset(convId, assetId, requestOptions = null) {
   return correlationId;
 }
 
+const pendingAssetBatchReads = new Map();
+
+// Previews are sufficient for relationship lists; exact editors request full content.
+async function requestAssetsByIds(convId, ids, { fullContent = false, force = false } = {}) {
+  const unique = [...new Set(ids.map(BigInt))];
+  const reads = new Map();
+  const missing = [];
+  for (const id of unique) {
+    const cached = roomAssets.get(0n)?.get(id);
+    if (!force && cached && (!fullContent || cached.payload != null)) {
+      reads.set(id, Promise.resolve(cached)); continue;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN || !serverReady) {
+      reads.set(id, Promise.reject(new Error("Asset transport unavailable")));
+      continue;
+    }
+    const key = `${id}:${fullContent}`;
+    const pending = pendingAssetBatchReads.get(`${id}:true`) || pendingAssetBatchReads.get(key);
+    if (pending) { reads.set(id, pending); continue; }
+    if (pendingExactAssetRequests.has(`0:${id}`)) {
+      reads.set(id, new Promise((resolve, reject) => requestAsset(0n, id, {
+        force, onSuccess: detail => resolve(detail.asset),
+        onError: error => error?.message === "Asset not found" ? resolve() : reject(error),
+      })));
+      continue;
+    }
+    let resolve, reject;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    pendingAssetBatchReads.set(key, promise);
+    reads.set(id, promise);
+    missing.push({ id, key, resolve, reject });
+  }
+  for (let start = 0; start < missing.length; start += 64) {
+    const batch = missing.slice(start, start + 64);
+    const settle = (records, error) => {
+      const found = new Map(records.map(asset => [asset.assetId, asset]));
+      for (const entry of batch) {
+        pendingAssetBatchReads.delete(entry.key);
+        if (error) entry.reject(error);
+        else entry.resolve(found.get(entry.id));
+      }
+    };
+    if (!ws || ws.readyState !== WebSocket.OPEN || !serverReady) {
+      settle([], new Error("Asset transport unavailable"));
+      continue;
+    }
+    const correlationId = generateCorrelationId();
+    const buffer = new ArrayBuffer(17 + batch.length * 8);
+    const view = new DataView(buffer);
+    view.setUint16(0, Opcode.C_GetAssetsByIDs, false);
+    view.setBigUint64(2, 0n, false);
+    view.setUint32(10, correlationId, false);
+    view.setUint8(14, fullContent ? 1 : 0);
+    view.setUint16(15, batch.length, false);
+    batch.forEach((entry, i) => view.setBigUint64(17 + 8 * i, entry.id, false));
+    registerPendingAssetRpc(correlationId, {
+      kind: "ids", originOpcode: AssetOriginOpcode.GetByIDs, convId: 0n,
+      records: [], snapshotStartVersion: assetMutationSequence,
+      onSuccess: records => settle(records), onError: error => settle([], error),
+    });
+    sendPacket(buffer);
+  }
+  const results = await Promise.allSettled(unique.map(id => reads.get(id)));
+  for (const result of results) if (result.status === "rejected") throw result.reason;
+  return results.map(result => result.value).filter(Boolean);
+}
+
 // Exact reads require a full payload; list-cache previews are not sufficient.
 function requestAsset(convId, assetId, requestOptions = null) {
   const normalizedConvId = 0n;
@@ -700,6 +770,16 @@ function requestAsset(convId, assetId, requestOptions = null) {
       { kind: "get", convId: normalizedConvId, assetId: normalizedAssetId, context: requestOptions?.context },
     );
     return cached;
+  }
+
+  const batchRead = pendingAssetBatchReads.get(`${normalizedAssetId}:true`);
+  if (batchRead) {
+    const subscribers = requestOptions ? [requestOptions] : [];
+    const pending = { kind: "get", convId: normalizedConvId, assetId: normalizedAssetId };
+    batchRead.then(asset => notifyPendingGetSubscribers(subscribers, asset ? "onSuccess" : "onError",
+      asset ? { kind: "get", asset, correlationId: 0 } : { message: "Asset not found" }, pending),
+    error => notifyPendingGetSubscribers(subscribers, "onError", error, pending));
+    return batchRead;
   }
 
   const key = `${normalizedConvId}:${normalizedAssetId}`;
@@ -1661,6 +1741,9 @@ function handleAssetListPage(dataView) {
   offset += 4;
   const pending = pendingAssetRpcByCorrelation.get(correlationId);
 
+  // Ignore delayed chunks of settled or failed reads, including after disconnect.
+  if (correlationId !== 0 && !pending) return correlationId;
+
   if (!roomAssets.has(convId)) {
     roomAssets.set(convId, new Map());
   }
@@ -1674,9 +1757,21 @@ function handleAssetListPage(dataView) {
       ({ asset, newOffset } = parseAsset(dataView, offset));
     }
     offset = newOffset;
+    if (pending?.kind === "ids" && fullContent && asset.payload === null) {
+      settlePendingAssetRpc(correlationId, false, {
+        kind: "ids", correlationId, message: "Failed to decode asset payload",
+      });
+      return correlationId;
+    }
     assets.push(asset);
     const version = assetMutationVersions.get(assetMutationKey(convId, asset.assetId)) ?? 0;
     if (pending?.snapshotStartVersion == null || version <= pending.snapshotStartVersion) storeAsset(asset);
+  }
+
+  if (pending?.kind === "ids") {
+    pending.records.push(...assets.map(asset => roomAssets.get(convId)?.get(asset.assetId) ?? asset));
+    if (!hasMore) settlePendingAssetRpc(correlationId, true, pending.records);
+    return correlationId;
   }
 
   settlePendingAssetRpc(correlationId, true, {
@@ -2074,6 +2169,7 @@ window.NRCAssets = {
   sendUpdateAsset,
   sendDeleteAsset,
   sendGetAsset,
+  requestAssetsByIds,
   requestAsset,
   sendListAssets,
   sendListAssetsPaged,

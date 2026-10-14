@@ -57,6 +57,8 @@ try {
     };
     NRCEdges.requestEdgePage = async () => ({ session: { seen: new Set() }, hasMore: false });
     NRCEdges.getEdgesForEntity = () => [];
+    NRCAssets.requestAssetsByIds = (_room, ids) => Promise.all(ids.map(id => new Promise(resolve =>
+      NRCAssets.requestAsset(0n, id, { onSuccess: detail => resolve(detail.asset) }))));
     NRCViewManager.setActiveView("customers");
     NRCWorkspaceSearch.onReconnect();
   });

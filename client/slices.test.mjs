@@ -70,6 +70,14 @@ function loadSlices(overrides = {}) {
       NRCTasks: { ...baseWindow.NRCTasks, ...(windowOverrides?.NRCTasks ?? {}) },
     },
   };
+  sandbox.window.NRCAssets.requestAssetsByIds ??= async (room, ids) => (await Promise.all(ids.map(id =>
+    new Promise((resolve, reject) => sandbox.window.NRCAssets.requestAsset(room, id, {
+      onSuccess: detail => resolve(detail.asset), onError: detail => reject(new Error(detail.message)),
+    }))))).filter(Boolean);
+  sandbox.window.NRCTasks.requestTasksByIds ??= async (room, ids) => (await Promise.all(ids.map(id =>
+    new Promise((resolve, reject) => sandbox.window.NRCTasks.requestTask(room, id, {
+      onSuccess: detail => resolve(detail.task), onError: detail => reject(new Error(detail.message)),
+    }))))).filter(Boolean);
   vm.runInNewContext(source, sandbox);
   sandbox.window.NRCSlices.__sent = sent;
   sandbox.window.NRCSlices.__dispatched = sandbox.document.dispatched;

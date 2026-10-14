@@ -42,6 +42,8 @@ const (
 	C_ListTaskAssignees    uint16 = 57
 	C_QueryCalendar        uint16 = 58
 	C_GetWorkspaceOverview uint16 = 59
+	C_GetTasksByIDs        uint16 = 60
+	C_GetAssetsByIDs       uint16 = 61
 
 	// Assets (Client -> Server)
 	C_CreateAsset              uint16 = 30

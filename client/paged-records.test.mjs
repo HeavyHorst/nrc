@@ -25,7 +25,7 @@ function load(file) {
       C_ListAssets: 34, C_ListAssetsPaged: 35, C_CreateEdge: 40, C_DeleteEdge: 41,
       C_ListEdges: 42, C_ListAllEdges: 43, C_GraphQuery: 44, C_GraphShortestPath: 45,
       C_GraphDegree: 46, C_GraphCommonNeighbors: 47, C_ListAllEdgesPaged: 53,
-      C_ListEdgesPaged: 54, C_SearchCustomers: 55,
+      C_ListEdgesPaged: 54, C_SearchCustomers: 55, C_GetAssetsByIDs: 61,
     },
   });
   vm.runInContext(fs.readFileSync(new URL(file, import.meta.url), "utf8"), context, { filename: file });
@@ -85,6 +85,112 @@ function edgeBytes({ id, room = 0n, sourceType = 1, sourceId, targetType = 1, ta
   const w = writer(); w.u64(id); w.u64(room); w.u16(sourceType); w.u64(sourceId); w.u16(targetType);
   w.u64(targetId); w.u16(1); w.i64(1); w.text("owner"); return new Uint8Array(w.done().buffer);
 }
+
+test("ID batches merge streamed subsets, coalesce overlaps and retain unrelated cache records", async () => {
+  const f = load("assets.js");
+  const high = 9007199254740999n;
+  f.api.handleAssetListPage(assetPage(0, [{ id: 99n }]));
+  const first = f.api.requestAssetsByIds(0n, [high, 2n, high, 3n]);
+  const overlap = f.api.requestAssetsByIds(0n, [2n, high]);
+  assert.equal(f.packets.length, 1);
+  const wire = new DataView(f.packets[0]);
+  assert.equal(wire.getUint16(0), 61);
+  assert.equal(wire.getUint16(15), 3);
+  assert.equal(wire.getBigUint64(17), high);
+  const cid = wire.getUint32(10);
+  let finished = false;
+  first.then(() => { finished = true; });
+  f.api.handleAssetListPage(assetPage(cid, [{ id: 2n }], { more: true }));
+  await Promise.resolve();
+  assert.equal(finished, false, "intermediate chunk must not complete the read");
+  f.api.handleAssetListPage(assetPage(cid, [{ id: high }]));
+  assert.equal((await first).map(a => a.assetId).join(","), `${high},2`);
+  assert.equal((await overlap).map(a => a.assetId).join(","), `2,${high}`);
+  assert.equal(f.api.roomAssets.get(0n).has(99n), true);
+  await f.api.requestAssetsByIds(0n, [high, 99n]);
+  assert.equal(f.packets.length, 1, "warm previews cause no requests");
+  const full = f.api.requestAssetsByIds(0n, [high], { fullContent: true });
+  assert.equal(f.packets.length, 2, "preview cache does not satisfy a full read");
+  assert.equal(new DataView(f.packets[1]).getUint8(14), 1);
+  f.api.handleAssetErrorResponse(61, new DataView(f.packets[1]).getUint32(10), "unavailable");
+  await assert.rejects(full, error => error.message === "unavailable");
+});
+
+test("ID batches bound requests at 64 and release pending reads on disconnect for retry", async () => {
+  const f = load("assets.js");
+  const ids = Array.from({ length: 65 }, (_, i) => BigInt(i + 1));
+  const pending = f.api.requestAssetsByIds(0n, ids);
+  assert.equal(f.packets.length, 2);
+  assert.equal(new DataView(f.packets[0]).getUint16(15), 64);
+  assert.equal(new DataView(f.packets[1]).getUint16(15), 1);
+  f.api.clearPendingAssetRpc();
+  await assert.rejects(pending);
+  const retry = f.api.requestAssetsByIds(0n, [1n]);
+  assert.equal(f.packets.length, 3);
+  f.api.handleAssetListPage(assetPage(new DataView(f.packets[2]).getUint32(10), []));
+  assert.equal((await retry).length, 0);
+});
+
+test("a batch joining an exact read omits its missing target rather than failing the set", async () => {
+  const f = load("assets.js");
+  let exactFailed = false;
+  f.api.requestAsset(0n, 42n, { onError: () => { exactFailed = true; } });
+  const batch = f.api.requestAssetsByIds(0n, [42n, 43n]);
+  assert.equal(f.packets.length, 2, "the in-flight exact ID is not requested again");
+  f.api.handleAssetErrorResponse(33, new DataView(f.packets[0]).getUint32(18), "Asset not found");
+  f.api.handleAssetListPage(assetPage(new DataView(f.packets[1]).getUint32(10), [{ id: 43n }]));
+  assert.equal(exactFailed, true, "the single read retains its not-found error");
+  assert.equal((await batch).map(asset => asset.assetId).join(","), "43");
+});
+
+test("full ID batches reject undecodable bodies for bulk and exact readers, ignoring late chunks", async () => {
+  const f = load("assets.js");
+  const page = (cid, preview, more = false) => {
+    const w = writer(); w.u16(130); w.u64(0); w.u8(1); w.u8(more ? 1 : 0);
+    w.i64(0); w.u64(0); w.u32(1); w.u16(1); w.u32(cid);
+    const full = fullAsset(131, 0, { id: 42n, preview });
+    w.bytes(new Uint8Array(full.buffer).slice(2, -4));
+    return w.done();
+  };
+  const batch = f.api.requestAssetsByIds(0n, [42n], { fullContent: true });
+  const exact = new Promise((resolve, reject) => f.api.requestAsset(0n, 42n, {
+    onSuccess: resolve, onError: reject,
+  }));
+  const failures = [batch, exact].map(p => assert.rejects(p, e => e.message === "Failed to decode asset payload"));
+  const cid = new DataView(f.packets[0]).getUint32(10);
+  // The plain body has nonzero wire length but advertises raw length zero.
+  f.api.handleAssetListPage(page(cid, "invalid", true));
+  await Promise.all(failures);
+  assert.equal(f.api.roomAssets.get(0n).has(42n), false);
+  const retry = f.api.requestAssetsByIds(0n, [42n], { fullContent: true });
+  assert.equal(f.packets.length, 2, "failure releases the ID for a new request");
+  f.api.handleAssetListPage(page(cid, ""));
+  assert.equal(f.api.roomAssets.get(0n).has(42n), false, "late chunks cannot cache a failed read");
+  f.api.handleAssetListPage(page(new DataView(f.packets[1]).getUint32(10), ""));
+  assert.equal((await retry)[0].payload, "", "empty bodies are valid full content");
+});
+
+test("offline bulk reads reject without joining queued exact reads, which still retry on reconnect", async () => {
+  const f = load("assets.js");
+  f.api.handleAssetListPage(assetPage(0, [{ id: 99n }]));
+  vm.runInContext("serverReady = false", f.context);
+  let exactResult;
+  f.api.requestAsset(0n, 42n, { onSuccess: detail => { exactResult = detail.asset; } });
+  const batch = f.api.requestAssetsByIds(0n, [42n, 43n]);
+  await Promise.race([
+    assert.rejects(batch, e => e.message === "Asset transport unavailable"),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("offline batch hung")), 100)),
+  ]);
+  f.api.clearPendingAssetRpc();
+  assert.equal((await f.api.requestAssetsByIds(0n, [99n]))[0].assetId, 99n);
+  assert.equal(f.packets.length, 0);
+  vm.runInContext("serverReady = true", f.context);
+  f.api.retryPendingAssetRequests();
+  assert.equal(f.packets.length, 1, "queued exact read survives; bulk adds no reconnect requests");
+  f.api.handleAssetFull(fullAsset(131, new DataView(f.packets[0]).getUint32(18), { id: 42n, preview: "" }));
+  assert.equal(exactResult.assetId, 42n);
+  assert.equal((await f.api.requestAssetsByIds(0n, [42n]))[0].assetId, 42n);
+});
 
 function edgePage(correlation, edges, { room = 0n, more = false, next = 0n } = {}) {
   const w = writer(); w.u16(153); w.u64(room); w.u8(more ? 1 : 0); w.u64(next); w.u32(edges.length);

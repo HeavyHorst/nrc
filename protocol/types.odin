@@ -80,6 +80,8 @@ Opcode :: enum u16 {
 	C_ListTaskAssignees = 57,
 	C_QueryCalendar = 58,
 	C_GetWorkspaceOverview = 59,
+	C_GetTasksByIDs = 60,
+	C_GetAssetsByIDs = 61,
 
 	// Tasks/Kanban (Server -> Client)
 	S_TaskCreated = 130,

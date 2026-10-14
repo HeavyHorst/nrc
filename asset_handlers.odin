@@ -515,6 +515,49 @@ cascade_delete_child_assets :: proc {
 // Get Asset (fetch full payload)
 // ============================================================================
 
+handle_get_assets_by_ids :: proc(c: ^NRC_Connection, req: pr.GetRecordsByIDsRequest) {
+	ws := get_connection_workspace(c)
+	if ws == nil {
+		send_error_response(c, .C_GetAssetsByIDs, "Workspace not found", req.correlation_id)
+		return
+	}
+	conv := get_conversation(ws, req.conv_id)
+	storage: [pr.MAX_ID_BATCH_SIZE]pr.Asset
+	count := 0
+	if conv != nil {
+		for id, i in req.ids {
+			duplicate := false
+			for previous in req.ids[:i] {
+				if previous == id do duplicate = true
+			}
+			if duplicate do continue
+			asset := conv.assets[pr.AssetID(id)]
+			if asset_visible_to(asset, get_connection_nickname(c)) {
+				storage[count] = asset^
+				count += 1
+			}
+		}
+	}
+	remaining := storage[:count]
+	for {
+		size := pr.getSizeAssetListPageMessage(pr.AssetListPageMessage{})
+		n := 0
+		for asset in remaining {
+			item_size := pr.getSizeAsset(asset) if req.full_content else pr.getSizeAssetHeader(asset)
+			if size + item_size > MAX_PROTOCOL_PAYLOAD_SIZE do break
+			size += item_size
+			n += 1
+		}
+		if n == 0 && len(remaining) > 0 {
+			send_error_response(c, .C_GetAssetsByIDs, "Asset exceeds batch byte limit", req.correlation_id)
+			return
+		}
+		send_asset_list_page(c, req.conv_id, remaining[:n], req.full_content, n < len(remaining), 0, 0, u32(count), req.correlation_id)
+		remaining = remaining[n:]
+		if len(remaining) == 0 do return
+	}
+}
+
 handle_get_asset :: proc(c: ^NRC_Connection, req: pr.GetAssetRequest) {
 	ws := get_connection_workspace(c)
 	if ws == nil {

@@ -22,6 +22,10 @@ function loadLinksUI({ edges = [], getEdgesForEntity = null, onRequestTask = nul
     NRCAssets: {
       roomAssets,
       requestAsset: (...args) => onRequestAsset?.(...args),
+      requestAssetsByIds: (room, ids) => Promise.all(ids.map(id => new Promise((resolve, reject) => {
+        const request = onRequestAsset?.(room, id, { onSuccess: resolve, onError: reject });
+        if (request === undefined) reject(new Error("Asset transport unavailable"));
+      }))),
       getAssetTypeLabel: assetType => assetTypeLabels[assetType] || "NOTE",
     },
     NRCEdges: {
@@ -51,6 +55,8 @@ function loadLinksUI({ edges = [], getEdgesForEntity = null, onRequestTask = nul
     NRCTasks: {
       roomTasks,
       requestTask: (...args) => onRequestTask?.(roomTasks, ...args),
+      requestTasksByIds: (room, ids) => Promise.all(ids.map(id => new Promise((resolve, reject) =>
+        onRequestTask?.(roomTasks, room, id, { onSuccess: resolve, onError: reject })))),
       isKanbanVisible: () => false,
       showKanban: () => { kanbanShows += 1; },
       clearTaskSelection: () => { taskClears += 1; },

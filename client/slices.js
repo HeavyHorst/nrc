@@ -928,49 +928,18 @@
       });
   }
 
-  function resolveMembers(slice) {
+  async function resolveMembers(slice) {
     const refs = memberRefs(slice.sliceId);
-    const tasks = [];
-    const notes = [];
-    const files = [];
-    let remaining = refs.length;
-
-    return new Promise((resolve, reject) => {
-      const settle = () => {
-        tasks.sort((a, b) => Number((a.createdAt ?? 0n) - (b.createdAt ?? 0n)));
-        resolve({ tasks, notes, files });
-      };
-      const done = () => {
-        if (--remaining <= 0) settle();
-      };
-
-      if (!refs.length) {
-        settle();
-        return;
-      }
-
-      for (const ref of refs) {
-        if (ref.type === edgeTargets().Task) {
-          window.NRCTasks.requestTask(0n, ref.id, {
-            onSuccess: (detail) => {
-              if (detail?.task) tasks.push(detail.task);
-              done();
-            },
-            onError: detail => reject(new Error(detail?.message || "Slice task could not be loaded.")),
-          });
-          continue;
-        }
-        window.NRCAssets.requestAsset(0n, ref.id, {
-          onSuccess: (detail) => {
-            const asset = detail?.asset;
-            if (asset?.assetType === FILE_ASSET_TYPE) files.push(asset);
-            else if (asset?.assetType === NOTE_ASSET_TYPE) notes.push(asset);
-            done();
-          },
-          onError: detail => reject(new Error(detail?.message || "Slice asset could not be loaded.")),
-        });
-      }
-    });
+    const [tasks, assets] = await Promise.all([
+      window.NRCTasks.requestTasksByIds(0n, refs.filter(ref => ref.type === edgeTargets().Task).map(ref => ref.id)),
+      window.NRCAssets.requestAssetsByIds(0n, refs.filter(ref => ref.type !== edgeTargets().Task).map(ref => ref.id)),
+    ]);
+    tasks.sort((a, b) => Number((a.createdAt ?? 0n) - (b.createdAt ?? 0n)));
+    return {
+      tasks,
+      notes: assets.filter(asset => asset.assetType === NOTE_ASSET_TYPE),
+      files: assets.filter(asset => asset.assetType === FILE_ASSET_TYPE),
+    };
   }
 
   // assignMembers links entities to the slice. The picker and the edge RPC are

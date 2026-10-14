@@ -1984,11 +1984,80 @@ function loadActiveTasks(convId) {
     .catch((err) => console.warn("[NRCTasks] Active task load failed:", err));
 }
 
+const pendingTaskBatchReads = new Map();
+
+// Returns found records in input order; missing IDs do not fail other members.
+async function requestTasksByIds(convId, ids) {
+  const unique = [...new Set(ids.map(BigInt))];
+  const reads = new Map();
+  const missing = [];
+  for (const id of unique) {
+    const cached = roomTasks.get(0n)?.get(id);
+    if (cached) { reads.set(id, Promise.resolve(cached)); continue; }
+    if (pendingTaskBatchReads.has(id)) { reads.set(id, pendingTaskBatchReads.get(id)); continue; }
+    if (pendingExactTaskRequests.has(`0:${id}`)) {
+      reads.set(id, new Promise((resolve, reject) => requestTask(0n, id, {
+        onSuccess: detail => resolve(detail.task),
+        onError: error => error?.message === "Task not found" ? resolve() : reject(error),
+      })));
+      continue;
+    }
+    let resolve, reject;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    pendingTaskBatchReads.set(id, promise);
+    reads.set(id, promise);
+    missing.push({ id, resolve, reject });
+  }
+  for (let start = 0; start < missing.length; start += 64) {
+    const batch = missing.slice(start, start + 64);
+    const settle = (records, error) => {
+      const found = new Map(records.map(task => [task.id, task]));
+      for (const entry of batch) {
+        pendingTaskBatchReads.delete(entry.id);
+        if (error) entry.reject(error);
+        else entry.resolve(found.get(entry.id));
+      }
+    };
+    if (!ws || ws.readyState !== WebSocket.OPEN || !serverReady) {
+      settle([], new Error("Task transport unavailable"));
+      continue;
+    }
+    const correlationId = getRpcCorrelationId();
+    const buffer = new ArrayBuffer(17 + batch.length * 8);
+    const view = new DataView(buffer);
+    view.setUint16(0, Opcode.C_GetTasksByIDs, false);
+    view.setBigUint64(2, 0n, false);
+    view.setUint32(10, correlationId, false);
+    view.setUint8(14, 1);
+    view.setUint16(15, batch.length, false);
+    batch.forEach((entry, i) => view.setBigUint64(17 + 8 * i, entry.id, false));
+    pendingTaskRpcs.set(correlationId, {
+      kind: "ids", records: [],
+      onSuccess: records => settle(records), onError: error => settle([], error),
+    });
+    ws.send(buffer);
+    localPacketsOut++;
+  }
+  const results = await Promise.allSettled(unique.map(id => reads.get(id)));
+  for (const result of results) if (result.status === "rejected") throw result.reason;
+  return results.map(result => result.value).filter(Boolean);
+}
+
 function requestTask(convId, taskId, requestOptions = null) {
   const normalizedConvId = 0n;
   const normalizedTaskId = BigInt(taskId);
   const cached = roomTasks.get(normalizedConvId)?.get(normalizedTaskId);
   if (cached) { requestOptions?.onSuccess?.({ task: cached }); return cached; }
+
+  const batchRead = pendingTaskBatchReads.get(normalizedTaskId);
+  if (batchRead) {
+    batchRead.then(task => task
+      ? requestOptions?.onSuccess?.({ task })
+      : requestOptions?.onError?.({ message: "Task not found" }),
+    error => requestOptions?.onError?.(error))
+      .catch(error => console.error("[NRCTasks] Exact task batch callback failed", error));
+    return batchRead;
+  }
 
   const key = `${normalizedConvId}:${normalizedTaskId}`;
   const subscriber = requestOptions && typeof requestOptions === "object" ? requestOptions : null;
@@ -2190,6 +2259,22 @@ function handleTaskListPage(dataView) {
   const correlationId = dataView.getUint32(offset, false);
   const pending = pendingTaskRpcs.get(correlationId);
   if (!pending) return console.warn("[S_TaskListPage] Unknown correlation:", correlationId);
+  if (pending.kind === "ids") {
+    if (!success) {
+      pendingTaskRpcs.delete(correlationId);
+      pending.onError(new Error(error.value || "Task batch failed"));
+      return;
+    }
+    if (!roomTasks.has(convId)) roomTasks.set(convId, new Map());
+    for (const task of tasks) roomTasks.get(convId).set(task.id, task);
+    invalidateTaskList(convId);
+    pending.records.push(...tasks);
+    if (!hasMore) {
+      pendingTaskRpcs.delete(correlationId);
+      pending.onSuccess(pending.records);
+    }
+    return;
+  }
   pendingTaskRpcs.delete(correlationId);
   const state = getTaskPageState(convId, pending.statusMask);
 
@@ -2293,7 +2378,7 @@ function handleTaskCreated(dataView) {
 }
 
 function handleTaskErrorResponse(originOpcode, correlationId, errorMsg = "") {
-  if (originOpcode !== Opcode.C_CreateTask && originOpcode !== Opcode.C_UpdateTask && originOpcode !== Opcode.C_MoveTask && originOpcode !== Opcode.C_GetTask) return false;
+  if (originOpcode !== Opcode.C_CreateTask && originOpcode !== Opcode.C_UpdateTask && originOpcode !== Opcode.C_MoveTask && originOpcode !== Opcode.C_GetTask && originOpcode !== Opcode.C_GetTasksByIDs) return false;
   const pendingRpc = pendingTaskRpcs.get(correlationId);
   if (!pendingRpc) return false;
   pendingTaskRpcs.delete(correlationId);
@@ -4631,6 +4716,7 @@ window.NRCTasks = {
     { title: "UNSAVED CHANGES", confirmLabel: "Discard" },
   ),
   requestTasksForRoom: sendGetTasks,
+  requestTasksByIds,
   handleTaskEdgeChanged,
   // Note: Notes exports moved to window.NRCNotes
 };

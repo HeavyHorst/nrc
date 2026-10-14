@@ -96,6 +96,8 @@ const Opcode = {
   C_GetTask: 26,
   C_ListTaskSlices: 56,
   C_GetWorkspaceOverview: 59,
+  C_GetTasksByIDs: 60,
+  C_GetAssetsByIDs: 61,
   // Tasks/Kanban (Server -> Client)
   S_TaskCreated: 130,
   S_TaskUpdated: 131,

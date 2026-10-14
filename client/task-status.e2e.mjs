@@ -109,6 +109,8 @@ try {
       if (task) onSuccess?.({ task }); else onError?.({ message: "task not found" });
       return 1;
     };
+    NRCTasks.requestTasksByIds = async (_room, ids) => ids.map(id =>
+      roomTasks.get(0n)?.get(id) ?? serverTasks.get(id)).filter(Boolean);
     const requestAsset = NRCAssets.requestAsset;
     NRCAssets.requestAsset = (convId, assetId, options) => {
       const asset = assets.get(assetId);

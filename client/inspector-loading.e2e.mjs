@@ -77,13 +77,15 @@ try {
   await open("task", 0); await ready();
   const beforeTarget = await host.innerHTML();
   await page.evaluate(id => {
-    const request = NRCAssets.requestAsset;
+    const request = NRCAssets.requestAssetsByIds;
     window.releaseInspectorTarget = null;
     NRCAssets.roomAssets.get(0n).delete(BigInt(id));
-    NRCAssets.requestAsset = (room, assetId, options) => request(room, assetId, {
-      ...options, onSuccess: result => { window.releaseInspectorTarget = () => options.onSuccess(result); },
-    });
-    window.restoreInspectorTarget = () => { NRCAssets.requestAsset = request; };
+    NRCAssets.requestAssetsByIds = async (...args) => {
+      const result = await request(...args);
+      await new Promise(resolve => { window.releaseInspectorTarget = resolve; });
+      return result;
+    };
+    window.restoreInspectorTarget = () => { NRCAssets.requestAssetsByIds = request; };
   }, ids.note[1]);
   await open("task", 1);
   await page.waitForFunction(() => !!window.releaseInspectorTarget);

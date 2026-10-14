@@ -180,6 +180,45 @@ prop_promoted_response_parser_roundtrips :: proc(tc: ^hgl.Test_Case, _: rawptr) 
 		if !hegel_task_equal(task, task_msg.tasks[i]) do return hgl.interesting("decode task list response task")
 	}
 
+	// ID batches reuse list pages. A non-final chunk must preserve correlation,
+	// total count and records just like the final chunk, without a paging cursor.
+	batch_total, batch_total_err := hgl.draw_u32(tc, u32(task_count), max(u32))
+	if batch_total_err == .Stop_Test do return hgl.abort()
+	if batch_total_err != nil do return hgl.interesting("draw task batch total")
+	chunk_flags := [2]bool{false, true}
+	for has_more in chunk_flags {
+		msg := TaskListPage {
+			conv_id        = WORKSPACE_DATA_ID,
+			success        = true,
+			tasks          = tasks[:task_count],
+			has_more       = has_more,
+			total_count    = batch_total,
+			correlation_id = correlation_id,
+		}
+		expected_size := 40
+		for task in msg.tasks do expected_size += hegel_task_wire_size(task)
+		page_buf: [2049]byte
+		written := serializeTaskListPage(msg, page_buf[:])
+		if written != expected_size do return hgl.interesting("task batch chunk independent size")
+		parsed, err := parseTaskListPage(page_buf[:written], decoded_tasks[:], decoded_attachments[:])
+		if err != nil ||
+		   parsed.conv_id != WORKSPACE_DATA_ID ||
+		   !parsed.success ||
+		   parsed.has_more != has_more ||
+		   parsed.total_count != batch_total ||
+		   parsed.correlation_id != correlation_id ||
+		   len(parsed.tasks) != task_count ||
+		   parsed.next_cursor_sort_at != 0 ||
+		   parsed.next_cursor_task_id != 0 {
+			return hgl.interesting("task batch chunk header changed")
+		}
+		for task, i in parsed.tasks {
+			if !hegel_task_equal(task, msg.tasks[i]) do return hgl.interesting("task batch chunk record changed")
+		}
+		_, err = parseTaskListPage(page_buf[:written + 1], decoded_tasks[:], decoded_attachments[:])
+		if err != .ContentLengthMismatch do return hgl.interesting("task batch chunk trailing bytes accepted")
+	}
+
 	edges: [4]Edge
 	edge_created_by_storage: [4][8]byte
 	for i in 0 ..< edge_count {

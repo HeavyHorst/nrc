@@ -23,6 +23,7 @@ function loadRequestTask() {
   vm.runInNewContext(`
     const roomTasks = new Map();
     const pendingExactTaskRequests = new Map();
+    const pendingTaskBatchReads = new Map();
     const pendingTaskRpcs = new Map();
     const pendingTaskUpdateCorrelations = new Set();
     const taskPageState = new Map();

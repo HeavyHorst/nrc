@@ -153,7 +153,7 @@ get_opcode :: proc(data: []byte) -> Opcode {
 	status_code, _ := endian.get_u16(data, .Big)
 
 	// Validate that the opcode is within known ranges
-	// Client opcodes: 1-3, 8, 16-59
+	// Client opcodes: 1-3, 8, 16-61
 	// Server opcodes: 100, 102-111, 121-127, 130-147, 150-167
 	if (status_code >= 1 && status_code <= 3) ||
 	   status_code == 8 ||
@@ -161,7 +161,7 @@ get_opcode :: proc(data: []byte) -> Opcode {
 	   (status_code >= 20 && status_code <= 29) ||
 	   (status_code >= 30 && status_code <= 39) ||
 	   (status_code >= 40 && status_code <= 47) ||
-	   (status_code >= 48 && status_code <= 59) ||
+	   (status_code >= 48 && status_code <= 61) ||
 	   status_code == 100 ||
 	   (status_code >= 102 && status_code <= 111) ||
 	   (status_code >= 121 && status_code <= 127) ||

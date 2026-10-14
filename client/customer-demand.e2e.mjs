@@ -80,7 +80,11 @@ try {
   assert.equal(await page.locator(".customer-contact").count(), 1);
   assert.equal(await page.locator("[data-activity]").count(), 49);
   assert.equal(sent.filter(b => b.readUInt16BE(0) === 54).length, 1, "first page only");
-  assert.equal(sent.filter(b => b.readUInt16BE(0) === 33).length, 51, "one GET per linked asset plus selected company, no duplicate hydration");
+  assert.equal(sent.filter(b => b.readUInt16BE(0) === 33).length, 0, "no individual asset hydration");
+  const batches = sent.filter(b => b.readUInt16BE(0) === 61);
+  assert.equal(batches.length, 1, "one batch replaces 51 individual GETs");
+  assert.equal(batches[0].readUInt16BE(15), 51);
+  assert.equal(batches[0][14], 0, "relationship lists request previews, not bodies");
   assert.ok(!sent.some(b => [25, 34, 35, 43, 53].includes(b.readUInt16BE(0))), "detail does not prefetch room tasks, notes or edges");
   assert.ok(sent.filter(b => b.readUInt16BE(0) === 54).every(b => b.readBigUInt64BE(12) === BigInt(ids.last)));
   assert.equal(await page.evaluate(id => NRCAssets.roomAssets.get(0n).has(BigInt(id)), ids.unrelated), false);

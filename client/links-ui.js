@@ -560,13 +560,8 @@ async function loadLinks(convId, sourceType, entityId, isCancelled, { prefetch =
   // finish a high-degree note through the normal, complete loading path.
   if (prefetch && assets.size + tasks.size > 4) throw new Error("Note exceeds speculative target budget");
   const results = await Promise.allSettled([
-    ...[...assets].map(id => new Promise((resolve, reject) => {
-      const request = window.NRCAssets.requestAsset(convId, id, { onSuccess: resolve, onError: reject });
-      if (request === undefined) reject(new Error("Asset transport unavailable"));
-    })),
-    ...[...tasks].map(id => new Promise((resolve, reject) => {
-      window.NRCTasks.requestTask(convId, id, { onSuccess: resolve, onError: reject });
-    })),
+    window.NRCAssets.requestAssetsByIds(convId, [...assets]),
+    window.NRCTasks.requestTasksByIds(convId, [...tasks]),
   ]);
   // Keep already-issued requests accounted for even when one target fails.
   for (const result of results) if (result.status === "rejected") throw result.reason;

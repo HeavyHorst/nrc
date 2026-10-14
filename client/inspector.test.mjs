@@ -729,6 +729,12 @@ test("adopted pending prefetch survives capacity eviction and speculative expiry
 
 test("real link preparation keeps failed target fan-out inside the speculative budget", async () => {
   const f = loadNotePrefetchInspector();
+  f.window.NRCAssets.requestAssetsByIds = async (room, ids) => {
+    const results = await Promise.allSettled(ids.map(id => new Promise((resolve, reject) =>
+      f.window.NRCAssets.requestAsset(room, id, { onSuccess: resolve, onError: reject }))));
+    for (const result of results) if (result.status === "rejected") throw result.reason;
+  };
+  f.window.NRCTasks.requestTasksByIds = async () => [];
   f.context.HTMLElement = class {};
   f.context.customElements = { define() {} };
   vm.runInNewContext(fs.readFileSync(path.resolve("client/links-ui.js"), "utf8"), f.context);

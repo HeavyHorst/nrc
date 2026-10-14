@@ -30,6 +30,8 @@ DECLARED_PROTOCOL_OPCODES :: [?]Opcode {
 	.C_DeleteTask,
 	.C_MoveTask,
 	.C_GetTasks,
+	.C_GetTasksByIDs,
+	.C_GetAssetsByIDs,
 	.C_CreateAsset,
 	.C_UpdateAsset,
 	.C_DeleteAsset,
@@ -1730,6 +1732,95 @@ prop_get_tasks_request_roundtrip :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.B
 // These tests generate data known to be invalid (oversized fields, out-of-range
 // enums, length mismatches) and verify the parser rejects it with the correct
 // error code — without panicking.
+
+@(test)
+test_hegel_id_batch_requests :: proc(t: ^testing.T) {
+	if !hgl.can_run() do return
+	result, err := hgl.run(prop_id_batch_requests, nil, {test_cases = 100})
+	testing.expectf(t, err == nil, "hegel ID batch property failed: err=%v interesting=%v", err, result.interesting_test_cases)
+}
+
+prop_id_batch_requests :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.Body_Result {
+	count, draw_result, ok := hegel_draw_len(tc, MAX_ID_BATCH_SIZE, "draw ID batch count")
+	if !ok do return draw_result
+	scope, draw_err := hgl.draw_u64(tc, 0, max(u64))
+	if draw_err == .Stop_Test do return hgl.abort()
+	if draw_err != nil do return hgl.interesting("draw ID batch scope")
+	correlation, corr_err := hgl.draw_u32(tc, 0, max(u32))
+	if corr_err == .Stop_Test do return hgl.abort()
+	if corr_err != nil do return hgl.interesting("draw ID batch correlation")
+	full_content, flag_err := hgl.draw_bool(tc)
+	if flag_err == .Stop_Test do return hgl.abort()
+	if flag_err != nil do return hgl.interesting("draw ID batch content flag")
+	invalid_flag, flag_result, flag_ok := draw_i64_or_result(tc, 2, 255, "draw invalid ID batch flag")
+	if !flag_ok do return flag_result
+	excessive_count, count_result, count_ok := draw_i64_or_result(tc, 65, 80, "draw excessive ID batch count")
+	if !count_ok do return count_result
+	trailing, trailing_result, trailing_ok := draw_i64_or_result(tc, 1, 16, "draw ID batch trailing length")
+	if !trailing_ok do return trailing_result
+
+	expected: [MAX_ID_BATCH_SIZE]u64
+	for &id, i in expected {
+		// Exercise values beyond signed i64 as well as the entire unsigned range.
+		lower := u64(max(i64)) + 1 if i % 2 == 0 else 0
+		id, draw_err = hgl.draw_u64(tc, lower, max(u64))
+		if draw_err == .Stop_Test do return hgl.abort()
+		if draw_err != nil do return hgl.interesting("draw batch record ID")
+		if i % 3 == 2 do id = expected[i - 1] // Parser preserves order and duplicates.
+	}
+	expected[63] = 0
+	buf: [2 + 15 + 8 * 80 + 16]byte
+	body := buf[2:]
+	endian.put_u64(body, .Big, scope)
+	endian.put_u32(body[8:], .Big, correlation)
+	for id, i in expected do endian.put_u64(body[15 + 8 * i:], .Big, id)
+
+	// Every generated case includes both legal boundaries and the count drawn
+	// by Hegel, so accepting 65 or rejecting 64 cannot hide behind random coverage.
+	opcodes := [2]Opcode{.C_GetTasksByIDs, .C_GetAssetsByIDs}
+	counts := [3]int{0, count, MAX_ID_BATCH_SIZE}
+	excessive_counts := [2]int{65, int(excessive_count)}
+	for opcode in opcodes {
+		endian.put_u16(buf[:], .Big, u16(opcode))
+		if get_opcode(buf[:]) != opcode do return hgl.interesting("ID batch opcode rejected")
+		for n in counts {
+			body[12] = 1 if full_content else 0
+			endian.put_u16(body[13:], .Big, u16(n))
+			size := 15 + 8 * n
+			parsed_ids: [MAX_ID_BATCH_SIZE]u64
+			parsed, err := parseGetRecordsByIDsRequest(body[:size], parsed_ids[:])
+			if err != nil do return hgl.interesting("valid ID batch rejected")
+			if parsed.conv_id != ConversationID(scope) || parsed.correlation_id != correlation || parsed.full_content != full_content || len(parsed.ids) != n {
+				return hgl.interesting("ID batch fixed fields changed")
+			}
+			for id, i in parsed.ids {
+				if id != expected[i] do return hgl.interesting("ID batch record ID/order changed")
+			}
+			cut, cut_result, cut_ok := draw_i64_or_result(tc, 0, i64(size - 1), "draw ID batch truncation")
+			if !cut_ok do return cut_result
+			_, err = parseGetRecordsByIDsRequest(body[:cut], parsed_ids[:])
+			wanted := ProtocolParseError.TooShort if cut < 15 else ProtocolParseError.ContentLengthMismatch
+			if err != wanted do return hgl.interesting("truncated ID batch accepted or wrong error")
+			_, err = parseGetRecordsByIDsRequest(body[:size + int(trailing)], parsed_ids[:])
+			if err != .ContentLengthMismatch do return hgl.interesting("ID batch trailing bytes accepted")
+			if n > 0 {
+				_, err = parseGetRecordsByIDsRequest(body[:size], parsed_ids[:n - 1])
+				if err != .TooMany do return hgl.interesting("ID batch exceeded caller storage")
+			}
+			body[12] = u8(invalid_flag)
+			_, err = parseGetRecordsByIDsRequest(body[:size], parsed_ids[:])
+			if err != .InvalidContentType do return hgl.interesting("ID batch invalid flag accepted")
+		}
+		body[12] = 0
+		for n in excessive_counts {
+			endian.put_u16(body[13:], .Big, u16(n))
+			parsed_ids: [80]u64
+			_, err := parseGetRecordsByIDsRequest(body[:15 + 8 * n], parsed_ids[:])
+			if err != .TooMany do return hgl.interesting("ID batch exceeded protocol limit")
+		}
+	}
+	return hgl.valid()
+}
 
 build_send_message_payload :: proc(conv_id: ConversationID, client_req_id: u32, content_type: MessageContentType, content_len: u16, buf: []byte) -> int {
 	if len(buf) < 15 {

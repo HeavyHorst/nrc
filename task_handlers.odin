@@ -682,6 +682,41 @@ process_list_tasks_paged :: proc(c: ^NRC_Connection, req: pr.ListTasksPagedReque
 	)
 }
 
+process_get_tasks_by_ids :: proc(c: ^NRC_Connection, req: pr.GetRecordsByIDsRequest) {
+	storage: [pr.MAX_ID_BATCH_SIZE]pr.Task
+	count := 0
+	for id, i in req.ids {
+		duplicate := false
+		for previous in req.ids[:i] {
+			if previous == id do duplicate = true
+		}
+		if duplicate do continue
+		task := get_task(c.workspace_id, req.conv_id, pr.TaskID(id))
+		if task != nil {
+			storage[count] = task^
+			count += 1
+		}
+	}
+	remaining := storage[:count]
+	for {
+		size := pr.getSizeTaskListPage(pr.TaskListPage{})
+		n := 0
+		for task in remaining {
+			item_size := pr.getSizeTask(task)
+			if size + item_size > MAX_PROTOCOL_PAYLOAD_SIZE do break
+			size += item_size
+			n += 1
+		}
+		if n == 0 && len(remaining) > 0 {
+			send_error_response(c, .C_GetTasksByIDs, "Task exceeds batch byte limit", req.correlation_id)
+			return
+		}
+		send_task_list_page(c, req.conv_id, remaining[:n], n < len(remaining), 0, 0, u32(count), "", req.correlation_id)
+		remaining = remaining[n:]
+		if len(remaining) == 0 do return
+	}
+}
+
 process_get_task :: proc(c: ^NRC_Connection, req: pr.GetTaskRequest) {
 	task := get_task(c.workspace_id, req.conv_id, req.task_id)
 	if task == nil {

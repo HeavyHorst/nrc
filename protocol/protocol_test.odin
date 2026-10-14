@@ -18,6 +18,38 @@ import "core:time"
 // ============================================================================
 
 @(test)
+test_id_batch_request_bounds :: proc(t: ^testing.T) {
+	buf: [15 + 8 * MAX_ID_BATCH_SIZE + 1]byte
+	ids: [MAX_ID_BATCH_SIZE]u64
+	endian.put_u32(buf[8:], .Big, 0x12345678)
+	buf[12] = 1
+	endian.put_u16(buf[13:], .Big, MAX_ID_BATCH_SIZE)
+	for i in 0 ..< MAX_ID_BATCH_SIZE {
+		endian.put_u64(buf[15 + 8 * i:], .Big, u64(9007199254740999) + u64(i))
+	}
+	req, err := parseGetRecordsByIDsRequest(buf[:len(buf) - 1], ids[:])
+	testing.expect_value(t, err, ProtocolParseError(nil))
+	testing.expect_value(t, req.correlation_id, u32(0x12345678))
+	testing.expect_value(t, len(req.ids), MAX_ID_BATCH_SIZE)
+	testing.expect_value(t, req.ids[63], u64(9007199254741062))
+	_, err = parseGetRecordsByIDsRequest(buf[:], ids[:])
+	testing.expect_value(t, err, ProtocolParseError.ContentLengthMismatch)
+	_, err = parseGetRecordsByIDsRequest(buf[:len(buf) - 2], ids[:])
+	testing.expect_value(t, err, ProtocolParseError.ContentLengthMismatch)
+	endian.put_u16(buf[13:], .Big, MAX_ID_BATCH_SIZE + 1)
+	_, err = parseGetRecordsByIDsRequest(buf[:], ids[:])
+	testing.expect_value(t, err, ProtocolParseError.TooMany)
+	endian.put_u16(buf[13:], .Big, 0)
+	buf[12] = 2
+	_, err = parseGetRecordsByIDsRequest(buf[:15], ids[:])
+	testing.expect_value(t, err, ProtocolParseError.InvalidContentType)
+	buf[12] = 0
+	req, err = parseGetRecordsByIDsRequest(buf[:15], ids[:])
+	testing.expect_value(t, err, ProtocolParseError(nil))
+	testing.expect_value(t, len(req.ids), 0)
+}
+
+@(test)
 test_task_description_byte_limit :: proc(t: ^testing.T) {
 	description: [4097]byte
 	buf: [4200]byte
@@ -580,7 +612,7 @@ test_get_opcode_invalid :: proc(t: ^testing.T) {
 	buf: [2]byte
 
 	// Invalid opcode above the client range
-	endian.put_u16(buf[:], .Big, 60)
+	endian.put_u16(buf[:], .Big, 62)
 	testing.expect_value(t, get_opcode(buf[:]), Opcode(0xFFFF))
 
 	// Reserved client opcode 0 (formerly C_SetNickname)
