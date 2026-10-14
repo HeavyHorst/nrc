@@ -31,6 +31,42 @@ try {
   assert.ok(await page.evaluate(() => logOutput.scrollHeight - logOutput.clientHeight - logOutput.scrollTop < 48), "burst follows bottom");
   assert.ok(await page.locator("#chatNewMessages").isHidden());
 
+  // Transport diagnostics must never become room messages, including retry exhaustion.
+  const connectionDiagnostics = await page.evaluate(() => {
+    const before = roomHistory.get(2n).length;
+    const firstLog = systemLogHistory.length;
+    ws.dispatchEvent(new Event("error"));
+    ws.dispatchEvent(new CloseEvent("close", { code: 1013, reason: "storage busy", wasClean: false }));
+    resetReconnection();
+    reconnectAttempts = maxReconnectAttempts;
+    ws.dispatchEvent(new CloseEvent("close", { code: 1006, wasClean: false }));
+    resetReconnection();
+    ws.dispatchEvent(new CloseEvent("close", { code: 1000, reason: "normal shutdown", wasClean: true }));
+    updateConnectionStatus(true);
+    retainedRoomStates.set(2n, "disabled");
+    return {
+      before, after: roomHistory.get(2n).length,
+      endpoint: ws.url,
+      retryEndpoint: getWsUrl(),
+      entries: getSystemLogEntries().slice(firstLog),
+    };
+  });
+  assert.equal(connectionDiagnostics.after, connectionDiagnostics.before);
+  assert.equal(await page.locator("#logOutput .log-row").count(), 150);
+  assert.deepEqual(connectionDiagnostics.entries.map(({ level, source }) => [level, source]), [
+    ["ERROR", "websocket"], ["WARN", "websocket"], ["WARN", "websocket"],
+    ["WARN", "websocket"], ["ERROR", "websocket"], ["INFO", "websocket"],
+  ]);
+  connectionDiagnostics.entries.forEach((entry, index) => {
+    assert.ok(entry.message.includes(index === 2 ? connectionDiagnostics.retryEndpoint : connectionDiagnostics.endpoint));
+  });
+  assert.match(connectionDiagnostics.entries[0].message, /readyState=OPEN.*no failure cause/);
+  assert.match(connectionDiagnostics.entries[1].message, /code=1013; clean=false; reason=storage busy; reconnect=scheduled/);
+  assert.match(connectionDiagnostics.entries[2].message, /delay=1000ms; retry=1\//);
+  assert.match(connectionDiagnostics.entries[3].message, /code=1006.*No close reason provided; reconnect=stopped/);
+  assert.match(connectionDiagnostics.entries[4].message, /retry limit=.*manual reconnect required/);
+  assert.match(connectionDiagnostics.entries[5].message, /code=1000; clean=true; reason=normal shutdown; reconnect=stopped/);
+
   const input = page.locator("#messageInput");
   assert.ok(await page.locator("#chatSearchCount").isHidden(), "no idle search label");
   await input.fill("Draft");

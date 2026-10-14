@@ -1471,7 +1471,7 @@ async function connectWebSocket() {
     clearPendingOptimisticDMs();
     const wasCleanClose = event.wasClean;
     const closeCode = event.code;
-    const closeReason = event.reason || "Unknown reason";
+    const closeReason = event.reason || "No close reason provided";
 
     if (window.NRCAssets && typeof window.NRCAssets.clearPendingAssetRpc === "function") {
       window.NRCAssets.clearPendingAssetRpc();
@@ -1486,18 +1486,20 @@ async function connectWebSocket() {
       window.NRCEdges.clearPendingEdgeRpc();
     }
 
-    logMessage(
-      "System",
-      `DISCONNECTED (Code: ${closeCode}, Clean: ${wasCleanClose}, Reason: ${closeReason})`,
+    logSystem(
+      `WEBSOCKET CLOSED; endpoint=${event.target.url}; code=${closeCode}; clean=${wasCleanClose}; reason=${closeReason}; reconnect=${!wasCleanClose && reconnectAttempts < maxReconnectAttempts ? "scheduled" : "stopped"}`,
+      "websocket",
+      wasCleanClose ? "INFO" : "WARN",
     );
 
     // Attempt reconnection unless it was a clean close or we've exceeded max attempts
     if (!wasCleanClose && reconnectAttempts < maxReconnectAttempts) {
       attemptReconnection();
     } else if (reconnectAttempts >= maxReconnectAttempts) {
-      logMessage(
-        "Error",
-        `MAX RECONNECTION ATTEMPTS REACHED (${maxReconnectAttempts})`,
+      logSystem(
+        `WEBSOCKET RECONNECT STOPPED; endpoint=${event.target.url}; retry limit=${maxReconnectAttempts}; manual reconnect required`,
+        "websocket",
+        "ERROR",
       );
       isReconnecting = false;
     }
@@ -1505,7 +1507,11 @@ async function connectWebSocket() {
 
   ws.onerror = (error) => {
     updateConnectionStatus(false);
-    logMessage("Error", `CONNECTION ERROR`);
+    logSystem(
+      `WEBSOCKET TRANSPORT ERROR; endpoint=${error.target.url}; readyState=${["CONNECTING", "OPEN", "CLOSING", "CLOSED"][error.target.readyState]}; browser provides no failure cause; close event will report code and retry status`,
+      "websocket",
+      "ERROR",
+    );
     console.error("WebSocket Error:", error);
   };
 
@@ -1604,9 +1610,10 @@ function attemptReconnection() {
     maxReconnectDelay,
   );
 
-  logMessage(
-    "System",
-    `RECONNECTING IN ${Math.round(delay / 1000)}s... (${reconnectAttempts}/${maxReconnectAttempts})`,
+  logSystem(
+    `WEBSOCKET RECONNECT SCHEDULED; endpoint=${getWsUrl()}; delay=${delay}ms; retry=${reconnectAttempts}/${maxReconnectAttempts}`,
+    "websocket",
+    "WARN",
   );
 
   reconnectTimer = setTimeout(() => {
