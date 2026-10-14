@@ -34,7 +34,7 @@ function loadLinksUI({ edges = [], getEdgesForEntity = null, onRequestTask = nul
     NRCViewManager: { setActiveView: (view) => activeViews.push(view) },
     NRCSlices: {
       getState: () => ({ slices }),
-      select: (name, options) => sliceSelects.push([name, options]),
+      select: (id, options) => sliceSelects.push([id, options]),
       ensureLoaded: () => { sliceLoads += 1; },
     },
     NRCCustomers: { openRecord: (type, id) => customerOpened.push([type, id]) },
@@ -339,9 +339,9 @@ test("a linked slice is named from its preview, a note from its title", () => {
   assert.deepEqual(rows.map((cells) => cells.at(-1)), ["×", "×"], "unlink stays available without entering the content editor");
 });
 
-test("a linked slice opens the slice record in the task view", () => {
+test("a linked slice opens by ID even when another slice has the same label", () => {
   const { linksUI, roomAssets, sliceSelects, activeViews, kanbanShows } = loadLinksUI({
-    slices: [{ sliceId: 40n, name: "Wartung Nordtor Q4" }],
+    slices: [{ sliceId: 42n, name: "Wartung Nordtor Q4" }, { sliceId: 40n, name: "Wartung Nordtor Q4" }],
   });
   roomAssets.set(0n, new Map([[40n, { assetId: 40n, assetType: 11, preview: JSON.stringify({ name: "Wartung Nordtor Q4" }) }]]));
 
@@ -349,7 +349,7 @@ test("a linked slice opens the slice record in the task view", () => {
 
   assert.deepEqual(activeViews, ["kanban"], "the slice lives in the task view");
   assert.equal(sliceSelects.length, 1);
-  assert.equal(sliceSelects[0][0], "Wartung Nordtor Q4");
+  assert.equal(sliceSelects[0][0], 40n);
   assert.equal(sliceSelects[0][1].focusDetail, true);
   assert.equal(kanbanShows(), 0, "the slice opens through its own register");
 });
@@ -361,7 +361,7 @@ test("an unresolved slice id still resolves through the slice register", () => {
 
   assert.deepEqual(activeViews, ["kanban"]);
   assert.equal(sliceSelects.length, 1);
-  assert.equal(sliceSelects[0][0], "Wartung Nordtor Q4");
+  assert.equal(sliceSelects[0][0], 40n);
   assert.equal(sliceLoads(), 0);
 });
 

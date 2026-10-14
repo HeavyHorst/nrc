@@ -534,8 +534,12 @@ Nothing is derived from project labels, so a slice spans projects freely and one
 task can belong to more than one slice. There is no slice-specific opcode: a
 slice is created with `C_CreateAsset`, its record is written with
 `C_UpdateAsset`, and its members are linked and unlinked with `C_CreateEdge` and
-`C_DeleteEdge`. A slice name is unique within the conversation, because the
-register, the record and the CLI address a slice by name.
+`C_DeleteEdge`. The stable numeric asset ID identifies a slice. Display names
+may repeat and may be renamed without changing memberships or links. The CLI
+creates with `nrc slice create <name>` and addresses existing slices only by ID,
+including `nrc slice update <id> --name <label>`; there is no name fallback.
+Use `nrc slice list --fields slice_id,name` to discover IDs. List name queries
+remain case-insensitive substring searches, not identity lookups.
 
 #### C_GetWorkspaceOverview (Client → Server)
 ```
@@ -593,7 +597,7 @@ Each slice is:
 | Field | Meaning |
 |-------|---------|
 | `Name` | From the slice record preview. Never empty. |
-| `SliceID` | The slice asset. Never zero. |
+| `SliceID` | Stable numeric identity of the slice asset. Never zero. |
 | `Owner` | From the slice record preview. |
 | `Flags` | Bit 0 `Closed`. Unknown bits are rejected. |
 | `Backlog`/`Todo`/`InProgress`/`Done` | Task members by status. |
@@ -617,11 +621,13 @@ An asset of type `AssetType.Slice` carries this preview:
 {"version":1,"name":"Sharded Persistence","owner":"rene","outcome":"Restart-safe.","closed":true,"closed_at":1789944297304000000,"closed_by":"rene"}
 ```
 
-`name` is the slice's identity and is unique within the conversation; a second
-slice cannot be created under a name that is already taken, and the name is
-bounded by `MAX_PROJECT_LENGTH`. `outcome` is also written to the asset payload.
+`name` is a nonempty display label, not an identity. Duplicate names are allowed,
+and updates may rename the same asset. The name is bounded by
+`MAX_PROJECT_LENGTH` (128 bytes). `outcome` is also written to the asset payload
+and is bounded by `MAX_SLICE_OUTCOME_LENGTH` (2048 bytes).
 A preview that does not decode, carries no version, or carries no name is skipped
-rather than repaired, so a corrupt record cannot invent or rename a slice.
+rather than repaired. Create and update still require a valid preview and version,
+a nonempty name and protocol byte-length validation.
 Closure is an act by the owner: `closed_at`/`closed_by` are set deliberately and
 are not derived from member statuses. Membership is not stored in the record at
 all: it is the set of `MemberOf` edges pointing at the slice, which is what lets

@@ -316,7 +316,7 @@ try {
     NRCInspector.openEntity = (ref) => { window.inspectorOpens.push(ref); return openEntity(ref); };
     window.sliceSelections = [];
     const select = NRCSlices.select;
-    NRCSlices.select = (name, options) => { window.sliceSelections.push({ name, options }); return select(name, options); };
+    NRCSlices.select = (id, options) => { window.sliceSelections.push({ id, options }); return select(id, options); };
   });
 
   // A reload in another view must not hide what is waiting: the sidebar count is

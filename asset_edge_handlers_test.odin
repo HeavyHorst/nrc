@@ -209,12 +209,9 @@ test_asset_handlers_keep_note_indexes_synchronized_and_replace_agenda :: proc(t:
 	testing.expect_value(t, len(conv.note_index_keys), 0)
 }
 
-// A slice is addressed by its name, so the name is validated where slices are
-// written: a second slice cannot take a name that is already in use, a record
-// without a usable name is refused rather than stored as an unaddressable asset,
-// and an update carries the record forward instead of renaming the slice.
+// Display names may repeat. Writes target IDs and preserve memberships.
 @(test)
-test_slice_create_and_update_keep_the_name_that_identifies_it :: proc(t: ^testing.T) {
+test_slice_duplicate_names_and_rename_preserve_ids_and_memberships :: proc(t: ^testing.T) {
 	workspace_id := "slice-name-guard"
 	if !init_room_mapping_test_state("slice_name_guard.log", workspace_id) {
 		testing.expect(t, false, "slice name guard test WAL should initialize")
@@ -222,6 +219,7 @@ test_slice_create_and_update_keep_the_name_that_identifies_it :: proc(t: ^testin
 	}
 	defer cleanup_room_mapping_test_state()
 	td.asset_seq = 0
+	td.edge_seq = 0
 
 	c := make_room_mapping_test_connection(workspace_id)
 	defer send_queue_destroy(&c)
@@ -235,13 +233,28 @@ test_slice_create_and_update_keep_the_name_that_identifies_it :: proc(t: ^testin
 	testing.expect_value(t, len(conv.assets), 1)
 
 	asset_handler_test_create(&c, conv_id, .Slice, .None, 0, `{"version":1,"name":"Shard hardening"}`, "")
-	testing.expect_value(t, len(conv.assets), 1)
-	testing.expect_value(t, td.asset_seq, u64(1))
+	testing.expect_value(t, len(conv.assets), 2)
+	testing.expect_value(t, td.asset_seq, u64(2))
 
 	asset_handler_test_create(&c, conv_id, .Slice, .None, 0, `{"version":1,"name":""}`, "")
 	asset_handler_test_create(&c, conv_id, .Slice, .None, 0, `not json`, "")
-	testing.expect_value(t, len(conv.assets), 1)
-	testing.expect_value(t, td.asset_seq, u64(1))
+	testing.expect_value(t, len(conv.assets), 2)
+	testing.expect_value(t, td.asset_seq, u64(2))
+
+	asset_handler_test_create(&c, conv_id, .Note, .None, 0, `{"title":"Keep this member"}`, "")
+	handle_create_edge(
+		&c,
+		pr.CreateEdgeRequest{conv_id = conv_id, source_type = .Asset, source_id = 3, target_type = .Asset, target_id = 1, relation = .MemberOf},
+	)
+	handle_update_asset(
+		&c,
+		pr.UpdateAssetRequest {
+			conv_id = conv_id,
+			asset_id = 2,
+			payload_encoding = .Plain,
+			preview = transmute([]byte)string(`{"version":1,"name":"Renamed","owner":"anke"}`),
+		},
+	)
 
 	handle_update_asset(
 		&c,
@@ -253,7 +266,18 @@ test_slice_create_and_update_keep_the_name_that_identifies_it :: proc(t: ^testin
 			preview = transmute([]byte)string(`{"version":1,"name":"Renamed","owner":"rene"}`),
 		},
 	)
-	testing.expect(t, string(conv.assets[1].preview) == `{"version":1,"name":"Shard hardening"}`, "a rename is refused and the record is untouched")
+	testing.expect_value(t, string(conv.assets[1].preview), `{"version":1,"name":"Renamed","owner":"rene"}`)
+	testing.expect_value(t, string(conv.assets[2].preview), `{"version":1,"name":"Renamed","owner":"anke"}`)
+	testing.expect_value(t, conv.assets[1].asset_id, pr.AssetID(1))
+	testing.expect_value(t, len(conv.assets), 3)
+	testing.expect_value(t, len(conv.edges), 1)
+	testing.expect_value(t, conv.edges[1].target_id, u64(1))
+	testing.expect_value(t, string(conv.assets[3].preview), `{"title":"Keep this member"}`)
+
+	for preview in ([]string{`{"version":1,"name":""}`, `not json`}) {
+		handle_update_asset(&c, pr.UpdateAssetRequest{conv_id = conv_id, asset_id = 1, payload_encoding = .Plain, preview = transmute([]byte)preview})
+		testing.expect_value(t, string(conv.assets[1].preview), `{"version":1,"name":"Renamed","owner":"rene"}`)
+	}
 
 	handle_update_asset(
 		&c,
@@ -262,11 +286,12 @@ test_slice_create_and_update_keep_the_name_that_identifies_it :: proc(t: ^testin
 			asset_id = 1,
 			payload_encoding = .Plain,
 			payload_raw_len = 0,
-			preview = transmute([]byte)string(`{"version":1,"name":"Shard hardening","owner":"rene","outcome":"Restart-safe."}`),
+			preview = transmute([]byte)string(`{"version":1,"name":"Renamed","owner":"rene","outcome":"Restart-safe."}`),
 		},
 	)
 	record, ok := slice_preview(conv.assets[1], context.temp_allocator)
 	testing.expect(t, ok && record.owner == "rene", "an update that keeps the name is applied")
+	testing.expect_value(t, record.outcome, "Restart-safe.")
 }
 
 @(test)

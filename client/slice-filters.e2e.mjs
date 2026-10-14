@@ -162,7 +162,7 @@ try {
   const rows = () => page.locator("#sliceRegisterList .slice-row").count();
   const head = () => page.locator("#sliceResultsCount").textContent();
   const status = () => page.locator("#sliceStatus").textContent();
-  const rowNames = () => page.locator("#sliceRegisterList .slice-row").evaluateAll((elements) => elements.map((element) => element.dataset.sliceName));
+  const rowNames = () => page.locator("#sliceRegisterList .slice-row-title").allTextContents();
   const chooseOwner = async (value) => {
     await page.locator("#sliceOwnerFilter-trigger").click();
     await page.locator(`.custom-select__option[data-value="${value}"]`).click();
@@ -175,7 +175,7 @@ try {
   // One page is drawn, and the head says how many of the listing's slices that is.
   assert.equal(await rows(), 100, "the register draws one page");
   assert.equal(await head(), "100 / 150 SLICES / 34 OPEN");
-  assert.equal(await page.locator("#sliceRegisterList .slice-row").first().getAttribute("data-slice-name"), "Tester work 001");
+  assert.equal(await page.locator("#sliceRegisterList .slice-row").first().getAttribute("data-slice-id"), "1000");
 
   // Reaching the end of the drawn rows asks for the next page.
   await scrollToEnd();
@@ -209,20 +209,20 @@ try {
     state.slices.length = 100;
     state.cursor = { closed: last.flags !== 0, sortAt: last.lastMovedAt, sliceId: last.sliceId };
     state.hasMore = true;
-    state.selected = last.name;
+    state.selected = last.sliceId;
     window.NRCSlices.render();
   });
   await page.locator("#sliceRegisterList .slice-row").last().focus();
   await page.keyboard.press("ArrowDown");
   await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length === 120);
 
-  // The name query narrows by the name a slice is addressed by.
+  // The name query searches display labels, not identity.
   await page.locator("#filterReset").click();
   await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length >= 100);
   await page.locator("#sliceQuery").fill("anke work");
   await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length === 20);
   assert.equal(await head(), "20 SLICES / 20 OPEN");
-  assert.equal(await page.locator("#sliceRegisterList .slice-row").first().getAttribute("data-slice-name"), "Anke work 001");
+  assert.equal(await page.locator("#sliceRegisterList .slice-row").first().getAttribute("data-slice-id"), "2000");
 
   // A filter that matches nothing says so instead of reading as an empty workspace.
   await page.locator("#sliceQuery").fill("zzz");

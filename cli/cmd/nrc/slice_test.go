@@ -132,6 +132,22 @@ func TestSliceCommandSurface(t *testing.T) {
 	if protocol.AssetTypeSlice != 11 {
 		t.Fatalf("AssetTypeSlice = %d, want 11", protocol.AssetTypeSlice)
 	}
+	for _, name := range []string{"get", "members", "assign", "unassign", "update", "close", "reopen", "delete"} {
+		cmd, _, err := rootCmd.Find([]string{"slice", name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range []string{"1", "18446744073709551615"} {
+			if err := cmd.Args(cmd, []string{id}); err != nil {
+				t.Errorf("slice %s rejects ID %s: %v", name, id, err)
+			}
+		}
+		for _, args := range [][]string{nil, {"Alpha"}, {"0"}, {"-1"}, {"18446744073709551616"}, {"1", "2"}} {
+			if err := cmd.Args(cmd, args); err == nil {
+				t.Errorf("slice %s accepts invalid ID arguments %v", name, args)
+			}
+		}
+	}
 }
 
 // TestSliceDeleteRefusesWhatItWouldTakeWithIt pins the delete rule: a slice that

@@ -50,31 +50,13 @@ slice_has_flag :: proc(slice: pr.TaskSlice, flag: pr.TaskSliceFlags) -> bool {
 	return flag <= slice.flags
 }
 
-// slice_preview_name decodes just the identity a write has to validate. A record
-// that does not decode, or that carries no name, is refused rather than stored:
-// the register skips such a record, so accepting it would create an asset that
-// no command and no register can address.
+// slice_preview_name validates the display record that the register can decode.
+// Names need not be unique; the asset ID is the slice's identity.
 slice_preview_name :: proc(preview: []byte, allocator: mem.Allocator) -> (name: string, ok: bool) {
 	m: Slice_Preview
 	if json.unmarshal(preview, &m, allocator = allocator) != nil do return
 	if m.version != 1 || len(m.name) == 0 || len(m.name) > pr.MAX_PROJECT_LENGTH do return
 	return m.name, true
-}
-
-// slice_name_taken reports whether a slice other than `except` already carries
-// the name. Renaming is not offered, so the only caller passes 0.
-slice_name_taken :: proc(conv: ^Conversation_State, name: string, except: pr.AssetID) -> bool {
-	if conv == nil do return false
-	arena: virtual.Arena
-	if virtual.arena_init_growing(&arena) != nil do return true
-	defer virtual.arena_destroy(&arena)
-	for id, asset in conv.assets {
-		if id == except || asset.asset_type != .Slice do continue
-		virtual.arena_free_all(&arena)
-		m, ok := slice_preview(asset, virtual.arena_allocator(&arena))
-		if ok && m.name == name do return true
-	}
-	return false
 }
 
 // slice_member_endpoint returns the endpoint of a MemberOf edge that is not the

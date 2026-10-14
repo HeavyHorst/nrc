@@ -231,32 +231,42 @@ func fetchSliceRecord(s *conn.Session, sliceID uint64) (*sliceRecord, error) {
 	return &record, nil
 }
 
-func findSlice(s *conn.Session, name string) (protocol.TaskSlice, error) {
-	// Finding one slice reads the whole register: a slice is addressed by its name,
-	// and the name is matched over every page.
+func findSlice(s *conn.Session, sliceID uint64) (protocol.TaskSlice, error) {
+	// Keep the server's folded counters, but match stable identity rather than label.
 	listing, err := fetchTaskSlices(s, protocol.SliceQuery{IncludeClosed: true, Limit: protocol.MaxTaskSliceCount})
 	if err != nil {
 		return protocol.TaskSlice{}, err
 	}
 	for _, slice := range listing.Slices {
-		if slice.Name == name {
+		if slice.SliceID == sliceID {
 			return slice, nil
 		}
 	}
 	return protocol.TaskSlice{}, nil
 }
 
-// requireSlice resolves a slice by name and fails with a not-found error when
-// there is none, so every command reports the same way.
-func requireSlice(s *conn.Session, name string) (protocol.TaskSlice, error) {
-	slice, err := findSlice(s, name)
+// requireSlice resolves the server's folded slice read model by stable asset ID.
+func requireSlice(s *conn.Session, value string) (protocol.TaskSlice, error) {
+	id, err := parseSliceID(value)
+	if err != nil {
+		return protocol.TaskSlice{}, err
+	}
+	slice, err := findSlice(s, id)
 	if err != nil {
 		return protocol.TaskSlice{}, err
 	}
 	if slice.SliceID == 0 {
-		return protocol.TaskSlice{}, fmt.Errorf("slice %q was not found; run `nrc slice list` to see the slices in this workspace", name)
+		return protocol.TaskSlice{}, fmt.Errorf("slice %d was not found; run `nrc slice list` to see the slices in this workspace", id)
 	}
 	return slice, nil
+}
+
+func parseSliceID(value string) (uint64, error) {
+	id, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || id == 0 {
+		return 0, fmt.Errorf("slice ID must be a positive numeric asset ID, got %q", value)
+	}
+	return id, nil
 }
 
 func requireSliceName(name string) (string, error) {
@@ -399,6 +409,7 @@ var sliceListCmd = &cobra.Command{
 		rows := make([][]string, 0, len(entries))
 		for _, entry := range entries {
 			rows = append(rows, []string{
+				strconv.FormatUint(entry.SliceID, 10),
 				entry.Name,
 				strconv.FormatUint(uint64(entry.Members), 10),
 				strconv.FormatUint(uint64(entry.Open), 10),
@@ -408,7 +419,7 @@ var sliceListCmd = &cobra.Command{
 				sliceState(entry),
 			})
 		}
-		table := tablewriter.NewTable(os.Stdout, tablewriter.WithHeader([]string{"SLICE", "MEM", "OPEN", "BLK", "DONE", "MOVED", "STATE"}))
+		table := tablewriter.NewTable(os.Stdout, tablewriter.WithHeader([]string{"ID", "SLICE", "MEM", "OPEN", "BLK", "DONE", "MOVED", "STATE"}))
 		for _, row := range rows {
 			table.Append(row)
 		}
@@ -418,7 +429,7 @@ var sliceListCmd = &cobra.Command{
 }
 
 var sliceGetCmd = &cobra.Command{
-	Use:   "get <name>",
+	Use:   "get <id>",
 	Short: "Show one slice, including its outcome and closure",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -448,6 +459,7 @@ var sliceGetCmd = &cobra.Command{
 		output.PrintSuccess("%s", entry.Name)
 		table := tablewriter.NewTable(os.Stdout, tablewriter.WithHeader([]string{"FIELD", "VALUE"}))
 		for _, row := range [][]string{
+			{"ID", strconv.FormatUint(entry.SliceID, 10)},
 			{"STATE", sliceState(entry)},
 			{"OWNER", sliceOrDash(entry.Owner)},
 			{"MEMBERS", strconv.FormatUint(uint64(entry.Members), 10)},
@@ -654,17 +666,12 @@ func memberState(member sliceMember) string {
 }
 
 var sliceMembersCmd = &cobra.Command{
-	Use:   "members <name>",
+	Use:   "members <id>",
 	Short: "List what a slice carries, with each member's kind and title",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		roomFlag, _ := cmd.Flags().GetString("room")
 		jsonOutput := useJSONOutput(cmd)
-
-		name, err := requireSliceName(args[0])
-		if err != nil {
-			conn.FatalInvalid("%v", err)
-		}
 
 		s, err := conn.Dial(roomFlag)
 		if err != nil {
@@ -672,7 +679,7 @@ var sliceMembersCmd = &cobra.Command{
 		}
 		defer s.Close()
 
-		slice, err := requireSlice(s, name)
+		slice, err := requireSlice(s, args[0])
 		if err != nil {
 			conn.FatalNotFound("%v", err)
 		}
@@ -693,7 +700,7 @@ var sliceMembersCmd = &cobra.Command{
 		}
 
 		if len(members) == 0 {
-			output.PrintSuccess("Slice %s carries no members.", name)
+			output.PrintSuccess("Slice %s (%d) carries no members.", slice.Name, slice.SliceID)
 			return
 		}
 		rows := make([][]string, 0, len(members))
@@ -739,14 +746,6 @@ var sliceCreateCmd = &cobra.Command{
 		}
 		defer s.Close()
 
-		existing, err := findSlice(s, name)
-		if err != nil {
-			conn.Fatal("Error: %v", err)
-		}
-		if existing.SliceID != 0 {
-			conn.FatalInvalid("Slice %q already exists as asset %d; use `nrc slice update` or `nrc slice close`.", name, existing.SliceID)
-		}
-
 		resp, err := s.SendAndRecv(&protocol.Message{
 			Opcode: protocol.C_CreateAsset,
 			Data:   protocol.EncodeCreateAssetWithCorrelation(protocol.WorkspaceDataConvID, protocol.AssetTypeSlice, protocol.ParentTypeNone, 0, preview, outcome, 0),
@@ -766,16 +765,12 @@ var sliceCreateCmd = &cobra.Command{
 }
 
 var sliceAssignCmd = &cobra.Command{
-	Use:         "assign <name> --task <id> | --note <id> | --file <id>",
+	Use:         "assign <id> --task <id> | --note <id> | --file <id>",
 	Short:       "Assign tasks, notes or files to a slice",
 	Args:        cobra.ExactArgs(1),
 	Annotations: map[string]string{"mutation": "true"},
 	Run: func(cmd *cobra.Command, args []string) {
 		roomFlag, _ := cmd.Flags().GetString("room")
-		name, err := requireSliceName(args[0])
-		if err != nil {
-			conn.FatalInvalid("%v", err)
-		}
 		members, err := resolveMemberKinds(cmd)
 		if err != nil {
 			conn.FatalInvalid("%v", err)
@@ -787,7 +782,7 @@ var sliceAssignCmd = &cobra.Command{
 		}
 		defer s.Close()
 
-		slice, err := requireSlice(s, name)
+		slice, err := requireSlice(s, args[0])
 		if err != nil {
 			conn.FatalNotFound("%v", err)
 		}
@@ -817,22 +812,18 @@ var sliceAssignCmd = &cobra.Command{
 			}
 		}
 		output.Mutation("assigned", "slice", slice.SliceID,
-			fmt.Sprintf("Assigned %s to %s", strings.Join(assigned, ", "), name), nil,
-			map[string]any{"name": name, "members": assigned})
+			fmt.Sprintf("Assigned %s to %s (%d)", strings.Join(assigned, ", "), slice.Name, slice.SliceID), nil,
+			map[string]any{"name": slice.Name, "members": assigned})
 	},
 }
 
 var sliceUnassignCmd = &cobra.Command{
-	Use:         "unassign <name> --task <id> | --note <id> | --file <id>",
+	Use:         "unassign <id> --task <id> | --note <id> | --file <id>",
 	Short:       "Remove tasks, notes or files from a slice",
 	Args:        cobra.ExactArgs(1),
 	Annotations: map[string]string{"mutation": "true"},
 	Run: func(cmd *cobra.Command, args []string) {
 		roomFlag, _ := cmd.Flags().GetString("room")
-		name, err := requireSliceName(args[0])
-		if err != nil {
-			conn.FatalInvalid("%v", err)
-		}
 		members, err := resolveMemberKinds(cmd)
 		if err != nil {
 			conn.FatalInvalid("%v", err)
@@ -844,7 +835,7 @@ var sliceUnassignCmd = &cobra.Command{
 		}
 		defer s.Close()
 
-		slice, err := requireSlice(s, name)
+		slice, err := requireSlice(s, args[0])
 		if err != nil {
 			conn.FatalNotFound("%v", err)
 		}
@@ -864,7 +855,7 @@ var sliceUnassignCmd = &cobra.Command{
 					}
 				}
 				if edgeID == 0 {
-					conn.FatalNotFound("%s %d is not assigned to slice %q.", kind.name, memberID, name)
+					conn.FatalNotFound("%s %d is not assigned to slice %d.", kind.name, memberID, slice.SliceID)
 				}
 				resp, err := s.SendAndRecv(&protocol.Message{
 					Opcode: protocol.C_DeleteEdge,
@@ -883,27 +874,31 @@ var sliceUnassignCmd = &cobra.Command{
 			}
 		}
 		output.Mutation("unassigned", "slice", slice.SliceID,
-			fmt.Sprintf("Unassigned %s from %s", strings.Join(removed, ", "), name), nil,
-			map[string]any{"name": name, "members": removed})
+			fmt.Sprintf("Unassigned %s from %s (%d)", strings.Join(removed, ", "), slice.Name, slice.SliceID), nil,
+			map[string]any{"name": slice.Name, "members": removed})
 	},
 }
 
 var sliceUpdateCmd = &cobra.Command{
-	Use:         "update <name>",
-	Short:       "Change a slice's owner or outcome",
+	Use:         "update <id>",
+	Short:       "Change a slice's name, owner or outcome",
 	Args:        cobra.ExactArgs(1),
 	Annotations: map[string]string{"mutation": "true"},
 	Run: func(cmd *cobra.Command, args []string) {
 		roomFlag, _ := cmd.Flags().GetString("room")
 		owner, _ := cmd.Flags().GetString("owner")
 		outcome, _ := cmd.Flags().GetString("outcome")
+		newName, _ := cmd.Flags().GetString("name")
 
-		name, err := requireSliceName(args[0])
-		if err != nil {
-			conn.FatalInvalid("%v", err)
+		if !cmd.Flags().Changed("name") && !cmd.Flags().Changed("owner") && !cmd.Flags().Changed("outcome") {
+			conn.FatalInvalid("Pass --name, --owner or --outcome. Only the flags you pass are changed.")
 		}
-		if !cmd.Flags().Changed("owner") && !cmd.Flags().Changed("outcome") {
-			conn.FatalInvalid("Pass --owner, --outcome, or both. Only the flags you pass are changed.")
+		if cmd.Flags().Changed("name") {
+			var err error
+			newName, err = requireSliceName(newName)
+			if err != nil {
+				conn.FatalInvalid("%v", err)
+			}
 		}
 
 		s, err := conn.Dial(roomFlag)
@@ -912,13 +907,16 @@ var sliceUpdateCmd = &cobra.Command{
 		}
 		defer s.Close()
 
-		slice, err := requireSlice(s, name)
+		slice, err := requireSlice(s, args[0])
 		if err != nil {
 			conn.FatalNotFound("%v", err)
 		}
 		record, err := fetchSliceRecord(s, slice.SliceID)
 		if err != nil {
 			conn.Fatal("Error: %v", err)
+		}
+		if cmd.Flags().Changed("name") {
+			record.Name = newName
 		}
 		if cmd.Flags().Changed("owner") {
 			record.Owner = strings.TrimSpace(owner)
@@ -941,12 +939,12 @@ var sliceUpdateCmd = &cobra.Command{
 		if resp.Opcode != protocol.S_AssetUpdated {
 			conn.Fatal("Unexpected response: %d", resp.Opcode)
 		}
-		output.Mutation("updated", "slice", slice.SliceID, fmt.Sprintf("Slice updated: %s", name), nil, map[string]any{"name": name})
+		output.Mutation("updated", "slice", slice.SliceID, fmt.Sprintf("Slice updated: %s", record.Name), nil, map[string]any{"name": record.Name})
 	},
 }
 
 var sliceCloseCmd = &cobra.Command{
-	Use:         "close <name>",
+	Use:         "close <id>",
 	Short:       "Close a slice",
 	Args:        cobra.ExactArgs(1),
 	Annotations: map[string]string{"mutation": "true"},
@@ -956,7 +954,7 @@ var sliceCloseCmd = &cobra.Command{
 }
 
 var sliceReopenCmd = &cobra.Command{
-	Use:         "reopen <name>",
+	Use:         "reopen <id>",
 	Short:       "Reopen a closed slice",
 	Args:        cobra.ExactArgs(1),
 	Annotations: map[string]string{"mutation": "true"},
@@ -1011,7 +1009,7 @@ func sliceDeleteRefusal(name string, members uint32, record *sliceRecord) string
 }
 
 var sliceDeleteCmd = &cobra.Command{
-	Use:         "delete <name>",
+	Use:         "delete <id>",
 	Short:       "Delete a slice and release its memberships",
 	Args:        cobra.ExactArgs(1),
 	Annotations: map[string]string{"mutation": "true"},
@@ -1019,18 +1017,13 @@ var sliceDeleteCmd = &cobra.Command{
 		roomFlag, _ := cmd.Flags().GetString("room")
 		force, _ := cmd.Flags().GetBool("force")
 
-		name, err := requireSliceName(args[0])
-		if err != nil {
-			conn.FatalInvalid("%v", err)
-		}
-
 		s, err := conn.Dial(roomFlag)
 		if err != nil {
 			conn.Fatal("Error: %v", err)
 		}
 		defer s.Close()
 
-		slice, err := requireSlice(s, name)
+		slice, err := requireSlice(s, args[0])
 		if err != nil {
 			conn.FatalNotFound("%v", err)
 		}
@@ -1040,7 +1033,7 @@ var sliceDeleteCmd = &cobra.Command{
 		}
 		members := slice.MemberCount()
 		if !force {
-			if refusal := sliceDeleteRefusal(name, members, record); refusal != "" {
+			if refusal := sliceDeleteRefusal(slice.Name, members, record); refusal != "" {
 				conn.Fatal("%s", refusal)
 			}
 		}
@@ -1059,12 +1052,12 @@ var sliceDeleteCmd = &cobra.Command{
 			conn.Fatal("Unexpected response: %d", resp.Opcode)
 		}
 
-		message := fmt.Sprintf("Deleted slice %s (%d)", name, slice.SliceID)
+		message := fmt.Sprintf("Deleted slice %s (%d)", slice.Name, slice.SliceID)
 		if members > 0 {
-			message = fmt.Sprintf("Deleted slice %s (%d), released %d %s", name, slice.SliceID, members, membershipNoun(members))
+			message = fmt.Sprintf("Deleted slice %s (%d), released %d %s", slice.Name, slice.SliceID, members, membershipNoun(members))
 		}
 		output.Mutation("deleted", "slice", slice.SliceID, message, nil,
-			map[string]any{"name": name, "released_members": members})
+			map[string]any{"name": slice.Name, "released_members": members})
 	},
 }
 
@@ -1074,18 +1067,13 @@ func setSliceClosed(cmd *cobra.Command, args []string, closed bool) {
 	roomFlag, _ := cmd.Flags().GetString("room")
 	by, _ := cmd.Flags().GetString("by")
 
-	name, err := requireSliceName(args[0])
-	if err != nil {
-		conn.FatalInvalid("%v", err)
-	}
-
 	s, err := conn.Dial(roomFlag)
 	if err != nil {
 		conn.Fatal("Error: %v", err)
 	}
 	defer s.Close()
 
-	slice, err := requireSlice(s, name)
+	slice, err := requireSlice(s, args[0])
 	if err != nil {
 		conn.FatalNotFound("%v", err)
 	}
@@ -1120,7 +1108,7 @@ func setSliceClosed(cmd *cobra.Command, args []string, closed bool) {
 	if resp.Opcode != protocol.S_AssetUpdated {
 		conn.Fatal("Unexpected response: %d", resp.Opcode)
 	}
-	output.Mutation(verb, "slice", slice.SliceID, fmt.Sprintf("Slice %s: %s", verb, name), nil, map[string]any{"name": name})
+	output.Mutation(verb, "slice", slice.SliceID, fmt.Sprintf("Slice %s: %s (%d)", verb, record.Name, slice.SliceID), nil, map[string]any{"name": record.Name})
 }
 
 func sliceState(entry sliceEntry) string {
@@ -1158,9 +1146,19 @@ func sliceAge(timestamp int64) string {
 }
 
 func init() {
+	for _, cmd := range []*cobra.Command{sliceGetCmd, sliceMembersCmd, sliceAssignCmd, sliceUnassignCmd, sliceUpdateCmd, sliceCloseCmd, sliceReopenCmd, sliceDeleteCmd} {
+		cmd.Args = func(cmd *cobra.Command, args []string) error {
+			if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+				return err
+			}
+			_, err := parseSliceID(args[0])
+			return err
+		}
+	}
 	sliceListCmd.Flags().Bool("include-closed", false, "Include closed slices")
 	sliceCreateCmd.Flags().String("owner", "", "Owner of the slice")
 	sliceCreateCmd.Flags().String("outcome", "", "What the slice ends in")
+	sliceUpdateCmd.Flags().String("name", "", "New name of the slice (memberships are preserved)")
 	sliceUpdateCmd.Flags().String("owner", "", "Owner of the slice")
 	sliceUpdateCmd.Flags().String("outcome", "", "What the slice ends in")
 	sliceCloseCmd.Flags().String("by", "", "Who is closing the slice")

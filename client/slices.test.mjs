@@ -248,18 +248,18 @@ function sliceView({ mobile }) {
 
 test("a phone tap drills into the record even when the row is already selected", () => {
   const { slices, view } = sliceView({ mobile: true });
-  assert.equal(slices.getState().selected, "Alpha", "the listing preselects its first slice");
-  slices.select("Alpha");
+  assert.equal(slices.getState().selected, 5n, "the listing preselects its first slice");
+  slices.select(5n);
   assert.equal(view.dataset.sliceMobileDetail, "true", "the record replaces the register");
 
-  slices.select("Alpha");
-  assert.equal(slices.getState().selected, "Alpha", "re-selecting keeps the selection");
+  slices.select(5n);
+  assert.equal(slices.getState().selected, 5n, "re-selecting keeps the selection");
   assert.equal(view.dataset.sliceMobileDetail, "true");
 });
 
 test("a wide viewport keeps register and record side by side", () => {
   const { slices, view } = sliceView({ mobile: false });
-  slices.select("Alpha");
+  slices.select(5n);
   assert.equal(view.dataset.sliceMobileDetail, undefined, "the drill-in belongs to phones");
 });
 
@@ -314,7 +314,7 @@ test("a declined delete sends nothing and keeps the record", async () => {
 
   assert.equal(sent, false);
   assert.equal(deleted.length, 0);
-  assert.equal(slices.getState().selected, "Alpha");
+  assert.equal(slices.getState().selected, 5n);
 });
 
 test("an empty slice says so instead of counting memberships", async () => {
@@ -325,12 +325,12 @@ test("an empty slice says so instead of counting memberships", async () => {
 
 test("a slice deleted elsewhere closes its record and refreshes the register", () => {
   const { slices } = deletableSlices();
-  assert.equal(slices.getState().selected, "Alpha");
+  assert.equal(slices.getState().selected, 5n);
 
   slices.onAssetDeleted(0n, 6n);
-  assert.equal(slices.getState().selected, "Alpha", "another slice's delete leaves this record open");
+  assert.equal(slices.getState().selected, 5n, "another slice's delete leaves this record open");
   slices.onAssetDeleted(1n, 5n);
-  assert.equal(slices.getState().selected, "Alpha", "a chat conversation's delete is not a slice delete");
+  assert.equal(slices.getState().selected, 5n, "a chat conversation's delete is not a slice delete");
 
   slices.onAssetDeleted(0n, 5n);
   assert.equal(slices.getState().selected, null, "the deleted slice closes its record");
@@ -895,15 +895,15 @@ test("a selection change asks before it discards unsaved record edits", async ()
   assert.equal(slices.getState().detailSliceId, 5n, "the fields on screen belong to Alpha");
 
   assert.equal(slices.recordDirty(), true, "the typed owner and outcome are unsaved");
-  assert.equal(await slices.selectGuarded("Beta"), false, "a declined answer keeps the record");
-  assert.equal(slices.getState().selected, "Alpha");
+  assert.equal(await slices.selectGuarded(6n), false, "a declined answer keeps the record");
+  assert.equal(slices.getState().selected, 5n);
   assert.equal(dialogs.length, 1, "the change asks once");
   assert.equal(dialogs[0].options.title, "UNSAVED CHANGES");
   assert.match(dialogs[0].message, /Discard unsaved changes to this slice\?/);
 
   confirmed = true;
-  assert.equal(await slices.selectGuarded("Beta"), true);
-  assert.equal(slices.getState().selected, "Beta");
+  assert.equal(await slices.selectGuarded(6n), true);
+  assert.equal(slices.getState().selected, 6n);
   await settleMicrotasks();
   assert.equal(slices.getState().detailSliceId, 6n, "the record that arrived is Beta's");
 
@@ -913,8 +913,8 @@ test("a selection change asks before it discards unsaved record edits", async ()
   typed.owner = "rene";
   typed.outcome = "";
   assert.equal(slices.recordDirty(), false);
-  assert.equal(await slices.selectGuarded("Beta"), true, "re-selecting the open slice does not ask");
-  assert.equal(await slices.selectGuarded("Alpha"), true, "a clean record changes selection without a question");
+  assert.equal(await slices.selectGuarded(6n), true, "re-selecting the open slice does not ask");
+  assert.equal(await slices.selectGuarded(5n), true, "a clean record changes selection without a question");
   assert.equal(dialogs.length, asked, "a clean record never asks");
 });
 
@@ -990,15 +990,42 @@ test("a refresh keeps text the record's fields hold unsaved", async () => {
 
   // The record moves on elsewhere: the untouched owner shows it, the outcome the
   // reader is still typing in does not lose its text.
-  roomAssets.get(0n).get(5n).preview = JSON.stringify({ version: 1, name: "Alpha", owner: "anke", outcome: "Remote." });
+  const asset = roomAssets.get(0n).get(5n);
+  asset.convId = 0n;
+  asset.preview = JSON.stringify({ version: 1, name: "Renamed", owner: "anke", outcome: "Remote." });
+  slices.onAssetChanged(asset, "mutation", 0);
+  assert.equal(slices.getState().selected, 5n, "the broadcast keeps the selected ID before the listing refresh");
+  assert.equal(fields.sliceOutcome.value, "Typed but unsaved.");
   slices.requestList({ force: true });
-  slices.handleSliceList(encodeSliceList({ slices: [{ name: "Alpha", sliceId: 5n, todo: 2 }] }));
+  slices.handleSliceList(encodeSliceList({ slices: [
+    { name: "Other", sliceId: 6n },
+    { name: "Renamed", sliceId: 5n, todo: 2 },
+  ] }));
   await settleMicrotasks();
   assert.deepEqual(
     { owner: fields.sliceOwner.value, outcome: fields.sliceOutcome.value },
     { owner: "anke", outcome: "Typed but unsaved." },
     "a remote change shows where the reader has not typed",
   );
+  asset.preview = JSON.stringify({ version: 1, name: "Renamed again", owner: "anke", outcome: "Remote." });
+  slices.requestList({ force: true });
+  slices.handleSliceList(encodeSliceList({ slices: [
+    { name: "Other", sliceId: 6n },
+    { name: "Renamed again", sliceId: 5n, todo: 2 },
+  ] }));
+  await settleMicrotasks();
+  assert.equal(slices.selectedSlice().sliceId, 5n, "a listing-only rename keeps the same record rather than opening the first row");
+  assert.equal(slices.getState().selected, 5n);
+  assert.equal(fields.sliceOutcome.value, "Typed but unsaved.");
+
+  // The new name can fall outside a name filter or off the first listing page.
+  slices.setQuery("Alpha");
+  slices.handleSliceList(encodeSliceList({ slices: [] }));
+  await settleMicrotasks();
+  assert.equal(slices.selectedSlice().sliceId, 5n, "a dirty record survives losing its filtered register row");
+  assert.equal(fields.sliceOutcome.value, "Typed but unsaved.");
+  slices.onAssetDeleted(0n, 5n);
+  assert.equal(slices.selectedSlice(), null, "a peer delete still closes the retained record");
 });
 
 test("closing a bound slice updates the asset with an owner-acted closure", () => {
@@ -1033,7 +1060,7 @@ test("closing a bound slice updates the asset with an owner-acted closure", () =
   assert.equal(updates[0].preview.owner, "rene");
 });
 
-test("creating a slice writes a record with the name it was given", () => {
+test("creating a slice writes its display name and selects the returned ID", async () => {
   const creates = [];
   const slices = loadSlices({
     window: {
@@ -1042,7 +1069,7 @@ test("creating a slice writes a record with the name it was given", () => {
         roomAssets: new Map([[0n, new Map()]]),
         sendCreateAsset: (convId, type, parentType, parentId, preview, payload, correlationId, options) => {
           creates.push({ type, parentType, parentId, preview: JSON.parse(preview), payload });
-          options.onSuccess({});
+          options.onSuccess({ asset: { assetId: 50n } });
           return 1;
         },
         sendUpdateAsset: () => { throw new Error("a new slice must be created, not updated"); },
@@ -1053,6 +1080,8 @@ test("creating a slice writes a record with the name it was given", () => {
   slices.requestList({ force: true });
   slices.handleSliceList(encodeSliceList({ correlationId: 7, slices: [] }));
   slices.createSlice("  Shard hardening  ", { owner: "rene", outcome: "Restart-safe." });
+  slices.handleSliceList(encodeSliceList({ slices: [{ name: "Shard hardening", sliceId: 50n }] }));
+  await settleMicrotasks();
 
   assert.equal(creates.length, 1);
   assert.equal(creates[0].type, 11, "a slice is an asset of type Slice");
@@ -1061,16 +1090,21 @@ test("creating a slice writes a record with the name it was given", () => {
   assert.equal(creates[0].preview.owner, "rene");
   assert.equal(creates[0].preview.outcome, "Restart-safe.");
   assert.equal(creates[0].preview.closed, false);
-  assert.equal(slices.getState().selected, "Shard hardening", "the new slice is selected");
+  assert.equal(slices.getState().selected, 50n, "the returned ID is selected");
 });
 
-test("a name that is already taken is refused before anything is sent", () => {
+test("duplicate display names can be created and selected independently", async () => {
+  const creates = [];
   const slices = loadSlices({
     window: {
       NRCAssets: {
         generateCorrelationId: () => 7,
         roomAssets: new Map([[0n, new Map()]]),
-        sendCreateAsset: () => { throw new Error("a duplicate name must not reach the wire"); },
+        sendCreateAsset: (convId, type, parentType, parentId, preview, payload, correlationId, options) => {
+          creates.push(JSON.parse(preview));
+          options.onSuccess({ asset: { assetId: 6n } });
+          return 1;
+        },
         MAX_PREVIEW_LENGTH: 4096,
       },
     },
@@ -1078,17 +1112,25 @@ test("a name that is already taken is refused before anything is sent", () => {
   slices.requestList({ force: true });
   slices.handleSliceList(encodeSliceList({ correlationId: 7, slices: [{ name: "Alpha", sliceId: 5n }] }));
   slices.createSlice("Alpha");
-  assert.match(slices.getState().writeError, /already exists/);
+  slices.handleSliceList(encodeSliceList({ slices: [{ name: "Alpha", sliceId: 5n }, { name: "Alpha", sliceId: 6n }] }));
+  await settleMicrotasks();
+  assert.equal(creates.length, 1);
+  assert.equal(slices.selectedSlice().sliceId, 6n);
+  slices.handleSliceList(encodeSliceList({ slices: [{ name: "Alpha", sliceId: 5n }, { name: "Alpha", sliceId: 6n }] }));
+  await slices.select(5n);
+  assert.equal(slices.selectedSlice().sliceId, 5n);
+  await slices.select(6n);
+  assert.equal(slices.selectedSlice().sliceId, 6n);
 });
 
-test("saving a bound slice updates the record instead of creating a second one", () => {
+test("saving a bound slice preserves a remote rename before the register refresh", () => {
   const updates = [];
   const slices = loadSlices({
     ...sliceFields({ outcome: "Sharpened outcome.", owner: "anke" }),
     window: {
       NRCAssets: {
         generateCorrelationId: () => 7,
-        roomAssets: new Map([[0n, new Map([[5n, { assetId: 5n, assetType: 11, preview: JSON.stringify({ version: 1, name: "Alpha", owner: "rene", outcome: "First." }) }]])]]),
+        roomAssets: new Map([[0n, new Map([[5n, { assetId: 5n, assetType: 11, preview: JSON.stringify({ version: 1, name: "Renamed", owner: "rene", outcome: "First." }) }]])]]),
         sendUpdateAsset: (convId, assetId, preview, payload, type, correlationId, options) => {
           updates.push({ assetId, preview: JSON.parse(preview), type });
           options.onSuccess({});
@@ -1105,8 +1147,125 @@ test("saving a bound slice updates the record instead of creating a second one",
 
   assert.equal(updates.length, 1);
   assert.equal(updates[0].assetId, 5n);
+  assert.equal(updates[0].preview.name, "Renamed");
   assert.equal(updates[0].preview.outcome, "Sharpened outcome.");
   assert.equal(updates[0].preview.owner, "anke");
+});
+
+for (const filteredOut of [false, true]) test(`a listing-only rename reconciles a stale full record (${filteredOut ? "omitted" : "visible"} row) before any write`, async () => {
+  const cached = { assetId: 5n, assetType: 11, payload: "",
+    preview: JSON.stringify({ version: 1, name: "Alpha", owner: "rene", outcome: "Saved." }) };
+  const updates = [];
+  let freshRead;
+  const slices = loadSlices({
+    ...sliceFields({ owner: "rene", outcome: "Keep my draft." }),
+    window: {
+      NRCAssets: {
+        roomAssets: new Map([[0n, new Map([[5n, cached]])]]),
+        requestAsset: (convId, assetId, options) => {
+          if (options.force) freshRead = options;
+          else options.onSuccess({ asset: cached });
+          return 1;
+        },
+        sendUpdateAsset: (convId, assetId, preview) => {
+          updates.push(JSON.parse(preview));
+          return 1;
+        },
+      },
+    },
+  });
+  slices.requestList({ force: true });
+  slices.handleSliceList(encodeSliceList({ slices: [{ name: "Alpha", sliceId: 5n }] }));
+  await settleMicrotasks();
+  if (filteredOut) slices.disconnect();
+  slices.requestList({ force: true });
+  slices.handleSliceList(encodeSliceList({ slices: filteredOut ? [] : [{ name: "Beta", sliceId: 5n }] }));
+  for (const action of [() => slices.saveRecord(), () => slices.closeSlice(slices.selectedSlice()), () => slices.reopenSlice(slices.selectedSlice())]) action();
+  assert.equal(updates.length, 0, "a stale cached name cannot be written while the exact read is pending");
+  assert.ok(freshRead, "the new listing bypasses the full-record cache");
+  cached.preview = JSON.stringify({ version: 1, name: "Beta", owner: "rene", outcome: "Saved." });
+  freshRead.onSuccess({ asset: cached });
+  await settleMicrotasks();
+  slices.saveRecord();
+  slices.closeSlice(slices.selectedSlice());
+  slices.reopenSlice(slices.selectedSlice());
+  assert.deepEqual(updates.map(record => record.name), ["Beta", "Beta", "Beta"]);
+  assert.deepEqual(updates.map(record => record.outcome), ["Keep my draft.", "Keep my draft.", "Keep my draft."]);
+});
+
+test("an explicitly linked off-page ID survives a clean background refresh", async () => {
+  let correlation = 0;
+  const slices = loadSlices({ window: { NRCAssets: { generateCorrelationId: () => ++correlation } } });
+  slices.requestList({ force: true });
+  slices.handleSliceList(encodeSliceList({ correlationId: 1, slices: [{ name: "Same", sliceId: 5n }] }));
+  await settleMicrotasks();
+  const selection = slices.select(40n);
+  slices.handleSliceList(encodeSliceList({ correlationId: 2, slices: [{ name: "Same", sliceId: 40n }] }));
+  await selection;
+  await settleMicrotasks();
+  assert.equal(slices.getState().selected, 40n);
+  slices.requestList({ force: true });
+  slices.handleSliceList(encodeSliceList({ correlationId: 3, slices: [{ name: "Same", sliceId: 5n }] }));
+  await settleMicrotasks();
+  assert.equal(slices.getState().selected, 40n);
+  assert.equal(slices.getState().detailSliceId, 40n);
+  slices.setQuery("explicit filter change");
+  slices.handleSliceList(encodeSliceList({ correlationId: 4, slices: [{ name: "Same", sliceId: 5n }] }));
+  await settleMicrotasks();
+  assert.equal(slices.getState().selected, 5n);
+});
+
+test("a retained slice keeps its closure when saved after disappearing from the open register", async () => {
+  const cached = { assetId: 5n, assetType: 11,
+    preview: JSON.stringify({ version: 1, name: "Alpha", closed: false }) };
+  const updates = [];
+  const slices = loadSlices({ window: { NRCAssets: {
+    roomAssets: new Map([[0n, new Map([[5n, cached]])]]),
+    requestAsset: (convId, assetId, options) => options.onSuccess({ asset: cached }),
+    sendUpdateAsset: (convId, assetId, preview) => { updates.push(JSON.parse(preview)); return 1; },
+  } } });
+  slices.requestList({ force: true });
+  slices.handleSliceList(encodeSliceList({ slices: [{ name: "Alpha", sliceId: 5n }] }));
+  await settleMicrotasks();
+  await slices.select(5n);
+  cached.preview = JSON.stringify({ version: 1, name: "Alpha", closed: true, closed_at: 1234, closed_by: "rene" });
+  slices.requestList({ force: true });
+  slices.handleSliceList(encodeSliceList({ slices: [] }));
+  await settleMicrotasks();
+  assert.equal(slices.getState().selected, 5n);
+  assert.equal(slices.selectedSlice().flags & 1, 1, "the retained record displays CLOSED rather than ACTIVE");
+  slices.saveRecord();
+  assert.equal(updates[0].closed, true, "saving a field must not reopen the retained slice");
+  assert.equal(updates[0].closed_at, 1234);
+  assert.equal(updates[0].closed_by, "rene");
+});
+
+test("close and reopen preserve a remote rename before the register refresh", () => {
+  for (const closed of [true, false]) {
+    const updates = [];
+    const slices = loadSlices({
+      window: {
+        NRCAssets: {
+          roomAssets: new Map([[0n, new Map([[5n, { assetId: 5n, assetType: 11,
+            preview: JSON.stringify({ version: 1, name: "Renamed", owner: "rene", outcome: "Keep this.", closed: !closed }) }]])]]),
+          sendUpdateAsset: (convId, assetId, preview) => {
+            updates.push({ assetId, preview: JSON.parse(preview) });
+            return 1;
+          },
+        },
+      },
+    });
+    slices.requestList({ force: true });
+    slices.handleSliceList(encodeSliceList({ slices: [{ name: "Alpha", sliceId: 5n, flags: closed ? 0 : 1 }] }));
+    if (closed) slices.closeSlice(slices.selectedSlice());
+    else slices.reopenSlice(slices.selectedSlice());
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].assetId, 5n);
+    assert.equal(updates[0].preview.name, "Renamed");
+    assert.equal(updates[0].preview.closed, closed);
+    assert.equal(updates[0].preview.owner, "rene");
+    assert.equal(updates[0].preview.outcome, "Keep this.");
+  }
 });
 
 test("an over-long outcome is rejected before anything is sent", () => {
@@ -1175,7 +1334,7 @@ test("a disposed picker acknowledgement does not refresh the newly selected slic
   let cancelled = false;
   const pending = picker.onSelect({ id: 42n }, 7, () => cancelled);
   cancelled = true;
-  slices.select("Beta");
+  slices.select(9n);
   const before = { reads: reads.length, packets: slices.__sent.length };
   acknowledgement.onSuccess();
   await pending;
@@ -1439,20 +1598,21 @@ test("a listing replaces the record unless the reader has unsaved work in it", a
     { name: "Beta", sliceId: 6n, owner: "anke" },
   ] }));
   await settleMicrotasks();
-  assert.equal(slices.getState().selected, "Alpha");
+  assert.equal(slices.getState().selected, 5n);
   assert.equal(slices.recordDirty(), true, "the typed owner is unsaved");
 
   // A filtered listing that does not carry the open slice leaves the record alone.
   slices.setOwnerFilter("anke");
   slices.handleSliceList(encodeSliceList({ total: 1, slices: [{ name: "Beta", sliceId: 6n, owner: "anke" }] }));
-  assert.equal(slices.getState().selected, "Alpha", "the reader keeps the record they were working in");
+  assert.equal(slices.getState().selected, 5n, "the reader keeps the record they were working in");
   assert.deepEqual(Array.from(slices.getState().slices, (slice) => slice.name), ["Beta"]);
+  assert.equal(slices.selectedSlice().sliceId, 5n, "the dirty record remains available outside the filtered rows");
 
   // A record that holds what its fields hold follows the listing.
-  fields.sliceOwner.value = "anke";
+  fields.sliceOwner.value = "rene";
   slices.setOwnerFilter("unassigned");
   slices.handleSliceList(encodeSliceList({ total: 1, slices: [{ name: "Beta", sliceId: 6n, owner: "anke" }] }));
-  assert.equal(slices.getState().selected, "Beta", "a clean record opens the row the listing draws");
+  assert.equal(slices.getState().selected, 6n, "a clean record opens the row the listing draws");
 });
 
 // MY SLICES resolves to the reader's own name, the way MY TASKS resolves the
@@ -1500,7 +1660,7 @@ test("a headless read walks every page without touching the register", async () 
 
   assert.deepEqual(Array.from(slices.getState().slices, (slice) => slice.name), ["Register row"],
     "the register's window is untouched");
-  assert.equal(slices.getState().selected, "Register row", "so is its selection");
+  assert.equal(slices.getState().selected, 5n, "so is its selection");
   assert.deepEqual({ ...slices.getFilters() }, { owner: null, query: "" }, "and its filter");
 });
 
@@ -1536,7 +1696,7 @@ test("creating a slice drops the filter that would hide it", async () => {
         generateCorrelationId: () => 7,
         roomAssets: new Map([[0n, new Map()]]),
         sendCreateAsset: (convId, type, parentType, parentId, preview, payload, correlationId, options) => {
-          options.onSuccess({});
+          options.onSuccess({ asset: { assetId: 50n } });
           return 1;
         },
         MAX_PREVIEW_LENGTH: 4096,
@@ -1549,9 +1709,11 @@ test("creating a slice drops the filter that would hide it", async () => {
   assert.equal(slices.filterActive(), true);
 
   slices.createSlice("Shard hardening");
+  slices.handleSliceList(encodeSliceList({ slices: [{ name: "Shard hardening", sliceId: 50n }] }));
+  await settleMicrotasks();
   assert.equal(slices.filterActive(), false, "the filter goes so the new slice is visible");
   assert.deepEqual({ ...slices.getFilters() }, { owner: null, query: "" });
-  assert.equal(slices.getState().selected, "Shard hardening");
+  assert.equal(slices.getState().selected, 50n);
 });
 
 test("a listing is announced only when it differs from the one before", () => {

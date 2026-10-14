@@ -237,8 +237,8 @@ Important constraints:
 
 ### Slice List
 
-A slice is an explicit work stream: an asset created by name whose members are
-the tasks, notes and files assigned to it. The server reads those assignments, so
+A slice is an explicit work stream: an asset created with a display name whose
+members are the tasks, notes and files assigned to it. The server reads those assignments, so
 `nrc slice list` is the authoritative answer to "what work is in flight" — it is
 not the CLI grouping tasks by project, and the CLI never assembles slices itself.
 
@@ -246,17 +246,24 @@ Command:
 
 ```bash
 nrc slice list
+nrc slice list --fields slice_id,name,members,open,blocked,last_moved_at
 ```
 
 Supported flags:
 
 - `--human` (switches from default JSON to a table)
 - `--include-closed`
+- `--fields <field,...>` (include `slice_id` when discovering IDs)
 
 Important constraints:
 
 - Closed slices are excluded by default. Use `--include-closed` to see them.
 - The JSON result is an object with a `slices` field, not a top-level array.
+- `slice_id` is the stable numeric asset ID. Names are display labels and may
+  repeat. Existing-slice commands require the ID, with no name fallback; inspect
+  matching records before choosing an ID when labels are ambiguous.
+- The protocol's list name query remains a case-insensitive substring search,
+  not an identity lookup. The CLI list does not expose a name-query flag.
 - Membership is the assignments, not the project label: a task, note or file is
   a member because it was assigned to the slice. A task can belong to several
   slices, and a slice can span projects.
@@ -313,39 +320,43 @@ Notes:
 ### Slice Get
 
 ```bash
-nrc slice get "Sharded Persistence"
+nrc slice get 2
 ```
 
 Returns one slice object with the same fields as a list entry, plus `outcome`,
-`closed_at` and `closed_by`. A name that does not exist returns a structured
+`closed_at` and `closed_by`. A slice ID that does not exist returns a structured
 `not_found` error.
 
 ### Slice Create, Assign, Unassign, Update, Close, Reopen, Delete
 
 ```bash
 nrc slice create "Sharded Persistence" --owner rene --outcome "Restart-safe shard persistence."
-nrc slice assign "Sharded Persistence" --task 42 --task 51 --note 331
-nrc slice assign "Sharded Persistence" --file 204
-nrc slice unassign "Sharded Persistence" --task 51
-nrc slice update "Sharded Persistence" --outcome "Restart-safe with no migration commands."
-nrc slice close "Sharded Persistence" --by rene
-nrc slice reopen "Sharded Persistence"
-nrc slice delete "Draft"
-nrc slice delete "Sharded Persistence" --force
+nrc slice assign 2 --task 42 --task 51 --note 331
+nrc slice assign 2 --file 204
+nrc slice unassign 2 --task 51
+nrc slice update 2 --name "Shard persistence rollout" --outcome "Restart-safe with no migration commands."
+nrc slice close 2 --by rene
+nrc slice reopen 2
+nrc slice delete 3
+nrc slice delete 2 --force
 ```
 
 Important constraints:
 
 - `create` is what makes a slice exist. It carries the name, and optionally the
-  owner and the outcome. A name that already exists is refused; use `update` for
-  the record or `assign` for members.
+  owner and the outcome. Duplicate display names are allowed, so repeating a
+  create is not idempotent. Capture the returned mutation `id`; the examples use
+  `2` for the created slice and `3` for a separate empty draft.
+- `get`, `members`, `assign`, `unassign`, `update`, `close`, `reopen` and `delete`
+  take the existing slice's stable numeric asset ID, never a name.
 - `assign` and `unassign` take `--task`, `--note` and `--file` with positive IDs,
   and any mix of them in one call. Assignment is the only membership: nothing
   joins by carrying a project label, and a task may be assigned to several
   slices. Assigning an ID that is already a member, or unassigning one that is
   not, is an error rather than a silent no-op.
-- `update` sends only the flags you pass. It requires at least one of `--owner`
-  or `--outcome`.
+- `update` sends only the flags you pass. It requires at least one of `--name`,
+  `--owner` or `--outcome`. `update <id> --name <label>` renames the existing
+  asset without changing its ID, memberships or links.
 - `close` records the act: it sets `closed_at` and, when given, `closed_by`.
   Closure is never derived from member statuses, so a slice whose members are all
   Done stays open until someone closes it.
@@ -359,7 +370,8 @@ Important constraints:
   carries nothing is deleted without the flag. Deleting cannot be undone —
   closure can, with `reopen`.
 - `--outcome` is bounded by 2048 bytes and the slice name by 128.
-- An empty name is refused: a slice needs an identity to be addressed by.
+- An empty display name is refused. Valid previews and versions and protocol
+  byte-length validation remain required on create and update.
 
 Each mutation returns the standard mutation envelope:
 
@@ -375,12 +387,12 @@ A delete reports how much it released:
 
 ### Reading slice membership
 
-`nrc slice members <name>` resolves the slice's `member-of` edges into the
+`nrc slice members <id>` resolves the slice's `member-of` edges into the
 entities behind them, in the order they were assigned:
 
 ```bash
-nrc slice members "Sharded Persistence"
-nrc slice members "Sharded Persistence" --fields kind,id,title
+nrc slice members 11
+nrc slice members 11 --fields kind,id,title
 ```
 
 ```json

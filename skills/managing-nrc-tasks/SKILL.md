@@ -68,7 +68,7 @@ nrc task list --blocked
 nrc task list --ready
 nrc slice list
 nrc slice list --include-closed
-nrc slice get "Marketplace"
+nrc slice get 11
 nrc edge list
 ```
 
@@ -89,12 +89,19 @@ Examples:
 
 ## Slice Queries
 
-A slice is an explicit work stream. It is created by name, and its members are
-the tasks, notes and files assigned to it. The server reads those assignments, so
+A slice is an explicit work stream. It is created with a display name, and its
+members are the tasks, notes and files assigned to it. The server reads those assignments, so
 `nrc slice list` is the authoritative answer to "what work is in flight" — do not
 answer that by listing tasks and grouping them yourself, and never derive
 membership from project labels or titles. A task can belong to more than one
 slice, and a slice can span projects.
+
+Existing slices are addressed only by stable numeric asset ID, with no name
+fallback. Display names may repeat. Discover IDs with
+`nrc slice list --fields slice_id,name` (add `--include-closed` for closed work).
+List name queries remain case-insensitive substring searches; inspect matching
+records before choosing an ID, and do not guess when duplicate labels are ambiguous.
+Use the returned mutation `id` after creation. The examples below use slice ID `11`.
 
 Use slices when the question is about work streams, load, or staleness:
 
@@ -102,42 +109,45 @@ Use slices when the question is about work streams, load, or staleness:
 - `Which work streams are stalled or overloaded?` → `nrc slice list`, then read
   `open`, `blocked` and `last_moved_at`
 - `Which work is in no slice?` → `unassigned_tasks` in `nrc slice list`
-- `What is the outcome of the X work stream?` → `nrc slice get "X"`
-- `What is in the X work stream?` → `nrc slice members "X"`
-- `Close the X work stream` → `nrc slice close "X"`
-- `Put task 42 into the X work stream` → `nrc slice assign "X" --task 42`
-- `Delete the X work stream` → `nrc slice delete "X"` (see the delete rule below)
+- `What is the outcome of the X work stream?` → `nrc slice get <id>`
+- `What is in the X work stream?` → `nrc slice members <id>`
+- `Close the X work stream` → `nrc slice close <id>`
+- `Put task 42 into the X work stream` → `nrc slice assign <id> --task 42`
+- `Delete the X work stream` → `nrc slice delete <id>` (see the delete rule below)
 
 ```bash
 nrc slice list
 nrc slice list --include-closed
-nrc slice list --fields name,members,open,blocked,last_moved_at
-nrc slice get "Marketplace"
-nrc slice members "Marketplace"
-nrc slice members "Marketplace" --fields kind,id,title
+nrc slice list --fields slice_id,name,members,open,blocked,last_moved_at
+nrc slice get 11
+nrc slice members 11
+nrc slice members 11 --fields kind,id,title
 nrc slice create "Marketplace" --owner rene --outcome "Pricing agreed and shipped."
-nrc slice assign "Marketplace" --task 42 --task 51 --note 331
-nrc slice assign "Marketplace" --file 204
-nrc slice unassign "Marketplace" --task 51
-nrc slice update "Marketplace" --outcome "Pricing agreed, shipped, and measured."
-nrc slice close "Marketplace" --by rene
-nrc slice reopen "Marketplace"
-nrc slice delete "Marketplace"
-nrc slice delete "Marketplace" --force
+nrc slice assign 11 --task 42 --task 51 --note 331
+nrc slice assign 11 --file 204
+nrc slice unassign 11 --task 51
+nrc slice update 11 --name "Marketplace rollout" --outcome "Pricing agreed, shipped, and measured."
+nrc slice close 11 --by rene
+nrc slice reopen 11
+nrc slice delete 11
+nrc slice delete 11 --force
 ```
 
 Rules that differ from tasks:
 
 - **A slice must exist before anything is assigned to it.** Create it first; an
-  unknown name is an error, not an implicitly created slice.
+  unknown ID is an error, not an implicitly created slice.
 - **Assignment is the only membership.** A task joins a slice by being assigned
   to it (`--task`), a note or file likewise (`--note`, `--file`). Nothing joins
   by carrying a project label, and a project label alone never makes a slice.
 - **One task, several slices.** Assignment is not exclusive; do not assume a task
   belongs to one work stream, and never unassign it from one to move it to
   another.
-- **`create` is not idempotent.** Creating a name that already exists is refused;
-  use `update` for the record and `assign` for members.
+- **`create` is not idempotent.** Repeating a display name creates a separate
+  asset. Use `update <id> --name <label>` to rename an existing slice without
+  changing its ID, memberships or links; use `assign <id>` for members.
+  Valid previews and versions, nonempty names (at most 128 bytes) and protocol
+  byte-length limits still apply; outcomes are bounded by 2048 bytes.
 - **Closure is an act, not a derivation.** A slice whose members are all Done
   stays open until someone closes it, and a slice can be closed with work still
   open. Never infer slice state from member statuses; read `closed`.
@@ -166,13 +176,13 @@ about individual tasks inside a repository or module rather than a work stream.
 
 ### Reading membership
 
-`nrc slice members <name>` is the way to read what a slice carries. It resolves
+`nrc slice members <id>` is the way to read what a slice carries. It resolves
 each `member-of` edge into the entity behind it and reports the kind, the ID, the
 title and the state that kind has:
 
 ```bash
-nrc slice members "Marketplace"
-nrc slice members "Marketplace" --fields kind,id,title
+nrc slice members 11
+nrc slice members 11 --fields kind,id,title
 ```
 
 ```json
@@ -354,7 +364,7 @@ For read queries, answer with the relevant tasks, reminders, blockers, or counts
 
 For create or update actions, report the result succinctly with task IDs or reminder IDs.
 
-In NRC chat messages, use typed references: `[task:42]` for tasks and `[note:456]` for notes. Preserve the exact decimal ID, including 64-bit IDs; never round it through a floating-point number. Write these tokens as plain message text, not inside Markdown backticks or links, so they remain clickable. The `#` title/ID picker is a client UI aid; agents send the complete token directly. Legacy `#42` task references still work, but prefer the typed format for new messages. Work slices have no typed reference token: name a slice in prose, and read it with `nrc slice get`.
+In NRC chat messages, use typed references: `[task:42]` for tasks and `[note:456]` for notes. Preserve the exact decimal ID, including 64-bit IDs; never round it through a floating-point number. Write these tokens as plain message text, not inside Markdown backticks or links, so they remain clickable. The `#` title/ID picker is a client UI aid; agents send the complete token directly. Legacy `#42` task references still work, but prefer the typed format for new messages. Work slices have no typed reference token: give the display name and numeric ID in prose, and read the record with `nrc slice get <id>`.
 
 Typed task and note references resolve workspace-wide, independently of the chat room. This is a chat text convention, not a change to CLI ID arguments or graph endpoint types.
 
@@ -365,8 +375,8 @@ Examples:
 - `Task [task:123] is blocked by [task:98] Marketplace: Update API schema.`
 - `Created reminder #77: "Review deploy" due 2025-12-31 23:59`
 - `Reminder #77 state is LATE (passed deadline)
-- `Marketplace is open, 8 open of 14 members, 2 blocked, last moved 2h ago.`
-- `Marketplace has 14 members: 11 tasks, 2 notes and 1 file.`
+- `Marketplace (slice 11) is open, 8 open of 14 members, 2 blocked, last moved 2h ago.`
+- `Marketplace (slice 11) has 14 members: 11 tasks, 2 notes and 1 file.`
 
 The backticks above delimit documentation examples only; omit them in actual NRC chat messages.
 

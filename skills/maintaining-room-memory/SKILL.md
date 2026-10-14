@@ -143,11 +143,20 @@ Use relation types deliberately:
 For note memory, `references`, `derived-from`, and `supersedes` are usually the most valuable.
 
 Slice membership is not a loose relationship. When a note is part of a work slice, assign it with
-`nrc slice assign "<slice>" --note <id>`; use the corresponding `--task` or `--file` flag for those
+`nrc slice assign <slice-id> --note <id>`; use the corresponding `--task` or `--file` flag for those
 kinds. Only the resulting `member-of` edge makes the entity appear under the slice UI's TASKS,
 NOTES, or FILES section and contribute to its member counters. A `related-to` edge appears only as
-a link and does not make the note a slice member. Use `nrc slice unassign` to remove membership;
-do not create, replace, or delete slice-membership edges through generic edge commands.
+a link and does not make the note a slice member. Use `nrc slice unassign <slice-id>` with the
+member flag to remove membership; do not create, replace, or delete slice-membership edges
+through generic edge commands.
+
+Discover stable numeric slice asset IDs with `nrc slice list --fields slice_id,name`;
+add `--include-closed` when needed. Display names may repeat, and list name queries
+are substring searches, not identity lookups. Existing-slice commands take IDs
+only, with no name fallback. `nrc slice create <name>` takes a display name;
+`nrc slice update <slice-id> --name <label>` renames without changing memberships
+or links. Valid previews and versions, nonempty names and protocol byte-length
+limits still apply.
 
 For ordinary `edge` and `graph` commands, endpoint types are only `asset` and `task`. Notes are assets, so use `--source-type asset` or `--target-type asset` for note IDs. Atomic transaction JSON additionally accepts `note` as an alias for an asset endpoint.
 

@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261014sliceheader3";
+const CACHE_NAME = "nrc-terminal-20261014sliceids1";
 
 const APP_SHELL = [
   "./",
@@ -28,7 +28,7 @@ const APP_SHELL = [
   "./transactions.js?v=20260925inline1",
   "./edges.js?v=20260924slicelive1",
   "./files.js?v=20261008files1",
-  "./links-ui.js?v=20260929prefetch1",
+  "./links-ui.js?v=20261014sliceids1",
   "./inspector.js?v=20261012overview2",
   "./view-manager.js?v=20261012overview1",
   "./list-navigation.js?v=20260805b",
@@ -48,7 +48,7 @@ const APP_SHELL = [
   "./appointment-notify.js?v=20260927appointment2",
   "./reminder-notify.js?v=20260923attention7",
   "./task-query.js?v=20260927calendar8",
-  "./slices.js?v=20261014sliceheader3",
+  "./slices.js?v=20261014sliceids1",
   "./overview.js?v=20261013overviewactions2",
   "./note-html.js?v=20261007fragments1",
   "./notes.js?v=20261013loading1",
@@ -56,7 +56,7 @@ const APP_SHELL = [
   "./ai.js?v=20261008description1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20261013retaineddm1",
-  "./app.js?v=20261013fold1",
+  "./app.js?v=20261014sliceids1",
   "./customers.js?v=20261013loading1",
   "./mobile-shell.js?v=20260914chats1",
   "./latency-worker.js",

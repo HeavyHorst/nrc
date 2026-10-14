@@ -81,7 +81,7 @@ try {
     const assets = new Map();
     const tasks = new Map();
     for (const id of [5n, 6n]) {
-      assets.set(id, { assetId: id, assetType: 11, preview: JSON.stringify({ version: 1, name: id === 5n ? "Alpha" : "Beta" }) });
+      assets.set(id, { assetId: id, assetType: 11, preview: JSON.stringify({ version: 1, name: id === 5n ? "Alpha" : "Beta", owner: "tester" }) });
     }
     for (const id of [1n, 2n, 3n]) {
       tasks.set(id, { id, convId: 0n, title: `Member task ${id}`, status: 1, priority: Number(id), color: 0, createdAt: stamp + id, attachments: [], assignee: "tester", project: "NRC" });
@@ -121,7 +121,7 @@ try {
           window.releaseSliceAsset = () => {
             window.delayedSliceAsset = null;
             window.releaseSliceAsset = null;
-            options?.onSuccess?.({ asset });
+            options?.onSuccess?.({ asset: assets.get(assetId) });
           };
           return 1;
         }
@@ -139,9 +139,9 @@ try {
       window.NRCSlices.handleSliceList(sliceListFrame({
         correlationId,
         slices: [
-          { name: "Alpha", sliceId: 5n, owner: "tester", todo: 3, notes: 2, files: 2 },
+          { name: window.listedSliceName ?? JSON.parse(assets.get(5n).preview).name, sliceId: 5n, owner: "tester", todo: 3, notes: 2, files: 2 },
           { name: "Beta", sliceId: 6n, owner: "tester", todo: 2 },
-        ],
+        ].filter(slice => slice.name.includes(NRCSlices.getFilters().query)),
       }));
     };
     setTaskGrouping("slices");
@@ -177,7 +177,7 @@ try {
   await personEditor().getByRole("option", { name: "anna", exact: true }).click();
   assert.equal(await page.locator("#sliceOwner").inputValue(), "anna");
   assert.equal(await page.evaluate(() => NRCSlices.recordDirty()), true);
-  assert.equal(await page.evaluate(() => JSON.parse(NRCAssets.roomAssets.get(0n).get(5n).preview).owner ?? ""), "", "selection does not persist the slice before SAVE");
+  assert.equal(await page.evaluate(() => JSON.parse(NRCAssets.roomAssets.get(0n).get(5n).preview).owner ?? ""), "tester", "selection does not persist the slice before SAVE");
   await page.evaluate(() => NRCSlices.render());
   assert.equal(await ownerButton().textContent(), "anna", "a refresh retains the form draft and its visible value");
   await ownerButton().click();
@@ -238,12 +238,12 @@ try {
     open: document.activeElement?.getAttribute?.("data-member-open") ?? null,
     entity: window.NRCInspector.current() ? `${window.NRCInspector.current().type}:${window.NRCInspector.current().id}` : null,
   }));
-  const selectedSlice = () => page.locator('#sliceRegisterList [aria-pressed="true"]').getAttribute("data-slice-name");
+  const selectedSlice = () => page.locator('#sliceRegisterList [aria-pressed="true"]').getAttribute("data-slice-id");
 
   // The register walks between slices and keeps the record that belongs to the row.
-  assert.equal(await selectedSlice(), "Alpha", "the listing preselects its first slice");
+  assert.equal(await selectedSlice(), "5", "the listing preselects its first slice");
   await page.evaluate(() => { window.delayedSliceAsset = 6n; });
-  await page.locator('#sliceRegisterList [data-slice-name="Alpha"]').focus();
+  await page.locator('#sliceRegisterList [data-slice-id="5"]').focus();
   await page.keyboard.press("ArrowDown");
   assert.deepEqual(await page.locator("#sliceRecord").evaluate((record) => ({
     heading: record.querySelector("h2")?.textContent,
@@ -253,10 +253,10 @@ try {
   await page.evaluate(() => window.releaseSliceAsset());
   await page.waitForFunction(() => document.querySelector("#sliceRecord h2")?.textContent === "Beta");
   assert.equal(await page.locator("#sliceRecord").evaluate(record => record.inert), false);
-  assert.equal(await selectedSlice(), "Beta");
+  assert.equal(await selectedSlice(), "6");
   await page.keyboard.press("ArrowUp");
   await page.waitForFunction(() => document.querySelector("#sliceRecord h2")?.textContent === "Alpha");
-  assert.equal(await selectedSlice(), "Alpha", "the register walks back");
+  assert.equal(await selectedSlice(), "5", "the register walks back");
   await page.waitForFunction(() => document.querySelectorAll("#sliceRecord .slice-member").length === 7);
 
   // A click on any column of a member row opens it; the arrow then walks the same
@@ -300,13 +300,13 @@ try {
   await ownerButton().click();
   await page.keyboard.press("ArrowDown");
   assert.equal(await personSearch().evaluate(input => input === document.activeElement), true, "the picker keeps the arrow keys");
-  assert.equal(await selectedSlice(), "Alpha", "a field never moves the register");
+  assert.equal(await selectedSlice(), "5", "a field never moves the register");
   await page.keyboard.press("Escape");
   await page.locator("#sliceRecord .slice-member[data-member-task='3'] .slice-member-open").focus();
   await page.keyboard.press("ArrowDown");
   await page.waitForTimeout(100);
   assert.deepEqual(await activeMember(), { open: "task:3", entity: "file:302" }, "the last member row holds the walk");
-  assert.equal(await selectedSlice(), "Alpha", "a member table never moves the register");
+  assert.equal(await selectedSlice(), "5", "a member table never moves the register");
 
   // A table the reader reached with Tab is the table the arrows continue in, even
   // when the click that follows lands on the record itself.
@@ -318,7 +318,7 @@ try {
 
   // The member the reader opened belongs to one slice: another slice's record
   // has no walk of its own until a row of its own is opened.
-  await page.locator('#sliceRegisterList [data-slice-name="Beta"]').click();
+  await page.locator('#sliceRegisterList [data-slice-id="6"]').click();
   await page.waitForFunction(() => document.querySelector("#sliceRecord h2")?.textContent === "Beta");
   const beforeSliceChange = (await activeMember()).entity;
   await page.locator("#sliceRecord .slice-facts").click();
@@ -335,7 +335,7 @@ try {
   // a modal that owns the keyboard while it is open. Closing it returns to the
   // member table, which keeps walking; the drilled-past register does not move.
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator('#sliceRegisterList [data-slice-name="Alpha"]').click();
+  await page.locator('#sliceRegisterList [data-slice-id="5"]').click();
   await page.waitForFunction(() => document.querySelector("#sliceRecord h2")?.textContent === "Alpha");
   await page.waitForFunction(() => document.querySelectorAll("#sliceRecord .slice-member").length === 7);
 
@@ -370,7 +370,7 @@ try {
   await page.keyboard.press("ArrowDown");
   await page.waitForFunction(() => window.NRCInspector.current()?.id === 2n);
   assert.equal((await activeMember()).entity, "task:2", "the phone drill-in still walks the member tables");
-  assert.equal(await selectedSlice(), "Alpha", "the drilled-past register does not move");
+  assert.equal(await selectedSlice(), "5", "the drilled-past register does not move");
   await page.evaluate(() => NRCInspector.close());
   for (const theme of ["white", "matte-black"]) {
     for (const width of [1600, 390]) {
@@ -391,8 +391,73 @@ try {
       await page.keyboard.press("Escape");
     }
   }
+
+  // A peer rename changes the label, not the record or the draft being edited.
+  for (const theme of ["white", "matte-black"]) {
+    for (const width of [1600, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      const name = `Renamed ${theme} ${width}`;
+      await page.locator("#sliceOutcome").fill("Keep my unsaved outcome.");
+      await page.evaluate(() => NRCSlices.setQuery(NRCSlices.selectedSlice().name));
+      await page.evaluate(name => {
+        const current = NRCAssets.roomAssets.get(0n).get(5n);
+        const record = JSON.parse(current.preview);
+        storeAsset({ ...current, convId: 0n, preview: JSON.stringify({ ...record, name }) }, "mutation", 0);
+      }, name);
+      assert.equal(await page.locator("#sliceRecord h2").textContent(), name, "the broadcast updates the open label immediately");
+      assert.equal(await selectedSlice(), "5");
+      await page.evaluate(() => NRCSlices.requestList({ force: true }));
+      await page.waitForFunction(() => !document.querySelector("#sliceRecord").inert);
+      assert.equal(await page.locator("#sliceOutcome").inputValue(), "Keep my unsaved outcome.", "the listing keeps the draft after a peer rename");
+      assert.equal(await page.evaluate(() => String(NRCSlices.selectedSlice().sliceId)), "5");
+      assert.equal(await page.locator("#sliceRecord .slice-member").count(), 7);
+      assert.equal(await page.locator("#sliceRegisterList .slice-row").count(), 0, "the renamed slice no longer matches the old-name filter");
+      await page.evaluate(() => NRCSlices.resetFilters());
+      assert.equal(await selectedSlice(), "5", "the same selected record rejoins the unfiltered register");
+    }
+  }
+
+  // A reconnect can supply a new listing while the full cached record is old.
+  await page.evaluate(() => {
+    window.listedSliceName = "Renamed while offline";
+    window.delayedSliceAsset = 5n;
+    NRCSlices.requestList({ force: true });
+  });
+  assert.equal(await page.locator('#sliceRecord [data-slice-action="save"]').isDisabled(), true);
+  assert.equal(await page.locator('#sliceRecord [data-slice-action="close"]').isDisabled(), true);
+  assert.equal(await page.locator("#sliceOutcome").inputValue(), "Keep my unsaved outcome.");
+  await page.evaluate(() => {
+    const current = NRCAssets.roomAssets.get(0n).get(5n);
+    const record = JSON.parse(current.preview);
+    storeAsset({ ...current, preview: JSON.stringify({ ...record, name: window.listedSliceName }) }, "cache");
+    window.releaseSliceAsset();
+  });
+  await page.waitForFunction(() => !document.querySelector('#sliceRecord [data-slice-action="save"]').disabled);
+  assert.equal(await page.locator("#sliceRecord h2").textContent(), "Renamed while offline");
+  assert.equal(await page.locator("#sliceOutcome").inputValue(), "Keep my unsaved outcome.");
+
+  // Identical labels still identify different rows, members and keyboard targets.
+  await page.locator("#sliceOutcome").fill("");
+  await page.evaluate(() => {
+    window.listedSliceName = "Beta";
+    const current = NRCAssets.roomAssets.get(0n).get(5n);
+    storeAsset({ ...current, preview: JSON.stringify({ version: 1, name: "Beta" }) }, "mutation", 0);
+    NRCSlices.requestList({ force: true });
+  });
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.locator('#sliceRegisterList [data-slice-id="5"]').focus();
+  await page.keyboard.press("ArrowDown");
+  await page.waitForFunction(() => NRCSlices.getState().detailSliceId === 6n);
+  assert.equal(await selectedSlice(), "6");
+  assert.equal(await page.locator("#sliceRecord h2").textContent(), "Beta");
+  assert.equal(await page.locator("#sliceRecord .slice-member").count(), 2);
+  await page.keyboard.press("ArrowUp");
+  await page.waitForFunction(() => NRCSlices.getState().detailSliceId === 5n);
+  assert.equal(await selectedSlice(), "5");
+  assert.equal(await page.locator("#sliceRecord .slice-member").count(), 7);
   assert.deepEqual(errors, []);
-  console.log("PASS: register and member/note/file arrows walk and open, boundaries hold, fields and the register keep their keys, and a walk belongs to the slice it was opened in");
+  console.log("PASS: slice keyboard navigation, member selection, owner editing and peer renames preserve drafts in both themes at desktop/mobile widths");
 } finally {
   await browser.close();
 }

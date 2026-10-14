@@ -174,7 +174,7 @@ func TestDecodeTaskSliceListRejectsMalformedFrames(t *testing.T) {
 		t.Fatal("accepted an unknown slice flag")
 	}
 
-	// A slice name over the project limit cannot be addressed by a task label.
+	// Slice display names retain the protocol byte limit; asset IDs identify slices.
 	oversizedName := bytes.NewBuffer(nil)
 	writeSliceFrame(oversizedName, TaskSlice{Name: string(make([]byte, MaxProjectLength+1))}, 0, SliceCursor{}, 1, 0, 0)
 	if _, err := DecodeTaskSliceList(oversizedName.Bytes()); err == nil {

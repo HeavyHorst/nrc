@@ -1399,6 +1399,7 @@ async function connectWebSocket() {
     serverReady = false; // Reset server ready flag
     window.NRCCalendar?.disconnect();
     window.NRCOverview?.disconnect();
+    window.NRCSlices?.disconnect();
     window.NRCAppointmentNotify?.disconnect();
     logSystem("CONNECTED; WAITING FOR SERVER READY", "websocket");
 
@@ -1441,6 +1442,7 @@ async function connectWebSocket() {
     serverReady = false; // Reset server ready flag
     window.NRCCalendar?.disconnect();
     window.NRCOverview?.disconnect();
+    window.NRCSlices?.disconnect();
     window.NRCAppointmentNotify?.disconnect();
     window.NRCCustomers?.onDisconnect();
     pendingInitialization = null; // Clear any pending initialization

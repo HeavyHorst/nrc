@@ -92,7 +92,11 @@
   let listSignature = null;
   let detailGeneration = 0;
   let detailLoading = false;
+  let recordRefreshRequired = false;
   let selectionGeneration = 0;
+  let explicitSelection = false;
+  // A dirty record can outlive its filtered register row.
+  let retainedSlice = null;
   // What the record's fields were last painted with, so a later render can tell
   // the reader's text from the record's own value.
   let paintedFields = null;
@@ -147,7 +151,7 @@
     // carries the identity but is not focusable. The status token is its own
     // control, so it carries its member's identity the same way.
     const key = focused && container.contains(focused) ?
-      ["id", "data-slice-name", "data-member-open", "data-member-status"].find((name) => focused.hasAttribute(name)) : null;
+      ["id", "data-slice-id", "data-member-open", "data-member-status"].find((name) => focused.hasAttribute(name)) : null;
     const value = key && focused.getAttribute(key);
     container.innerHTML = markup;
     container.nrcMarkup = markup;
@@ -350,6 +354,7 @@
   function setOwnerFilter(owner) {
     const next = owner ? String(owner) : null;
     if (state.filters.owner === next) return Promise.resolve(false);
+    explicitSelection = false;
     state.filters.owner = next;
     syncFilterControls();
     return requestList({ force: true });
@@ -358,6 +363,7 @@
   function setQuery(query) {
     const next = String(query ?? "");
     if (state.filters.query === next) return Promise.resolve(false);
+    explicitSelection = false;
     state.filters.query = next;
     syncFilterControls();
     return requestList({ force: true });
@@ -365,6 +371,7 @@
 
   function resetFilters() {
     if (!filterActive()) return Promise.resolve(false);
+    explicitSelection = false;
     state.filters = { owner: null, query: "" };
     syncFilterControls();
     return requestList({ force: true });
@@ -653,7 +660,8 @@
 
     // The question is asked before the rows are replaced, because it reads the
     // record the rows still name.
-    const keepRecord = state.selected !== null && recordDirty();
+    const selected = selectedSlice();
+    const keepRecord = state.selected !== null && (recordDirty() || explicitSelection);
     state.slices = first ? request.slices : state.slices.concat(request.slices);
     state.total = total;
     state.hasMore = hasMore;
@@ -667,12 +675,13 @@
     state.mode = "ready";
     state.error = "";
     state.pageError = "";
-    // The record follows the register: a listing that no longer carries the open
-    // slice opens the first row it draws — unless the reader has unsaved work in
-    // that record, which is the reader's to keep.
-    const carried = state.selected !== null && state.slices.some((slice) => slice.name === state.selected);
+    // Background pages retain explicit navigation and drafts even outside the
+    // filter. An explicit filter change lets a clean record follow the register.
+    const carried = state.selected !== null && state.slices.some((slice) => slice.sliceId === state.selected);
+    retainedSlice = !carried && keepRecord ? selected : null;
+    if (retainedSlice) recordRefreshRequired = true;
     if (!carried && !keepRecord) {
-      state.selected = state.slices.length ? state.slices[0].name : null;
+      state.selected = state.slices.length ? state.slices[0].sliceId : null;
     }
     // Derived views (the attention register) re-read the work streams when they
     // change. The announcement is a courtesy, not a contract: a minimal harness
@@ -704,10 +713,22 @@
   // ---------------------------------------------------------------------------
 
   function selectedSlice() {
-    return state.slices.find((slice) => slice.name === state.selected) ?? null;
+    if (retainedSlice?.sliceId === state.selected) return retainedSlice;
+    return state.slices.find((slice) => slice.sliceId === state.selected) ?? null;
   }
 
-  function select(name, { focusDetail = false } = {}) {
+  async function select(sliceId, { focusDetail = false } = {}) {
+    const id = BigInt(sliceId);
+    const generation = ++selectionGeneration;
+    // Linked or newly created records need not be on the current filtered page.
+    if (!state.slices.some((slice) => slice.sliceId === id) && retainedSlice?.sliceId !== id) {
+      const listing = await readAll({ includeClosed: true });
+      if (generation !== selectionGeneration) return;
+      const slice = listing?.slices.find((slice) => slice.sliceId === id);
+      if (!slice) return;
+      retainedSlice = slice;
+    }
+    explicitSelection = true;
     const view = document.getElementById("sliceView");
     // On a phone the record is a drill-in behind the register, so a tap has to
     // reveal it even when the tapped row is the slice already selected: the
@@ -715,8 +736,9 @@
     if (view && window.matchMedia?.("(max-width: 768px)").matches) {
       view.dataset.sliceMobileDetail = "true";
     }
-    if (state.selected !== name) {
-      state.selected = name;
+    if (state.selected !== id) {
+      if (retainedSlice?.sliceId !== id) retainedSlice = null;
+      state.selected = id;
       state.createOpen = false;
       state.writeError = "";
       state.refreshError = "";
@@ -751,15 +773,16 @@
   // take the record — and whatever was typed into it — away without an answer.
   // The generation marks the newest request, so a second keypress while the
   // question is open cannot apply a second time.
-  async function selectGuarded(name) {
-    if (name === state.selected) {
-      select(name);
+  async function selectGuarded(sliceId) {
+    const id = BigInt(sliceId);
+    if (id === state.selected) {
+      await select(id);
       return true;
     }
     const generation = ++selectionGeneration;
     if (!(await confirmDiscardRecordEdits())) return false;
     if (generation !== selectionGeneration) return false;
-    select(name);
+    await select(id);
     return true;
   }
 
@@ -817,6 +840,7 @@
     const slice = selectedSlice();
     if (!slice) {
       detailLoading = false;
+      recordRefreshRequired = false;
       state.detailSliceId = null;
       state.detail = { mode: "idle", error: "" };
       state.members = { mode: "idle", tasks: [] };
@@ -832,6 +856,8 @@
     // the press lands on the old node, the release on the new one, and the click
     // is dispatched at the container, where it means nothing.
     const showing = state.detailSliceId === slice.sliceId && state.members.mode === "ready";
+    const cachedName = sliceRecordData(slice)?.name;
+    recordRefreshRequired = recordRefreshRequired || Boolean(cachedName && cachedName !== slice.name);
     detailLoading = true;
     if (!showing) {
       state.detailSliceId = null;
@@ -847,7 +873,19 @@
     // owner, the outcome and the closure, and the edges carry the members.
     const record = new Promise((resolve, reject) => {
       window.NRCAssets.requestAsset(0n, slice.sliceId, {
-        onSuccess: resolve,
+        force: recordRefreshRequired,
+        onSuccess: (detail) => {
+          if (generation === detailGeneration) {
+            recordRefreshRequired = false;
+            const current = sliceRecordData(slice);
+            if (current) {
+              slice.name = current.name;
+              slice.owner = current.owner ?? "";
+              slice.flags = current.closed ? slice.flags | FLAG_CLOSED : slice.flags & ~FLAG_CLOSED;
+            }
+          }
+          resolve(detail);
+        },
         onError: detail => reject(new Error(detail?.message || "Slice record could not be loaded.")),
       });
     });
@@ -1037,18 +1075,13 @@
       render();
       return;
     }
-    if (trimmed.length > MAX_PROJECT_LENGTH) {
+    if (encoder.encode(trimmed).length > MAX_PROJECT_LENGTH) {
       state.writeError = `A slice name is limited to ${MAX_PROJECT_LENGTH} bytes.`;
       render();
       return;
     }
     if (!connected()) {
       state.writeError = "OFFLINE — reconnect before creating a slice.";
-      render();
-      return;
-    }
-    if (state.slices.some((slice) => slice.name === trimmed)) {
-      state.writeError = "A slice with that name already exists.";
       render();
       return;
     }
@@ -1062,15 +1095,14 @@
     state.writeError = "";
     render();
     const sent = window.NRCAssets.sendCreateAsset(0n, SLICE_ASSET_TYPE, 0, 0n, preview, outcome, 0, {
-      onSuccess: () => {
+      onSuccess: (detail) => {
         state.writePending = false;
         state.createOpen = false;
-        state.selected = trimmed;
         // A slice is created without an owner, so a filter that would hide it is
         // dropped: the register has to show the slice that was just made.
         state.filters = { owner: null, query: "" };
         invalidate({ debounce: false });
-        loadDetail();
+        select(detail.asset.assetId);
         render();
       },
       onError: (detail) => {
@@ -1090,7 +1122,7 @@
   // has a record, so this is always an update.
   function saveRecord() {
     const slice = selectedSlice();
-    if (!slice) return;
+    if (!slice || recordRefreshRequired) return;
     if (!connected()) {
       state.writeError = "OFFLINE — reconnect before changing a slice.";
       render();
@@ -1103,15 +1135,15 @@
       owner,
       outcome,
       closed: isClosed(slice),
-      closedAt: 0,
-      closedBy: "",
+      closedAt: record.closed_at ?? 0,
+      closedBy: record.closed_by ?? "",
     };
     if (owner.length > MAX_OWNER_LENGTH || outcome.length > MAX_OUTCOME_LENGTH) {
       state.writeError = "Owner or outcome exceeds the record limit.";
       render();
       return;
     }
-    const preview = slicePreview(slice.name, next);
+    const preview = slicePreview(record.name ?? slice.name, next);
     if (encoder.encode(preview).length > window.NRCAssets.MAX_PREVIEW_LENGTH) {
       state.writeError = "Slice record exceeds the preview limit; shorten the outcome.";
       render();
@@ -1141,6 +1173,7 @@
   }
 
   function setClosed(slice, closed) {
+    if (recordRefreshRequired) return;
     const record = sliceRecordData(slice) ?? {};
     const owner = record.owner ?? slice.owner ?? "";
     const outcome = document.getElementById("sliceOutcome")?.value ?? record.outcome ?? "";
@@ -1151,7 +1184,7 @@
       closedAt: closed ? BigInt(Date.now()) * 1000000n : 0,
       closedBy: closed ? identity() : "",
     };
-    const preview = slicePreview(slice.name, next);
+    const preview = slicePreview(record.name ?? slice.name, next);
     if (encoder.encode(preview).length > window.NRCAssets.MAX_PREVIEW_LENGTH) {
       state.writeError = "Slice record exceeds the preview limit; shorten the outcome.";
       render();
@@ -1212,7 +1245,7 @@
     const sent = window.NRCAssets.sendDeleteAsset(0n, slice.sliceId, {
       onSuccess: () => {
         state.writePending = false;
-        if (state.selected === slice.name) state.selected = null;
+        if (state.selected === slice.sliceId) state.selected = null;
         // The record that was open is the one that was deleted, so a phone
         // returns to the register instead of the next slice's record.
         const view = document.getElementById("sliceView");
@@ -1239,8 +1272,8 @@
   // on screen as a record that no longer exists.
   function onAssetDeleted(convId, assetId) {
     if (convId !== state.roomId) return;
-    const deleted = state.slices.find((slice) => slice.sliceId === assetId);
-    if (deleted && deleted.name === state.selected) {
+    if (selectedSlice()?.sliceId === assetId) {
+      retainedSlice = null;
       state.selected = null;
       state.detailSliceId = null;
       state.detail = { mode: "idle", error: "" };
@@ -1271,6 +1304,16 @@
       return;
     }
     if (asset.assetType !== SLICE_ASSET_TYPE) return;
+    const slice = state.slices.find((slice) => slice.sliceId === asset.assetId) ??
+      (retainedSlice?.sliceId === asset.assetId ? retainedSlice : null);
+    if (slice) {
+      const current = sliceRecordData(slice);
+      if (current) {
+        slice.name = current.name;
+        slice.owner = current.owner ?? "";
+        slice.flags = current.closed ? slice.flags | FLAG_CLOSED : slice.flags & ~FLAG_CLOSED;
+      }
+    }
     invalidate();
     if (selectedSlice()?.sliceId === asset.assetId) render();
   }
@@ -1466,12 +1509,12 @@
   }
 
   function renderRow(slice) {
-    const selected = slice.name === state.selected;
+    const selected = slice.sliceId === state.selected;
     const classes = ["slice-row"];
     if (isClosed(slice)) classes.push("slice-row--closed");
     const idleHours = ageHours(slice.lastMovedAt);
     if (idleHours !== null && idleHours >= REGISTER_STALE_HOURS) classes.push("slice-row--cold");
-    return `<button type="button" class="${classes.join(" ")}" data-slice-name="${escape(slice.name)}" aria-pressed="${selected}">
+    return `<button type="button" class="${classes.join(" ")}" data-slice-id="${slice.sliceId}" aria-pressed="${selected}">
       <span class="slice-row-copy">
         <span class="slice-row-head">
           <strong class="slice-row-title">${escape(slice.name)}</strong>
@@ -1496,7 +1539,7 @@
     // buttons stay out of reach until it is loaded: saving an empty form would
     // erase what the slice already says.
     const ready = state.detail.mode === "ready";
-    const locked = state.writePending || !ready;
+    const locked = state.writePending || recordRefreshRequired || !ready;
 
     const outcome = fields.outcome;
     const owner = fields.owner;
@@ -1647,7 +1690,7 @@
       "kanban",
       active(),
       view?.style.display !== "none",
-      Boolean(view?.querySelector("[data-slice-name]")),
+      Boolean(view?.querySelector("[data-slice-id]")),
     );
   }
 
@@ -1658,18 +1701,18 @@
   }
 
   async function selectAdjacentSlice(direction) {
-    const rows = Array.from(document.querySelectorAll("#sliceRegisterList [data-slice-name]"));
+    const rows = Array.from(document.querySelectorAll("#sliceRegisterList [data-slice-id]"));
     let adjacent = window.NRCListNavigation.resolveAdjacent(
       rows,
-      state.selected,
+      state.selected?.toString() ?? null,
       direction,
-      (row) => row.dataset.sliceName,
+      (row) => row.dataset.sliceId,
     );
     // A filter can hide the slice the record is open on, and the record stays
     // where the reader left it: the walk enters the drawn rows from there
     // instead of stopping at a selection that is not among them.
     if (adjacent.status === "missing-selection") {
-      adjacent = window.NRCListNavigation.resolveAdjacent(rows, null, direction, (row) => row.dataset.sliceName);
+      adjacent = window.NRCListNavigation.resolveAdjacent(rows, null, direction, (row) => row.dataset.sliceId);
     }
     if (adjacent.status !== "target") {
       // The walk reached the end of what is drawn: when the server has more, the
@@ -1677,13 +1720,13 @@
       if (adjacent.status === "boundary" && direction > 0) loadMore();
       return false;
     }
-    const name = adjacent.row.dataset.sliceName;
+    const id = adjacent.row.dataset.sliceId;
     // The guard can decline, and a declined answer leaves the register where it
     // was: the row that would have moved is not focused either.
-    if (!(await selectGuarded(name))) return false;
+    if (!(await selectGuarded(id))) return false;
     // The register is re-rendered with the new selection, so the row that moved
     // is read back from the markup instead of reused from the old render.
-    const row = document.querySelector(`#sliceRegisterList [data-slice-name="${CSS.escape(name)}"]`);
+    const row = document.querySelector(`#sliceRegisterList [data-slice-id="${id}"]`);
     row?.focus({ preventScroll: true });
     row?.scrollIntoView({ block: "nearest" });
     return true;
@@ -1784,9 +1827,9 @@
     if (!view) return;
 
     view.addEventListener("click", (event) => {
-      const row = event.target.closest("[data-slice-name]");
+      const row = event.target.closest("[data-slice-id]");
       if (row) {
-        selectGuarded(row.dataset.sliceName);
+        selectGuarded(row.dataset.sliceId);
         return;
       }
       const action = event.target.closest("[data-slice-action]");
@@ -1900,8 +1943,12 @@
   }
 
   function onRoomSwitch() {
+    ++selectionGeneration;
     ++detailGeneration;
+    explicitSelection = false;
     detailLoading = false;
+    recordRefreshRequired = false;
+    retainedSlice = null;
     state.selected = null;
     state.detailSliceId = null;
     state.detail = { mode: "idle", error: "" };
@@ -1923,7 +1970,9 @@
   }
 
   function disconnect() {
+    ++selectionGeneration;
     ++detailGeneration;
+    recordRefreshRequired = true;
     detailLoading = false;
     if (pendingList) {
       clearTimeout(pendingList.timer);
@@ -1942,6 +1991,7 @@
 
   function setIncludeClosed(value) {
     if (state.includeClosed === value) return;
+    explicitSelection = false;
     state.includeClosed = value;
     requestList({ force: true });
   }

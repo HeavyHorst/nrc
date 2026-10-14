@@ -562,20 +562,8 @@ test_task_slice_listing_keeps_the_front_when_capped :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_slice_names_are_unique_and_records_must_carry_one :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	alpha := slice_test_slice_asset(77, `{"version":1,"name":"Alpha","owner":"rene","closed":false}`)
-	slice_test_add_asset(&conv, &alpha)
-
-	testing.expect(t, slice_name_taken(&conv, "Alpha", 0), "an existing slice name is taken")
-	testing.expect(t, !slice_name_taken(&conv, "Beta", 0), "an unused name is free")
-	testing.expect(t, !slice_name_taken(&conv, "Alpha", 77), "the slice itself does not block its own name")
-
-	// A write has to carry a usable record: the register skips one that does
-	// not, so accepting it would create an asset nothing can address.
+test_slice_records_must_carry_a_display_name :: proc(t: ^testing.T) {
+	// The register must be able to decode every accepted record.
 	_, ok := slice_preview_name(slice_test_bytes(`{"version":1,"name":"Beta"}`), context.temp_allocator)
 	testing.expect(t, ok, "a well-formed record names its slice")
 	broken_records := [4]string{`not json`, `{"name":"Beta"}`, `{"version":1,"name":""}`, `{"version":2,"name":"Beta"}`}

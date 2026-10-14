@@ -819,15 +819,12 @@ function navigateToTarget(convId, targetType, targetId, sourceType = 1) {
       window.NRCCustomers?.openRecord(asset.assetType === 9 ? "contact" : "activity", targetId);
       return;
     }
-    // A slice lives in the task view: switch there and select the record the
-    // register lists by name. An asset that has not arrived yet still counts as
-    // a slice when the register lists its id.
+    // A slice lives in the task view and is selected by its stable asset ID.
+    // Its display name need not be unique or present in the current register.
     const sliceId = asset ? asset.assetType === (window.NRCAssets?.AssetType?.Slice ?? 11) : Boolean(sliceName(targetId));
     if (sliceId) {
       window.NRCViewManager?.setActiveView?.("kanban");
-      const name = sliceName(targetId);
-      if (name) window.NRCSlices?.select?.(name, { focusDetail: true });
-      else window.NRCSlices?.ensureLoaded?.();
+      window.NRCSlices?.select?.(targetId, { focusDetail: true });
       return;
     }
     if (window.NRCInspector) {

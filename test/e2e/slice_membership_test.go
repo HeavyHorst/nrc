@@ -46,14 +46,14 @@ func listSlices(t *testing.T, conn *websocket.Conn, query protocol.SliceQuery, c
 	return result
 }
 
-func sliceNamed(t *testing.T, list *protocol.TaskSliceList, name string) protocol.TaskSlice {
+func sliceByID(t *testing.T, list *protocol.TaskSliceList, id uint64) protocol.TaskSlice {
 	t.Helper()
 	for _, item := range list.Slices {
-		if item.Name == name {
+		if item.SliceID == id {
 			return item
 		}
 	}
-	t.Fatalf("slice %q absent from %+v", name, list.Slices)
+	t.Fatalf("slice %d absent from %+v", id, list.Slices)
 	return protocol.TaskSlice{}
 }
 
@@ -123,7 +123,7 @@ func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 	defer func() { server.stop(t) }()
 	conn := workspaceDataClient(t, workspace, "alice", 31)
 
-	// Slice identity is mandatory, unique, and immutable.
+	// Display records must decode; names may repeat and change without changing IDs.
 	for i, preview := range []string{`not json`, `{"version":1,"name":""}`} {
 		correlation := uint32(0x51000000 + i)
 		if err := sendProtocolMessage(conn, protocol.C_CreateAsset, protocol.EncodeCreateAssetWithCorrelation(sliceRoomID, protocol.AssetTypeSlice, protocol.ParentTypeNone, 0, preview, "", correlation)); err != nil {
@@ -132,15 +132,11 @@ func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 		mustReadErrorResponse(t, conn, protocol.C_CreateAsset, correlation)
 	}
 	alpha := createSliceAsset(t, conn, "Alpha", "alice", false)
-	beta := createSliceAsset(t, conn, "Beta", "", false)
-	if err := sendProtocolMessage(conn, protocol.C_CreateAsset, protocol.EncodeCreateAssetWithCorrelation(sliceRoomID, protocol.AssetTypeSlice, protocol.ParentTypeNone, 0, `{"version":1,"name":"Alpha"}`, "", 0x51000002)); err != nil {
-		t.Fatal(err)
-	}
-	mustReadErrorResponse(t, conn, protocol.C_CreateAsset, 0x51000002)
+	beta := createSliceAsset(t, conn, "Alpha", "", false)
 	if err := sendProtocolMessage(conn, protocol.C_UpdateAsset, protocol.EncodeUpdateAssetWithCorrelation(sliceRoomID, alpha.AssetID, `{"version":1,"name":"Renamed","owner":"alice","closed":false}`, "", 0x51000003)); err != nil {
 		t.Fatal(err)
 	}
-	mustReadErrorResponse(t, conn, protocol.C_UpdateAsset, 0x51000003)
+	mustReadUntilOpcode(t, conn, protocol.S_AssetUpdated, 16)
 
 	tasks := make([]*protocol.Task, 5)
 	for i := range tasks {
@@ -181,21 +177,21 @@ func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 	if all.TotalCount != 2 || all.AssignedTasks != 4 || all.UnassignedTasks != 1 {
 		t.Fatalf("workspace counters: got total=%d assigned=%d unassigned=%d", all.TotalCount, all.AssignedTasks, all.UnassignedTasks)
 	}
-	a := sliceNamed(t, all, "Alpha")
+	a := sliceByID(t, all, alpha.AssetID)
 	if a.Backlog != 1 || a.Todo != 1 || a.InProgress != 1 || a.Done != 1 || a.Blocked != 0 || a.Notes != 1 || a.Files != 1 || a.TaskCount() != 4 || a.MemberCount() != 6 {
 		t.Fatalf("Alpha independent counters: %+v", a)
 	}
-	b := sliceNamed(t, all, "Beta")
+	b := sliceByID(t, all, beta.AssetID)
 	if b.Backlog != 1 || b.Todo != 0 || b.InProgress != 1 || b.Done != 0 || b.Blocked != 0 || b.Notes != 0 || b.Files != 0 || b.TaskCount() != 2 || b.MemberCount() != 2 {
 		t.Fatalf("Beta shared/reverse counters: %+v", b)
 	}
-	if got := listSlices(t, conn, protocol.SliceQuery{HasOwner: true, Owner: "alice", Limit: 10}, 102); got.TotalCount != 1 || got.Slices[0].Name != "Alpha" || got.AssignedTasks != 0 || got.UnassignedTasks != 0 {
+	if got := listSlices(t, conn, protocol.SliceQuery{HasOwner: true, Owner: "alice", Limit: 10}, 102); got.TotalCount != 1 || got.Slices[0].SliceID != alpha.AssetID || got.AssignedTasks != 0 || got.UnassignedTasks != 0 {
 		t.Fatalf("owner filter: %+v", got)
 	}
-	if got := listSlices(t, conn, protocol.SliceQuery{HasOwner: true, Owner: "", Limit: 10}, 103); got.TotalCount != 1 || got.Slices[0].Name != "Beta" {
+	if got := listSlices(t, conn, protocol.SliceQuery{HasOwner: true, Owner: "", Limit: 10}, 103); got.TotalCount != 1 || got.Slices[0].SliceID != beta.AssetID {
 		t.Fatalf("unowned filter: %+v", got)
 	}
-	if got := listSlices(t, conn, protocol.SliceQuery{HasName: true, Name: "lPh", Limit: 10}, 104); got.TotalCount != 1 || got.Slices[0].Name != "Alpha" {
+	if got := listSlices(t, conn, protocol.SliceQuery{HasName: true, Name: "lPh", Limit: 10}, 104); got.TotalCount != 1 || got.Slices[0].SliceID != beta.AssetID {
 		t.Fatalf("name filter: %+v", got)
 	}
 	page1 := listSlices(t, conn, protocol.SliceQuery{Limit: 1}, 105)
@@ -211,11 +207,11 @@ func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustReadUntilOpcode(t, conn, protocol.S_AssetUpdated, 16)
-	if got := listSlices(t, conn, protocol.SliceQuery{Limit: 10}, 107); got.TotalCount != 1 || got.Slices[0].Name != "Beta" {
+	if got := listSlices(t, conn, protocol.SliceQuery{Limit: 10}, 107); got.TotalCount != 1 || got.Slices[0].SliceID != beta.AssetID {
 		t.Fatalf("closed filter: %+v", got)
 	}
 	withClosed := listSlices(t, conn, protocol.SliceQuery{IncludeClosed: true, Limit: 10}, 108)
-	closedAlpha := sliceNamed(t, withClosed, "Alpha")
+	closedAlpha := sliceByID(t, withClosed, alpha.AssetID)
 	if !closedAlpha.IsClosed() || closedAlpha.Backlog != 0 || closedAlpha.Done != 2 {
 		t.Fatalf("closed/status-updated Alpha: %+v", closedAlpha)
 	}
@@ -230,7 +226,7 @@ func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 	server = startServerInWorkDir(t, workDir)
 	conn = workspaceDataClient(t, workspace, "alice", 31)
 	restored := listSlices(t, conn, protocol.SliceQuery{IncludeClosed: true, Limit: 10}, 109)
-	if restored.TotalCount != 2 || restored.AssignedTasks != 4 || restored.UnassignedTasks != 1 || sliceNamed(t, restored, "Alpha").Done != 2 || sliceNamed(t, restored, "Alpha").IsClosed() {
+	if restored.TotalCount != 2 || restored.AssignedTasks != 4 || restored.UnassignedTasks != 1 || sliceByID(t, restored, alpha.AssetID).Done != 2 || sliceByID(t, restored, alpha.AssetID).IsClosed() || sliceByID(t, restored, alpha.AssetID).Name != sliceByID(t, restored, beta.AssetID).Name {
 		t.Fatalf("restored slice semantics: %+v", restored)
 	}
 
@@ -240,7 +236,7 @@ func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 	}
 	mustReadUntilOpcode(t, conn, protocol.S_EdgeDeleted, 16)
 	unassigned := listSlices(t, conn, protocol.SliceQuery{Limit: 10}, 111)
-	if sliceNamed(t, unassigned, "Alpha").Done != 1 || unassigned.AssignedTasks != 4 || unassigned.UnassignedTasks != 1 {
+	if sliceByID(t, unassigned, alpha.AssetID).Done != 1 || unassigned.AssignedTasks != 4 || unassigned.UnassignedTasks != 1 {
 		t.Fatalf("unassign must update Alpha but preserve Beta's shared membership: %+v", unassigned)
 	}
 	if err := sendProtocolMessage(conn, protocol.C_DeleteAsset, protocol.EncodeDeleteAsset(sliceRoomID, alpha.AssetID)); err != nil {
@@ -252,7 +248,7 @@ func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 	server = startServerInWorkDir(t, workDir)
 	conn = workspaceDataClient(t, workspace, "alice", 31)
 	final := listSlices(t, conn, protocol.SliceQuery{IncludeClosed: true, Limit: 10}, 110)
-	if final.TotalCount != 1 || final.Slices[0].Name != "Beta" || final.AssignedTasks != 2 || final.UnassignedTasks != 3 || len(listTasks(t, conn, sliceRoomID).Tasks) != 5 {
+	if final.TotalCount != 1 || final.Slices[0].SliceID != beta.AssetID || final.AssignedTasks != 2 || final.UnassignedTasks != 3 || len(listTasks(t, conn, sliceRoomID).Tasks) != 5 {
 		t.Fatalf("slice deletion removed members or register is wrong: slices=%+v tasks=%+v", final, listTasks(t, conn, sliceRoomID).Tasks)
 	}
 	assets := listAssetsFull(t, conn, sliceRoomID)
@@ -266,7 +262,7 @@ func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 		t.Fatalf("member/slice assets after delete: note=%t file=%t alpha=%t", seenNote, seenFile, seenAlpha)
 	}
 	remainingEdges := listAllEdges(t, conn, sliceRoomID)
-	if len(remainingEdges) != 2 || sliceNamed(t, final, "Beta").Done != 1 || sliceNamed(t, final, "Beta").InProgress != 1 {
+	if len(remainingEdges) != 2 || sliceByID(t, final, beta.AssetID).Done != 1 || sliceByID(t, final, beta.AssetID).InProgress != 1 {
 		t.Fatalf("deleting Alpha changed Beta's memberships: edges=%+v slices=%+v", remainingEdges, final)
 	}
 	for _, edge := range remainingEdges {

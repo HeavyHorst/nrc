@@ -95,14 +95,23 @@ nrc file upload ./checklist.pdf --title "Rollout checklist"
 Use the IDs returned by these commands. The examples below assume task IDs `42`
 and `43`, note ID `81` and File record ID `91`. Replace them with your actual IDs.
 The File record ID is not the uploaded blob's `att_...` identifier.
-Choose a slice name that does not already exist:
+Create a slice with a display name, then use its returned numeric asset ID.
+Duplicate names are allowed. Replace `11` below with the created ID:
 
 ```sh
 nrc slice create "Customer rollout" --outcome "Customer can use the new release"
-nrc slice assign "Customer rollout" --task 42,43 --note 81 --file 91
-nrc slice members "Customer rollout"
-nrc slice get "Customer rollout"
+nrc slice list --fields slice_id,name
+nrc slice assign 11 --task 42,43 --note 81 --file 91
+nrc slice members 11
+nrc slice get 11
+nrc slice update 11 --name "Customer rollout phase 2"
 ```
+
+`get`, `members`, `assign`, `unassign`, `update`, `close`, `reopen` and `delete`
+take a stable numeric slice ID, never a name. List name queries remain
+case-insensitive substring searches; use the returned `slice_id` to address a
+match. Renaming preserves memberships and links. Names must remain nonempty and
+within the protocol's 128-byte limit; previews and versions must remain valid.
 
 These commands add membership links, not copies. The tasks keep their project
 labels and can belong to other slices. Use `slice unassign` to remove a member

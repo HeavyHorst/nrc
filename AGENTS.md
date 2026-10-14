@@ -220,9 +220,12 @@ fold their counters from those edges; nothing is derived twice.
   company through a member → company `MemberOf` edge, written by `nrc customer` and the customer
   editor; the slice register only folds `MemberOf` edges whose target is an `AssetType.Slice`, so a
   company target is skipped. Work links such as a company's notes or tasks stay `RelatedTo`.
-- **A slice name is its identity.** It is unique per conversation and fixed at creation: `create`
-  refuses a taken name, `update` refuses a rename, and a record that does not decode or carries no
-  name is refused rather than stored as an asset no command can address.
+- **A slice's identity is its stable numeric asset ID.** Duplicate display names are allowed.
+  `nrc slice create <name>` takes a display name; existing-slice commands take `<id>`, with no
+  name fallback. Discover IDs with `nrc slice list --fields slice_id,name`.
+  `nrc slice update <id> --name <label>` renames without changing memberships or links.
+  List name queries remain substring searches. Valid previews, versions, nonempty names and
+  protocol byte-length limits are still required.
 - **Relation and asset-type bounds follow the enums** (`min`/`max(pr.RelationType)`), never a
   literal. A literal bound once rejected `MemberOf` at the WAL and shut the server down on the first
   assign; the same shape appears in `protocol/graph_query.odin`, the AI sidecar's relation mask and

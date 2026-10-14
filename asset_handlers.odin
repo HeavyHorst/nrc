@@ -64,20 +64,14 @@ handle_create_asset :: proc(c: ^NRC_Connection, req: pr.CreateAssetRequest) {
 		}
 	}
 
-	// A slice is addressed by its name: the register selects by it, `slice get`
-	// resolves by it and `slice assign` takes it. Two slices with one name would
-	// make all three ambiguous, so the name is unique per conversation.
+	// Slice names are display labels; only the record format must be valid.
 	if req.asset_type == .Slice {
 		arena: virtual.Arena
 		if virtual.arena_init_growing(&arena) != nil do return
 		defer virtual.arena_destroy(&arena)
-		name, ok := slice_preview_name(req.preview, virtual.arena_allocator(&arena))
+		_, ok := slice_preview_name(req.preview, virtual.arena_allocator(&arena))
 		if !ok {
 			send_error_response(c, .C_CreateAsset, "Slice record must carry a version and a name", req.correlation_id)
-			return
-		}
-		if slice_name_taken(conv, name, 0) {
-			send_error_response(c, .C_CreateAsset, "A slice with that name already exists", req.correlation_id)
 			return
 		}
 	}
@@ -179,21 +173,14 @@ handle_update_asset :: proc(c: ^NRC_Connection, req: pr.UpdateAssetRequest) {
 		return
 	}
 
-	// A slice's name is its identity: the register selects by it, `slice get`
-	// resolves by it and `slice assign` takes it. The name is fixed at creation,
-	// so an update carries the record forward and cannot rename the slice or empty
-	// the identity that every command addresses it by.
+	// Renaming only changes a display label. Identity and memberships use asset IDs.
 	if existing.asset_type == .Slice {
 		arena: virtual.Arena
 		if virtual.arena_init_growing(&arena) != nil do return
 		defer virtual.arena_destroy(&arena)
-		name, ok := slice_preview_name(req.preview, virtual.arena_allocator(&arena))
+		_, ok := slice_preview_name(req.preview, virtual.arena_allocator(&arena))
 		if !ok {
 			send_error_response(c, .C_UpdateAsset, "Slice record must carry a version and a name", req.correlation_id)
-			return
-		}
-		if current, has_current := slice_preview_name(existing.preview, virtual.arena_allocator(&arena)); has_current && current != name {
-			send_error_response(c, .C_UpdateAsset, "A slice name is fixed at creation", req.correlation_id)
 			return
 		}
 	}

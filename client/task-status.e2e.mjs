@@ -86,7 +86,7 @@ try {
       [2n, { id: 2n, convId: 0n, title: "Member of the slice", status: 3, orderIndex: 1, priority: 96, color: 0, createdAt: stamp + 1n, attachments: [], assignee: "tester", project: "NRC" }],
     ]);
     const assets = new Map([
-      [5n, { assetId: 5n, assetType: 11, preview: JSON.stringify({ version: 1, name: "Alpha" }) }],
+      [5n, { assetId: 5n, assetType: 11, preview: JSON.stringify({ version: 1, name: "Alpha", owner: "tester" }) }],
     ]);
     // The register's cache holds its own copies: a surface reads the copy it has,
     // and only a task the register does not hold is fetched from the fixture's
@@ -332,7 +332,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => { setTaskGrouping("slices"); });
   // The record is a drill-in on a phone, so the register opens it first.
-  await page.locator('#sliceRegisterList [data-slice-name="Alpha"]').click();
+  await page.locator('#sliceRegisterList [data-slice-id="5"]').click();
   await page.waitForSelector('#sliceRecord .slice-member[data-member-task="1"] [data-member-status]');
   const phoneMemberToken = page.locator('#sliceRecord .slice-member[data-member-task="1"] [data-member-status]');
   assert.equal(await phoneMemberToken.isVisible(), true, "the member token stays on the phone");
