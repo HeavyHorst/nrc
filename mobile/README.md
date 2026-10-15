@@ -28,9 +28,11 @@ white on a dark padded tile for Android adaptive/themed launcher icons.
   nested lists, read-only task lists, links, tables and selectable code blocks.
 
 **This is not yet a production mobile messenger.** There is no durable outbox,
-FCM integration, notification permission flow, attachments, reactions, or read
-receipts. NRC binary image/attachment messages still direct users to the web client;
-Markdown-linked HTTPS images can be loaded explicitly in the transcript.
+FCM integration, notification permission flow, reactions, or read
+receipts. Current web-client image attachments display directly in the transcript;
+all file types have native Open/Save actions, subject to a compatible viewer app.
+Legacy chunked-image JSON is not assembled. Markdown-linked external HTTPS images
+can be loaded explicitly in the transcript.
 The UI does not claim that `sent` means the recipient read or received a message.
 Unacknowledged sends become `delivery unknown`; they are never automatically
 resent, because ephemeral sends cannot safely deduplicate and retained deduplication
@@ -67,7 +69,55 @@ HTTPS URLs are accepted, with no redirects and a separate unauthenticated client
 Requests time out after 15 seconds, downloads are capped at 8 MiB even without
 Content-Length, decode requests at 1024 × 1024, and the in-memory image cache at
 16 MiB; no disk image cache is configured. Failed images have an explicit retry.
-This is linked-image viewing, not an attachment uploader or authenticated file reader.
+These external Markdown images are separate from the NRC file-upload flow below.
+
+Version-1 NRC image attachment envelopes use a separate path: validated file IDs
+are resolved against the configured chat origin and workspace, never against an
+arbitrary URL supplied in a message. Visible attachments load automatically after
+chat authentication, using the proxy's normal Tailscale authorization (no bot secrets).
+Tap a loaded preview to enlarge it; Close or Android Back returns to chat.
+The same 8 MiB download/1024 × 1024 decode/16 MiB memory limits and no-redirect
+policy apply. Preview errors offer Retry; oversized attachments show the limit.
+The image cache is isolated per profile and authenticated username and is memory-only.
+Offline or storage-blocked sessions do not fetch image attachments. Their metadata
+and original message payload persist locally; image bytes are not saved for offline use.
+Old cached Markdown placeholders cannot restore their lost source without a fresh
+server-history fetch. This update preserves original live and retained Markdown payloads.
+
+## Files from the phone
+
+The paperclip offers **Photo or image** and **File** through Android's document
+picker, without broad storage permissions. The selected file is streamed into
+app-private temporary storage (maximum 100 MiB), then shown for confirmation;
+images have a local preview. Confirming streams multipart data to the same
+`POST /upload?workspace=…` endpoint as the web client and sends its version-1
+attachment envelope through NRC only after a successful, validated upload.
+Draft text is not cleared by attachment sends. Multipart progress is transport
+progress, not proof that a chat message has been acknowledged.
+File authorization remains the proxy's workspace-grant policy, as on the web;
+chat-target binding does not introduce DM-only file access controls.
+
+Transfers are foreground-only, cancellable and never retried automatically.
+Changing conversation/profile, disconnecting or backgrounding cancels an active
+transfer. Returning from the system picker can require reconnecting before Send
+becomes available; a different account/chat cannot receive the selected file.
+Cancellation after an upload reached the server may leave an unreferenced blob;
+it does not cause an automatic chat send or deletion of shared server data.
+
+**Open** downloads a bounded, complete file to app-private cache, then grants a
+temporary read-only content URI to Android's app chooser. **Save** downloads first,
+then uses Android's Create Document picker to choose a destination. PDF, audio,
+video, archives and other types are opened by compatible installed apps, not an
+embedded WebView or an in-chat media player. Missing viewers and access/storage
+errors are surfaced. Downloads are capped at 100 MiB, reject redirects/truncation
+and check the expected attachment size. Only one transfer runs at a time.
+Local staging and Save copies are cancellable too. A cancelled Save may leave a
+partial file at the chosen destination; the app reports that rather than claiming
+completion. A document provider that ignores thread interruption can delay cleanup;
+new file actions remain blocked until its streams have closed.
+Upload staging files are removed on completion/cancel; opened-file cache is
+replaced by the next download or app recreation. Explicitly saved copies remain
+at the user's chosen destination. Process death does not resume or resend transfers.
 
 ## Troubleshooting a connection
 

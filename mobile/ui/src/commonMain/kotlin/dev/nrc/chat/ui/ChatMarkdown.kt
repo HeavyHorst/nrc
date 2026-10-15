@@ -1,6 +1,7 @@
 package dev.nrc.chat.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -24,6 +25,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil3.ImageLoader
 import coil3.annotation.ExperimentalCoilApi
 import coil3.compose.AsyncImage
@@ -339,7 +342,7 @@ internal fun ChatMarkdown(content: String, imageLoader: ImageLoader, modifier: M
             tree.children.forEach { node -> MarkdownNode(MarkdownComponentModel(content, node, typography), components) }
             if (linkProblem) Text("This link cannot be opened safely.", color = scheme.onSurfaceVariant, fontSize = 12.sp)
             images.values.distinctBy { it.first }.filter { allowedLink(it.first, image = true) }.forEach { (url, alt) ->
-                MarkdownImage(url, alt, url in requested, imageLoader) { requested = requested + url }
+                ChatImage(url, alt, url in requested, imageLoader) { requested = requested + url }
             }
         }
     }
@@ -488,11 +491,12 @@ private fun MarkdownCode(code: String, language: String?, style: TextStyle) {
 }
 
 @Composable
-private fun MarkdownImage(url: String, alt: String, requested: Boolean, loader: ImageLoader, onLoad: () -> Unit) {
+internal fun ChatImage(url: String, alt: String, requested: Boolean, loader: ImageLoader, onLoad: () -> Unit) {
     val context = LocalPlatformContext.current
     var attempt by remember(url) { mutableStateOf(0) }
     var failed by remember(url, attempt) { mutableStateOf(false) }
     var loading by remember(url, attempt) { mutableStateOf(true) }
+    var expanded by remember(url) { mutableStateOf(false) }
     val request = remember(context, url, attempt) { ImageRequest.Builder(context).data(url)
         .size(Size(1024, 1024)).memoryCacheKey("$url:$attempt").build() }
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
@@ -502,9 +506,20 @@ private fun MarkdownImage(url: String, alt: String, requested: Boolean, loader: 
             else if (loading) Text("Loading image…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (requested && !failed) AsyncImage(model = request, imageLoader = loader, contentDescription = alt,
-            modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp)
+                .clickable(enabled = !loading, onClickLabel = "Open image") { expanded = true },
             onSuccess = { loading = false }, onError = { failed = true; loading = false })
         if (!requested) Text("External HTTPS content; loading shares your IP with its host.",
             fontSize = 11.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (expanded) Dialog(onDismissRequest = { expanded = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxWidth().fillMaxHeight(0.9f)) {
+            Column(Modifier.padding(16.dp)) {
+                Text(alt, maxLines = 2, style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = { expanded = false }) { Text("Close image") }
+                AsyncImage(model = request, imageLoader = loader, contentDescription = "Expanded image · $alt",
+                    modifier = Modifier.fillMaxWidth().weight(1f))
+            }
+        }
     }
 }

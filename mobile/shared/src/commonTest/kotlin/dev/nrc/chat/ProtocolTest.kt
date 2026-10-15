@@ -14,6 +14,8 @@ class ProtocolTest {
         assertEquals(17, message.sequence)
         assertEquals("bob", message.author)
         assertEquals("hé", message.text)
+        val markdown = hex("0066 0000000000000002 0000000000000012 0003 626f62 0000000000000009 01 0008 2a2a626f6c642a2a")
+        assertEquals("**bold**", (Protocol.decode(markdown) as Protocol.Incoming).message.text)
         incoming.indices.forEach { length -> assertFailsWith<IllegalArgumentException> { Protocol.decode(incoming.copyOf(length)) } }
         assertFailsWith<IllegalArgumentException> { Protocol.decode(incoming + byteArrayOf(0)) }
         val started = Protocol.decode(hex("0079 800000000000002a 0003 626f62 01 00 00 01020304")) as Protocol.DMStarted
@@ -60,9 +62,33 @@ class ProtocolTest {
         assertEquals(2L, page.id)
         assertEquals("0102030405060708090a0b0c0d0e0f10", page.messages.single().clientMessageId)
         assertEquals("hé", page.messages.single().text)
+        val markdownPage = frame.copyOf().apply { this[lastIndex - 5] = 1 }
+        assertEquals("hé", (Protocol.decode(markdownPage) as Protocol.Page).messages.single().text)
         assertFalse(page.ascending)
         assertFalse(page.hasMore)
         assertFailsWith<IllegalArgumentException> { Protocol.decode(frame.copyOf(frame.size - 1)) }
+    }
+
+    @Test fun webAttachmentsResolveOnlyAgainstTheChatOriginAndWorkspace() {
+        val id = "att_0123456789abcdef0123456789abcdef"
+        val envelope = """{"type":"attachment","version":1,"fileId":"$id","filename":"a & b.png","size":1234,"mimeType":"image/png","url":"/files/$id?filename=a+%26+b.png"}"""
+        val attachment = assertNotNull(ChatAttachment.parse(envelope))
+        val url = io.ktor.http.Url(attachment.fileUrl(Profile("https://nrc.example:8443/", "private_ws")))
+        assertEquals("nrc.example", url.host)
+        assertEquals(8443, url.port)
+        assertEquals("/files/$id", url.encodedPath)
+        assertEquals("private_ws", url.parameters["workspace"])
+        assertEquals("a & b.png", url.parameters["filename"])
+        assertEquals("true", url.parameters["inline"])
+        for (bad in listOf(
+            envelope.replace("/files/$id?", "https://evil.invalid/files/$id?"),
+            envelope.replace("filename=a+%26+b.png", "filename=other.png"),
+            envelope.replace("filename=a+%26+b.png", "filename=a+%26+b.png&workspace=other"),
+            envelope.replace("\"version\":1", "\"version\":2"),
+            envelope.replace("\"size\":1234", "\"size\":104857601"),
+            envelope.replace(id, "../secret")
+        )) assertNull(ChatAttachment.parse(bad))
+        assertFailsWith<IllegalArgumentException> { attachment.fileUrl(Profile("https://alice:password@nrc.example", "studio")) }
     }
 }
 

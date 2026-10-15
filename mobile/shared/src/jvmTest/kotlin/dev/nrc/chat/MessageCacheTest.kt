@@ -9,10 +9,51 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.nio.file.Files
 import kotlin.test.*
 
 class MessageCacheTest {
+    @Test fun liveAndRetainedAttachmentPayloadsSurviveSqliteReopenExactly() = runBlocking {
+        val directory = Files.createTempDirectory("nrc-attachment-cache").toFile()
+        val url = "jdbc:sqlite:${directory.resolve("history.db")}"
+        val profile = Profile("https://nrc.example", "studio")
+        val liveText = """{
+          "type": "attachment", "version": 1,
+          "fileId": "att_0123456789abcdef0123456789abcdef", "filename": "Bild 🌲.png",
+          "size": 80, "mimeType": "image/png",
+          "url": "/files/att_0123456789abcdef0123456789abcdef?filename=Bild+%F0%9F%8C%B2.png"
+        }"""
+        val retainedText = " \n$liveText\n "
+        fun DataOutputStream.string(value: String) {
+            val bytes = value.toByteArray(Charsets.UTF_8)
+            writeShort(bytes.size); write(bytes)
+        }
+        fun frame(opcode: Int, body: DataOutputStream.() -> Unit): ByteArray = ByteArrayOutputStream().also {
+            DataOutputStream(it).use { output -> output.writeShort(opcode); output.body() }
+        }.toByteArray()
+        val live = assertIs<Protocol.Incoming>(Protocol.decode(frame(102) {
+            writeLong(42); writeLong(7); string("peer"); writeLong(900); writeByte(1); string(liveText)
+        })).message
+        val retained = assertIs<Protocol.Page>(Protocol.decode(frame(159) {
+            writeLong(42); writeBoolean(false); writeBoolean(false); writeBoolean(false)
+            writeLong(8); writeLong(0); writeLong(8); writeInt(19); writeShort(1)
+            writeLong(42); writeLong(8); write(ByteArray(16) { (it + 1).toByte() })
+            string("peer"); writeLong(901); writeByte(1); string(retainedText)
+        })).messages.single()
+        var driver = JdbcSqliteDriver(url)
+        try {
+            ChatDatabase.Schema.create(driver)
+            SqliteMessageStore(driver).save(profile, CachedChat(messages = mapOf(42L to listOf(live, retained))))
+            driver.close(); driver = JdbcSqliteDriver(url)
+            val restored = assertNotNull(SqliteMessageStore(driver).load(profile)).messages[42]!!
+            assertEquals(listOf(liveText, retainedText), restored.map { it.text })
+            assertEquals(listOf(7L, 8L), restored.map { it.sequence })
+            assertEquals(listOf("peer", "peer"), restored.map { it.author })
+        } finally { driver.close(); directory.deleteRecursively() }
+    }
+
     @Test fun diskHistorySurvivesReopenAndRestoresOfflineWithoutResending() = runBlocking {
         val directory = Files.createTempDirectory("nrc-chat-cache").toFile()
         val url = "jdbc:sqlite:${directory.resolve("history.db")}"

@@ -7,13 +7,16 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Search
@@ -37,6 +40,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.ImageLoader
+import coil3.compose.AsyncImage
 import dev.nrc.chat.*
 import dev.nrc.chat.Retention
 import kotlinx.datetime.*
@@ -78,6 +83,18 @@ fun NrcApp(
     darkTheme: Boolean = false,
     onClearDiagnostics: () -> Unit = {},
     platformBackHandler: @Composable (Boolean, () -> Unit) -> Unit = { _, _ -> },
+    onPickAttachment: ((Boolean) -> Unit)? = null,
+    onOpenAttachment: ((ChatAttachment) -> Unit)? = null,
+    onSaveAttachment: ((ChatAttachment) -> Unit)? = null,
+    onCancelFileTransfer: () -> Unit = {},
+    pendingAttachment: AttachmentUpload? = null,
+    attachmentPreview: Any? = null,
+    canConfirmAttachment: Boolean = false,
+    onSendAttachment: () -> Unit = {},
+    onDismissAttachment: () -> Unit = {},
+    preparingAttachment: Boolean = false,
+    fileActionError: String? = null,
+    onDismissFileError: () -> Unit = {},
 ) {
     var settings by rememberSaveable { mutableStateOf(state.profile.server.isBlank()) }
     var diagnostics by rememberSaveable { mutableStateOf(false) }
@@ -142,16 +159,55 @@ fun NrcApp(
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     state.notice?.let { Notice(it, onDismissNotice) }
+                    if (preparingAttachment && state.fileTransfer == null) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
+                            Text("Preparing file on this device…", fontSize = 13.sp)
+                            TextButton(onClick = onCancelFileTransfer) { Text("Cancel transfer") }
+                        }
+                    }
+                    state.fileTransfer?.let { transfer ->
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
+                            Text("${if (transfer.uploading) "Uploading" else "Downloading"} · ${transfer.filename}",
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+                            if (transfer.total > 0) LinearProgressIndicator(progress = { (transfer.bytes.toFloat() / transfer.total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                            else LinearProgressIndicator(Modifier.fillMaxWidth())
+                            TextButton(onClick = onCancelFileTransfer) { Text("Cancel transfer") }
+                        }
+                    }
                     if (selected == null) {
                         Conversations(state, onSelect = { onSelect(it) }, onNewDM = { newDM = true })
                     } else {
-                        Transcript(state, selected, onDraft, onSend, onOlder, { onStartDM(selected.name) })
+                        Transcript(state, selected, onDraft, onSend, onOlder, { onStartDM(selected.name) },
+                            onPickAttachment, onOpenAttachment, onSaveAttachment, preparingAttachment)
                     }
                 }
             }
         }
         if (newDM) NewDM(state.connection == Connection.Connected, { newDM = false }) {
             onStartDM(it); newDM = false
+        }
+        pendingAttachment?.let { file ->
+            AlertDialog(onDismissRequest = onDismissAttachment, shape = square,
+                containerColor = MaterialTheme.colorScheme.surfaceVariant, title = { Text("Send file") },
+                text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(file.filename, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    Text("${file.mimeType} · ${file.size / 1024} KiB", fontSize = 13.sp,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("To ${selected?.let { if (it.direct) "@${it.name}" else "#${it.name}" } ?: "selected chat"}",
+                        Modifier.padding(top = 8.dp))
+                    if (file.mimeType.startsWith("image/") && attachmentPreview != null)
+                        AsyncImage(model = attachmentPreview, contentDescription = "Selected image",
+                            modifier = Modifier.fillMaxWidth().height(160.dp).padding(top = 8.dp))
+                    if (!canConfirmAttachment) Text("Waiting for the same chat and authenticated connection.", fontSize = 13.sp)
+                } },
+                confirmButton = { TextButton(onClick = onSendAttachment, enabled = canConfirmAttachment) { Text("Send") } },
+                dismissButton = { TextButton(onClick = onDismissAttachment) { Text("Cancel") } })
+        }
+        fileActionError?.let { message ->
+            AlertDialog(onDismissRequest = onDismissFileError, shape = square,
+                containerColor = MaterialTheme.colorScheme.surfaceVariant, title = { Text("File error") },
+                text = { Text(message, Modifier.verticalScroll(rememberScrollState())) },
+                confirmButton = { TextButton(onClick = onDismissFileError) { Text("OK") } })
         }
     }
 }
@@ -276,9 +332,11 @@ private fun ColumnScope.Conversations(state: ChatState, onSelect: (Long) -> Unit
 
 @Composable
 private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation, onDraft: (Long, String) -> Unit,
-                                   onSend: () -> Unit, onOlder: (Long) -> Unit, onReopenDM: () -> Unit) {
+                                   onSend: () -> Unit, onOlder: (Long) -> Unit, onReopenDM: () -> Unit,
+                                   onPickAttachment: ((Boolean) -> Unit)?, onOpenAttachment: ((ChatAttachment) -> Unit)?,
+                                   onSaveAttachment: ((ChatAttachment) -> Unit)?, preparingAttachment: Boolean) {
     val id = conversation.id
-    val markdownImages = rememberMarkdownImageLoader()
+    val markdownImages = key(state.profile, state.username) { rememberMarkdownImageLoader() }
     val messages = state.messages[id].orEmpty()
     val draft = state.drafts[id].orEmpty()
     val list = rememberLazyListState()
@@ -329,7 +387,12 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
                         fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Meta(" · ${clockTime(message.timestampNanos)}", Modifier.padding(start = 6.dp).alignByBaseline())
                 }
-                SelectionContainer {
+                val attachment = remember(message.text) { ChatAttachment.parse(message.text) }
+                if (attachment != null) {
+                    key(state.profile, state.username, state.connection, state.storageBlocked) {
+                        ChatAttachmentView(attachment, state, markdownImages, onOpenAttachment, onSaveAttachment, preparingAttachment)
+                    }
+                } else SelectionContainer {
                     ChatMarkdown(message.text, markdownImages, Modifier.padding(top = 8.dp))
                 }
                 if (own && message.delivery != Delivery.Received && message.delivery != Delivery.Sent) Meta(when (message.delivery) {
@@ -343,6 +406,21 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 6.dp),
         verticalAlignment = Alignment.Bottom) {
+        if (onPickAttachment != null) {
+            var pickMenu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { pickMenu = true }, enabled = !state.storageBlocked && state.connection == Connection.Connected &&
+                    state.fileTransfer == null && !preparingAttachment && (!conversation.direct || id in state.liveDMs) &&
+                    state.retention[id] in listOf(Retention.Enabled, Retention.Ephemeral)) {
+                    Icon(Icons.Outlined.AttachFile, "Attach photo or file")
+                }
+                DropdownMenu(expanded = pickMenu, onDismissRequest = { pickMenu = false },
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant) {
+                    DropdownMenuItem(text = { Text("Photo or image") }, onClick = { pickMenu = false; onPickAttachment(true) })
+                    DropdownMenuItem(text = { Text("File") }, onClick = { pickMenu = false; onPickAttachment(false) })
+                }
+            }
+        }
         OutlinedTextField(draft, { onDraft(id, it) }, Modifier.weight(1f).heightIn(min = 56.dp, max = 160.dp),
             enabled = !state.storageBlocked,
             placeholder = { Text("Message ${if (conversation.direct) "@" else "#"}${conversation.name}", fontSize = 15.sp) },
@@ -356,6 +434,35 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
     }
     Meta(if (draft.isNotBlank()) "Draft saved locally" else if (state.username.isNotBlank()) "SIGNED IN · ${state.username}" else "",
         Modifier.padding(start = 22.dp, end = 20.dp, top = 3.dp, bottom = 12.dp))
+}
+
+@Composable
+private fun ChatAttachmentView(attachment: ChatAttachment, state: ChatState, images: ImageLoader,
+                               onOpen: ((ChatAttachment) -> Unit)?, onSave: ((ChatAttachment) -> Unit)?, preparing: Boolean) {
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        SelectionContainer { Text(attachment.filename, fontSize = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis) }
+        Text("${attachment.mimeType} · ${attachment.size / 1024} KiB", Modifier.padding(top = 4.dp),
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (attachment.mimeType.startsWith("image/")) {
+            val url = remember(attachment, state.profile) { runCatching { attachment.fileUrl(state.profile) }.getOrNull() }
+            when {
+                state.storageBlocked || state.connection != Connection.Connected || state.username.isBlank() ->
+                    Meta("Image preview unavailable offline", Modifier.padding(top = 8.dp))
+                attachment.size > 8L * 1024 * 1024 ->
+                    Meta("Image exceeds the 8 MiB preview limit", Modifier.padding(top = 8.dp))
+                url == null -> Meta("Image preview unavailable", Modifier.padding(top = 8.dp))
+                else -> ChatImage(url, attachment.filename, true, images) {}
+            }
+        }
+        Row {
+            val enabled = state.connection == Connection.Connected && !state.storageBlocked && state.fileTransfer == null && !preparing
+            if (onOpen != null) TextButton(onClick = { onOpen(attachment) }, enabled = enabled) { Text("Open") }
+            if (onSave != null) TextButton(onClick = { onSave(attachment) }, enabled = enabled) { Text("Save") }
+        }
+        if (!attachment.mimeType.startsWith("image/") && onSave == null)
+            Meta("File attachment · native file actions unavailable in this preview", Modifier.padding(top = 8.dp))
+    }
 }
 
 @Composable

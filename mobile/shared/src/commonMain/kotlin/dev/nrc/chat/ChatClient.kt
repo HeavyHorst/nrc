@@ -55,6 +55,7 @@ class ChatClient(private val http: HttpClient, private val store: LocalStore, pr
     private var cacheJob: Job? = null
     private var cacheLoaded = CompletableDeferred<Unit>()
     private var cacheReady = false
+    private var fileJob: Job? = null
 
     init { restoreCache() }
 
@@ -284,6 +285,7 @@ class ChatClient(private val http: HttpClient, private val store: LocalStore, pr
                     }
                 } finally {
                     if (generation == currentGeneration) {
+                        cancelFileTransfer()
                         socket = null
                         clearHistory()
                         mutable.update { old -> old.copy(connection = Connection.Disconnected, loadingHistory = emptySet(), members = emptyMap(), liveDMs = emptySet(),
@@ -304,6 +306,7 @@ class ChatClient(private val http: HttpClient, private val store: LocalStore, pr
     }
 
     fun disconnect() {
+        cancelFileTransfer()
         if (connectionJob?.isActive == true) recordDiagnostic(DiagnosticLevel.Info, "Connection stopped", "Local disconnect or app backgrounded.")
         generation++
         connectionJob?.cancel(); connectionJob = null
@@ -316,6 +319,7 @@ class ChatClient(private val http: HttpClient, private val store: LocalStore, pr
     }
 
     fun select(id: Long?) {
+        if (state.value.selected != id) cancelFileTransfer()
         mutable.update { it.copy(selected = id, unread = if (id == null) it.unread else it.unread - id, notice = null) }
     }
     fun dismissNotice() { mutable.update { it.copy(notice = null) } }
@@ -337,22 +341,28 @@ class ChatClient(private val http: HttpClient, private val store: LocalStore, pr
 
     fun sendSelected() {
         val current = state.value
-        if (current.storageBlocked) return
-        val id = current.selected ?: return
-        val text = current.drafts[id].orEmpty().trim()
-        if (current.connection != Connection.Connected || text.isBlank()) return
-        val conversation = current.conversations.firstOrNull { it.id == id } ?: return
-        if (conversation.direct && id !in current.liveDMs) return
-        if (current.retention[id] !in listOf(Retention.Enabled, Retention.Ephemeral)) return
-        val target = socket ?: return
+        current.selected?.let { sendMessage(current.drafts[it].orEmpty().trim(), clearDraft = true) }
+    }
+
+    private fun sendMessage(text: String, clearDraft: Boolean): Boolean {
+        val current = state.value
+        if (current.storageBlocked) return false
+        val id = current.selected ?: return false
+        if (current.connection != Connection.Connected || text.isBlank()) return false
+        val conversation = current.conversations.firstOrNull { it.id == id } ?: return false
+        if (conversation.direct && id !in current.liveDMs) return false
+        if (current.retention[id] !in listOf(Retention.Enabled, Retention.Ephemeral)) return false
+        val target = socket ?: return false
         val currentGeneration = generation
         val request = request()
         val messageId = if (current.retention[id] == Retention.Enabled) Random.nextBytes(16) else null
         val frame = Protocol.send(id, request, text, messageId)
         val message = Message("pending:${Random.nextBytes(16).messageIdString()}", id, author = current.username, timestampNanos = now(),
             text = text, delivery = Delivery.Sending, requestId = request, clientMessageId = messageId?.messageIdString())
-        draft(id, "")
-        if (state.value.drafts[id].orEmpty().isNotEmpty()) return // storage failure: preserve the draft
+        if (clearDraft) {
+            draft(id, "")
+            if (state.value.drafts[id].orEmpty().isNotEmpty()) return false // storage failure: preserve the draft
+        }
         mutable.update { it.copy(messages = it.messages + (id to (it.messages[id].orEmpty() + message).takeLast(1000))) }
         scope.launch {
             try { target.send(Frame.Binary(true, frame)) }
@@ -367,6 +377,66 @@ class ChatClient(private val http: HttpClient, private val store: LocalStore, pr
                 recordDiagnostic(DiagnosticLevel.Warning, "Message acknowledgement timed out", "Delivery is unknown; no automatic resend.")
             updatePending(request) { if (it.delivery == Delivery.Sending) it.copy(delivery = Delivery.Unconfirmed) else it }
         }
+        return true
+    }
+
+    fun attachmentTarget(): AttachmentTarget? {
+        val current = state.value
+        val id = current.selected ?: return null
+        if (current.storageBlocked || current.connection != Connection.Connected || current.username.isBlank()) return null
+        return AttachmentTarget(current.profile, current.username, id)
+    }
+
+    fun cancelFileTransfer() {
+        fileJob?.cancel(); fileJob = null
+        mutable.update { it.copy(fileTransfer = null) }
+    }
+
+    fun uploadAttachment(target: AttachmentTarget, file: AttachmentUpload): Job? = transfer(target, file.filename, true) { progress ->
+        val session = socket
+        val uploaded = AttachmentFiles(http).upload(target.profile, target.conversationId, file, progress)
+        check(session != null && socket === session && attachmentTarget() == target &&
+            sendMessage(uploaded.messageText(), clearDraft = false)) { "Conversation or connection changed" }
+    }
+
+    fun downloadAttachment(target: AttachmentTarget, attachment: ChatAttachment,
+                           write: suspend (ByteArray, Int) -> Unit,
+                           onComplete: suspend () -> Unit = {}): Job? = transfer(target, attachment.filename, false) { progress ->
+        AttachmentFiles(http).download(target.profile, attachment, progress, write)
+        check(attachmentTarget() == target) { "Conversation or connection changed" }
+        onComplete()
+    }
+
+    private fun transfer(target: AttachmentTarget, filename: String, uploading: Boolean,
+                         action: suspend (suspend (Long, Long) -> Unit) -> Unit): Job? {
+        if (fileJob != null || attachmentTarget() != target) return null
+        if (uploading && state.value.retention[target.conversationId] !in listOf(Retention.Enabled, Retention.Ephemeral)) return null
+        if (uploading && state.value.conversations.any { it.id == target.conversationId && it.direct } &&
+            target.conversationId !in state.value.liveDMs) return null
+        val sessionGeneration = generation
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val ownJob = currentCoroutineContext()[Job]
+            try {
+                action { bytes, total ->
+                    if (fileJob === ownJob) mutable.update { it.copy(fileTransfer = FileTransfer(filename, uploading, bytes, total)) }
+                }
+            } catch (timeout: TimeoutCancellationException) {
+                currentCoroutineContext().ensureActive()
+                if (generation == sessionGeneration) mutable.update { it.copy(notice = "File transfer timed out. Select the file again to retry.") }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (generation == sessionGeneration) {
+                    recordFailure(error, "File transfer", "Upload or download failed. Check access, connectivity and device storage.")
+                    mutable.update { it.copy(notice = "File transfer failed. Check access, connectivity and storage. No automatic retry.") }
+                }
+            } finally {
+                if (fileJob === ownJob) { fileJob = null; mutable.update { it.copy(fileTransfer = null) } }
+            }
+        }
+        fileJob = job
+        mutable.update { it.copy(fileTransfer = FileTransfer(filename, uploading)) }
+        job.start()
+        return job
     }
 
     fun startDM(username: String) {

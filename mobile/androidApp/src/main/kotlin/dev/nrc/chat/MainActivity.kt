@@ -16,6 +16,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.websocket.WebSockets
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -29,26 +30,58 @@ class MainActivity : ComponentActivity() {
         expectSuccess = true
     }
     private lateinit var chat: ChatClient
+    private lateinit var attachments: AndroidAttachments
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         chat = ChatClient(http, AndroidStore(this), scope, AndroidMessageStore.get(this))
+        attachments = AndroidAttachments(this, chat, scope)
+        scope.launch {
+            var previous = chat.state.value
+            chat.state.collect { current ->
+                if (previous.profile != current.profile || previous.username != current.username || previous.selected != current.selected)
+                    attachments.contextChanged()
+                else if (previous.connection == Connection.Connected && current.connection != Connection.Connected)
+                    attachments.cancel()
+                previous = current
+            }
+        }
         setContent {
             val state by chat.state.collectAsState()
-            NrcApp(state, chat::select, chat::draft, chat::sendSelected, chat::configure,
+            val pending = attachments.pending?.takeIf { it.target.profile == state.profile &&
+                it.target.username == state.username && it.target.conversationId == state.selected }
+            NrcApp(state, { id ->
+                if (id != chat.state.value.selected) attachments.contextChanged()
+                chat.select(id)
+            }, chat::draft, chat::sendSelected, { profile ->
+                if (profile != chat.state.value.profile) attachments.contextChanged()
+                chat.configure(profile)
+            },
                 chat::startDM, chat::loadOlder, { chat.disconnect(); chat.connect() }, chat::dismissNotice,
                 darkTheme = isSystemInDarkTheme(), onClearDiagnostics = chat::clearDiagnostics,
-                platformBackHandler = { enabled, onBack -> BackHandler(enabled, onBack) })
+                platformBackHandler = { enabled, onBack -> BackHandler(enabled, onBack) },
+                onPickAttachment = attachments::pick,
+                onOpenAttachment = { attachments.receive(it, open = true) },
+                onSaveAttachment = { attachments.receive(it, open = false) },
+                onCancelFileTransfer = attachments::cancel,
+                pendingAttachment = pending?.upload,
+                attachmentPreview = pending?.file,
+                canConfirmAttachment = pending?.let { it.target == chat.attachmentTarget() &&
+                    state.retention[it.target.conversationId] in listOf(Retention.Enabled, Retention.Ephemeral) } == true && state.fileTransfer == null,
+                onSendAttachment = attachments::send, onDismissAttachment = attachments::dismiss,
+                preparingAttachment = attachments.preparing,
+                fileActionError = attachments.error, onDismissFileError = { attachments.error = null })
         }
     }
     override fun onStart() { super.onStart(); chat.connect() }
     override fun onStop() {
+        attachments.backgrounded()
         chat.disconnect()
         scope.launch(start = CoroutineStart.UNDISPATCHED) { chat.flushCache() }
         super.onStop()
     }
-    override fun onDestroy() { scope.cancel(); http.close(); super.onDestroy() }
+    override fun onDestroy() { attachments.close(); scope.cancel(); http.close(); super.onDestroy() }
 }
 
 /** One app-lifetime connection; activities never hold a database Context. */

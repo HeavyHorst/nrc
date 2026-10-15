@@ -5,7 +5,7 @@ val signingDirectory = providers.environmentVariable("NRC_ANDROID_SIGNING_DIRECT
 android {
     namespace = "dev.nrc.chat"
     compileSdk = 35
-    defaultConfig { applicationId = "dev.nrc.chat"; minSdk = 26; targetSdk = 35; versionCode = 8; versionName = "0.2.6" }
+    defaultConfig { applicationId = "dev.nrc.chat"; minSdk = 26; targetSdk = 35; versionCode = 10; versionName = "0.2.8" }
     if (signingDirectory != null) {
         val credentials = JsonSlurper().parse(file("$signingDirectory/signing.json")) as Map<*, *>
         signingConfigs.getByName("debug") {

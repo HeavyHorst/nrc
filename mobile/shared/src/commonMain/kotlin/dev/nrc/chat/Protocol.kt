@@ -140,7 +140,7 @@ object Protocol {
             val name = string(255); val nanos = long(); val type = byte(); require(type <= 2)
             val text = string(MAX_CONTENT_BYTES)
             return Message("$id:$sequence", id, sequence, name, nanos,
-                if (type == 1) "[Image message — open the web client]" else text, clientMessageId = clientId)
+                text, clientMessageId = clientId)
         }
     }
 }

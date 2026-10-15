@@ -1,6 +1,8 @@
 package dev.nrc.chat
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.*
+import io.ktor.http.*
 
 enum class Connection { Disconnected, Connecting, Connected, Reconnecting }
 enum class Delivery { Received, Sending, Sent, Unconfirmed, Failed }
@@ -22,6 +24,52 @@ data class Message(
     val clientMessageId: String? = null,
 )
 
+/** The web client's version-1 attachment envelope, not an arbitrary remote image URL. */
+data class ChatAttachment(val fileId: String, val filename: String, val size: Long, val mimeType: String) {
+    fun fileUrl(profile: Profile, inline: Boolean = true): String {
+        ChatClient.connectionUrl(profile) // Same validated origin/workspace as the chat connection.
+        return URLBuilder(profile.server.trim()).apply {
+            protocol = URLProtocol.HTTPS
+            encodedPath = "/files/$fileId"
+            parameters.append("workspace", profile.workspace)
+            if (inline) parameters.append("inline", "true")
+            parameters.append("filename", filename)
+        }.buildString()
+    }
+
+    fun messageText(): String = buildJsonObject {
+        put("type", "attachment"); put("version", 1); put("fileId", fileId)
+        put("filename", filename); put("size", size); put("mimeType", mimeType)
+        // The web parser requires exact URLSearchParams serialization, including ~ and *.
+        val query = listOf("filename" to filename).formUrlEncode().replace("~", "%7E").replace("%2A", "*")
+        put("url", "/files/$fileId?$query")
+    }.toString()
+
+    companion object {
+        fun parse(content: String): ChatAttachment? = runCatching {
+            if (!content.trimStart().startsWith('{')) return null
+            val json = Json.parseToJsonElement(content).jsonObject
+            fun string(key: String) = json.getValue(key).jsonPrimitive.let { require(it.isString); it.content }
+            require(string("type") == "attachment")
+            require(json.getValue("version").jsonPrimitive.let { !it.isString && it.int == 1 })
+            val id = string("fileId")
+            require(Regex("att_[0-9a-f]{32}").matches(id))
+            val filename = string("filename")
+            require(filename.isNotBlank() && filename.none { it.code < 32 || it.code == 127 })
+            val size = json.getValue("size").jsonPrimitive.let { require(!it.isString); it.long }
+            require(size in 0..100L * 1024 * 1024)
+            val mime = string("mimeType")
+            val relative = string("url")
+            require(relative.startsWith("/files/$id?"))
+            val url = Url("https://attachment.invalid$relative")
+            require(url.encodedPath == "/files/$id" && url.fragment.isEmpty() &&
+                url.parameters.names() == setOf("filename") &&
+                url.parameters.getAll("filename") == listOf(filename))
+            ChatAttachment(id, filename, size, mime)
+        }.getOrNull()
+    }
+}
+
 data class ChatState(
     val profile: Profile = Profile(), val connection: Connection = Connection.Disconnected,
     val username: String = "", val conversations: List<Conversation> = defaultRooms,
@@ -34,7 +82,11 @@ data class ChatState(
     val liveDMs: Set<Long> = emptySet(),
     val notice: String? = null, val preview: Boolean = false,
     val diagnostics: List<DiagnosticEvent> = emptyList(),
+    val fileTransfer: FileTransfer? = null,
 )
+
+data class AttachmentTarget(val profile: Profile, val username: String, val conversationId: Long)
+data class FileTransfer(val filename: String, val uploading: Boolean, val bytes: Long = 0, val total: Long = 0)
 
 val defaultRooms = listOf(Conversation(2, "engineering"), Conversation(3, "operations"))
 
