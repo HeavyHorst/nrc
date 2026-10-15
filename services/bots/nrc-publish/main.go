@@ -106,14 +106,13 @@ func (a *app) render(w http.ResponseWriter, status int, p page) {
 
 func group(rows []revision) []category {
 	m := map[string][]revision{}
+	names := []string{}
 	for _, r := range rows {
+		if _, ok := m[r.Category]; !ok {
+			names = append(names, r.Category)
+		}
 		m[r.Category] = append(m[r.Category], r)
 	}
-	names := []string{}
-	for name := range m {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 	groups := []category{}
 	for _, name := range names {
 		c := category{Name: name, Articles: m[name]}
@@ -152,6 +151,7 @@ func (a *app) admin() http.Handler {
 	mux.HandleFunc("GET /{$}", a.dashboard)
 	mux.HandleFunc("GET /order", a.order)
 	mux.HandleFunc("POST /order", a.saveOrder)
+	mux.HandleFunc("POST /category-order", a.saveCategoryOrder)
 	mux.HandleFunc("POST /subtopics", a.saveSubtopics)
 	mux.HandleFunc("GET /articles/{slug}", a.article)
 	mux.HandleFunc("GET /articles/by-note/{id}", a.articleByNote)
@@ -393,7 +393,30 @@ func (a *app) order(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Speicher nicht verfügbar", 500)
 		return
 	}
-	a.render(w, 200, page{Title: "Artikel sortieren", Mode: "ordering", Categories: group(rows)})
+	a.render(w, 200, page{Title: "Kategorien und Artikel sortieren", Mode: "ordering", Categories: group(rows)})
+}
+
+func (a *app) saveCategoryOrder(w http.ResponseWriter, r *http.Request) {
+	names := r.PostForm["category_name"]
+	positions := r.PostForm["category_position"]
+	ordered := make([]string, len(names))
+	if len(names) != len(positions) {
+		a.action(w, r, errors.New("Bitte Seite neu laden und alle Positionen angeben."))
+		return
+	}
+	for i, name := range names {
+		position, err := strconv.Atoi(positions[i])
+		if err != nil || position < 1 || position > len(ordered) || ordered[position-1] != "" {
+			a.action(w, r, errors.New("Bitte jede Position von 1 bis zur Kategorienanzahl genau einmal vergeben."))
+			return
+		}
+		ordered[position-1] = name
+	}
+	if err := a.store.setCategoryOrder(ordered); err != nil {
+		a.action(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/order", http.StatusSeeOther)
 }
 
 func (a *app) saveOrder(w http.ResponseWriter, r *http.Request) {

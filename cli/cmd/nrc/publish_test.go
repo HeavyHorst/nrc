@@ -58,12 +58,12 @@ func TestPublishDoesNotFollowRedirects(t *testing.T) {
 }
 
 func TestPublishCommandBoundary(t *testing.T) {
-	for _, name := range []string{"list", "draft", "inspect", "order", "subtopic"} {
+	for _, name := range []string{"list", "draft", "inspect", "order", "category-order", "subtopic"} {
 		cmd, _, err := publishCmd.Find([]string{name})
 		if err != nil || cmd.Name() != name {
 			t.Fatalf("missing command %s", name)
 		}
-		if (name == "draft" || name == "order" || name == "subtopic") && cmd.Annotations["mutation"] != "true" {
+		if (name == "draft" || name == "order" || name == "category-order" || name == "subtopic") && cmd.Annotations["mutation"] != "true" {
 			t.Fatal("publish mutation lacks annotation")
 		}
 	}
@@ -75,5 +75,45 @@ func TestPublishCommandBoundary(t *testing.T) {
 	t.Setenv("NRC_PUBLISH_URL", "https://reviewer:password@example.test")
 	if _, err := runPublish(context.Background(), "GET", "/api/publications", nil); err == nil || strings.Contains(err.Error(), "password") {
 		t.Fatal("URL credentials accepted or echoed")
+	}
+}
+
+func TestPublishCategoryOrderCommand(t *testing.T) {
+	want := `["Zeta","Erste Schritte"]`
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var input struct {
+			Categories json.RawMessage `json:"categories"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Error(err)
+		}
+		if r.Method != "PUT" || r.URL.Path != "/publish/api/category-order" || string(input.Categories) != want {
+			t.Errorf("wrong category order request: %s %s %s", r.Method, r.URL.Path, input.Categories)
+		}
+		w.Write([]byte(`{"categories":` + want + `}`))
+	}))
+	defer server.Close()
+	t.Setenv("NRC_PUBLISH_URL", server.URL)
+	cmd, _, err := publishCmd.Find([]string{"category-order"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.SetContext(context.Background())
+	if err := cmd.RunE(cmd, []string{"Zeta", "Erste Schritte"}); err != nil {
+		t.Fatal(err)
+	}
+	want = `[]`
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"Zeta", "Zeta"}, {" "}} {
+		if err := cmd.RunE(cmd, args); err == nil {
+			t.Fatal("invalid category names accepted")
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("unexpected request count: %d", calls)
 	}
 }

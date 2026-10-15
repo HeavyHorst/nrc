@@ -8,7 +8,7 @@ Readers can browse categories, search article text and download published files.
 Pages are server-rendered, with no JavaScript, external fonts or tracking.
 
 Reading order is stored per category using NRC note IDs, separately from approved
-article snapshots. Reviewers can choose **Artikelreihenfolge bearbeiten** in the
+article snapshots. Reviewers can choose **Kategorien und Artikel sortieren** in the
 dashboard and assign each position once. Agents use the existing private gateway:
 
 ```sh
@@ -26,6 +26,21 @@ The HTTP operation is `PUT /publish/api/order` with
 `{"category":"Marketplace","note_ids":["596","5351","5348"]}`;
 `GET /publish/api/publications` returns published articles in reading order.
 Note IDs are strings to preserve full uint64 precision.
+
+Main categories can also be reordered in that editor, independently of article
+positions. Agents use exact published category names (quote names containing spaces):
+
+```sh
+nrc publish category-order "Marketplace" "Erste Schritte" "Referenz"
+nrc publish category-order # Restore alphabetical category order
+```
+
+Listed categories come first; omitted and new categories follow alphabetically.
+The order applies to the homepage, category navigation and publication list,
+persists across restarts and takes effect immediately. Unknown or duplicate names
+reject the entire change. Concurrent edits use the last saved order. The operation
+is `PUT /publish/api/category-order` with `{"categories":["Marketplace","Erste Schritte"]}`;
+an empty array resets the order. Article positions and approvals remain unchanged.
 
 Categories support one optional subtopic level. In the same editor, enter a name
 beside each article; matching names form a group, and an empty name leaves the
@@ -299,7 +314,8 @@ safe integer range; revision IDs are opaque hexadecimal strings. `--human` provi
 an indented view of the same document.
 
 The gateway allowlists `GET /publish/api/publications`, `POST /publish/api/drafts`,
-`GET /publish/api/drafts/{id}` and `PUT /publish/api/order`, forwarding them without `/publish` to the
+`GET /publish/api/drafts/{id}`, `PUT /publish/api/order`, `PUT /publish/api/category-order`
+and `PUT /publish/api/subtopics`, forwarding them without `/publish` to the
 backend. Creation accepts `note_id` (decimal string), `slug`,
 `title`, `summary`, `category`, `kind`; source body/files and creator cannot be
 supplied. All snapshot/link/attachment validation is shared with human creation.

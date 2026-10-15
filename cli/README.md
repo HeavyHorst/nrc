@@ -49,7 +49,14 @@ nrc publish list
 nrc publish draft --note 41 --slug api-schluessel --title "API-Schlüssel erstellen" \
   --category "API & Integrationen" --kind Anleitung
 nrc publish inspect <draft-id> --json
+nrc publish category-order "Marketplace" "Erste Schritte" "API & Integrationen"
+nrc publish category-order # Reset main categories to alphabetical order
 ```
+
+`category-order` takes exact published category names in the desired order.
+Omitted and new categories follow alphabetically. Changes are immediately public,
+persist across restarts and do not change article positions, contents or approvals.
+Unknown or duplicate category names reject the entire change.
 
 Output defaults to JSON. `draft` copies the current note and attachments into a
 private snapshot, and returns the service-configured human `review_url` (a relative

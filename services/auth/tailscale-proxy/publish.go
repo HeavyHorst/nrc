@@ -32,7 +32,7 @@ func publishGateway(backend, workspace string) http.Handler {
 			return
 		}
 		path := strings.TrimPrefix(r.URL.Path, "/publish")
-		allowed := (r.Method == "GET" && path == "/api/publications") || (r.Method == "POST" && path == "/api/drafts") || (r.Method == "PUT" && (path == "/api/order" || path == "/api/subtopics"))
+		allowed := (r.Method == "GET" && path == "/api/publications") || (r.Method == "POST" && path == "/api/drafts") || (r.Method == "PUT" && (path == "/api/order" || path == "/api/subtopics" || path == "/api/category-order"))
 		if r.Method == "GET" && strings.HasPrefix(path, "/api/drafts/") {
 			id := strings.TrimPrefix(path, "/api/drafts/")
 			allowed = len(id) == 32 && strings.Trim(id, "0123456789abcdef") == ""

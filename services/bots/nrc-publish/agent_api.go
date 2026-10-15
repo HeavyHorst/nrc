@@ -84,6 +84,27 @@ func (a *app) agentAPI() http.Handler {
 		}
 		agentJSON(w, 200, result)
 	})
+	mux.HandleFunc("PUT /api/category-order", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		var input struct {
+			Categories []string `json:"categories"`
+		}
+		if err := decoder.Decode(&input); err != nil {
+			agentJSON(w, 400, map[string]string{"error": "Ungültige Kategorienreihenfolge"})
+			return
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF || input.Categories == nil {
+			agentJSON(w, 400, map[string]string{"error": "Ein JSON-Dokument mit categories erwartet"})
+			return
+		}
+		if err := a.store.setCategoryOrder(input.Categories); err != nil {
+			agentJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		agentJSON(w, 200, input)
+	})
 	mux.HandleFunc("PUT /api/order", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
 		decoder := json.NewDecoder(r.Body)

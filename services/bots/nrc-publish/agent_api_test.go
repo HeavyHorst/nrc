@@ -117,6 +117,87 @@ func TestAgentAPIReviewBoundary(t *testing.T) {
 	}
 }
 
+func TestCategoryOrderHTTP(t *testing.T) {
+	a := testApp(t)
+	a.cfg.JWTSecret, a.cfg.JWTIssuer, a.cfg.Workspace = "fixture-signing-secret-not-production", "nrc-tailscale-proxy", "test-workspace"
+	token := testProxyAssertion(a.cfg.JWTSecret, testProxyClaims())
+	for i, name := range []string{"Alpha", "Beta", "Zeta"} {
+		draft, err := a.store.create(revision{SourceID: uint64(42 + i), Slug: strings.ToLower(name), Title: name, Category: name, Kind: "Anleitung"}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := a.store.approve(draft.ID, "reviewer"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call := func(handler http.Handler, credential, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("PUT", "/api/category-order", strings.NewReader(body))
+		r.Header.Set("X-NRC-Publish-Auth", credential)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	assertOrder := func(names ...string) {
+		t.Helper()
+		rows, err := a.store.entries("published")
+		if err != nil || len(rows) != len(names) {
+			t.Fatalf("entries: %v %v", rows, err)
+		}
+		body := request(a.public(), "GET", "/", nil, false).Body.String()
+		previous := -1
+		for i, name := range names {
+			position := strings.Index(body, ">"+name+"</a></h3>")
+			if rows[i].Category != name || position < 0 || position <= previous {
+				t.Fatalf("wrong category order: %v; body %s", names, body)
+			}
+			previous = position
+		}
+	}
+	assertOrder("Alpha", "Beta", "Zeta")
+	input := `{"categories":["Zeta","Alpha"]}`
+	if w := call(a.admin(), "", input); w.Code != 401 {
+		t.Fatal("unauthenticated sorting accepted")
+	}
+	if w := call(a.public(), token, input); w.Code != 404 {
+		t.Fatal("public sorting exposed")
+	}
+	if w := call(a.admin(), token, input); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	assertOrder("Zeta", "Alpha", "Beta")
+	for _, body := range []string{`{}`, `{"categories":null}`, `{"categories":["Zeta","Zeta"]}`, `{"categories":["Missing"]}`, `{"categories":[1]}`, input + ` {}`, `{"categories":[],"other":true}`} {
+		if w := call(a.admin(), token, body); w.Code != 400 {
+			t.Fatalf("invalid order accepted: %s", body)
+		}
+		assertOrder("Zeta", "Alpha", "Beta")
+	}
+	path := a.store.db.Path()
+	if err := a.store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := openStore(path, "test-workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.db.Close() })
+	a.store = s
+	assertOrder("Zeta", "Alpha", "Beta")
+	form := url.Values{"csrf": {a.csrf}, "category_name": {"Zeta", "Alpha", "Beta"}, "category_position": {"2", "3", "1"}}
+	if w := request(a.admin(), "POST", "/category-order", form, true); w.Code != 303 {
+		t.Fatal(w.Body.String())
+	}
+	assertOrder("Beta", "Zeta", "Alpha")
+	form["category_position"] = []string{"1", "1", "2"}
+	if w := request(a.admin(), "POST", "/category-order", form, true); w.Code != 400 {
+		t.Fatal("duplicate positions accepted", w.Code)
+	}
+	assertOrder("Beta", "Zeta", "Alpha")
+	if w := call(a.admin(), token, `{"categories":[]}`); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	assertOrder("Alpha", "Beta", "Zeta")
+}
+
 func TestArticleOrderHTTP(t *testing.T) {
 	a := testApp(t)
 	a.cfg.JWTSecret, a.cfg.JWTIssuer, a.cfg.Workspace = "fixture-signing-secret-not-production", "nrc-tailscale-proxy", "test-workspace"

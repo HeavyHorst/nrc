@@ -147,6 +147,23 @@ func init() {
 	}}
 	order.Flags().String("category", "", "Exact published category name; no IDs resets alphabetical order")
 	order.MarkFlagRequired("category")
+	categoryOrder := &cobra.Command{Use: "category-order [category ...]", Short: "Set main category order; no names resets alphabetical order", Args: cobra.ArbitraryArgs, Annotations: map[string]string{"mutation": "true"}, RunE: func(cmd *cobra.Command, args []string) error {
+		names := []string{}
+		seen := map[string]bool{}
+		for _, name := range args {
+			if strings.TrimSpace(name) == "" || seen[name] {
+				return fmt.Errorf("category names must be nonempty and unique")
+			}
+			seen[name] = true
+			names = append(names, name)
+		}
+		result, err := runPublish(cmd.Context(), http.MethodPut, "/api/category-order", map[string]any{"categories": names})
+		if err != nil {
+			return err
+		}
+		publishOutput(cmd, result)
+		return nil
+	}}
 	subtopic := &cobra.Command{Use: "subtopic <note-id> [note-id ...]", Short: "Assign published articles to a subtopic, or clear their assignment", Args: cobra.MinimumNArgs(1), Annotations: map[string]string{"mutation": "true"}, RunE: func(cmd *cobra.Command, args []string) error {
 		category, _ := cmd.Flags().GetString("category")
 		name, _ := cmd.Flags().GetString("name")
@@ -169,6 +186,6 @@ func init() {
 	subtopic.Flags().String("name", "", "Subtopic name; empty clears the assignment")
 	subtopic.MarkFlagRequired("category")
 	subtopic.MarkFlagRequired("name")
-	publishCmd.AddCommand(list, draft, inspect, order, subtopic)
+	publishCmd.AddCommand(list, draft, inspect, order, categoryOrder, subtopic)
 	rootCmd.AddCommand(publishCmd)
 }

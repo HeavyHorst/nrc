@@ -19,7 +19,7 @@ func TestPublishGatewayAuthorization(t *testing.T) {
 	var forwarded atomic.Int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		forwarded.Add(1)
-		if (r.URL.Path != "/api/publications" && !(r.Method == "PUT" && r.URL.Path == "/api/order")) || r.Header.Get("Authorization") != "" {
+		if (r.URL.Path != "/api/publications" && !(r.Method == "PUT" && (r.URL.Path == "/api/order" || r.URL.Path == "/api/category-order"))) || r.Header.Get("Authorization") != "" {
 			t.Error("route or credential forwarding incorrect")
 		}
 		parts := strings.Split(r.Header.Get("X-NRC-Publish-Auth"), ".")
@@ -78,6 +78,18 @@ func TestPublishGatewayAuthorization(t *testing.T) {
 		}
 		if w.Code != want {
 			t.Fatalf("order %s: %d", method, w.Code)
+		}
+	}
+	for _, method := range []string{"PUT", "GET", "POST", "DELETE"} {
+		r := httptest.NewRequest(method, "http://nrc/publish/api/category-order", strings.NewReader(`{"categories":[]}`))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		want := 404
+		if method == "PUT" {
+			want = 204
+		}
+		if w.Code != want {
+			t.Fatalf("category-order %s: %d", method, w.Code)
 		}
 	}
 	for _, path := range []string{"/publish/api/drafts/0123456789abcdef0123456789abcdef/approve", "/publish/notes", "/publish/api/drafts/%2e%2e/notes", "/publish/api/publications?workspace=other"} {

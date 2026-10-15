@@ -802,6 +802,9 @@ a.result:hover {
   border-radius: 2px;
   padding: 28px;
 }
+.admin-panel + h2 {
+  margin-top: 40px;
+}
 .admin-panel form + h3 {
   margin-top: 28px;
 }

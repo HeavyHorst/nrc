@@ -177,8 +177,18 @@ func (s *store) head(r revision) (string, error) {
 func (s *store) entries(bucket string) ([]revision, error) {
 	rows := []revision{}
 	ranks := map[string]map[uint64]int{}
+	categoryRanks := map[string]int{}
 	err := s.db.View(func(tx *bolt.Tx) error {
 		if bucket == "published" {
+			var names []string
+			if data := tx.Bucket([]byte("meta")).Get([]byte("category_order")); data != nil {
+				if err := json.Unmarshal(data, &names); err != nil {
+					return err
+				}
+			}
+			for i, name := range names {
+				categoryRanks[name] = i + 1
+			}
 			if err := tx.Bucket([]byte("ordering")).ForEach(func(k, v []byte) error {
 				var ids []string
 				if err := json.Unmarshal(v, &ids); err != nil {
@@ -209,6 +219,10 @@ func (s *store) entries(bucket string) ([]revision, error) {
 	sort.Slice(rows, func(i, j int) bool {
 		a, b := rows[i], rows[j]
 		if bucket == "published" && a.Category != b.Category {
+			x, y := categoryRanks[a.Category], categoryRanks[b.Category]
+			if x != y {
+				return x != 0 && (y == 0 || x < y)
+			}
 			return a.Category < b.Category
 		}
 		x, y := ranks[a.Category][a.SourceID], ranks[b.Category][b.SourceID]
@@ -221,6 +235,30 @@ func (s *store) entries(bucket string) ([]revision, error) {
 		return a.SourceID < b.SourceID
 	})
 	return rows, err
+}
+
+// Category positions are independent of article snapshots and article positions.
+func (s *store) setCategoryOrder(names []string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		available := map[string]bool{}
+		if err := tx.Bucket([]byte("published")).ForEach(func(_, v []byte) error {
+			r, err := readRevision(tx, string(v))
+			if err == nil {
+				available[r.Category] = true
+			}
+			return err
+		}); err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		for _, name := range names {
+			if !available[name] || seen[name] {
+				return errors.New("Hauptkategorien müssen veröffentlicht und eindeutig sein")
+			}
+			seen[name] = true
+		}
+		return putJSON(tx.Bucket([]byte("meta")), "category_order", names)
+	})
 }
 
 // Ordering changes navigation only, never article snapshots or approval state.
