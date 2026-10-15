@@ -143,6 +143,10 @@ try {
   );
   assert.equal(await page.locator(".toc nav a").count(), 4);
   assert.equal(await page.locator(".prose pre code").count(), 1);
+  assert.equal(await page.locator(".related a").count(), 1);
+  assert.equal(await page.locator(".related a").getAttribute("href"), "/?category=API%20%26%20Integrationen");
+  assert.equal(await page.getByRole("heading", { name: "Weiter in diesem Thema" }).count(), 0);
+  assert.equal(await page.locator('.prose a[href="/articles/api-referenz"]').count(), 1);
   const noteLink = page.locator('.prose a[href="/articles/by-note/2"]');
   assert.equal(await noteLink.textContent(), "Benutzer und Rechte verstehen");
   assert.equal(await page.locator(".prose code").filter({ hasText: "[note:999]" }).count(), 1);

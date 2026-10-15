@@ -256,18 +256,7 @@
       <article class="prose">{{ .HTML }}</article>
       {{ template "attachments" .Article }}
       <section class="related">
-        <h2>Weiter in diesem Thema</h2>
-        {{ range .Categories }}
-          {{ if eq .Name $.Article.Category }}
-            {{ range .Articles }}
-              {{ if ne .Slug $.Article.Slug }}
-                <a href="/articles/{{ .Slug }}"
-                  >{{ .Title }} <span aria-hidden="true">→</span></a
-                >
-              {{ end }}
-            {{ end }}
-          {{ end }}
-        {{ end }}<a href="/?category={{ .Article.Category }}"
+        <a href="/?category={{ .Article.Category }}"
           >Themenübersicht <span aria-hidden="true">→</span></a
         >
       </section>
