@@ -699,9 +699,9 @@ a.result:hover {
   margin-bottom: 24px;
 }
 .prose code {
-  background: var(--pale);
-  border-radius: 2px;
-  padding: 2px 5px;
+  background: color-mix(in srgb, var(--pale) 45%, transparent);
+  border-radius: 3px;
+  padding: 0.05em 0.2em;
   font-size: 0.86em;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
