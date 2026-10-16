@@ -207,7 +207,7 @@ test("a restored draft fills the composer and stays escaped", () => {
     sendId: "taskCommentSend",
   });
 
-  assert.match(html, /<textarea class="task-comment-input" id="taskCommentInput" rows="3" aria-label="Write a message">erste Zeile\n&lt;b&gt;zweite&lt;\/b&gt;<\/textarea>/);
+  assert.match(html, /<textarea\b[^>]*\bid="taskCommentInput"[^>]*>erste Zeile\n&lt;b&gt;zweite&lt;\/b&gt;<\/textarea>/);
   assert.doesNotMatch(html, /<b>zweite<\/b>/);
 });
 

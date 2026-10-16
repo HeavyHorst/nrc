@@ -121,7 +121,8 @@
     if (!bar) return;
     bar.hidden = !active;
     if (!active) {
-      messageInput.placeholder = "";
+      closeSourcePanel(false);
+      messageInput.placeholder = "Write a message…";
       setRunBusy(null);
       return;
     }
@@ -129,7 +130,7 @@
     if (title) title.textContent = "SULLIVAN / AI WORKBENCH";
     const context = resolveAskContextForDisplay(sullivanDisplayConvId).contextConvId;
     document.getElementById("sullivanComposerContext").textContent = `CONTEXT / ${getRoomName(context)}`;
-    messageInput.placeholder = "";
+    messageInput.placeholder = "Ask Sullivan…";
     setRunBusy(activeAskRun);
     document.querySelector("#logOutput > .sullivan-empty")?.remove();
     renderEmptyState();
@@ -2275,7 +2276,10 @@
       }
     }
 
-    if (asset.assetType === AssetType.Comment) {
+    if ([AssetType.CustomerCompany, AssetType.CustomerContact, AssetType.CustomerActivity].includes(asset.assetType)) {
+      const type = asset.assetType === AssetType.CustomerCompany ? "company" : asset.assetType === AssetType.CustomerContact ? "contact" : "activity";
+      window.NRCInspector?.openEntity({ roomId: targetRoomId, type, id: asset.assetId });
+    } else if (asset.assetType === AssetType.Comment) {
       if (asset.parentType === window.NRCAssets?.ParentType?.Asset) {
         const parent = window.NRCAssets?.roomAssets?.get(targetRoomId)?.get(asset.parentId);
         if (parent && parent.assetType === AssetType.Note && window.NRCNotes) {
@@ -2539,24 +2543,20 @@
   function processAssetReferences(rootEl, sources = [], contextRoomId = currentRoomId) {
     if (!rootEl) return;
 
-    const sourceByTaskID = new Map();
-    const sourceByAssetID = new Map();
+    const sourceByReference = new Map();
     (sources || []).forEach((src) => {
       if (!src || src.id == null) return;
-      if (src.type === "task") {
-        sourceByTaskID.set(String(src.id), src);
-      } else if (src.type === "asset") {
-        sourceByAssetID.set(String(src.id), src);
-      }
+      sourceByReference.set(`${src.type}:${src.id}`, src);
     });
 
-    const assetRefRegex = /\[\s*(task|asset|comment|document|file|agenda|note|reminder)\s*:\s*(\d+)\s*\]/gi;
+    const inAnswer = rootEl.classList.contains("ai-answer-body");
+    const assetRefRegex = /\[\s*(task|asset|comment|document|file|agenda|note|reminder)\s*:\s*(\d+)\s*\]|#(\d+)/gi;
     const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null);
     const textNodes = [];
     let current;
 
     while ((current = walker.nextNode())) {
-      if (current.parentElement?.closest("a, code, pre, .task-reference")) continue;
+      if (current.parentElement?.closest("a, button, code, pre, .task-reference")) continue;
       if (assetRefRegex.test(current.nodeValue || "")) {
         textNodes.push(current);
       }
@@ -2571,7 +2571,8 @@
       let match;
 
       while ((match = assetRefRegex.exec(text)) !== null) {
-        const [full, typeName, idStr] = match;
+        const [full, typeName = "task", typedId, taskId] = match;
+        const idStr = typedId || taskId;
         const matchStart = match.index;
 
         if (matchStart > lastIndex) {
@@ -2586,22 +2587,37 @@
         link.addEventListener("keydown", (event) => {
           if (event.key === "Enter") { event.preventDefault(); link.click(); }
         });
-        const source = typeName.toLowerCase() === "task"
-          ? (sourceByTaskID.get(idStr) || { type: "task", id: idStr, title: `Task #${idStr}` })
-          : (sourceByAssetID.get(idStr) || { type: "asset", id: idStr, title: `[${typeName}:${idStr}]` });
+        const refType = typeName.toLowerCase();
+        const source = sourceByReference.get(`${refType}:${idStr}`) ||
+          (refType !== "task" && sourceByReference.get(`asset:${idStr}`)) ||
+          { type: refType === "task" || refType === "note" || refType === "reminder" ? refType : "asset", id: idStr, title: `[${refType}:${idStr}]` };
+        if (inAnswer) {
+          const index = sources.indexOf(source);
+          if (index >= 0) link.textContent = `[${index + 1}]`;
+          link.title = source.title || `${source.type}:${source.id}`;
+          link.setAttribute("aria-label", `Quelle: ${link.title}`);
+        } else {
+          link.dataset.nrcReference = "";
+          link.dataset.referenceType = refType;
+          link.dataset.referenceId = idStr;
+          link.dataset.referenceWorkspace = currentWorkspaceId;
+          link.textContent = markdownReferenceTitle(refType, BigInt(idStr)) || link.textContent;
+          link.title = `${refType.toUpperCase()} #${idStr}`;
+        }
         link.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
-          navigateToSource(source, contextRoomId);
+          if (inAnswer) openSourcePanel(source, sources, contextRoomId, link);
+          else navigateToSource(source, contextRoomId);
         });
-        if (source.type === "task" && window.NRCTaskReferences?.showTaskPreview) {
+        if (!inAnswer && source.type === "task" && window.NRCTaskReferences?.showTaskPreview) {
           link.addEventListener("mouseenter", () => {
             window.NRCTaskReferences.showTaskPreview(link, BigInt(source.id), BigInt(contextRoomId));
           });
           link.addEventListener("mouseleave", () => {
             window.NRCTaskReferences.hideTaskPreview?.();
           });
-        } else if (source.type === "asset") {
+        } else if (!inAnswer && source.type === "asset") {
           link.addEventListener("mouseenter", () => {
             showAssetReferencePreview(link, source, contextRoomId);
           });
@@ -2631,6 +2647,164 @@
       case AssetType.Note: return "Note";
       default: return `Type${t}`;
     }
+  }
+
+  let sourcePanelAnchor = null;
+  const sourcePanelMedia = matchMedia("(max-width: 768px)");
+  const sourcePanelInertElements = new Set();
+
+  function syncSourcePanelInert() {
+    for (const element of sourcePanelInertElements) element.inert = false;
+    sourcePanelInertElements.clear();
+    const panel = document.getElementById("aiSourcePanel");
+    if (!panel || !sourcePanelMedia.matches) return;
+    for (const element of panel.parentElement.children) {
+      if (element === panel || element.inert) continue;
+      element.inert = true;
+      sourcePanelInertElements.add(element);
+    }
+    if (Array.from(sourcePanelInertElements).some(element => element.contains(document.activeElement))) {
+      panel.querySelector("button").focus();
+    }
+  }
+
+  sourcePanelMedia.addEventListener("change", syncSourcePanelInert);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && sourcePanelMedia.matches && document.getElementById("aiSourcePanel")) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeSourcePanel();
+    }
+  }, true);
+
+  function closeSourcePanel(restoreFocus = true) {
+    document.getElementById("aiSourcePanel")?.remove();
+    document.getElementById("chatDialog")?.classList.remove("has-ai-sources");
+    syncSourcePanelInert();
+    if (restoreFocus && sourcePanelAnchor?.isConnected) sourcePanelAnchor.focus();
+    sourcePanelAnchor = null;
+  }
+
+  function openSourcePanel(source, sources, contextRoomId, anchor) {
+    hideAssetPreviewNow();
+    closeSourcePanel(false);
+    sourcePanelAnchor = anchor;
+    const panel = document.createElement("aside");
+    panel.id = "aiSourcePanel";
+    panel.className = "ai-source-panel";
+    panel.setAttribute("aria-label", "Quellen und Details");
+    const header = document.createElement("header");
+    header.className = "panel-header";
+    const row = document.createElement("div");
+    const label = document.createElement("span");
+    label.textContent = "QUELLEN & DETAILS";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "btn btn--danger task-detail-close";
+    close.textContent = "×";
+    close.setAttribute("aria-label", "Quellen schließen");
+    close.addEventListener("click", () => closeSourcePanel());
+    row.append(label, close);
+    header.append(row);
+    const body = document.createElement("div");
+    body.className = "ai-source-body";
+    const identity = document.createElement("p");
+    identity.className = "ai-source-id";
+    identity.textContent = `${source.type}:${source.id}`;
+    const title = document.createElement("h2");
+    title.textContent = source.title || source.preview || identity.textContent;
+    const preview = document.createElement("p");
+    preview.textContent = source.preview && source.preview !== title.textContent ? source.preview : "";
+    const card = document.createElement("section");
+    card.className = "ai-source-card";
+    const facts = document.createElement("dl");
+    facts.className = "ai-source-facts";
+    const cached = source.type === "asset" ? window.NRCAssets?.roomAssets?.get(BigInt(contextRoomId))?.get(BigInt(source.id)) : null;
+    let metadata;
+    try { metadata = JSON.parse(cached?.preview || "null"); } catch { /* A source may have a plain-text preview. */ }
+    const type = cached?.assetType === AssetType.CustomerContact ? "CRM Kontakt" :
+      cached?.assetType === AssetType.CustomerCompany ? "CRM Organisation" :
+      cached?.assetType === AssetType.CustomerActivity ? "CRM Aktivität" : source.type;
+    for (const [label, value] of [["Typ", type], ["E-Mail", metadata?.email], ["Telefon", metadata?.phone], ["Funktion", metadata?.role], ["ID", identity.textContent]]) {
+      if (!value) continue;
+      const pair = document.createElement("div");
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const detail = document.createElement("dd");
+      detail.textContent = value;
+      if (label === "E-Mail") {
+        const link = document.createElement("a");
+        link.href = `mailto:${encodeURIComponent(value)}`;
+        link.textContent = value;
+        detail.replaceChildren(link);
+      }
+      pair.append(term, detail);
+      facts.append(pair);
+    }
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "btn";
+    open.textContent = "Datensatz öffnen ↗";
+    open.addEventListener("click", () => {
+      closeSourcePanel(false);
+      if (window.NRCViewManager?.getActiveView?.() === "sullivanShare") exitSullivanShareMode();
+      navigateToSource(source, contextRoomId);
+    });
+    const heading = document.createElement("h3");
+    heading.textContent = `Quellen dieser Antwort (${sources.length})`;
+    card.append(identity, title, preview, facts, open);
+    body.append(card, heading);
+    sources.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ai-source-item";
+      const name = document.createElement("span");
+      name.textContent = `${index + 1}  ${item.title || item.preview || `${item.type}:${item.id}`}`;
+      const reference = document.createElement("small");
+      reference.textContent = `${item.type}:${item.id}`;
+      button.append(name, reference);
+      button.setAttribute("aria-pressed", String(item === source));
+      button.addEventListener("click", () => openSourcePanel(item, sources, contextRoomId, anchor));
+      body.append(button);
+    });
+    panel.append(header, body);
+    panel.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.stopPropagation(); closeSourcePanel(); }
+    });
+    const dialog = document.getElementById("chatDialog");
+    dialog.classList.add("has-ai-sources");
+    dialog.append(panel);
+    syncSourcePanelInert();
+    close.focus();
+  }
+
+  function renderAnswer(root, messageData) {
+    // Keep the transport/history envelope intact; only its presentation changes.
+    const text = String(messageData.message || "");
+    const [body, sourceText = ""] = text.split(/\n\*\*SOURCES \(\d+\)\*\*\n/);
+    const answer = messageData.aiAnswer ?? body
+      .replace(/^\*\*AI RESPONSE[^\n]*\n?/, "")
+      .replace(/^\*\*FOLLOW-UP CONTEXT:[^\n]*\n?/, "").trim();
+    const sources = Array.isArray(messageData.aiSources) ? messageData.aiSources :
+      Array.from(sourceText.matchAll(/^- \[(\w+):(\d+)\] (.+)$/gm), match => ({ type: match[1], id: match[2], title: match[3] }));
+    root.classList.add("ai-answer-body");
+    root.innerHTML = parseMarkdown(answer, { entityReferences: false });
+    const evidence = document.createElement("details");
+    evidence.className = "ai-response-evidence";
+    const summary = document.createElement("summary");
+    summary.textContent = `Recherche · ${sources.length} ${sources.length === 1 ? "Quelle" : "Quellen"}`;
+    evidence.append(summary);
+    sources.forEach((source, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ai-source-item";
+      button.textContent = `[${index + 1}] ${source.title || source.preview || `${source.type}:${source.id}`}`;
+      button.addEventListener("click", () => openSourcePanel(source, sources, messageData.aiContextRoomId ?? messageData.roomId, button));
+      evidence.append(button);
+    });
+    root.append(evidence);
+    processAssetReferences(root, sources, messageData.aiContextRoomId ?? messageData.roomId);
+    return answer;
   }
 
   function answerWithSources(messageData) {
@@ -2666,18 +2840,40 @@
     if (root.querySelector(".ai-response-actions")) return;
     const actions = document.createElement("div");
     actions.className = "ai-response-actions";
-    const add = (label, title, handler, requiresIdle = false) => {
+    const more = document.createElement("details");
+    more.className = "ai-response-more";
+    const summary = document.createElement("summary");
+    summary.textContent = "⋮";
+    summary.setAttribute("aria-label", "Aktionen");
+    summary.title = "Weitere Aktionen";
+    const menu = document.createElement("div");
+    menu.className = "ai-response-menu";
+    more.append(summary, menu);
+    more.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        more.open = false;
+        summary.focus();
+      }
+    });
+    const add = (label, title, handler, requiresIdle = false, target = menu) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "btn";
       button.textContent = label;
+      button.setAttribute("aria-label", label);
+      if (target === actions) {
+        button.classList.add("ai-response-icon");
+        button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></svg>';
+      }
       button.title = title;
       if (requiresIdle) {
         button.dataset.requiresIdle = "true";
         button.disabled = isWorkbenchBusy();
       }
       button.addEventListener("click", handler);
-      actions.appendChild(button);
+      button.addEventListener("click", () => { more.open = false; });
+      target.appendChild(button);
     };
     const feedback = (text, error = false) => logWorkbenchMessage(
       error ? "Error" : "CommandResult",
@@ -2685,15 +2881,7 @@
       messageData.roomId,
       messageData.aiContextRoomId,
     );
-    add("COPY", "Copy answer body", async () => {
-      try {
-        await navigator.clipboard.writeText(messageData.aiAnswer);
-        feedback("✓ SULLIVAN ANSWER COPIED");
-      } catch (err) {
-        feedback(`COPY FAILED: ${err.message}`, true);
-      }
-    });
-    add("SAVE AS NOTE", "Save answer and source references in the captured context", async () => {
+    add("Als Notiz speichern", "Save answer and source references in the captured context", async () => {
       const title = await window.NRCDialog.prompt("Note title:", { title: "SAVE SULLIVAN RESPONSE", initialValue: conciseTitle(messageData.aiQuestion) });
       if (!title) return;
       const preview = JSON.stringify({ title, teaser: messageData.aiAnswer.slice(0, 240), project: "", tags: ["sullivan"] });
@@ -2705,7 +2893,7 @@
       );
       if (!correlationId) feedback("NOTE SAVE FAILED: NOT CONNECTED", true);
     }, true);
-    add("CREATE TASK", "Create a task in the captured context", async () => {
+    add("Aufgabe erstellen", "Create a task in the captured context", async () => {
       const title = await window.NRCDialog.prompt("Task title:", { title: "CREATE TASK FROM RESPONSE", initialValue: conciseTitle(messageData.aiQuestion) });
       if (!title) return;
       const correlationId = window.NRCTasks?.sendCreateTask(
@@ -2719,21 +2907,12 @@
       if (correlationId) feedback("TASK CREATE REQUEST SENT");
       else feedback("TASK CREATE FAILED: NOT CONNECTED", true);
     }, true);
-    add("RETRY", "Retry as a fresh run without prior conversational context", () => {
+    add("Erneut versuchen", "Retry as a fresh run without prior conversational context", () => {
       if (isWorkbenchBusy()) return;
       resetAskSession(BigInt(messageData.aiContextRoomId), BigInt(messageData.roomId));
       handleAsk(messageData.aiQuestion, { contextConvID: messageData.aiContextRoomId, displayConvID: messageData.roomId });
-    }, true);
-    add("NEW SESSION", "Reset the session and clear the transcript", async () => {
-      if (isWorkbenchBusy()) return;
-      resetAskSession(BigInt(messageData.aiContextRoomId), BigInt(messageData.roomId));
-      await window.NRCChat?.clearCurrentRoomMessages?.({
-        logResult: false,
-        roomId: BigInt(messageData.roomId),
-        aiContextRoomId: BigInt(messageData.aiContextRoomId),
-      });
-      renderEmptyState();
-    }, true);
+    }, true, actions);
+    actions.append(more);
     root.appendChild(actions);
   }
 
@@ -2778,6 +2957,8 @@
     clearSullivanShareMode,
     exitSullivanShareMode,
     navigateToSource,
+    renderAnswer,
+    closeSourcePanel,
     renderEmptyState,
     renderResponseActions,
   };

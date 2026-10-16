@@ -151,6 +151,49 @@ window.NRCChat = (() => {
     composerContext = next;
   }
 
+  function renderCopyActions(root, markdown, metadata) {
+    const actions = document.createElement("div");
+    actions.className = "message-copy-actions";
+    actions.setAttribute("role", "group");
+    actions.setAttribute("aria-label", "Nachrichtenaktionen");
+    const feedback = document.createElement("span");
+    feedback.className = "message-copy-feedback";
+    feedback.setAttribute("role", "status");
+    for (const formatted of [false, true]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn--row";
+      button.setAttribute("aria-label", formatted ? "Mit Formatierung kopieren" : "Kopieren");
+      button.title = formatted ? "Mit Formatierung kopieren" : "Als Markdown kopieren";
+      button.innerHTML = formatted
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h11l5 5v13H4zM14 3v6h6M7 17l3-6 3 6m-5-2h4M15 13h2v4h-2z"/></svg>'
+        : '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></svg>';
+      button.addEventListener("click", async () => {
+        try {
+          if (formatted) {
+            if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+              throw new Error("Formatierte Zwischenablage nicht verfügbar. Bitte als Markdown kopieren.");
+            }
+            const body = root.cloneNode(true);
+            body.querySelectorAll(".message-copy-feedback, .ai-response-actions, .ai-response-evidence, .ai-action-plan").forEach(element => element.remove());
+            await navigator.clipboard.write([new ClipboardItem({
+              "text/html": new Blob([DOMPurify.sanitize(body.innerHTML)], { type: "text/html" }),
+              "text/plain": new Blob([markdown], { type: "text/plain" }),
+            })]);
+          } else {
+            await navigator.clipboard.writeText(markdown);
+          }
+          feedback.textContent = formatted ? "Mit Formatierung kopiert" : "Kopiert";
+        } catch (error) {
+          feedback.textContent = `Kopieren fehlgeschlagen: ${error.message}`;
+        }
+      });
+      actions.append(button);
+    }
+    metadata.append(actions);
+    root.append(feedback);
+  }
+
   function decorate(row, message) {
     if (!enabled() || !["Message", "Sent"].includes(message.type)) return;
     if (isMention(message)) {
@@ -163,7 +206,8 @@ window.NRCChat = (() => {
     const reply = document.createElement("button");
     reply.type = "button";
     reply.className = "btn btn--row chat-reply-action";
-    reply.textContent = "REPLY";
+    reply.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l-6 6 6 6M3 11h10a7 7 0 0 1 7 7"/></svg>';
+    reply.title = "Antworten";
     reply.setAttribute("aria-label", `Reply to ${message.author || "message"}`);
     reply.onclick = () => {
       cancelQuote();
@@ -181,7 +225,7 @@ window.NRCChat = (() => {
       messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
       messageInput.dispatchEvent(new Event("input"));
     };
-    row.querySelector(".message-meta").append(reply);
+    (row.querySelector(".message-copy-actions") || row.querySelector(".message-meta")).append(reply);
   }
 
   function received(message) {
@@ -358,7 +402,7 @@ window.NRCChat = (() => {
     };
   }
 
-  return { init, syncComposer, markRead, suggestions, quoteText, mentionPattern, decorate, received, update,
+  return { init, syncComposer, markRead, suggestions, quoteText, mentionPattern, decorate, renderCopyActions, received, update,
     unreadDetail,
     referenceQuery, referenceSuggestions, searchReferences, cancelReferenceSearch,
     beforeAppend, beginHistory, filterHistory, endHistory, matchesQuery,

@@ -325,7 +325,7 @@ try {
     root.innerHTML = '<p>[TASK:123] [note:18446744073709551615]</p><code>[task:123]</code><a href="#"><strong>[note:456]</strong></a>';
     window.NRCAI.processAssetReferences(root, [], 2n);
     const links = root.querySelectorAll(".task-reference");
-    if (links.length !== 2 || links[0].textContent !== "[task:123]" || links[1].textContent !== "[note:18446744073709551615]") throw new Error("typed reference rendering or code/link exclusion failed");
+    if (links.length !== 2 || links[0].textContent !== "Release checklist" || links[1].textContent !== "[note:18446744073709551615]") throw new Error("typed reference rendering or code/link exclusion failed");
     const opened = [];
     const originalOpen = window.NRCInspector.openEntity;
     const originalGet = window.NRCAssets.requestAsset;
@@ -341,6 +341,54 @@ try {
     }
   });
   console.log("PASS: unified task/note picker, remote workspace search, keyboard/mouse insertion, empty/error/cancel states, exact 64-bit navigation and Markdown exclusions");
+  await page.evaluate(() => {
+    serverReady = true;
+    window.__originalTitleRequest = NRCAssets.requestAsset;
+    window.__resolveChatTitle = null;
+    NRCAssets.requestAsset = (_room, id, options) => {
+      if (id === 9999n) { options.onError?.({ message: "Not found" }); return; }
+      window.__resolveChatTitle = () => {
+        const asset = { assetId: id, convId: 0n, assetType: AssetType.Note, preview: JSON.stringify({ title: "Freigabe prüfen" }) };
+        NRCAssets.roomAssets.get(0n).set(id, asset);
+        options.onSuccess({ asset });
+      };
+    };
+    NRCAssets.roomAssets.get(0n).set(708n, { assetId: 708n, convId: 0n, assetType: AssetType.File, preview: JSON.stringify({ filename: "angebot.pdf" }) });
+    logMessage("Message", "[task:123] #123 [note:18446744073709551615] [file:708] [note:9999] `#123` [unchanged](https://example.com/#123)", 2n, { author: "anna" });
+  });
+  const titleLinks = page.locator("#logOutput .log-row").last().locator(".task-reference");
+  assert.deepEqual(await titleLinks.allTextContents(), ["Release checklist", "Release checklist", "[note:18446744073709551615]", "angebot.pdf", "[note:9999]"]);
+  await page.waitForFunction(() => typeof window.__resolveChatTitle === "function");
+  await page.evaluate(() => window.__resolveChatTitle());
+  assert.equal(await titleLinks.nth(2).textContent(), "Freigabe prüfen");
+  assert.equal(await titleLinks.nth(2).getAttribute("title"), "NOTE #18446744073709551615");
+  assert.match(await titleLinks.nth(4).getAttribute("title"), /NOTE #9999.*Not available/);
+  await page.evaluate(() => {
+    const task = NRCTasks.roomTasks.get(0n).get(123n);
+    task.title = "Release final prüfen";
+    document.dispatchEvent(new CustomEvent("nrc:task-changed", { detail: { task, reason: "updated" } }));
+    const asset = NRCAssets.roomAssets.get(0n).get(18446744073709551615n);
+    asset.preview = JSON.stringify({ title: "Freigabe erteilt" });
+    document.dispatchEvent(new CustomEvent("nrc:asset-updated", { detail: { asset } }));
+  });
+  assert.deepEqual(await titleLinks.allTextContents(), ["Release final prüfen", "Release final prüfen", "Freigabe erteilt", "angebot.pdf", "[note:9999]"]);
+  assert.match(await page.evaluate(() => roomHistory.get(2n).at(-1).message), /\[note:18446744073709551615\]/, "stored reference survives display resolution and renames");
+  await page.evaluate(() => { NRCAssets.requestAsset = window.__originalTitleRequest; });
+  console.log("PASS: chat titles from cache and exact reads, legacy IDs, files, renames, missing targets and unchanged stored references");
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.evaluate(() => logMessage("Sent", "Eigene **Nachricht** mit [task:123].", 2n, { author: "ben" }));
+  const ownCopy = page.locator("#logOutput .log-row").last();
+  await ownCopy.getByRole("button", { name: "Kopieren", exact: true }).click();
+  await ownCopy.getByText("Kopiert", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "Eigene **Nachricht** mit [task:123].");
+  await ownCopy.getByRole("button", { name: "Mit Formatierung kopieren", exact: true }).click();
+  await ownCopy.getByText("Mit Formatierung kopiert", { exact: true }).waitFor();
+  const ownHTML = await page.evaluate(async () => (await (await navigator.clipboard.read())[0].getType("text/html")).text());
+  assert.match(ownHTML, /<strong>Nachricht<\/strong>/);
+  assert.match(ownHTML, /Release final prüfen/);
+  assert.doesNotMatch(ownHTML, /message-copy-actions|Mit Formatierung kopiert|Kopiert/);
+  assert.equal(await page.locator("#logOutput .log-row.type-message").first().getByRole("button", { name: "Mit Formatierung kopieren", exact: true }).count(), 1, "received messages expose the same direct controls");
+  console.log("PASS: shared direct copy controls on own and received chat messages, Markdown IDs and formatted title links");
   await page.unroute("**/search");
   await page.route("**/search", async (route) => {
     const body = route.request().postDataJSON();
@@ -404,6 +452,192 @@ try {
     }
   }
   console.log("PASS: shared Markdown quote styles across six surfaces, nested content, light/dark, desktop/mobile");
+
+  // Exercise the real Sullivan request/render path, with disposable service replies.
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(process.env.NRC_CLIENT_URL || "http://localhost:8000");
+  await page.waitForFunction(() => window.NRCAI && ws?.readyState === WebSocket.OPEN);
+  await page.evaluate(async () => {
+    currentRoomId = 2n;
+    NRCViewManager.setActiveView("chat");
+    await clearCurrentRoomMessages({ roomId: 2n, logResult: false });
+    loadRoomHistory(2n);
+    logMessage("Message", "Erste Nachricht", 2n, { author: "anna", timestamp: 1000 });
+    logMessage("Message", "Kurz danach", 2n, { author: "anna", timestamp: 300999 });
+    logMessage("Message", "Nach fünf Minuten", 2n, { author: "anna", timestamp: 600999 });
+    logMessage("Message", "Andere Person", 2n, { author: "mika", timestamp: 601000 });
+  });
+  assert.equal(await page.locator(".col-tag").filter({ hasText: "anna" }).nth(1).isVisible(), false, "consecutive messages share their author label");
+  assert.ok(await page.locator(".col-tag").filter({ hasText: "anna" }).nth(2).isVisible(), "five-minute boundary begins a new group");
+  assert.ok(await page.locator(".col-tag").filter({ hasText: "mika" }).isVisible(), "changing author begins a new group");
+  for (const text of ["**QUERY** SELECT * FROM tasks", "**ASK**\nKeep this second line", "**QUERY · PLAN · CONTEXT WORKSPACE**\nNot an AI turn"]) {
+    await page.evaluate(text => logMessage("Sent", text, 2n), text);
+    const sent = page.locator("#logOutput .log-row").last();
+    assert.equal(await sent.locator(".col-message").innerText(), text.replaceAll("**", ""));
+    assert.equal(await sent.evaluate(node => node.classList.contains("ledger-ai-query")), false);
+  }
+  await page.route("**/ask/ready", route => route.fulfill({ json: { ai_username: "sullivan-test" } }));
+  const askRequests = [];
+  await page.route("**/ask", async route => {
+    askRequests.push(route.request().postDataJSON());
+    await route.fulfill({ json: {
+      answer: "Jochen Keil gehört zum **Kreismedienzentrum Esslingen**. [asset:1517] [asset:1515]\n\nSiehe #123, [task:123] und #18446744073709551615. `#123` [#123](https://example.org)\n\n## Nächste Schritte\n\n- **Kontakt prüfen**\n- *Freigabe einholen*\n\n| Kontakt | Status |\n| --- | --- |\n| Jochen | Offen |",
+      sources: [{ type: "asset", id: "1517", title: "Jochen Keil", preview: "Kontakt · Keil@kmz-es.de" },
+        { type: "task", id: "123", title: "Freigabe prüfen" },
+        { type: "task", id: "18446744073709551615", title: "Große Task-ID" },
+        { type: "asset", id: "1515", title: "Kreismedienzentrum Esslingen" }],
+      session_id: "chat-design-test", history_turns: askRequests.length - 1,
+    } });
+  });
+  await page.evaluate(async () => {
+    currentRoomId = 2n;
+    const aiDM = DM_CONV_FLAG | 999n;
+    activeDMs.set(aiDM, { username: "sullivan-test", online: true });
+    subscribedRooms.add(aiDM); roomHistory.set(aiDM, []);
+    NRCAssets.roomAssets.set(0n, new Map([[1517n, { assetId: 1517n, assetType: NRCAssets.AssetType.CustomerContact,
+      preview: JSON.stringify({ version: 1, title: "Jochen Keil", email: "keil@example.org", role: "<Koordination>" }) }]]));
+    await NRCAI.openSullivanWithContext(0n, { focused: true });
+    logMessage("Sent", "**QUERY · PLAN · CONTEXT WORKSPACE**\nFrühere Frage", aiDM, { aiContextRoomId: 0n });
+    await NRCAI.handleAsk("Zu welchem Kunden gehört Jochen Keil?");
+  });
+  assert.equal(await page.locator(".ledger-ai-query .col-message").first().innerText(), "Frühere Frage");
+  assert.equal(await page.locator(".ledger-ai-query .col-message").last().innerText(), "Zu welchem Kunden gehört Jochen Keil?");
+  const answer = page.locator(".ledger-ai-answer").last();
+  assert.ok((await answer.innerText()).includes("Jochen Keil gehört zum Kreismedienzentrum Esslingen"));
+  assert.ok(!(await page.locator("#logOutput").innerText()).match(/AI COMPLETE|AI RESPONSE|FOLLOW-UP CONTEXT|QUERY ·/));
+  assert.equal(await page.locator(".sullivan-empty").count(), 0);
+  assert.equal(await page.locator("#sullivanStop").isVisible(), false);
+  assert.equal(await answer.locator(".task-reference").first().innerText(), "[1]");
+  assert.deepEqual(await answer.getByRole("link", { name: "Quelle: Freigabe prüfen", exact: true }).allTextContents(), ["[2]", "[2]"]);
+  assert.equal(await answer.locator("code").innerText(), "#123");
+  assert.equal(await answer.locator('a[href="https://example.org"]').innerText(), "#123");
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await answer.getByRole("button", { name: "Kopieren", exact: true }).click();
+  await answer.getByText("Kopiert", { exact: true }).waitFor();
+  const markdownCopy = await page.evaluate(() => navigator.clipboard.readText());
+  assert.match(markdownCopy, /\*\*Kreismedienzentrum Esslingen\*\*/);
+  assert.match(markdownCopy, /\[asset:1517\]/, "Markdown copy keeps the stored references");
+  await answer.getByRole("button", { name: "Mit Formatierung kopieren", exact: true }).click();
+  await answer.getByText("Mit Formatierung kopiert", { exact: true }).waitFor();
+  const richCopy = await page.evaluate(async () => {
+    const [item] = await navigator.clipboard.read();
+    return { types: item.types, html: await (await item.getType("text/html")).text(), plain: await (await item.getType("text/plain")).text() };
+  });
+  assert.ok(richCopy.types.includes("text/html") && richCopy.types.includes("text/plain"));
+  assert.equal(richCopy.plain, markdownCopy, "text-only targets retain the Markdown fallback");
+  assert.doesNotMatch(richCopy.html, /message-copy-actions|ai-response-actions|ai-response-evidence|Recherche|Als Notiz speichern|Mit Formatierung kopiert/);
+  await page.evaluate(() => {
+    const editor = document.createElement("div");
+    editor.id = "clipboardPasteTarget";
+    editor.contentEditable = "true";
+    editor.style.cssText = "position:fixed;inset:20px;z-index:20000;background:white;color:black;overflow:auto";
+    document.body.append(editor);
+    editor.focus();
+  });
+  try {
+    await page.keyboard.press("Control+V");
+    const pasted = page.locator("#clipboardPasteTarget");
+    await pasted.locator("h2").waitFor();
+    assert.equal(await pasted.locator("h2").innerText(), "Nächste Schritte");
+    assert.equal(await pasted.locator("strong").first().innerText(), "Kreismedienzentrum Esslingen");
+    assert.equal(await pasted.locator("ul li").count(), 2);
+    assert.equal(await pasted.locator("em").innerText(), "Freigabe einholen");
+    assert.equal(await pasted.locator("table tbody td").first().innerText(), "Jochen");
+    assert.equal(await pasted.locator("code").innerText(), "#123");
+    assert.equal(await pasted.locator("a[href]").innerText(), "#123");
+    assert.equal(new URL(await pasted.locator("a[href]").getAttribute("href")).href, "https://example.org/");
+    assert.ok((await pasted.innerText()).includes("[1]"), "formatted copy retains the visible citation numbering");
+    assert.equal(await pasted.locator("button, details").count(), 0, "pasting never includes answer controls or research UI");
+  } finally { await page.evaluate(() => document.getElementById("clipboardPasteTarget").remove()); }
+  await page.evaluate(() => {
+    window.__originalClipboardWrite = navigator.clipboard.write;
+    navigator.clipboard.write = async () => { throw new Error("clipboard denied"); };
+  });
+  try {
+    await answer.getByRole("button", { name: "Mit Formatierung kopieren", exact: true }).click();
+    await answer.getByText("Kopieren fehlgeschlagen: clipboard denied", { exact: true }).waitFor();
+  } finally { await page.evaluate(() => { navigator.clipboard.write = window.__originalClipboardWrite; }); }
+  console.log("PASS: real Markdown and HTML clipboard writes, formatted paste with headings/lists/table/code/links/citations, UI exclusion and denied-write feedback");
+  const taskCitation = answer.getByRole("link", { name: "Quelle: Große Task-ID", exact: true });
+  await taskCitation.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await page.locator("#aiSourcePanel h2").innerText(), "Große Task-ID");
+  await page.evaluate(() => {
+    window.originalInspectorOpen = NRCInspector.openEntity;
+    NRCInspector.openEntity = ref => { window.openedSource = { type: ref.type, id: String(ref.id) }; };
+  });
+  await page.getByRole("button", { name: "Datensatz öffnen ↗", exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.openedSource), { type: "task", id: "18446744073709551615" });
+  await page.evaluate(() => { NRCInspector.openEntity = window.originalInspectorOpen; });
+  await page.evaluate(async () => {
+    await NRCAI.openSullivanWithContext(0n, { focused: true });
+  });
+  await answer.locator(".ai-response-evidence > summary").click();
+  assert.ok((await answer.locator(".ai-response-evidence").innerText()).includes("processing fresh"), "completed research remains inspectable");
+  await answer.locator(".ai-response-evidence > summary").click();
+  const citation = answer.getByRole("link", { name: "Quelle: Jochen Keil" });
+  await citation.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await page.locator("#aiSourcePanel h2").innerText(), "Jochen Keil");
+  assert.equal(await page.locator("#aiSourcePanel .ai-source-facts a").getAttribute("href"), "mailto:keil%40example.org");
+  assert.ok((await page.locator("#aiSourcePanel .ai-source-facts").innerText()).includes("<Koordination>"));
+  assert.ok((await page.locator("#aiSourcePanel .ai-source-facts").innerText()).includes("CRM Kontakt"));
+  await page.locator("#aiSourcePanel .ai-source-item").last().click();
+  assert.equal(await page.locator("#aiSourcePanel h2").innerText(), "Kreismedienzentrum Esslingen");
+  assert.equal(await page.locator("#aiSourcePanel .ai-source-facts a").count(), 0, "uncached sources never inherit another record's details");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#aiSourcePanel").count(), 0);
+  assert.equal(await citation.evaluate(node => node === document.activeElement), true, "closing evidence returns focus to its citation");
+  await answer.locator(".ai-response-more > summary").click();
+  assert.ok(await answer.getByRole("button", { name: "Als Notiz speichern", exact: true }).isVisible());
+  assert.equal(await answer.getByRole("button", { name: "NEW SESSION", exact: true }).count(), 0);
+  await page.evaluate(async () => NRCAI.handleAsk("Wer arbeitet da noch?"));
+  assert.equal(askRequests[1].session_id, "chat-design-test", "new presentation preserves follow-up context");
+
+  // Transport-only historical answers have no aiAnswer/aiSources metadata.
+  await page.evaluate(() => logMessage("Message", "**AI RESPONSE · CONTEXT WORKSPACE**\n**FOLLOW-UP CONTEXT:** LAST 1 TURN(S)\n\nHistorische Antwort. [note:91]\n\n**SOURCES (1)**\n- [note:91] Gesprächsnotiz", NRCAI.getDisplayConvId(), { author: "sullivan-ai", aiContextRoomId: 0n }));
+  const historical = page.locator(".ledger-ai-answer").last();
+  assert.equal(await historical.getByRole("link", { name: "Quelle: Gesprächsnotiz" }).innerText(), "[1]");
+  await historical.getByRole("button", { name: "Kopieren", exact: true }).click();
+  await historical.getByText("Kopiert", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "Historische Antwort. [note:91]", "historical copies omit transport envelopes");
+  await historical.locator(".ai-response-evidence > summary").click();
+  assert.ok((await historical.innerText()).includes("[1] Gesprächsnotiz"));
+  for (const theme of ["light", "dark"]) {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.evaluate(theme => { document.documentElement.dataset.theme = theme; logOutput.scrollTop = 0; }, theme);
+      await page.locator(".ledger-ai-answer .task-reference").first().click();
+      assert.ok(await page.locator("#aiSourcePanel").isVisible());
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      assert.equal(await page.locator("#logOutput").evaluate(node => node.inert), width === 390);
+      assert.equal(await input.evaluate(node => !!node.closest("[inert]")), false, "visible composer remains usable");
+      if (width === 390) {
+        for (const key of ["Shift+Tab", "Tab", "Tab", "Shift+Tab"]) {
+          await page.keyboard.press(key);
+          assert.equal(await page.evaluate(() => !!document.activeElement.closest("#logOutput, .chat-header")), false, "covered transcript and header never receive focus");
+        }
+        await page.keyboard.press("Escape");
+        assert.equal(await page.locator("#aiSourcePanel").count(), 0);
+        assert.equal(await page.locator("#logOutput").evaluate(node => node.inert), false);
+        assert.equal(await page.locator(".ledger-ai-answer .task-reference").first().evaluate(node => node === document.activeElement), true);
+        await page.locator(".ledger-ai-answer .task-reference").first().click();
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        assert.equal(await page.locator("#logOutput").evaluate(node => node.inert), false);
+        await page.locator(".ledger-ai-answer .task-reference").first().focus();
+        await page.setViewportSize({ width: 390, height: 1000 });
+        await page.waitForFunction(() => document.activeElement.closest("#aiSourcePanel"));
+      }
+      const composer = await input.boundingBox();
+      assert.ok(composer.y + composer.height <= 1000, "composer stays inside viewport");
+      await page.locator("#aiSourcePanel button[aria-label='Quellen schließen']").click();
+    }
+  }
+  await page.locator(".ledger-ai-answer .task-reference").first().click();
+  await page.evaluate(() => { NRCViewManager.setActiveView("chat"); loadRoomHistory(2n); });
+  assert.equal(await page.locator("#aiSourcePanel").count(), 0);
+  assert.equal(await page.locator("#logOutput").evaluate(node => node.inert), false);
+  console.log("PASS: Sullivan requests/follow-up, clean answers, historical citations, research disclosure, source selection, keyboard focus, actions, light/dark desktop/mobile");
   assert.deepEqual(errors, []);
   console.log("PASS: chat quotes/send, mouse/keyboard mentions, scroll/unread, local search, notification isolation, desktop/mobile light/dark");
 } finally {

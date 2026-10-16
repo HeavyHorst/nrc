@@ -1437,7 +1437,7 @@ async function connectWebSocket() {
         window.NRCAI.openSullivanWithContext(currentSullivanShareRoute.contextConvId, { focused: true });
       }
       if (parseInspectorRouteFromHash()) handleShareHashChange();
-      document.querySelectorAll("a[data-nrc-reference]").forEach(resolveMarkdownReference);
+      document.querySelectorAll("[data-nrc-reference]").forEach(resolveMarkdownReference);
     };
   };
 
@@ -6083,7 +6083,15 @@ function completeOpenAiRun(aiRunId, terminalStatus = "complete") {
   const header = row.querySelector(".ai-run-header");
   row.classList.remove("ai-run-row--expanded");
   header?.setAttribute("aria-expanded", "false");
-  if (terminalStatus === "complete") completeLedgerRun();
+  if (terminalStatus === "complete") {
+    const evidence = run.querySelector(".ai-response-evidence");
+    if (evidence) {
+      const steps = row.querySelector(".ai-run-steps");
+      if (steps) evidence.append(steps);
+      row.remove();
+    }
+    completeLedgerRun();
+  }
 }
 
 function displayMessage(messageData) {
@@ -6094,6 +6102,7 @@ function displayMessage(messageData) {
   const logOutput = document.getElementById("logOutput");
   if (!logOutput) return;
   const followChat = window.NRCChat.beforeAppend(messageData);
+  if (messageData.aiRunId) logOutput.querySelector(":scope > .sullivan-empty")?.remove();
 
   if (isAiRunStatusMessage(messageData)) {
     renderAiRunStatus(messageData, formatChatTimestamp(messageData.timestamp));
@@ -6110,7 +6119,8 @@ function displayMessage(messageData) {
   }
   if (messageData.type === "Sent") logRow.classList.add("message-own");
   if (isAiAnswerMessage(messageData)) logRow.classList.add("ledger-ai-answer");
-  if (messageData.type === "Sent" && /^\*\*(?:ASK|QUERY)\b/i.test(getMessageText(messageData))) {
+  if (messageData.type === "Sent" && (messageData.aiQuestion != null ||
+    (isAIDMConversation(messageData.roomId) && /^\*\*(?:ASK|QUERY)\s*·\s*[^·\n]+\s*·\s*CONTEXT\s+[^\n]+\*\*\r?\n/i.test(getMessageText(messageData))))) {
     logRow.classList.add("ledger-ai-query");
   }
 
@@ -6146,6 +6156,10 @@ function displayMessage(messageData) {
 
   colTag.textContent = tagText;
   colTag.title = tagText;
+  logRow.dataset.avatar = logRow.classList.contains("ledger-ai-answer") ? "AI" :
+    logRow.classList.contains("ledger-ai-query") ? "DU" : tagText.slice(0, 2).toUpperCase();
+  if (logRow.classList.contains("ledger-ai-answer")) colTag.textContent = "Sullivan";
+  if (logRow.classList.contains("ledger-ai-query")) colTag.textContent = "Du";
 
   const messageMeta = document.createElement("div");
   messageMeta.className = "message-meta";
@@ -6190,21 +6204,16 @@ function displayMessage(messageData) {
   } else if (messageData.type === "Message" || messageData.type === "Sent") {
     // Parse markdown first (converts to HTML)
     // Chat retains its source-aware reference previews and navigation.
-    const htmlContent = parseMarkdown(messageData.message, { entityReferences: false });
-    colMessage.innerHTML = htmlContent;
+    const aiAnswer = isAiAnswerMessage(messageData);
+    const messageText = logRow.classList.contains("ledger-ai-query")
+      ? messageData.aiQuestion ?? getMessageText(messageData).replace(/^\*\*(?:ASK|QUERY)[^\n]*\n?/, "")
+      : messageData.message;
+    let copyText = messageText;
+    if (aiAnswer && window.NRCAI?.renderAnswer) copyText = window.NRCAI.renderAnswer(colMessage, messageData);
+    else colMessage.innerHTML = parseMarkdown(messageText, { entityReferences: false });
 
-    const taskRefRoomId = messageData.aiContextRoomId ?? messageData.roomId;
-
-    // Then process task references in the parsed HTML
-    // This must happen AFTER innerHTML to process the actual DOM
-    if (window.NRCTaskReferences) {
-      window.NRCTaskReferences.processMessageTaskReferences(
-        colMessage,
-        taskRefRoomId,
-      );
-    }
-
-    if (window.NRCAI?.processAssetReferences) {
+    // Resolve references after Markdown, excluding code and existing links.
+    if (!aiAnswer && window.NRCAI?.processAssetReferences) {
       window.NRCAI.processAssetReferences(
         colMessage,
         messageData.aiSources || [],
@@ -6222,6 +6231,7 @@ function displayMessage(messageData) {
     if (isAiAnswerMessage(messageData) && window.NRCAI?.renderResponseActions) {
       window.NRCAI.renderResponseActions(colMessage, messageData);
     }
+    window.NRCChat.renderCopyActions(colMessage, copyText, messageMeta);
   } else if (messageData.type === "Activity") {
     // Activity messages: plain text but with task reference processing
     colMessage.textContent = messageData.message;
@@ -6248,6 +6258,15 @@ function displayMessage(messageData) {
   if (messageData.aiRunId) {
     appendTarget = getAiRunContainer(logOutput, messageData.aiRunId, true);
   }
+  if (appendTarget === logOutput && ["Message", "Sent"].includes(messageData.type) && !isAiAnswerMessage(messageData)) {
+    logRow.dataset.chatAuthor = messageData.author || (messageData.type === "Sent" ? myNickname : "");
+    logRow.dataset.chatTime = String(new Date(messageData.timestamp).getTime());
+    const previous = logOutput.lastElementChild;
+    const elapsed = Number(logRow.dataset.chatTime) - Number(previous?.dataset.chatTime);
+    if (logRow.dataset.chatAuthor && previous?.dataset.chatAuthor === logRow.dataset.chatAuthor && elapsed >= 0 && elapsed < 300000) {
+      logRow.classList.add("message-continuation");
+    }
+  }
   appendTarget.appendChild(logRow);
   if (isAiAnswerMessage(messageData)) completeOpenAiRun(messageData.aiRunId, "complete");
   updateLedgerQuery(messageData);
@@ -6273,6 +6292,7 @@ function loadRoomHistory(roomId, options = {}) {
   }
 
   window.NRCChat.beginHistory(roomId);
+  window.NRCAI?.closeSourcePanel?.(false);
   const logOutput = document.getElementById("logOutput");
   // Clear current chat
   logOutput.innerHTML = "";
@@ -7044,8 +7064,15 @@ window.NRCRooms = {
 
 function markdownReferenceTitle(type, id, entity = null) {
   if (type === "task") return (entity || window.NRCTasks?.roomTasks?.get(0n)?.get(id))?.title || "";
-  const note = entity || window.NRCAssets?.roomAssets?.get(0n)?.get(id);
-  return note?.assetType === AssetType.Note ? window.NRCNotes?.parseNotePreview(note.preview)?.title || "" : "";
+  const asset = entity || window.NRCAssets?.roomAssets?.get(0n)?.get(id);
+  if (!asset || type === "note" && asset.assetType !== AssetType.Note) return "";
+  if (asset.assetType === AssetType.Note) return window.NRCNotes?.parseNotePreview(asset.preview)?.title || "";
+  try {
+    const preview = JSON.parse(asset.preview);
+    return preview?.title || preview?.filename || preview?.name || "";
+  } catch {
+    return asset.preview || "";
+  }
 }
 
 // Resolve every mounted reference, including hidden and off-screen content.
@@ -7053,22 +7080,29 @@ function markdownReferenceTitle(type, id, entity = null) {
 // duplicate requests and populate the caches used by the inspector on click.
 function resolveMarkdownReference(link) {
   if (!link.isConnected || !serverReady) return;
-  const ref = parseInspectorRouteFromHash(new URL(link.href).hash);
+  const ref = link.dataset.referenceId
+    ? { type: link.dataset.referenceType, id: BigInt(link.dataset.referenceId), workspaceId: link.dataset.referenceWorkspace }
+    : parseInspectorRouteFromHash(new URL(link.href).hash);
   if (!ref || ref.workspaceId !== currentWorkspaceId) return;
+  const fallback = `[${ref.type}:${ref.id}]`;
+  const tooltip = `${ref.type.toUpperCase()} #${ref.id}`;
   const applyTitle = entity => {
     if (!link.isConnected || ref.workspaceId !== currentWorkspaceId) return;
     const title = markdownReferenceTitle(ref.type, ref.id, entity);
-    if (title) link.textContent = title;
+    link.textContent = title || fallback;
+    link.title = title ? tooltip : `${tooltip} · Not available`;
   };
   const title = markdownReferenceTitle(ref.type, ref.id);
   if (title) {
     link.textContent = title;
+    link.title = tooltip;
     return;
   }
+  link.textContent = fallback;
   if (ref.type === "task") {
-    window.NRCTasks?.requestTask(0n, ref.id, { onSuccess: detail => applyTitle(detail.task) });
+    window.NRCTasks?.requestTask(0n, ref.id, { onSuccess: detail => applyTitle(detail.task), onError: () => applyTitle(null) });
   } else {
-    window.NRCAssets?.requestAsset(0n, ref.id, { onSuccess: detail => applyTitle(detail.asset) });
+    window.NRCAssets?.requestAsset(0n, ref.id, { onSuccess: detail => applyTitle(detail.asset), onError: () => applyTitle(null) });
   }
 }
 
@@ -7076,11 +7110,15 @@ new MutationObserver(records => {
   for (const record of records) {
     for (const node of record.addedNodes) {
       if (node.nodeType !== Node.ELEMENT_NODE) continue;
-      node.querySelectorAll("a[data-nrc-reference]").forEach(resolveMarkdownReference);
-      if (node.matches("a[data-nrc-reference]")) resolveMarkdownReference(node);
+      node.querySelectorAll("[data-nrc-reference]").forEach(resolveMarkdownReference);
+      if (node.matches("[data-nrc-reference]")) resolveMarkdownReference(node);
     }
   }
 }).observe(document.body, { childList: true, subtree: true });
+
+for (const event of ["nrc:task-created", "nrc:task-changed", "nrc:asset-created", "nrc:asset-updated", "nrc:asset-deleted"]) {
+  document.addEventListener(event, () => document.querySelectorAll("[data-nrc-reference]").forEach(resolveMarkdownReference));
+}
 
 function parseInspectorRouteFromHash(hash = window.location.hash) {
   const match = hash.match(/^#\/inspect\/([^/]+)\/(note|task)\/([0-9]+)$/);

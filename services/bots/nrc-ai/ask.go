@@ -136,8 +136,27 @@ type askResponse struct {
 
 type askSource struct {
 	Type  string `json:"type"`
-	ID    uint64 `json:"id"`
+	ID    uint64 `json:"id,string"`
 	Title string `json:"title"`
+}
+
+// Older agent-session records used JSON numbers; emit strings without losing
+// the ability to read those records.
+func (s *askSource) UnmarshalJSON(data []byte) error {
+	type sourceAlias askSource
+	raw := struct {
+		ID json.RawMessage `json:"id"`
+		*sourceAlias
+	}{sourceAlias: (*sourceAlias)(s)}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	id, err := parseConvIDRaw(raw.ID)
+	if err != nil {
+		return err
+	}
+	s.ID = id
+	return nil
 }
 
 const (

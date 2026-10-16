@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261014sliceheader3">
+    <link rel="stylesheet" href="../css/main.css?v=20261016cleanup1">
     <link rel="stylesheet" href="../css/custom-select.css?v=20260926nesting1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -265,7 +265,7 @@
                         <div class="input-panel">
                             <div class="input-controls">
                                 <label class="input-container">
-                                    <textarea class="composer-input" rows="2" aria-label="Message composer example"></textarea>
+                                    <textarea class="composer-input" rows="2" aria-label="Message composer example" placeholder="Write a message…"></textarea>
                                 </label>
                                 <div class="composer-meta"><button class="btn" type="button" title="Send files (up to 100 MB each)">+ FILE</button><span><b>ENTER</b> SEND</span><span><b>SHIFT+ENTER</b> NEW LINE</span><span class="composer-byte-count">0 B / 51,200 B</span></div>
                                 <button class="btn composer-send" type="button">SEND ↵</button>
@@ -273,13 +273,13 @@
                         </div>
                         <div class="task-comment-input-area">
                             <label class="task-comment-input-container">
-                                <textarea class="task-comment-input" rows="2" aria-label="Comment composer example"></textarea>
+                                <textarea class="task-comment-input" rows="2" aria-label="Comment composer example" placeholder="Write a message…"></textarea>
                             </label>
                             <div class="task-comment-composer-meta"><span><b>ENTER</b> SEND</span><span class="task-comment-byte-count">0 B / 65,535 B</span></div>
                             <button class="btn task-comment-send" type="button">SEND ↵</button>
                         </div>
                     </div>
-                    <p class="catalog-usage"><b>CONTRACT</b> Chat and comments use a full-width multiline field above a compact footer with keyboard hints, byte-limit state and a neutral SEND ↵ button at right. Touch controls retain a 44px target. Over-limit drafts remain visible and cannot be submitted.</p>
+                    <p class="catalog-usage"><b>CONTRACT</b> Chat and comments use a full-width multiline field above a compact footer with keyboard hints, byte-limit state and a neutral SEND ↵ button at right. The writing surface uses the shared control background and inset border; empty inputs show “Write a message…” (“Ask Sullivan…” in AI chat). Accessible labels remain present when the hint disappears while typing. Touch controls retain a 44px target. Over-limit drafts remain visible and cannot be submitted.</p>
                 </div>
             </section>
 
@@ -310,7 +310,7 @@
                 <div class="catalog-grid-2">
                     <div class="catalog-subsection catalog-panel-demo inspector">
                         <div class="catalog-subhead"><h3>INSPECTOR HEADER</h3><code>identity row / mode row</code></div>
-                        <p class="catalog-usage"><b>VISIBILITY</b> Tasks (including slices), notes, customers, reminders, attention and calendar use the full workspace until a record is inspected. Closing the last record hides the rail again. Chat and Sullivan retain their context; the system log shows selected-event details.</p>
+                        <p class="catalog-usage"><b>VISIBILITY</b> Chat, tasks (including slices), notes, customers, reminders, attention and calendar use the full workspace until a record is inspected. Closing the last record hides the rail again. Sullivan presents evidence beside its answer; the system log shows selected-event details.</p>
                         <div class="catalog-resizable-panel">
                             <div class="agenda-resize-handle" role="separator" aria-label="Resize Inspector" tabindex="0"></div>
                             <div class="panel-header inspector-matrix-header">
@@ -567,10 +567,10 @@
                             <div class="log-row type-sent message-own"><span class="message-meta"><span class="col-tag">YOU</span><time class="col-time" title="09:42:17.044">09:42</time></span><span class="col-message">Inventory updated: 27 families</span></div>
                             <div class="log-row type-error"><span class="message-meta"><span class="col-tag">ERROR</span><time class="col-time" title="09:43:08.501">09:43</time></span><span class="col-message">Undefined token detected</span></div>
                             <div class="chat-unread-divider">NEW MESSAGES</div>
-                            <div class="log-row type-message chat-mentioned"><div class="message-meta"><span class="col-tag">ANNA</span><time class="col-time">09:44</time><span class="chat-mention-label">@ YOU</span><button class="btn btn--row chat-reply-action" type="button">REPLY</button></div><div class="col-message message-content"><blockquote><p>BEN: Ready for testing?</p></blockquote><p>@ben The build is ready.</p></div></div>
+                            <div class="log-row type-message chat-mentioned"><div class="message-meta"><span class="col-tag">ANNA</span><time class="col-time">09:44</time><span class="chat-mention-label">@ YOU</span><button class="btn btn--row chat-reply-action" type="button" aria-label="Reply to ANNA" title="Antworten"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l-6 6 6 6M3 11h10a7 7 0 0 1 7 7"/></svg></button></div><div class="col-message message-content"><blockquote><p>BEN: Ready for testing?</p></blockquote><p>@ben The build is ready.</p></div></div>
                         </div>
                         <div class="chat-tools"><span class="filter-label chat-reply-preview">REPLY TO ANNA: The build is ready.</span><button class="btn btn--danger" type="button">CANCEL · ESC</button></div>
-                        <p class="message-content">See <span class="task-reference" role="link" tabindex="0">[task:123]</span> and <span class="task-reference" role="link" tabindex="0">[note:456]</span>.</p>
+                        <div class="log-row type-message"><div class="message-meta"><span class="col-tag">ANNA</span><time class="col-time">09:45</time><div class="message-copy-actions" role="group" aria-label="Nachrichtenaktionen"><button class="btn btn--row" type="button" aria-label="Kopieren" title="Als Markdown kopieren"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></svg></button><button class="btn btn--row" type="button" aria-label="Mit Formatierung kopieren" title="Mit Formatierung kopieren"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h11l5 5v13H4zM14 3v6h6M7 17l3-6 3 6m-5-2h4M15 13h2v4h-2z"/></svg></button><button class="btn btn--row chat-reply-action" type="button" aria-label="Reply to ANNA" title="Antworten"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l-6 6 6 6M3 11h10a7 7 0 0 1 7 7"/></svg></button></div></div><div class="col-message message-content"><p>See <span class="task-reference" data-nrc-reference data-reference-type="task" title="TASK #123" role="link" tabindex="0">Release checklist</span> and <span class="task-reference" data-nrc-reference data-reference-type="note" title="NOTE #456" role="link" tabindex="0">Release notes</span>.</p><span class="message-copy-feedback" role="status"></span></div></div>
                         <div class="portal-wrapper">
                             <div class="autocomplete-dropdown entity-mode" role="listbox" aria-label="Task and note title selection example">
                                 <div class="autocomplete-option highlighted" role="option" aria-selected="true"><span class="autocomplete-option-command">Release checklist<span class="autocomplete-reference-id">[task:123]</span></span><span class="autocomplete-option-aliases">TASK</span></div>
@@ -579,6 +579,7 @@
                             </div>
                         </div>
                         <p class="catalog-usage">Type # and a title or ID to select TASK or NOTE from the workspace. Titles are primary; IDs are secondary. Arrow keys + Enter/Tab or click insert a typed reference; Escape dismisses. Cached items appear immediately; both tasks and notes lazily search the server after a typing pause, including entries not loaded by pagination. Status rows report SEARCHING TASKS &amp; NOTES…, NO MATCHES, or SEARCH UNAVAILABLE · LOADED ITEMS ONLY. Legacy #123 task links remain supported.</p>
+                        <p class="catalog-usage">Chat references show the current record title with a type icon; type and ID remain in the tooltip. Missing titles are fetched and renames update mounted links; unavailable targets retain their clickable ID fallback. Stored messages keep the original reference, code and existing links stay unchanged, and Sullivan keeps numbered citations.</p>
                         <p class="catalog-usage">REPLY appears on message hover or keyboard focus; touch devices retain the quiet, borderless action. It inserts an editable Markdown quote; Escape cancels. @ completion uses room presence. Mentions in quotes, code and links do not notify. Search covers locally loaded messages only; the result count appears only while searching. Scrolling up holds position; NEW jumps to the latest messages. Notification preferences are browser-local and scoped to workspace and room.</p>
                     </div>
                 </div>
@@ -656,7 +657,7 @@
                                 <div class="record-composer" data-composer data-composer-open="false">
                                     <button class="record-composer-bar" type="button" data-composer-toggle aria-expanded="false"><span>WRITE A MESSAGE…</span><b>M</b></button>
                                     <div class="task-comment-input-area">
-                                        <label class="task-comment-input-container"><textarea class="task-comment-input" rows="3" aria-label="Write a message"></textarea></label>
+                                        <label class="task-comment-input-container"><textarea class="task-comment-input" rows="3" aria-label="Write a message" placeholder="Write a message…"></textarea></label>
                                         <div class="task-comment-composer-meta" aria-live="polite"><span><b>ENTER</b> SEND</span><span><b>SHIFT+ENTER</b> NEW LINE</span><span class="task-comment-byte-count">0 B / 65,535 B</span></div>
                                         <button class="btn task-comment-send" type="button">SEND ↵</button>
                                     </div>
@@ -677,7 +678,7 @@
                                 <div class="record-composer" data-composer data-composer-open="true">
                                     <button class="record-composer-bar" type="button" data-composer-toggle aria-expanded="true"><span>WRITE A MESSAGE…</span><b>M</b></button>
                                     <div class="task-comment-input-area">
-                                        <label class="task-comment-input-container"><textarea class="task-comment-input" rows="3" aria-label="Write a message"></textarea></label>
+                                        <label class="task-comment-input-container"><textarea class="task-comment-input" rows="3" aria-label="Write a message" placeholder="Write a message…"></textarea></label>
                                         <div class="task-comment-composer-meta" aria-live="polite"><span><b>ENTER</b> SEND</span><span><b>SHIFT+ENTER</b> NEW LINE</span><span class="task-comment-byte-count">0 B / 65,535 B</span></div>
                                         <button class="btn task-comment-send" type="button">SEND ↵</button>
                                     </div>
@@ -779,6 +780,22 @@
                         <p class="catalog-usage"><b>CONTRACT</b> Active runs occupy one unboxed status line. Detailed steps remain available through explicit expansion; complete and error states retain semantic color.</p>
                     </div>
                 </div>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>SULLIVAN RESPONSE / EVIDENCE</h3><code>.ai-answer-body / .ai-response-evidence / .ai-source-panel</code></div>
+                    <div class="catalog-grid-2">
+                        <div class="log-row ledger-ai-answer"><div class="message-meta"><span class="col-tag">Sullivan</span><time class="col-time">12:29</time><div class="message-copy-actions" role="group" aria-label="Nachrichtenaktionen"><button class="btn btn--row" type="button" aria-label="Kopieren" title="Als Markdown kopieren"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></svg></button><button class="btn btn--row" type="button" aria-label="Mit Formatierung kopieren" title="Mit Formatierung kopieren"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h11l5 5v13H4zM14 3v6h6M7 17l3-6 3 6m-5-2h4M15 13h2v4h-2z"/></svg></button></div></div><div class="message-content ai-answer-body">
+                            <p>Jochen Keil gehört zum <strong>Kreismedienzentrum Esslingen</strong>. <span class="task-reference" role="link" tabindex="0" aria-label="Quelle: Jochen Keil">[1]</span></p>
+                            <details class="ai-response-evidence"><summary>Recherche · 2 Quellen</summary><button class="ai-source-item" type="button">[1] Jochen Keil</button><button class="ai-source-item" type="button">[2] Kreismedienzentrum Esslingen</button><div class="ai-run-steps"><div class="ai-run-step ai-run-step--ok"><span class="ai-run-mark">✓</span><span class="ai-run-label">Workspace durchsucht</span></div></div></details>
+                            <div class="ai-response-actions"><button class="btn ai-response-icon" type="button" aria-label="Erneut versuchen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></svg></button><details class="ai-response-more"><summary aria-label="Aktionen" title="Weitere Aktionen">⋮</summary><div class="ai-response-menu"><button class="btn" type="button">Als Notiz speichern</button><button class="btn" type="button">Aufgabe erstellen</button></div></details></div>
+                            <span class="message-copy-feedback" role="status"></span>
+                        </div></div>
+                        <aside class="ai-source-panel" aria-label="Quellen und Details">
+                            <header class="panel-header"><div><span>QUELLEN & DETAILS</span><button class="btn btn--danger task-detail-close" type="button" aria-label="Quellen schließen">×</button></div></header>
+                            <div class="ai-source-body"><section class="ai-source-card"><p class="ai-source-id">asset:1517</p><h2>Jochen Keil</h2><p>CRM-Kontakt im Workspace.</p><dl class="ai-source-facts"><div><dt>Typ</dt><dd>CRM Kontakt</dd></div><div><dt>ID</dt><dd>asset:1517</dd></div></dl><button class="btn" type="button">Datensatz öffnen ↗</button></section><h3>Quellen dieser Antwort (2)</h3><button class="ai-source-item" type="button" aria-pressed="true"><span>1  Jochen Keil</span><small>asset:1517</small></button><button class="ai-source-item" type="button" aria-pressed="false"><span>2  Kreismedienzentrum Esslingen</span><small>asset:1515</small></button></div>
+                        </aside>
+                    </div>
+                    <p class="catalog-usage"><b>CONTRACT</b> Content-only conversation modernization: initial avatars, a bounded reading column, numbered inline citations and accessible answer actions. Every text message, own message and Sullivan answer has two directly visible copy icons beside its timestamp: Markdown and formatted copy. People chat adds the reply arrow to the same action group, exposed on hover/focus or persistently on touch. Consecutive messages keep their timestamp and controls in the metadata row without overlaying prose. Tooltips and accessible names distinguish actions; inline live feedback below the body reports success or failure. Formatted copy writes sanitized HTML with Markdown as the plain-text fallback, preserving headings, emphasis, lists, tables, code and links without action controls or the research disclosure. Desktop controls are compact; narrow screens retain 44px touch targets. Headers, tools, composer and rectangular controls retain NRC's shared components and theme tokens. Source cards show supplied previews and cached record fields only; unavailable CRM details are never invented. Completed run steps join the collapsed research disclosure; errors and cancellation stay explicit. Sources appear beside the transcript, or as a closable sheet on narrow screens. Escape returns focus to its citation. The shared people chat groups consecutive messages by author within five minutes while preserving each timestamp.</p>
+                </div>
                 <div class="catalog-grid-2">
                     <div class="catalog-subsection">
                         <div class="catalog-subhead"><h3>TEXT LINK</h3><code>--link-* / .note-description a</code></div>
@@ -832,7 +849,7 @@
                                     <div class="record-composer" data-composer data-composer-open="false">
                                         <button class="record-composer-bar" type="button" data-composer-toggle aria-expanded="false"><span>WRITE A MESSAGE…</span><b>M</b></button>
                                         <div class="task-comment-input-area">
-                                            <label class="task-comment-input-container"><textarea class="task-comment-input" rows="3" aria-label="Write a message"></textarea></label>
+                                            <label class="task-comment-input-container"><textarea class="task-comment-input" rows="3" aria-label="Write a message" placeholder="Write a message…"></textarea></label>
                                             <div class="task-comment-composer-meta" aria-live="polite"><span><b>ENTER</b> SEND</span><span><b>SHIFT+ENTER</b> NEW LINE</span><span class="task-comment-byte-count">0 B / 65,535 B</span></div>
                                             <button class="btn task-comment-send" type="button">SEND ↵</button>
                                         </div>
@@ -1246,7 +1263,7 @@ status      ← Service Worker</code></pre>
                             <tr><td>CUSTOM PICKER</td><td>Searchable multivalue selection</td><td><code>NRCCustomPicker</code></td><td>custom-picker.js</td><td><b>CORE</b></td></tr>
                             <tr><td>PORTAL</td><td>Anchored overlay positioning</td><td><code>Portal</code></td><td>portal.js</td><td><b>UTILITY</b></td></tr>
                             <tr><td>PRESENCE</td><td>Online, connecting, offline, unread</td><td><code>.dm-status</code></td><td>css/main.css</td><td><b>CORE</b></td></tr>
-                            <tr><td>CHAT LOG</td><td>Metadata, quotes, mentions, search, unread, AI run; attachment download rows with type/size, PDF tab, lazy audio/video players</td><td><code>.log-row</code>, <code>.chat-attachment</code>, <code>.message-meta</code>, <code>.chat-tools</code>, <code>.chat-unread-divider</code></td><td>app.js / attachments.js / chat.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>CHAT LOG</td><td>Metadata, quotes, mentions, search, unread, AI run; direct Markdown/formatted copy icons with inline live feedback on own, received and Sullivan text messages; attachment download rows with type/size, PDF tab, lazy audio/video players</td><td><code>.log-row</code>, <code>.chat-attachment</code>, <code>.message-meta</code>, <code>.message-copy-actions</code>, <code>.chat-tools</code>, <code>.chat-unread-divider</code></td><td>app.js / attachments.js / chat.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>COMPOSER</td><td>Shared chat/comment command rail, byte state, send, stop; collapsed to one line inside a record panel and expanded on demand; chat file upload (100 MB/file), multiple selection and paste</td><td><code>.input-controls</code>, <code>.task-comment-input-area</code></td><td>index.html / detail-ui.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>TOAST</td><td>Transient actionable notification</td><td><code>.toast</code></td><td>app.js / css/main.css</td><td><b>FEEDBACK</b></td></tr>
                             <tr><td>DIALOG</td><td>Shared native modal shell, focus return, cancellation guard; confirm/prompt and file forms</td><td><code>NRCModal</code>, <code>NRCDialog</code>, <code>.nrc-dialog*</code></td><td>dialog.js / app.js / files.js / css/main.css</td><td><b>FEEDBACK</b></td></tr>
@@ -1255,7 +1272,7 @@ status      ← Service Worker</code></pre>
                             <tr><td>RECORD MESSAGES</td><td>One document surface plus one messages block per record; closed block is a single register line (label, count, last message, key hint), open block scrolls its own stream above a collapsed composer; a wide container turns the block into a column beside the document with a draggable divider; message cards render markdown through the shared chat renderer</td><td><code>.record-messages</code>, <code>.record-strip</code>, <code>.record-stream</code>, <code>.record-message</code>, <code>.record-composer</code>, <code>data-messages-toggle</code></td><td>detail-ui.js / tasks.js / notes.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>RECORD RESOURCES</td><td>Task/Note share one counter bar with no tab selected by default; at most one resource opens. ATTACH chooses a direct attachment or a reusable File with metadata; LINK offers Notes, Tasks and Files. These two actions stay in the header for every tab; comments remain visible separately.</td><td><code>.document-resources</code>, <code>.record-resource</code>, <code>data-resource-toggle</code>, <code>data-messages-persistent</code></td><td>detail-ui.js / files.js / links-ui.js / tasks.js / notes.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>TASK DETAIL</td><td>Stable read/edit document: title, compact inline properties, description and shared resource registers. Header provenance shows CREATED BY, CREATED, UPDATED and optional COMPLETED in labelled cells, independent of document scrolling; identity, SAVE/CANCEL and confirmed save state remain visible.</td><td><code>.record-document</code>, <code>.task-detail-*</code>, <code>.inspector-metadata</code></td><td>tasks.js / detail-ui.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
-                            <tr><td>ENTITY REFERENCES</td><td>Typed task/note tokens, shared title/ID picker, search status, preview card</td><td><code>.task-reference*</code>, <code>.autocomplete-status</code></td><td>chat.js / app.js / ai.js / task-references.js</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>ENTITY REFERENCES</td><td>Typed tokens and legacy task IDs render current titles with type icons, exact-ID navigation, asynchronous resolution and ID fallback; shared title/ID picker, search status, preview card</td><td><code>.task-reference*</code>, <code>.autocomplete-status</code></td><td>chat.js / app.js / ai.js / task-references.js</td><td><b>FEATURE</b></td></tr>
                             <tr><td>WORK SLICES</td><td>Explicit work streams linked by <code>member-of</code>; proportional task-status segments with inline counts, separate blocked text and owner, accessible full counts for tiny segments; full-width detail summary with facts/status/percentage swatches on the left and an aligned blocked track on the right (stacked in narrow panes), owner/outcome fields (stacked on phones), owner-acted closure, assigned/unassigned work counters, server-side owner/name filters, paged listing, filtered count and no-match state</td><td><code>.slice-*</code>, <code>NRCSlices</code>, <code>member-of</code></td><td>slices.js / edges.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>ATTENTION REGISTER</td><td>Actionable own work grouped by primary reason: overdue, overdue/waiting follow-up, unblocks, assigned, due reminders, mentions and unread. Ordinary blocked tasks and slices are excluded. Inline dependency controls underline and use accent color on hover/focus, with a keyboard-focus outline. Dependency disclosures link directly to affected tasks across assignees; partial reads are labelled. Tasks appear once; section counts follow kind filters. Shared openers and keyboard navigation cross headings.</td><td><code>.attention-*</code>, <code>--attention-columns</code></td><td>index.html / attention.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>CALENDAR</td><td>Workspace tasks, reminder deadlines and durable appointments by local date: agenda, spanning month intervals, selected-day list, shared person/project filters, appointment editor, shared inspector and live refresh</td><td><code>.calendar-*</code>, <code>.appointment-detail-panel</code></td><td>index.html / calendar.js / appointments.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
@@ -1268,7 +1285,7 @@ status      ← Service Worker</code></pre>
                             <tr><td>ATTACHMENTS</td><td>Lifecycle-owned read ledger: kind, filename, size, OPEN and native DOWNLOAD. Upload progress, popover and editing remain separate.</td><td><code>&lt;nrc-attachment-list&gt;</code>, <code>.task-attachment-*</code>, <code>.attachment-popover*</code></td><td>attachments.js / css/main.css</td><td><b>COMPONENT / FEATURE</b></td></tr>
                             <tr><td>FILE ASSETS</td><td>Compact rows with OPEN and DOWNLOAD; the title opens Details. Inspector and Details share a title, description and grouped metadata register, OPEN/DOWNLOAD ledger and inline images that open the image viewer. Known raster extensions also preview when MIME is generic. Document resource tabs own the title/count; standalone sections retain a header. Read-first Details supports EDIT/CANCEL EDIT; upload/edit use paired fields and fixed footer actions.</td><td><code>.file-assets-*</code>, <code>NRCFiles</code></td><td>files.js / attachments.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>INSPECTOR</td><td>Control-matrix header with inline scrollable provenance, scoped keyboard operations, persistent resize; entity-only rail in workspace registers, conversation context and selected system events</td><td><code>.inspector-*</code>, <code>.ledger-*</code></td><td>inspector.js / detail-ui.js / app.js</td><td><b>COMPOSITE</b></td></tr>
-                            <tr><td>AI WORKBENCH</td><td>Run state, response, steps, preview cards</td><td><code>.ai-*</code>, <code>.sullivan-*</code></td><td>ai.js / css/main.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>AI WORKBENCH</td><td>Focused response, numbered citations, research disclosure, responsive source inspector, compact response actions, run/error/cancellation state</td><td><code>.ai-*</code>, <code>.sullivan-*</code></td><td>ai.js / app.js / css/ledger.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>MARKDOWN CONTENT</td><td>Headings, code, links, tables, shared/nested quotes, KaTeX</td><td><code>.agenda-preview</code>, <code>.message-content</code>, <code>blockquote</code></td><td>app.js / css/main.css</td><td><b>CONTENT</b></td></tr>
                         </tbody>
                     </table>

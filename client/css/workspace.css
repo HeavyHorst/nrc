@@ -1482,12 +1482,6 @@ input[type="checkbox"]:focus {
     overflow-wrap: anywhere;
 }
 
-.ai-response-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-}
-
 .chat-send-btn {
     flex: 0 0 auto;
     margin-right: 0.5rem;
@@ -1550,12 +1544,6 @@ body.sullivan-workbench .sullivan-submit-controls {
 .ai-workbench-run > .log-row {
     padding-right: 0.5rem;
     padding-left: 0.5rem;
-}
-
-.ai-response-actions {
-    margin-top: 1rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid var(--border-primary);
 }
 
 .ai-run-header {

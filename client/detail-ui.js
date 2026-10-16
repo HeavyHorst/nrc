@@ -476,7 +476,7 @@
         </button>
         <div class="task-comment-input-area">
           <label class="task-comment-input-container" for="${escapeHtml(inputId)}">
-            <textarea class="task-comment-input" id="${escapeHtml(inputId)}" rows="3" aria-label="Write a message">${escapeHtml(draft)}</textarea>
+            <textarea class="task-comment-input" id="${escapeHtml(inputId)}" rows="3" aria-label="Write a message" placeholder="Write a message…">${escapeHtml(draft)}</textarea>
           </label>
           <div class="task-comment-composer-meta" aria-live="polite">
             <span><b>ENTER</b> SEND</span>

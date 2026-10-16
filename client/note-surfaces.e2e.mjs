@@ -112,7 +112,7 @@ try {
   await page.evaluate(() => window.__resolveReference());
   assert.equal(await page.locator('#hiddenReference a[title="TASK #987"]').textContent(), "Kaufangebot prüfen", "hidden task references resolve without becoming visible");
   assert.equal(await page.locator('#hiddenReference a[title="NOTE #4700"]').textContent(), "Medienpakete verkaufen", "uncached notes resolve too");
-  assert.equal(await page.locator('#hiddenReference a[title="NOTE #9999"]').textContent(), "[note:9999]", "missing targets retain an actionable ID fallback");
+  assert.equal(await page.locator('#hiddenReference a[title="NOTE #9999 · Not available"]').textContent(), "[note:9999]", "missing targets retain an actionable ID fallback");
   await page.evaluate(() => {
     document.getElementById("hiddenReference").remove();
     NRCTasks.requestTask = window.__originalReferenceTaskRequest;

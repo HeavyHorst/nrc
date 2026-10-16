@@ -34,7 +34,7 @@ try {
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-      for (const view of ["kanban", "notes", "customers", "reminders", "attention", "calendar"]) {
+      for (const view of ["chat", "kanban", "notes", "customers", "reminders", "attention", "calendar"]) {
         await page.evaluate(view => view === "notes" ? NRCNotes.showNotesView() : NRCViewManager.setActiveView(view), view);
         assert.equal(await rail.isHidden(), true, `${view} has no empty rail (${theme}/${width})`);
         if (view === "kanban") {
@@ -65,13 +65,13 @@ try {
         assert.equal(await rail.isHidden(), true, "note close hides the rail");
         if (view === "notes") await capture(`notes-closed-${theme}-${width}`);
       }
-      // A live record survives a view switch; returning to chat restores context.
+      // A live record survives a view switch; closing it hides the empty rail.
       await open("note");
       await page.evaluate(() => NRCViewManager.setActiveView("notes"));
       assert.equal(await rail.isVisible(), true);
       await page.evaluate(() => NRCInspector.close());
       assert.equal(await rail.isHidden(), true);
-      for (const view of ["chat", "sullivan"]) {
+      for (const view of ["sullivan"]) {
         await page.evaluate(view => NRCViewManager.setActiveView(view), view);
         assert.equal(await rail.evaluate(el => el.classList.contains("inspector-entity-only")), false);
         if (width === 1440) assert.equal(await rail.isVisible(), true, `${view} retains context`);
@@ -79,7 +79,7 @@ try {
     }
   }
   assert.deepEqual(errors, []);
-  console.log("PASS inspector visibility: six views, flat/slices, open/close/back, view switching, light/dark, desktop/mobile");
+  console.log("PASS inspector visibility: seven views including chat, flat/slices, open/close/back, view switching, light/dark, desktop/mobile");
 } finally {
   await browser.close();
 }

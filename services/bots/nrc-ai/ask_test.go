@@ -19,6 +19,33 @@ func TestExtractTaskRefs(t *testing.T) {
 	}
 }
 
+func TestAskSourceJSONPreservesUint64IDs(t *testing.T) {
+	for _, id := range []string{`18446744073709551615`, `"18446744073709551615"`} {
+		var source askSource
+		if err := json.Unmarshal([]byte(`{"type":"task","id":`+id+`,"title":"Release"}`), &source); err != nil {
+			t.Fatal(err)
+		}
+		if source.ID != ^uint64(0) || source.Type != "task" || source.Title != "Release" {
+			t.Fatalf("source lost fields or precision: %+v", source)
+		}
+		encoded, err := json.Marshal(askResponse{Sources: []askSource{source}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct {
+			Sources []struct {
+				ID string `json:"id"`
+			} `json:"sources"`
+		}
+		if err := json.Unmarshal(encoded, &response); err != nil {
+			t.Fatalf("source IDs must be JSON strings: %s: %v", encoded, err)
+		}
+		if len(response.Sources) != 1 || response.Sources[0].ID != "18446744073709551615" {
+			t.Fatalf("incorrect source ID: %s", encoded)
+		}
+	}
+}
+
 func TestClassifyAskIntent(t *testing.T) {
 	if got := classifyAskIntent("What's blocking release?"); got != askIntentPlanning {
 		t.Fatalf("expected planning intent, got %v", got)

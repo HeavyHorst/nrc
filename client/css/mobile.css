@@ -68,7 +68,6 @@
     .chat-header:has(#mobileChatTools) .header-register-control-row { min-height: 52px; }
     #chatTools .filter-input { font-size: var(--mobile-font-lg); }
     #logOutput.log-body { padding: 1rem 0.875rem; }
-    #logOutput .col-message { font-size: 15px; line-height: 1.5; }
     .input-panel { padding-bottom: 0; }
     .input-controls { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 0; padding: 0; align-items: end; }
     .input-container { grid-column: 1 / -1; grid-row: 1; padding: 16px 8px; min-height: 60px; }
