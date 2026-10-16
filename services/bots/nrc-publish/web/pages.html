@@ -17,6 +17,7 @@
     </head>
     <body>
       <a class="skip" href="#main">Zum Inhalt</a>
+      {{ if ne .Mode "home" }}
       <header class="header">
         <div class="header-inner">
           <a class="brand" href="/" aria-label="{{ .Brand }} Startseite"
@@ -47,6 +48,7 @@
           {{ end }}
         </div>
       </header>
+      {{ end }}
       {{ if eq .Mode "home" }}{{ template "home" . }}{{ end }}
       {{ if eq .Mode "article" }}{{ template "article" . }}{{ end }}
       {{ if eq .Mode "admin" }}{{ template "admin" . }}{{ end }}
