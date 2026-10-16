@@ -58,7 +58,11 @@ try {
     NRCEdges.requestEdgePage = async () => ({ session: { seen: new Set() }, hasMore: false });
     NRCEdges.getEdgesForEntity = () => [];
     NRCAssets.requestAssetsByIds = (_room, ids) => Promise.all(ids.map(id => new Promise(resolve =>
-      NRCAssets.requestAsset(0n, id, { onSuccess: detail => resolve(detail.asset) }))));
+      NRCAssets.requestAsset(0n, id, { onSuccess: detail => {
+        if (!NRCAssets.roomAssets.has(0n)) NRCAssets.roomAssets.set(0n, new Map());
+        NRCAssets.roomAssets.get(0n).set(id, detail.asset);
+        resolve(detail.asset);
+      } }))));
     NRCViewManager.setActiveView("customers");
     NRCWorkspaceSearch.onReconnect();
   });
@@ -143,6 +147,105 @@ try {
     await page.waitForFunction(title => document.getElementById("inspectorEntityHost").textContent.includes(title), title);
     await page.evaluate(() => NRCInspector.close());
   }
+  // Asymmetric lists cross both display-page and relationship-page boundaries.
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => {
+    const assets = new Map(), edges = [];
+    const make = (id, assetType, title, extra = {}) => {
+      const asset = { assetId: BigInt(id), convId: 0n, assetType, preview: JSON.stringify({ version: 1, title, ...extra }),
+        payload: assetType === 3 ? JSON.stringify({ type: "file", version: 1, title }) : "Fixture record", attachments: [], owner: "Rene", createdAt: BigInt(Date.UTC(2026, 9, id % 15 + 1)) * 1000000n };
+      assets.set(asset.assetId, asset);
+      return asset;
+    };
+    const company = make(200, 8, "Nordwerk GmbH", { city: "Herford", assignee: "Rene", number: "C-200", address: "Werkstraße 18, Herford", website: "https://nordwerk.example", sector: "Medien" });
+    const link = asset => edges.push({ edgeId: BigInt(edges.length + 1), convId: 0n, sourceType: 1, sourceId: asset.assetId,
+      targetType: 1, targetId: 200n, relation: [9, 10].includes(asset.assetType) ? 7 : 2 });
+    for (let i = 0; i < 26; i++) link(make(300 + i, 9, `Contact ${String(i + 1).padStart(2, "0")}`, { role: i ? "Support" : "Project lead", email: `contact${i + 1}@nordwerk.example`, phone: "+49 5221 12345" }));
+    for (let i = 0; i < 8; i++) link(make(400 + i, 10, `Customer discussion ${i + 1}`, { kind: i % 2 ? "Call" : "Meeting", excerpt: "Training schedule agreed; documentation sent." }));
+    for (let i = 0; i < 30; i++) link(make(500 + i, 5, `Rollout documentation ${i + 1}`));
+    for (let i = 0; i < 27; i++) link(make(600 + i, 3, `Customer document ${i + 1}`));
+    link(make(700, 11, "Rollout 2026"));
+    window.customerEdgeReads = 0;
+    NRCAssets.roomAssets.set(0n, assets);
+    NRCAssets.requestAssetsByIds = async (_room, ids) => ids.map(id => assets.get(id)).filter(Boolean);
+    NRCAssets.requestAsset = (_room, id, options) => options.onSuccess({ asset: assets.get(id) });
+    NRCTasks.requestTasksByIds = async () => [];
+    NRCEdges.getEdgesForEntity = (_room, _type, id) => id === 200n ? edges : [];
+    NRCEdges.requestEdgePage = async (_room, _type, id, options = {}) => {
+      if (id !== 200n) return { session: { seen: new Set() }, hasMore: false };
+      window.customerEdgeReads++;
+      if (window.failCustomerPage) { window.failCustomerPage = false; throw new Error("Fixture relationship failure"); }
+      const size = options.session ? edges.length : 50;
+      return { session: { seen: new Set(edges.slice(0, size).map(edge => edge.edgeId)) }, hasMore: size < edges.length };
+    };
+    document.getElementById("customersSearch").value = "";
+    NRCCustomers.openCompany(company);
+  });
+  await page.waitForFunction(() => document.querySelector("#customerRecord h2")?.textContent === "Nordwerk GmbH" && !document.getElementById("customerRecord").inert);
+  assert.equal(await page.locator("[data-contact]:visible").count(), 4);
+  assert.equal(await page.locator("[data-activity]:visible").count(), 4);
+  assert.match(await page.locator(".customer-record-body").textContent(), /PARTIAL/);
+  await page.waitForTimeout(500);
+  assert.equal(await page.evaluate(() => window.customerEdgeReads), 1, "overview does not drain relationship pages");
+  await capture("overview-partial");
+  await page.evaluate(() => window.failCustomerPage = true);
+  await page.locator("#customerRelationshipsMore").click();
+  await page.waitForFunction(() => document.getElementById("customersStatus").textContent.includes("Fixture relationship failure"));
+  await page.locator("#customerRelationshipsMore").click();
+  await page.waitForFunction(() => !document.getElementById("customerRecord").inert && document.getElementById("customerRelationshipsMore")?.textContent === "LOAD MORE LINKS");
+  await page.locator("#customerRelationshipsMore").click();
+  await page.waitForFunction(() => !document.getElementById("customerRelationshipsMore"));
+  const tab = name => page.locator(`nav [data-customer-tab="${name}"]`).click();
+  await tab("contacts");
+  assert.equal(await page.locator("[data-contact]:visible").count(), 25);
+  await page.locator('[data-page="contacts:next"]').click();
+  assert.equal(await page.locator("[data-contact]:visible").count(), 1);
+  assert.match(await page.locator("[data-contact]:visible").textContent(), /Contact 26/);
+  await tab("activities"); await tab("contacts");
+  assert.match(await page.locator("[data-contact]:visible").textContent(), /Contact 26/, "tab changes preserve display pages");
+  await page.locator("#customerRecordSearch").fill("contact1@");
+  assert.equal(await page.locator("[data-contact]:visible").count(), 1);
+  assert.match(await page.locator("[data-contact]:visible").textContent(), /Contact 01/);
+  await page.locator("[data-contact]:visible").click();
+  await page.waitForSelector("#customerForm");
+  assert.match(await page.locator("#customerForm").textContent(), /Contact 01/);
+  await page.evaluate(() => NRCInspector.close());
+  await tab("activities");
+  await page.locator("#customerHistoryFilter").selectOption("Meeting", { force: true });
+  assert.equal(await page.locator("[data-activity]:visible").count(), 4);
+  assert.deepEqual(await page.locator("[data-activity]:visible").evaluateAll(rows => rows.map(row => row.dataset.kind)), Array(4).fill("Meeting"));
+  await tab("work");
+  await page.locator("#customerRecordSearch").fill("Rollout 2026");
+  assert.match(await page.locator("#customerWork").textContent(), /SLICE #700/);
+  await tab("files");
+  assert.equal(await page.locator(".file-assets-row:visible").count(), 25);
+  await page.locator('[data-page="files:next"]').click();
+  assert.equal(await page.locator(".file-assets-row:visible").count(), 2);
+  assert.match(await page.locator("#customerFiles").textContent(), /Customer document 27/);
+  for (const theme of ["catppuccin-latte", "dark"]) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+      for (const section of ["overview", "contacts", "activities", "work", "files"]) {
+        await tab(section);
+        await page.evaluate(() => document.getElementById("customersPanel").scrollTop = 0);
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no page-level horizontal overflow");
+        assert.ok(await page.locator(".customer-tabs .active").evaluate(button => {
+          const tab = button.getBoundingClientRect(), nav = button.parentElement.getBoundingClientRect();
+          return tab.left >= nav.left - 1 && tab.right <= nav.right + 1;
+        }), "selected section remains visible in the horizontally scrolling tab strip");
+        await capture(`${section}-${theme}-${width}`);
+        const lastPage = page.locator("#customerRecord .customer-page:visible").last();
+        await lastPage.scrollIntoViewIfNeeded();
+        assert.ok(await lastPage.evaluate(element => {
+          const bounds = element.getBoundingClientRect();
+          const root = document.getElementById(innerWidth <= 768 ? "customersPanel" : "customerRecord").getBoundingClientRect();
+          const header = document.querySelector(".customer-record-header").getBoundingClientRect();
+          return bounds.bottom <= root.bottom + 1 && bounds.top >= header.bottom - 1;
+        }), "last page controls scroll clear of the fixed footer and sticky customer header");
+      }
+    }
+  }
   assert.deepEqual(errors, []);
-  console.log("PASS: customer hybrid/blank/paged/fallback/stale/archive/offline/cancel contracts, uncached projections and exact reads; company/contact/activity global inspectors; both themes and widths");
+  console.log("PASS: customer search and exact-read contracts; bounded overview, tab paging, search, activity filter, slice links, files, partial/retry states; both themes and widths");
 } finally { await browser.close(); }

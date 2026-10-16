@@ -25,7 +25,11 @@
   let companySearch;
   let searchNotice = "";
   let searchMode = "idle";
-  let edgeObserver = null;
+  let recordTab = "overview";
+  let recordQuery = "";
+  let historyFilter = "all";
+  const recordPages = {};
+  const PAGE_SIZE = 25;
   let pendingNavigation = null;
   let detailGeneration = 0;
   let edgeSession = null;
@@ -63,7 +67,7 @@
     if (container.nrcMarkup === markup) return;
     const focused = document.activeElement;
     const key = focused && container.contains(focused) ?
-      ["id", "data-company", "data-edit", "data-contact", "data-activity", "data-target"].find(name => focused.hasAttribute(name)) : null;
+      ["id", "data-customer-tab", "data-page", "data-company", "data-edit", "data-contact", "data-activity", "data-target"].find(name => focused.hasAttribute(name)) : null;
     const value = key && focused.getAttribute(key);
     container.innerHTML = markup;
     container.nrcMarkup = markup;
@@ -227,18 +231,6 @@
     }
   }
 
-  function observeRelationshipPage() {
-    if (!edgeHasMore || detailLoading || error || !active() || !connected() || typeof IntersectionObserver === "undefined") return;
-    const sentinel = el("customerRelationshipsSentinel");
-    const company = selected;
-    const root = window.matchMedia?.("(max-width: 768px)").matches ? el("customersPanel") : el("customerRecord");
-    edgeObserver = new IntersectionObserver(entries => {
-      if (company !== selected || !sentinel.isConnected || sentinel !== el("customerRelationshipsSentinel")) return;
-      if (entries.some(entry => entry.target === sentinel && entry.isIntersecting) && !error) loadRelationships();
-    }, { root, rootMargin: "400px 0px", threshold: 0 });
-    edgeObserver.observe(sentinel);
-  }
-
   function selectAdjacentCompany(direction, from = selected) {
     const adjacent = window.NRCListNavigation.resolveAdjacent(
       el("customersList").querySelectorAll("[data-company]"), from, direction,
@@ -320,7 +312,7 @@
       }
       if (!cancelled()) detailReady = true;
     } catch (failure) {
-      if (!cancelled()) error = failure.message;
+      if (!cancelled()) { error = failure.message; detailReady = !reset; }
     } finally {
       if (!cancelled()) { detailLoading = false; scheduleRender(); }
     }
@@ -408,9 +400,6 @@
   }
 
   function render() {
-    edgeObserver?.takeRecords();
-    edgeObserver?.disconnect();
-    edgeObserver = null;
     const query = el("customersSearch").value.trim().toLocaleLowerCase();
     const companies = [...companyIds].map(id => companySearchResults.get(id) || records.get(id)).filter(asset => asset && metadata(asset));
     loadingIndicator ||= window.createLoadingIndicator(render);
@@ -455,23 +444,42 @@
     activities.sort((a, b) => a.createdAt === b.createdAt ? (a.assetId > b.assetId ? -1 : 1) : (a.createdAt > b.createdAt ? -1 : 1));
     const disabled = !connected() || loading || !!error ? "disabled" : "";
     const archived = d.archived ? "disabled" : disabled;
-    const currentFilter = el("customerHistoryFilter")?.value || "all";
+    const overview = recordTab === "overview";
+    const partial = edgeHasMore || !!error;
+    const count = value => `${value}${partial ? "+" : ""}`;
+    const matches = value => !recordQuery || String(value).toLocaleLowerCase().includes(recordQuery.toLocaleLowerCase());
+    const contacts = overview ? people : people.filter(a => matches(Object.values(metadata(a)).join(" ")));
+    const history = overview ? activities : activities.filter(a => (historyFilter === "all" || metadata(a).kind === historyFilter) && matches(Object.values(metadata(a)).join(" ")));
+    const work = workEdges();
+    const files = (window.NRCFiles?.linkedFiles(company, 1, selectedEdges()) || []).filter(ref => window.NRCAssets.roomAssets.get(room)?.get(ref.assetId)?.assetType === window.NRCAssets.AssetType.File);
+    const visibleFiles = overview ? files : files.filter(ref => matches(window.NRCLinksUI.resolveTargetName(room, 1, ref.assetId)));
+    const sectionHidden = tab => overview || recordTab === tab ? "" : "hidden";
     updateHtml(el("customerRecord"), `
-      <div class="customer-identity"><div><span class="customer-meta">CUSTOMER #${selected} / ${d.archived ? "ARCHIVED" : "ACTIVE"}</span><h2>${escape(d.title)}</h2><span class="customer-meta">${escape(d.sector || "")} ${d.city ? "/ " + escape(d.city) : ""}</span></div><div class="customer-actions"><button class="btn" data-edit="${selected}" ${disabled}>EDIT</button><button class="btn" id="customerArchive" ${disabled}>${d.archived ? "RESTORE" : "ARCHIVE"}</button></div></div>
-      <dl class="customer-facts"><div><dt>CUSTOMER NO.</dt><dd>${escape(d.number || "—")}</dd></div><div><dt>TYPE</dt><dd>${escape(d.account_type || "—")}</dd></div><div><dt>RESPONSIBLE</dt><dd>${escape(d.assignee || "—")}</dd></div><div><dt>PHONE</dt><dd>${escape(d.phone || "—")}</dd></div><div><dt>ADDRESS</dt><dd>${escape(d.address || "—")}</dd></div><div><dt>WEBSITE</dt><dd>${escape(d.website || "—")}</dd></div></dl>
-      <section class="customer-section"><div class="panel-header"><div><span>CONTACTS / ${people.length}</span><button class="btn" id="customerContactNew" ${archived}>+ CONTACT</button></div></div><div class="customer-contacts">${people.length ? '<div class="customer-contact-head" aria-hidden="true"><span>NAME / ROLE</span><span>EMAIL</span><span>PHONE</span></div>' : ""}${people.map(a => {
+      <div class="customer-record-header"><nav class="tab-group customer-tabs" aria-label="Customer sections">${[["overview", "OVERVIEW", null], ["contacts", "CONTACTS", people.length], ["activities", "ACTIVITIES", activities.length], ["work", "LINKS", work.length], ["files", "FILES", files.length]].map(([tab, label, total]) => `<button type="button" class="btn nav-tab ${recordTab === tab ? "active" : ""}" data-customer-tab="${tab}" aria-pressed="${recordTab === tab}">${label}${total === null ? "" : `<span class="tab-count">${count(total)}</span>`}</button>`).join("")}</nav>
+      <div class="customer-identity"><div><span class="customer-meta">CUSTOMER #${selected} / ${d.archived ? "ARCHIVED" : "ACTIVE"}</span><h2>${escape(d.title)}</h2><span class="customer-meta">${escape(d.city || "—")} · RESPONSIBLE / ${escape(d.assignee || "UNASSIGNED")}</span></div><div class="customer-actions"><button class="btn" data-edit="${selected}" ${disabled}>EDIT</button><button class="btn" id="customerArchive" ${disabled}>${d.archived ? "RESTORE" : "ARCHIVE"}</button></div></div></div>
+      <div class="customer-record-body">
+      ${partial ? '<p class="customer-meta customer-footnote">PARTIAL · Counts and search cover loaded links only. Load more below.</p>' : ""}
+      ${overview ? "" : `<label class="customer-history-filter"><span class="filter-label">SEARCH ${recordTab.toUpperCase()}</span><input id="customerRecordSearch" class="filter-input" type="search" value="${escape(recordQuery)}" placeholder="Search loaded records"></label>`}
+      <dl class="customer-facts" ${overview ? "" : "hidden"}><div><dt>CUSTOMER NO.</dt><dd>${escape(d.number || "—")}</dd></div><div><dt>TYPE / SECTOR</dt><dd>${escape([d.account_type, d.sector].filter(Boolean).join(" / ") || "—")}</dd></div><div><dt>PHONE</dt><dd>${escape(d.phone || "—")}</dd></div><div><dt>ADDRESS</dt><dd>${escape(d.address || "—")}</dd></div><div><dt>WEBSITE</dt><dd>${escape(d.website || "—")}</dd></div></dl>
+      <div class="customer-overview-grid ${overview ? "is-overview" : ""}">
+      <section class="customer-section" ${sectionHidden("contacts")}><div class="panel-header"><div><span>CONTACTS / ${count(people.length)}</span><button class="btn" id="customerContactNew" ${archived}>+ CONTACT</button></div></div><div class="customer-contacts">${contacts.length ? '<div class="customer-contact-head" aria-hidden="true"><span>NAME / ROLE</span><span>EMAIL</span><span>PHONE</span></div>' : ""}${pageItems(contacts, "contacts").map(a => {
         const p = metadata(a);
         return `<button type="button" class="customer-contact" data-contact="${a.assetId}" aria-pressed="${inspection?.type === "contact" && inspection.id === a.assetId}"><span><strong>${escape(p.title)}</strong><span class="customer-meta">${escape(p.role || "—")}</span></span><span>${escape(p.email || "—")}</span><span>${escape(p.phone || "—")}</span></button>`;
-      }).join("") || '<p class="customer-empty">No contacts yet.</p>'}</div></section>
-      <div class="customer-columns"><section class="customer-section"><div class="panel-header"><div><span>ACTIVITY HISTORY / ${activities.length}</span><button class="btn" id="customerActivityNew" ${archived}>+ ACTIVITY</button></div></div><label class="customer-history-filter"><span class="filter-label">TYPE</span><nrc-select><select class="filter-select" id="customerHistoryFilter" data-custom-select-portal><option value="all">ALL</option><option value="Call">CALL</option><option value="Meeting">MEETING</option><option value="Email">EMAIL</option><option value="Decision">DECISION</option></select></nrc-select></label><div id="customerHistory">${activities.map(a => {
+      }).join("") || '<p class="customer-empty">No contacts in this selection.</p>'}</div>${recordPager("contacts", contacts.length)}</section>
+      <section class="customer-section" ${sectionHidden("activities")}><div class="panel-header"><div><span>${overview ? "LATEST RECORDED ACTIVITIES" : "ACTIVITY HISTORY"} / ${count(activities.length)}</span><button class="btn" id="customerActivityNew" ${archived}>+ ACTIVITY</button></div></div><label class="customer-history-filter" ${overview ? "hidden" : ""}><span class="filter-label">TYPE</span><nrc-select><select class="filter-select" id="customerHistoryFilter" data-custom-select-portal>${["all", "Call", "Meeting", "Email", "Decision"].map(value => `<option value="${value}" ${historyFilter === value ? "selected" : ""}>${value.toUpperCase()}</option>`).join("")}</select></nrc-select></label><div id="customerHistory" class="${overview && history.length > 1 ? "customer-history-timeline" : ""}">${pageItems(history, "activities").map(a => {
         const m = metadata(a);
         return `<button class="customer-event" data-activity="${a.assetId}" data-kind="${escape(m.kind)}"><span class="customer-meta">${escape(date(a.createdAt))} / ${escape(a.owner)} / ${escape(m.kind)}</span><strong>${escape(m.title)}</strong><span>${escape(m.excerpt || "")}</span></button>`;
-      }).join("") || '<p class="customer-empty">No activities yet.</p>'}</div><p class="customer-meta customer-footnote">PERSISTENT RECORDS / NOT CHAT HISTORY</p></section>
-      <section class="customer-section"><div class="panel-header"><div><span>LINKED WORK</span><button class="btn" id="customerLinkAdd" ${archived}>+ LINK</button></div></div><div id="customerWork"></div><nrc-link-picker id="customerLinkPicker"></nrc-link-picker></section></div>
-      ${edgeHasMore ? '<div id="customerRelationshipsSentinel" aria-hidden="true"></div>' : ""}`);
-    el("customerHistoryFilter").value = currentFilter;
-    el("customerHistoryFilter").onchange = filterHistory;
-    filterHistory();
+      }).join("") || '<p class="customer-empty">No activities in this selection.</p>'}</div>${recordPager("activities", history.length)}<p class="customer-meta customer-footnote">RECORD CREATION DATE · CUSTOMER ACTIVITIES, NOT TASK UPDATES</p></section>
+      <section class="customer-section" ${sectionHidden("work")}><div class="panel-header"><div><span>LINKED SLICES, TASKS & NOTES / ${count(work.length)}</span><button class="btn" id="customerLinkAdd" ${archived}>+ LINK</button></div></div><div id="customerWork"></div><nrc-link-picker id="customerLinkPicker"></nrc-link-picker></section>
+      <section class="customer-section" ${sectionHidden("files")}><div id="customerFiles"></div>${recordPager("files", visibleFiles.length)}</section></div>
+      ${edgeHasMore || error ? `<div class="customer-page"><button class="btn" id="customerRelationshipsMore" ${!connected() || detailLoading ? "disabled" : ""}>${error ? "RETRY LOADING LINKS" : "LOAD MORE LINKS"}</button><span class="customer-meta">Contacts, activities, files and work share relationship pages.</span></div>` : ""}</div>`);
+    el("customerHistoryFilter").onchange = event => { historyFilter = event.target.value; recordPages.activities = 0; render(); };
+    if (el("customerRecordSearch")) el("customerRecordSearch").oninput = event => {
+      const position = event.target.selectionStart;
+      recordQuery = event.target.value; recordPages[recordTab] = 0; render();
+      el("customerRecordSearch").setSelectionRange(position, position);
+    };
+    if (el("customerRelationshipsMore")) el("customerRelationshipsMore").onclick = () => loadRelationships(!!error);
     el("customerContactNew").onclick = () => edit("contact");
     el("customerActivityNew").onclick = () => edit("activity");
     el("customerArchive").onclick = () => saveRecord(company, { ...d, archived: !d.archived }, "");
@@ -482,49 +490,69 @@
         onSelect: (item, relation) => window.NRCLinksUI.createPickedLink(company, 1, item, relation),
       });
     };
-    let files = el("customerFiles");
-    if (!files) {
-      files = document.createElement("section");
-      files.id = "customerFiles";
-      el("customerRecord").querySelector(".customer-columns").before(files);
-    }
-    window.NRCFiles?.renderSection(files, company, 1, selectedEdges(), {
+    window.NRCFiles?.renderSection(el("customerFiles"), company, 1, pageItems(visibleFiles, "files").flatMap(ref => ref.edges), {
       readOnly: !!d.archived,
       partial: detailLoading || edgeHasMore,
     });
     renderWork();
-    observeRelationshipPage();
+    const activeTab = el("customerRecord").querySelector("nav .active");
+    if (activeTab) {
+      const nav = activeTab.parentElement;
+      if (activeTab.offsetLeft < nav.scrollLeft) nav.scrollLeft = activeTab.offsetLeft;
+      else if (activeTab.offsetLeft + activeTab.offsetWidth > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = activeTab.offsetLeft + activeTab.offsetWidth - nav.clientWidth;
+    }
   }
 
-  function filterHistory() {
-    const value = el("customerHistoryFilter").value;
-    for (const row of el("customerHistory").querySelectorAll("[data-kind]")) row.hidden = value !== "all" && row.dataset.kind !== value;
+  function pageItems(items, tab) {
+    if (recordTab === "overview") return items.slice(0, 4);
+    if (recordTab !== tab) return [];
+    recordPages[tab] = Math.min(recordPages[tab] || 0, Math.max(0, Math.ceil(items.length / PAGE_SIZE) - 1));
+    return items.slice(recordPages[tab] * PAGE_SIZE, (recordPages[tab] + 1) * PAGE_SIZE);
+  }
+
+  function recordPager(tab, total) {
+    if (recordTab === "overview") return total ? `<div class="customer-page"><button type="button" class="btn" data-customer-tab="${tab}">VIEW ALL ${total}${edgeHasMore ? "+" : ""} →</button></div>` : "";
+    const page = Math.min(recordPages[tab] || 0, Math.max(0, Math.ceil(total / PAGE_SIZE) - 1));
+    return `<div class="customer-page"><span class="customer-meta">${total ? page * PAGE_SIZE + 1 : 0}–${Math.min(total, (page + 1) * PAGE_SIZE)} / ${total} LOADED</span><button type="button" class="btn" data-page="${tab}:previous" ${page === 0 ? "disabled" : ""}>PREVIOUS</button><button type="button" class="btn" data-page="${tab}:next" ${(page + 1) * PAGE_SIZE >= total ? "disabled" : ""}>NEXT</button></div>`;
+  }
+
+  function workEdges() {
+    return selectedEdges().filter(edge => {
+      const outgoing = edge.sourceType === 1 && edge.sourceId === selected;
+      if (!outgoing && !(edge.targetType === 1 && edge.targetId === selected)) return false;
+      const type = outgoing ? edge.targetType : edge.sourceType;
+      const id = outgoing ? edge.targetId : edge.sourceId;
+      return type === 2 || [window.NRCAssets.AssetType.Note, window.NRCAssets.AssetType.Slice].includes(window.NRCAssets.roomAssets.get(room)?.get(id)?.assetType);
+    });
   }
 
   function renderWork() {
     const container = el("customerWork");
     if (!container || selected === null || !detailReady) return;
-    const edges = selectedEdges().filter(edge => {
+    const edges = workEdges().filter(edge => {
       const outgoing = edge.sourceType === 1 && edge.sourceId === selected;
-      if (!outgoing && !(edge.targetType === 1 && edge.targetId === selected)) return false;
-      const type = outgoing ? edge.targetType : edge.sourceType;
-      const id = outgoing ? edge.targetId : edge.sourceId;
-      return type === 2 || window.NRCAssets.roomAssets.get(room)?.get(id)?.assetType === window.NRCAssets.AssetType.Note;
+      return recordTab === "overview" || window.NRCLinksUI.resolveTargetName(room, outgoing ? edge.targetType : edge.sourceType, outgoing ? edge.targetId : edge.sourceId).toLocaleLowerCase().includes(recordQuery.toLocaleLowerCase());
     });
-    updateHtml(container, edges.map(edge => {
+    updateHtml(container, pageItems(edges, "work").map(edge => {
       const outgoing = edge.sourceType === 1 && edge.sourceId === selected;
       const type = outgoing ? edge.targetType : edge.sourceType;
       const id = outgoing ? edge.targetId : edge.sourceId;
       if (connected() && type === 2 && !window.NRCTasks.roomTasks.get(room)?.has(id)) {
         window.NRCTasks.requestTask(room, id, { onSuccess: renderWork });
       }
-      return `<button class="customer-event" data-target="${id}" data-target-type="${type}"><span><span class="note-link-direction">${outgoing ? "→" : "←"}</span> <span class="note-link-relation" data-relation="${edge.relation}">${escape(window.NRCEdges.RelationTypeNames[edge.relation])}</span> <span class="customer-meta">${type === 2 ? "TASK" : "NOTE"} #${id}</span></span><strong>${escape(window.NRCLinksUI.resolveTargetName(room, type, id))} ↗</strong></button>`;
-    }).join("") || '<p class="customer-empty">No linked tasks or notes.</p>');
+      const kind = type === 2 ? "TASK" : window.NRCAssets.roomAssets.get(room)?.get(id)?.assetType === window.NRCAssets.AssetType.Slice ? "SLICE" : "NOTE";
+      return `<button class="customer-event customer-work-row" data-target="${id}" data-target-type="${type}" title="${escape(window.NRCEdges.RelationTypeNames[edge.relation])}"><span class="customer-meta"><span class="note-link-direction">${outgoing ? "→" : "←"}</span> ${kind} #${id}</span><strong>${escape(window.NRCLinksUI.resolveTargetName(room, type, id))} ↗</strong></button>`;
+    }).join("") + (edges.length ? "" : '<p class="customer-empty">No linked slices, tasks or notes in this selection.</p>') + recordPager("work", edges.length));
   }
 
   function selectCompany(id) {
     pendingNavigation = null;
     window.NRCLinksUI.closeLinkPicker();
+    if (selected !== BigInt(id)) {
+      recordTab = "overview"; recordQuery = ""; historyFilter = "all";
+      for (const tab of Object.keys(recordPages)) delete recordPages[tab];
+      el("customerRecord").scrollTop = 0;
+    }
     selected = BigInt(id);
     error = "";
     loadRelationships(true);
@@ -940,6 +968,20 @@
       if (button) selectCompany(button.dataset.company);
     };
     el("customerRecord").onclick = event => {
+      const tab = event.target.closest("[data-customer-tab]");
+      const page = event.target.closest("[data-page]");
+      if (tab) {
+        recordTab = tab.dataset.customerTab; recordQuery = "";
+        render(); el("customerRecord").scrollTop = 0;
+        el("customerRecord").querySelector(`nav [data-customer-tab="${recordTab}"]`)?.focus({ preventScroll: true });
+        return;
+      }
+      if (page) {
+        const [tab, direction] = page.dataset.page.split(":");
+        recordPages[tab] = (recordPages[tab] || 0) + (direction === "next" ? 1 : -1);
+        render(); el("customerRecord").scrollTop = 0;
+        return;
+      }
       const editButton = event.target.closest("[data-edit]");
       const contactButton = event.target.closest("[data-contact]");
       const activityButton = event.target.closest("[data-activity]");

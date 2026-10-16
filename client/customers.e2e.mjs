@@ -145,10 +145,12 @@ try {
   assert.match(await page.locator("#customerActivityBody").textContent(), /Dokumentation vor/);
   await capture("activity-read");
   await page.click("#customerClose");
+  await page.locator('nav [data-customer-tab="activities"]').click();
   await page.selectOption("#customerHistoryFilter", "Meeting", { force: true });
   assert.equal(await page.locator("[data-activity]:visible").count(), 0);
   await page.selectOption("#customerHistoryFilter", "Call", { force: true });
   assert.equal(await page.locator("[data-activity]:visible").count(), 1);
+  await page.locator('nav [data-customer-tab="overview"]').click();
 
   // A second real WebSocket session observes acknowledged updates without reload.
   const peer = await context.newPage();
@@ -444,12 +446,14 @@ try {
   await page.fill('[name="body"]', "Revised decision\nSecond phase approved.");
   await page.selectOption('[name="kind"]', "Decision");
   await save();
+  await page.locator('nav [data-customer-tab="activities"]').click();
   await page.selectOption("#customerHistoryFilter", "all", { force: true });
   await page.click("[data-activity]");
   assert.equal(await page.locator("#customerActivityBody").textContent(), "Revised decision\nSecond phase approved.");
   await page.click("#customerDelete");
   await page.getByRole("button", { name: "Delete everywhere", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll("[data-activity]").length === 0);
+  await page.locator('nav [data-customer-tab="overview"]').click();
 
   // A peer update must not overwrite a dirty inspector draft, and a peer delete
   // must remove the inspected object rather than leave a writable stale form.

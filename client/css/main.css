@@ -87,6 +87,63 @@ body.sullivan-workbench #chatAttach {
 .customer-event { display: flex; flex-direction: column; gap: 0.375rem; width: 100%; padding: 0.75rem; border: 0; background: var(--surface-content); color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
 .customer-meta { font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-dim); }
 .customer-record { overflow: auto; padding: 1rem; min-width: 0; container-type: inline-size; }
+.customer-record [hidden] { display: none !important; }
+.customer-record-header { position: sticky; top: -1rem; z-index: 2; background: var(--surface-content); padding-block: 0.25rem 0; }
+.customer-record-header .customer-identity h2 { font-size: 1rem; margin-block: 0.25rem; }
+.customer-record .customer-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem 1rem; margin-block: 0.75rem; font-size: var(--font-base); }
+.customer-record-header .customer-identity { padding: 0.75rem; border-inline: 1px solid var(--border-primary); }
+.customer-tabs { position: relative; margin-top: 0.25rem; padding-inline: 0.5rem; overflow-x: auto; min-height: 2.25rem; align-items: end; gap: 0; box-shadow: inset 0 -1px var(--border-primary); }
+/* Index dividers sit behind the open sheet; the selected tab joins its edge. */
+.customer-tabs.tab-group > .btn.nav-tab {
+    position: relative;
+    isolation: isolate;
+    flex-shrink: 0;
+    align-self: end;
+    min-height: 2rem;
+    padding-inline: 0.875rem;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+.customer-tabs.tab-group > .btn.nav-tab + .btn.nav-tab { margin-left: -6px; }
+.customer-tabs.tab-group > .btn.nav-tab::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 0;
+    border: 1px solid var(--border-primary);
+    border-radius: 6px 6px 0 0;
+    background: var(--surface-panel);
+    transform: skewX(-7deg);
+    transform-origin: bottom;
+}
+.customer-tabs.tab-group > .btn.nav-tab:hover { background: transparent; }
+.customer-tabs.tab-group > .btn.nav-tab:hover::before { background: var(--bg-hover); }
+.customer-tabs.tab-group > .btn.nav-tab.active {
+    z-index: 1;
+    min-height: 2.25rem;
+    background: transparent;
+    box-shadow: none;
+}
+.customer-tabs.tab-group > .btn.nav-tab.active::before {
+    border-bottom-color: var(--surface-content);
+    background: color-mix(in srgb, var(--accent-selected) 10%, var(--surface-content));
+}
+.customer-tabs.tab-group > .btn.nav-tab:focus-visible { outline: 2px solid var(--focus-interactive); outline-offset: -4px; }
+.customer-record-body { min-width: 0; border: 1px solid var(--border-primary); border-top: 0; border-radius: 0 0 6px 6px; padding: 0.625rem; background: var(--surface-content); }
+.customer-overview-grid.is-overview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1rem; align-items: start; }
+.customer-page { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding-block: 0.5rem; }
+.customer-page > .customer-meta:first-child { margin-right: auto; }
+.customer-record .customer-history-filter { flex-wrap: wrap; }
+.customer-record .customer-history-filter input { flex: 1; min-width: 8rem; }
+.customer-work-row { display: grid; grid-template-columns: 6rem minmax(0, 1fr); align-items: baseline; padding: 0.5rem 0.375rem; font-size: var(--font-base); }
+.customer-history-timeline { border-left: 1px solid var(--border-primary); margin-left: 0.375rem; }
+.customer-history-timeline > .customer-event { position: relative; padding: 0.5rem 0.75rem; font-size: var(--font-base); }
+.customer-history-timeline > .customer-event::before { content: ""; position: absolute; left: -0.1875rem; top: 0.75rem; width: 0.3125rem; height: 0.3125rem; background: var(--text-dim); }
+@container (max-width: 640px) {
+    .customer-overview-grid.is-overview { grid-template-columns: minmax(0, 1fr); }
+    .customer-record-body .customer-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .customer-identity, .customer-actions { display: flex; gap: 0.5rem; justify-content: space-between; align-items: center; }
 .customer-identity { align-items: flex-start; flex-wrap: wrap; }
 .customer-identity h2 { font-family: var(--font-sans); font-size: 1.4rem; margin: 0.375rem 0; overflow-wrap: anywhere; }
@@ -208,6 +265,12 @@ body.sullivan-workbench #chatAttach {
     #customersList { display: flex; overflow-x: auto; }
     .customer-row { min-width: 13rem; }
     .customer-record { overflow: visible; padding: 0.625rem; }
+    .customer-record-header { top: -0.625rem; }
+    .customer-record .customer-facts { font-size: var(--mobile-font-base); }
+    .customer-record .customer-history-filter input { font-size: 16px; }
+    .customer-tabs.tab-group > .btn.nav-tab { min-height: 40px; }
+    .customer-tabs.tab-group > .btn.nav-tab.active { min-height: 46px; }
+    .customer-work-row, .customer-history-timeline > .customer-event { font-size: var(--mobile-font-base); }
     .customer-facts { grid-template-columns: 1fr; }
     .customers-panel > .panel-header { flex-shrink: 0; }
     .customer-identity .customer-actions { width: 100%; justify-content: flex-end; }

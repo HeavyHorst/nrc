@@ -76,9 +76,9 @@ try {
   assert.equal(await page.evaluate(() => [...NRCAssets.roomAssets.get(0n).values()].filter(a => a.assetType === 9 || a.assetType === 10).length), 0);
   sent.length = 0;
   await page.click(`[data-company="${ids.last}"]`);
-  await page.waitForFunction(() => document.querySelectorAll("[data-activity]").length === 49 && !!document.getElementById("customerRelationshipsSentinel"));
+  await page.waitForFunction(() => document.querySelectorAll("[data-activity]").length === 4 && !!document.getElementById("customerRelationshipsMore"));
   assert.equal(await page.locator(".customer-contact").count(), 1);
-  assert.equal(await page.locator("[data-activity]").count(), 49);
+  assert.match(await page.locator('nav [data-customer-tab="activities"]').textContent(), /49\+/);
   assert.equal(sent.filter(b => b.readUInt16BE(0) === 54).length, 1, "first page only");
   assert.equal(sent.filter(b => b.readUInt16BE(0) === 33).length, 0, "no individual asset hydration");
   const batches = sent.filter(b => b.readUInt16BE(0) === 61);
@@ -89,27 +89,32 @@ try {
   assert.ok(sent.filter(b => b.readUInt16BE(0) === 54).every(b => b.readBigUInt64BE(12) === BigInt(ids.last)));
   assert.equal(await page.evaluate(id => NRCAssets.roomAssets.get(0n).has(BigInt(id)), ids.unrelated), false);
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  assert.equal(sent.filter(b => b.readUInt16BE(0) === 54).length, 1, "offscreen sentinel does not load another page");
+  assert.equal(sent.filter(b => b.readUInt16BE(0) === 54).length, 1, "bounded overview does not automatically load another page");
   if (process.env.NRC_CUSTOMERS_SCREENSHOTS) {
     await fs.mkdir(process.env.NRC_CUSTOMERS_SCREENSHOTS, { recursive: true });
     await page.screenshot({ path: `${process.env.NRC_CUSTOMERS_SCREENSHOTS}/demand-partial.png` });
   }
-  await page.locator("#customerRelationshipsSentinel").scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelectorAll("[data-activity]").length === 99);
-  assert.equal(sent.filter(b => b.readUInt16BE(0) === 54).length, 2, "first sentinel intersection loads exactly one page");
-  await page.locator("#customerRelationshipsSentinel").scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelectorAll("[data-activity]").length === 114);
-  assert.equal(await page.locator("[data-activity]").count(), 114);
-  assert.equal(sent.filter(b => b.readUInt16BE(0) === 54).length, 3, "replacement sentinel loads the final page without duplicates");
-  assert.equal(await page.locator("#customerRelationshipsSentinel").count(), 0);
+  await page.locator("#customerRelationshipsMore").click();
+  await page.waitForFunction(() => document.querySelector('nav [data-customer-tab="activities"]').textContent.includes("99+"));
+  assert.equal(sent.filter(b => b.readUInt16BE(0) === 54).length, 2, "explicit load reads exactly one page");
+  await page.locator("#customerRelationshipsMore").click();
+  await page.waitForFunction(() => document.querySelector('nav [data-customer-tab="activities"]').textContent.includes("114"));
+  assert.equal(await page.locator("[data-activity]").count(), 4);
+  assert.equal(sent.filter(b => b.readUInt16BE(0) === 54).length, 3, "final page loads without expanding the overview");
+  assert.equal(await page.locator("#customerRelationshipsMore").count(), 0);
+  await page.locator('nav [data-customer-tab="activities"]').click();
+  assert.equal(await page.locator("[data-activity]").count(), 25);
+  await page.locator('[data-page="activities:next"]').click();
+  assert.equal(await page.locator("[data-activity]").count(), 25);
   // Search pages never evict the selected company or unrelated shared caches.
   const reset = socket.waitForEvent("framereceived", { predicate: e => Buffer.isBuffer(e.payload) && e.payload.readUInt16BE(0) === 163 });
   await page.fill("#customersSearch", ""); await reset;
   await page.waitForFunction(() => document.querySelectorAll(".customer-row").length === 50);
   await page.click("#customersMore");
   await page.waitForFunction(() => document.getElementById("customersState").textContent === "60 / 60 CUSTOMERS");
-  assert.equal(await page.locator("[data-activity]").count(), 114);
+  assert.equal(await page.locator("[data-activity]").count(), 25);
   assert.equal(await page.locator("#customersMore").isHidden(), true);
+  await page.locator('nav [data-customer-tab="overview"]').click();
   await page.evaluate(() => {
     const handle = NRCAssets.handleAssetListPage;
     NRCAssets.handleAssetListPage = view => {

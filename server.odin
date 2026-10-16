@@ -310,7 +310,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:7f68bc08"
+BUILD_VERSION :: "dev-2026-10:a7b908dc"
 PROTOCOL_VERSION :: 8 // Calendar appointment rows carry an explicit time interval.
 
 jwt_auth_secret: string
