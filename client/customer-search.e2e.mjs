@@ -79,6 +79,7 @@ try {
     await waitRegister();
   };
   await search("Anna");
+  assert.equal(requests.at(-1).top_n, 20);
   assert.deepEqual(requests.at(-1).filters, { entity_types: ["asset"], asset_types: [8, 9], customer: { include_archived: false } });
   assert.equal(requests.at(-1).conv_id, "0");
   assert.equal(requests.at(-1).workspace, "customer-search-demo");
@@ -160,7 +161,7 @@ try {
     const company = make(200, 8, "Nordwerk GmbH", { city: "Herford", assignee: "Rene", number: "C-200", address: "Werkstraße 18, Herford", website: "https://nordwerk.example", sector: "Medien" });
     const link = asset => edges.push({ edgeId: BigInt(edges.length + 1), convId: 0n, sourceType: 1, sourceId: asset.assetId,
       targetType: 1, targetId: 200n, relation: [9, 10].includes(asset.assetType) ? 7 : 2 });
-    for (let i = 0; i < 26; i++) link(make(300 + i, 9, `Contact ${String(i + 1).padStart(2, "0")}`, { role: i ? "Support" : "Project lead", email: `contact${i + 1}@nordwerk.example`, phone: "+49 5221 12345" }));
+    for (let i = 0; i < 26; i++) link(make(300 + i, 9, `Contact ${String(i + 1).padStart(2, "0")}`, { role: i ? (i % 2 ? "Support" : "") : "Project lead", email: `contact${i + 1}@nordwerk.example`, phone: "+49 5221 12345" }));
     for (let i = 0; i < 8; i++) link(make(400 + i, 10, `Customer discussion ${i + 1}`, { kind: i % 2 ? "Call" : "Meeting", excerpt: "Training schedule agreed; documentation sent." }));
     for (let i = 0; i < 30; i++) link(make(500 + i, 5, `Rollout documentation ${i + 1}`));
     for (let i = 0; i < 27; i++) link(make(600 + i, 3, `Customer document ${i + 1}`));
@@ -184,7 +185,11 @@ try {
   await page.waitForFunction(() => document.querySelector("#customerRecord h2")?.textContent === "Nordwerk GmbH" && !document.getElementById("customerRecord").inert);
   assert.equal(await page.locator("[data-contact]:visible").count(), 4);
   assert.equal(await page.locator("[data-activity]:visible").count(), 4);
-  assert.match(await page.locator(".customer-record-body").textContent(), /PARTIAL/);
+  assert.doesNotMatch(await page.locator(".customer-record-body").textContent(), /Counts and search cover loaded links only/);
+  assert.match(await page.locator('nav [data-customer-tab="contacts"]').textContent(), /26\+/);
+  await page.locator('nav [data-customer-tab="contacts"]').click();
+  assert.match(await page.locator(".customer-record-body").textContent(), /Counts and search cover loaded links only/);
+  await page.locator('nav [data-customer-tab="overview"]').click();
   await page.waitForTimeout(500);
   assert.equal(await page.evaluate(() => window.customerEdgeReads), 1, "overview does not drain relationship pages");
   await capture("overview-partial");

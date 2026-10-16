@@ -86,13 +86,13 @@ body.sullivan-workbench #chatAttach {
 .customer-row-state { color: var(--accent-danger); }
 .customer-event { display: flex; flex-direction: column; gap: 0.375rem; width: 100%; padding: 0.75rem; border: 0; background: var(--surface-content); color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
 .customer-meta { font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-dim); }
-.customer-record { overflow: auto; padding: 1rem; min-width: 0; container-type: inline-size; }
+.customer-record { overflow: auto; padding: 0 1rem 1rem; min-width: 0; container-type: inline-size; }
 .customer-record [hidden] { display: none !important; }
-.customer-record-header { position: sticky; top: -1rem; z-index: 2; background: var(--surface-content); padding-block: 0.25rem 0; }
+.customer-record-header { position: sticky; top: 0; z-index: 2; background: var(--surface-content); }
 .customer-record-header .customer-identity h2 { font-size: 1rem; margin-block: 0.25rem; }
 .customer-record .customer-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem 1rem; margin-block: 0.75rem; font-size: var(--font-base); }
 .customer-record-header .customer-identity { padding: 0.75rem; border-inline: 1px solid var(--border-primary); }
-.customer-tabs { position: relative; margin-top: 0.25rem; padding-inline: 0.5rem; overflow-x: auto; min-height: 2.25rem; align-items: end; gap: 0; box-shadow: inset 0 -1px var(--border-primary); }
+.customer-tabs { position: relative; padding-inline: 0.5rem; overflow-x: auto; min-height: 2.25rem; align-items: end; gap: 0; box-shadow: inset 0 -1px var(--border-primary); }
 /* Index dividers sit behind the open sheet; the selected tab joins its edge. */
 .customer-tabs.tab-group > .btn.nav-tab {
     position: relative;
@@ -173,7 +173,7 @@ body.sullivan-workbench #chatAttach {
 .customer-contact, .customer-contact-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 0.8fr); align-items: center; gap: 0.75rem; padding: 0.5rem 0.375rem; }
 .customer-contact-head { font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-dim); }
 .customer-contact { width: 100%; border: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: var(--font-base); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
-.customer-contact > span:first-child { display: grid; gap: 0.25rem; }
+.customer-contact > span:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.5rem; }
 .customer-columns { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 1rem; }
 .customer-history-filter { display: flex; gap: 0.5rem; align-items: center; padding: 0.375rem 0; }
 .customer-footnote, .customer-empty { padding: 0.5rem 0; margin: 0; color: var(--text-dim); }

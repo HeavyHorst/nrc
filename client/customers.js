@@ -175,7 +175,7 @@
         companySearch ||= window.NRCSearch.createController();
         try {
           const data = await new Promise((resolve, reject) => companySearch.search({
-            query, top_n: 100, include_payload: true,
+            query, top_n: 20, include_payload: true,
             filters: { entity_types: ["asset"], asset_types: [8, 9], customer: { include_archived: includeArchived } },
           }, { onResult: resolve, onError: reject }));
           if (cancelled()) return;
@@ -193,8 +193,7 @@
           companyIds = new Set(companySearchResults.keys());
           companyTotal = companyIds.size;
           searchMode = "results";
-          searchNotice = data.stale ? "Search results may be outdated. Refresh to retry reconciliation." :
-            data.results.length === 100 ? "TOP 100 · Narrow the query to find more customers." : "";
+          searchNotice = data.stale ? "Search results may be outdated. Refresh to retry reconciliation." : "";
           if (!metadata(records.get(selected))) automaticSelection = companyIds.values().next().value ?? null;
           return;
         } catch (failure) {
@@ -458,13 +457,13 @@
       <div class="customer-record-header"><nav class="tab-group customer-tabs" aria-label="Customer sections">${[["overview", "OVERVIEW", null], ["contacts", "CONTACTS", people.length], ["activities", "ACTIVITIES", activities.length], ["work", "LINKS", work.length], ["files", "FILES", files.length]].map(([tab, label, total]) => `<button type="button" class="btn nav-tab ${recordTab === tab ? "active" : ""}" data-customer-tab="${tab}" aria-pressed="${recordTab === tab}">${label}${total === null ? "" : `<span class="tab-count">${count(total)}</span>`}</button>`).join("")}</nav>
       <div class="customer-identity"><div><span class="customer-meta">CUSTOMER #${selected} / ${d.archived ? "ARCHIVED" : "ACTIVE"}</span><h2>${escape(d.title)}</h2><span class="customer-meta">${escape(d.city || "—")} · RESPONSIBLE / ${escape(d.assignee || "UNASSIGNED")}</span></div><div class="customer-actions"><button class="btn" data-edit="${selected}" ${disabled}>EDIT</button><button class="btn" id="customerArchive" ${disabled}>${d.archived ? "RESTORE" : "ARCHIVE"}</button></div></div></div>
       <div class="customer-record-body">
-      ${partial ? '<p class="customer-meta customer-footnote">PARTIAL · Counts and search cover loaded links only. Load more below.</p>' : ""}
+      ${partial && !overview ? '<p class="customer-meta customer-footnote">PARTIAL · Counts and search cover loaded links only. Load more below.</p>' : ""}
       ${overview ? "" : `<label class="customer-history-filter"><span class="filter-label">SEARCH ${recordTab.toUpperCase()}</span><input id="customerRecordSearch" class="filter-input" type="search" value="${escape(recordQuery)}" placeholder="Search loaded records"></label>`}
       <dl class="customer-facts" ${overview ? "" : "hidden"}><div><dt>CUSTOMER NO.</dt><dd>${escape(d.number || "—")}</dd></div><div><dt>TYPE / SECTOR</dt><dd>${escape([d.account_type, d.sector].filter(Boolean).join(" / ") || "—")}</dd></div><div><dt>PHONE</dt><dd>${escape(d.phone || "—")}</dd></div><div><dt>ADDRESS</dt><dd>${escape(d.address || "—")}</dd></div><div><dt>WEBSITE</dt><dd>${escape(d.website || "—")}</dd></div></dl>
       <div class="customer-overview-grid ${overview ? "is-overview" : ""}">
       <section class="customer-section" ${sectionHidden("contacts")}><div class="panel-header"><div><span>CONTACTS / ${count(people.length)}</span><button class="btn" id="customerContactNew" ${archived}>+ CONTACT</button></div></div><div class="customer-contacts">${contacts.length ? '<div class="customer-contact-head" aria-hidden="true"><span>NAME / ROLE</span><span>EMAIL</span><span>PHONE</span></div>' : ""}${pageItems(contacts, "contacts").map(a => {
         const p = metadata(a);
-        return `<button type="button" class="customer-contact" data-contact="${a.assetId}" aria-pressed="${inspection?.type === "contact" && inspection.id === a.assetId}"><span><strong>${escape(p.title)}</strong><span class="customer-meta">${escape(p.role || "—")}</span></span><span>${escape(p.email || "—")}</span><span>${escape(p.phone || "—")}</span></button>`;
+        return `<button type="button" class="customer-contact" data-contact="${a.assetId}" aria-pressed="${inspection?.type === "contact" && inspection.id === a.assetId}"><span><strong>${escape(p.title)}</strong>${p.role ? `<span class="customer-meta">${escape(p.role)}</span>` : ""}</span><span>${escape(p.email || "—")}</span><span>${escape(p.phone || "—")}</span></button>`;
       }).join("") || '<p class="customer-empty">No contacts in this selection.</p>'}</div>${recordPager("contacts", contacts.length)}</section>
       <section class="customer-section" ${sectionHidden("activities")}><div class="panel-header"><div><span>${overview ? "LATEST RECORDED ACTIVITIES" : "ACTIVITY HISTORY"} / ${count(activities.length)}</span><button class="btn" id="customerActivityNew" ${archived}>+ ACTIVITY</button></div></div><label class="customer-history-filter" ${overview ? "hidden" : ""}><span class="filter-label">TYPE</span><nrc-select><select class="filter-select" id="customerHistoryFilter" data-custom-select-portal>${["all", "Call", "Meeting", "Email", "Decision"].map(value => `<option value="${value}" ${historyFilter === value ? "selected" : ""}>${value.toUpperCase()}</option>`).join("")}</select></nrc-select></label><div id="customerHistory" class="${overview && history.length > 1 ? "customer-history-timeline" : ""}">${pageItems(history, "activities").map(a => {
         const m = metadata(a);
