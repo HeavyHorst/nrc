@@ -6,6 +6,7 @@ services:
     environment: !override
       # Remove base-file interpolation overrides; shared credentials come from .env.
       TS_AUTHKEY: ${TS_AUTHKEY:-}
+      NRC_SEARCH_FILES_ADDR: :8094
       NRC_PUBLISH_BACKEND: http://publish:8094
       NRC_PUBLISH_WORKSPACE: ${NRC_PUBLISH_WORKSPACE:?set NRC_PUBLISH_WORKSPACE}
   websocket-server:

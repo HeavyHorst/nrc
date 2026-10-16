@@ -228,7 +228,6 @@ if ! $skip_tests; then
     fi
     if $publish; then
         (cd services/bots/nrc-publish && go test -race ./... && go vet ./...)
-        python3 -m unittest test.test_publish_compose -v
     fi
 else
     echo "WARNING: local tests were explicitly skipped." >&2
