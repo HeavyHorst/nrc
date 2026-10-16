@@ -106,16 +106,24 @@ body.sullivan-workbench #chatAttach {
     box-shadow: none;
 }
 .customer-tabs.tab-group > .btn.nav-tab + .btn.nav-tab { margin-left: -6px; }
-.customer-tabs.tab-group > .btn.nav-tab::before {
+.customer-tabs.tab-group > .btn.nav-tab::before,
+.customer-tabs.tab-group > .btn.nav-tab::after {
     content: "";
     position: absolute;
     z-index: -1;
     inset: 0;
-    border: 1px solid var(--border-primary);
-    border-radius: 6px 6px 0 0;
+    pointer-events: none;
+    mask-size: 100% 100%;
+    mask-repeat: no-repeat;
+}
+/* Draw the slant directly; only the SVG contour is antialiased, not a transformed border. */
+.customer-tabs.tab-group > .btn.nav-tab::before {
     background: var(--surface-panel);
-    transform: skewX(-7deg);
-    transform-origin: bottom;
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 40' preserveAspectRatio='none'%3E%3Cpath d='M.5 40 5 6Q5.7.5 11.5.5H113Q119.5.5 118.7 7L114.5 40Z'/%3E%3C/svg%3E");
+}
+.customer-tabs.tab-group > .btn.nav-tab::after {
+    background: var(--border-primary);
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 40' preserveAspectRatio='none'%3E%3Cpath d='M.5 40 5 6Q5.7.5 11.5.5H113Q119.5.5 118.7 7L114.5 40' fill='none' stroke='black' stroke-width='1' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E");
 }
 .customer-tabs.tab-group > .btn.nav-tab:hover { background: transparent; }
 .customer-tabs.tab-group > .btn.nav-tab:hover::before { background: var(--bg-hover); }
@@ -126,7 +134,6 @@ body.sullivan-workbench #chatAttach {
     box-shadow: none;
 }
 .customer-tabs.tab-group > .btn.nav-tab.active::before {
-    border-bottom-color: var(--surface-content);
     background: color-mix(in srgb, var(--accent-selected) 10%, var(--surface-content));
 }
 .customer-tabs.tab-group > .btn.nav-tab:focus-visible { outline: 2px solid var(--focus-interactive); outline-offset: -4px; }
