@@ -98,7 +98,7 @@
         border-right: 0;
     }
 
-    .slice-record {
+    .slice-layout > .slice-record {
         display: none;
         padding: 0.625rem;
     }

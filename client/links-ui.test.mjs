@@ -346,28 +346,30 @@ test("a linked slice is named from its preview, a note from its title", () => {
 });
 
 test("a linked slice opens by ID even when another slice has the same label", () => {
-  const { linksUI, roomAssets, sliceSelects, activeViews, kanbanShows } = loadLinksUI({
+  const { linksUI, roomAssets, opened, sliceSelects, activeViews, kanbanShows } = loadLinksUI({
     slices: [{ sliceId: 42n, name: "Wartung Nordtor Q4" }, { sliceId: 40n, name: "Wartung Nordtor Q4" }],
   });
   roomAssets.set(0n, new Map([[40n, { assetId: 40n, assetType: 11, preview: JSON.stringify({ name: "Wartung Nordtor Q4" }) }]]));
 
   linksUI.navigateToTarget(0n, 1, 40n, 2);
 
-  assert.deepEqual(activeViews, ["kanban"], "the slice lives in the task view");
-  assert.equal(sliceSelects.length, 1);
-  assert.equal(sliceSelects[0][0], 40n);
-  assert.equal(sliceSelects[0][1].focusDetail, true);
-  assert.equal(kanbanShows(), 0, "the slice opens through its own register");
+  assert.deepEqual(activeViews, [], "the customer view stays open");
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].type, "slice");
+  assert.equal(opened[0].id, 40n);
+  assert.equal(sliceSelects.length, 0);
+  assert.equal(kanbanShows(), 0);
 });
 
-test("an unresolved slice id still resolves through the slice register", () => {
-  const { linksUI, sliceSelects, sliceLoads, activeViews } = loadLinksUI({ slices: [{ sliceId: 40n, name: "Wartung Nordtor Q4" }] });
+test("an uncached slice known to the register still opens in the inspector", () => {
+  const { linksUI, opened, sliceSelects, sliceLoads, activeViews } = loadLinksUI({ slices: [{ sliceId: 40n, name: "Wartung Nordtor Q4" }] });
 
   linksUI.navigateToTarget(0n, 1, 40n, 2);
 
-  assert.deepEqual(activeViews, ["kanban"]);
-  assert.equal(sliceSelects.length, 1);
-  assert.equal(sliceSelects[0][0], 40n);
+  assert.deepEqual(activeViews, []);
+  assert.equal(sliceSelects.length, 0);
+  assert.equal(opened[0].type, "slice");
+  assert.equal(opened[0].id, 40n);
   assert.equal(sliceLoads(), 0);
 });
 

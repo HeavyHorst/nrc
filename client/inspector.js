@@ -33,6 +33,7 @@
     if (ref.type === "task") return await (window.NRCTasks?.confirmDiscardTaskEdits?.() ?? true);
     if (ref.type === "reminder") return await (window.NRCTasks?.confirmDiscardReminderEdits?.() ?? true);
     if (ref.type === "appointment") return await (window.NRCAppointments?.confirmDiscardEdits?.() ?? true);
+    if (ref.type === "slice") return await (window.NRCSlices?.confirmDiscardRecordEdits?.() ?? true);
     if (["company", "contact", "activity"].includes(ref.type)) return await (window.NRCCustomers?.confirmDiscardEdits?.() ?? true);
     return true;
   }
@@ -240,6 +241,13 @@
       window.NRCAppointments?.showInspector?.(ref, stillCurrent);
     } else if (ref.type === "file") {
       window.NRCFiles?.showInspector?.(ref);
+    } else if (ref.type === "slice") {
+      window.NRCSlices?.clearInspector();
+      renderStatus(ref, "LOADING", `Loading slice #${ref.id}…`);
+      window.NRCSlices?.showInspector(ref, stillCurrent).then(found => {
+        if (stillCurrent() && !found) renderStatus(ref, "NOT FOUND", `Slice #${ref.id} could not be loaded.`);
+        updateActions();
+      });
     } else if (ref.type === "asset") {
       window.NRCWorkspaceSearch?.showInspector(ref, stillCurrent);
     } else renderStatus(ref, "UNSUPPORTED", `Inspector does not support ${ref.type}.`);
@@ -303,6 +311,7 @@
     if (ref?.type === "task") window.NRCTasks?.clearTaskSelection?.({ fromInspector: true, preserveDetail });
     if (ref?.type === "reminder") window.NRCTasks?.clearReminderSelection?.({ fromInspector: true });
     if (ref?.type === "appointment") window.NRCAppointments?.clearSelection?.();
+    if (ref?.type === "slice") window.NRCSlices?.clearInspector?.();
     if (["company", "contact", "activity"].includes(ref?.type)) window.NRCCustomers?.clearSelection();
   }
 

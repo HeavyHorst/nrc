@@ -190,6 +190,36 @@ try {
   await capture("linked-note");
   await page.evaluate(() => NRCInspector.close());
 
+  // Slice links use the same inspector and guarded history as other records.
+  const sliceId = await page.evaluate(async company => {
+    const rpc = send => new Promise((resolve, reject) => send({ onSuccess: resolve, onError: reject }));
+    const { asset } = await rpc(options => NRCAssets.sendCreateAsset(0n, AssetType.Slice, 0, 0n,
+      JSON.stringify({ version: 1, name: "Kundenstart", owner: "rene", outcome: "Abnahme vorbereiten", closed: false }), "", 0, options));
+    await rpc(options => NRCEdges.sendCreateEdge(0n, 1, BigInt(company), 1, asset.assetId, NRCEdges.RelationType.RelatedTo, options));
+    return String(asset.assetId);
+  }, companyId);
+  await page.locator(`#customerWork [data-target="${sliceId}"]`).click();
+  await page.waitForSelector("#inspectorEntityHost #sliceOutcome");
+  assert.equal(await page.evaluate(() => NRCViewManager.getActiveView()), "customers");
+  assert.equal(await page.inputValue("#sliceOutcome"), "Abnahme vorbereiten");
+  await page.fill("#sliceOutcome", "Unsaved outcome");
+  await page.click("#sliceInspectorClose");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(await page.inputValue("#sliceOutcome"), "Unsaved outcome");
+  await page.click("#sliceInspectorClose");
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+  await page.locator(`#customerWork [data-target="${sliceId}"]`).click();
+  await page.waitForSelector("#inspectorEntityHost #sliceOutcome");
+  assert.equal(await page.inputValue("#sliceOutcome"), "Abnahme vorbereiten", "discarded slice drafts do not return");
+  await page.fill("#sliceOutcome", "Abnahme bestätigt");
+  await page.click('[data-slice-action="save"]');
+  await page.waitForFunction(() => !NRCSlices.getState().writePending);
+  assert.equal(await page.evaluate(id => JSON.parse(NRCAssets.roomAssets.get(0n).get(BigInt(id)).preview).outcome, sliceId), "Abnahme bestätigt");
+  await page.click("#sliceInspectorClose");
+  assert.equal(await page.evaluate(() => document.getElementById("sliceRecord").closest("#sliceView") !== null), true);
+  await page.evaluate(id => new Promise((resolve, reject) => NRCAssets.sendDeleteAsset(0n, BigInt(id), { onSuccess: resolve, onError: reject })), sliceId);
+  await page.waitForFunction(id => !document.querySelector(`#customerWork [data-target="${id}"]`), sliceId);
+
   await page.evaluate(() => new Promise((resolve, reject) => {
     NRCTasks.sendCreateTask(currentRoomId, "Unterlagen vorbereiten", "Aktuelle Unterlagen für die Abstimmung zusammenstellen.", 180, 0, "", 0n, [], 0, 0, "Kundenbetreuung", { onSuccess: resolve, onError: reject });
   }));

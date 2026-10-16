@@ -97,6 +97,8 @@
   let explicitSelection = false;
   // A dirty record can outlive its filtered register row.
   let retainedSlice = null;
+  let inspectorRecord = null;
+  let recordHome = null;
   // What the record's fields were last painted with, so a later render can tell
   // the reader's text from the record's own value.
   let paintedFields = null;
@@ -723,9 +725,9 @@
     // Linked or newly created records need not be on the current filtered page.
     if (!state.slices.some((slice) => slice.sliceId === id) && retainedSlice?.sliceId !== id) {
       const listing = await readAll({ includeClosed: true });
-      if (generation !== selectionGeneration) return;
+      if (generation !== selectionGeneration) return false;
       const slice = listing?.slices.find((slice) => slice.sliceId === id);
-      if (!slice) return;
+      if (!slice) return false;
       retainedSlice = slice;
     }
     explicitSelection = true;
@@ -745,6 +747,36 @@
       loadDetail();
     }
     if (focusDetail) view?.querySelector(".slice-record")?.focus?.({ preventScroll: true });
+    return true;
+  }
+
+  async function showInspector(ref, stillCurrent) {
+    if (!(await select(ref.id)) || !stillCurrent()) return false;
+    const record = document.getElementById("sliceRecord");
+    const host = document.getElementById("inspectorEntityHost");
+    const header = document.getElementById("inspectorHeader");
+    if (!record || !host || !header) return false;
+    if (state.detailSliceId !== ref.id) {
+      updateHtml(record, '<p class="slice-empty">Loading slice…</p>');
+    }
+    recordHome = record.parentElement;
+    inspectorRecord = record;
+    host.replaceChildren(record);
+    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">SLICE #${ref.id}</span><span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">WORK STREAM</span></div><div class="inspector-mode-row">${window.NRCDetailUI.renderCloseControl("sliceInspectorClose")}</div>`;
+    document.getElementById("sliceInspectorClose").onclick = () => window.NRCInspector.close();
+    render();
+    return true;
+  }
+
+  function clearInspector() {
+    ++selectionGeneration;
+    if (!inspectorRecord) return;
+    recordHome.append(inspectorRecord);
+    inspectorRecord.nrcMarkup = null;
+    paintedFields = null;
+    inspectorRecord = null;
+    recordHome = null;
+    render();
   }
 
   // The owner and the outcome are live fields on the record, so a selection
@@ -1241,6 +1273,7 @@
   // on screen as a record that no longer exists.
   function onAssetDeleted(convId, assetId) {
     if (convId !== state.roomId) return;
+    window.NRCInspector?.entityDeleted?.({ roomId: convId, type: "slice", id: assetId });
     if (selectedSlice()?.sliceId === assetId) {
       retainedSlice = null;
       state.selected = null;
@@ -1514,7 +1547,7 @@
     const owner = fields.owner;
 
     return `
-      <button class="btn slice-mobile-back mobile-only" type="button" data-slice-action="back">← SLICES</button>
+      ${inspectorRecord ? "" : '<button class="btn slice-mobile-back mobile-only" type="button" data-slice-action="back">← SLICES</button>'}
       <div class="slice-identity">
         <div>
           <span class="slice-note">SLICE #${slice.sliceId} / ${closed ? "CLOSED" : "ACTIVE"} / OPENED ${formatAge(slice.oldestActiveAt)} AGO</span>
@@ -1795,7 +1828,7 @@
     const view = document.getElementById("sliceView");
     if (!view) return;
 
-    view.addEventListener("click", (event) => {
+    const handleClick = (event) => {
       const row = event.target.closest("[data-slice-id]");
       if (row) {
         selectGuarded(row.dataset.sliceId);
@@ -1862,6 +1895,10 @@
         openMemberRow(member);
         return;
       }
+    };
+    view.addEventListener("click", handleClick);
+    document.getElementById("sliceRecord")?.addEventListener?.("click", event => {
+      if (inspectorRecord) handleClick(event);
     });
 
     view.addEventListener("keydown", (event) => {
@@ -1889,11 +1926,15 @@
 
     // Where the focus is, the reader is: an opener reached with Tab anchors its
     // table the same way an opened member does, so the arrows continue there.
-    view.addEventListener("focusin", (event) => {
+    const handleFocus = (event) => {
       const opener = event.target.closest?.(".slice-member-open");
       if (opener?.dataset.memberOpen) {
         activateMemberRow(opener.closest(".slice-member"));
       }
+    };
+    view.addEventListener("focusin", handleFocus);
+    document.getElementById("sliceRecord")?.addEventListener?.("focusin", event => {
+      if (inspectorRecord) handleFocus(event);
     });
 
     document.addEventListener("keydown", handleKeyboardNavigation);
@@ -1980,6 +2021,9 @@
     // reads: both are exposed so a test can drive the question without a click.
     selectGuarded,
     recordDirty,
+    showInspector,
+    clearInspector,
+    confirmDiscardRecordEdits,
     isActive,
     ensureLoaded,
     setIncludeClosed,

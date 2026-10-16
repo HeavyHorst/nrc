@@ -814,12 +814,11 @@ function navigateToTarget(convId, targetType, targetId, sourceType = 1) {
       window.NRCCustomers?.openRecord(asset.assetType === 9 ? "contact" : "activity", targetId);
       return;
     }
-    // A slice lives in the task view and is selected by its stable asset ID.
-    // Its display name need not be unique or present in the current register.
+    // Linked slices keep the current view, just like linked tasks and notes.
+    // Resolve by stable ID, never by the potentially duplicate display name.
     const sliceId = asset ? asset.assetType === (window.NRCAssets?.AssetType?.Slice ?? 11) : Boolean(sliceName(targetId));
     if (sliceId) {
-      window.NRCViewManager?.setActiveView?.("kanban");
-      window.NRCSlices?.select?.(targetId, { focusDetail: true });
+      window.NRCInspector?.openEntity({ roomId: convId, type: "slice", id: targetId });
       return;
     }
     if (window.NRCInspector) {

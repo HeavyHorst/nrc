@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261016customergrid2";
+const CACHE_NAME = "nrc-terminal-20261016sliceinspector1";
 
 const APP_SHELL = [
   "./",
@@ -11,12 +11,12 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261016customergrid2",
+  "./css/main.css?v=20261016sliceinspector1",
   "./css/foundation.css?v=20261012slicebars1",
   "./css/workspace.css?v=20261016cleanup1",
   "./css/entities.css?v=20261014sliceheader3",
   "./css/ledger.css?v=20261016registertabs2",
-  "./css/mobile-tasks.css?v=20261007people1",
+  "./css/mobile-tasks.css?v=20261016sliceinspector1",
   "./css/mobile.css?v=20261016cleanup1",
   "./css/custom-select.css?v=20260926nesting1",
   "./dialog.js?v=20260925document17",
@@ -28,8 +28,8 @@ const APP_SHELL = [
   "./transactions.js?v=20260925inline1",
   "./edges.js?v=20260924slicelive1",
   "./files.js?v=20261008files1",
-  "./links-ui.js?v=20261014batch1",
-  "./inspector.js?v=20261015chatrail1",
+  "./links-ui.js?v=20261016sliceinspector1",
+  "./inspector.js?v=20261016sliceinspector1",
   "./view-manager.js?v=20261016sullivannav1",
   "./list-navigation.js?v=20260805b",
   "./virtual-list.js?v=20260908a",
@@ -48,7 +48,7 @@ const APP_SHELL = [
   "./appointment-notify.js?v=20260927appointment2",
   "./reminder-notify.js?v=20260923attention7",
   "./task-query.js?v=20260927calendar8",
-  "./slices.js?v=20261014batch1",
+  "./slices.js?v=20261016sliceinspector1",
   "./overview.js?v=20261013overviewactions2",
   "./note-html.js?v=20261007fragments1",
   "./notes.js?v=20261013loading1",
