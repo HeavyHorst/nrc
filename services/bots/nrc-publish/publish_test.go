@@ -84,6 +84,37 @@ func TestBrandingHTTP(t *testing.T) {
 	}
 }
 
+func TestFrameAncestorsHTTP(t *testing.T) {
+	a := testApp(t)
+	const policy = "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors "
+	for _, value := range []string{"", "https://antares.net https://www.edupool.de", " http://localhost:8080\nhttps://edupool.de "} {
+		var err error
+		a.cfg.FrameAncestors, err = parseFrameAncestors(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := strings.Join(strings.Fields(value), " ")
+		if want == "" {
+			want = "'none'"
+		}
+		for _, path := range []string{"/", "/articles/missing"} {
+			if got := request(a.public(), "GET", path, nil, false).Header().Get("Content-Security-Policy"); got != policy+want {
+				t.Fatalf("public policy: %q", got)
+			}
+		}
+		for _, auth := range []bool{false, true} {
+			if got := request(a.admin(), "GET", "/", nil, auth).Header().Get("Content-Security-Policy"); got != policy+"'none'" {
+				t.Fatalf("admin must never allow framing: %q", got)
+			}
+		}
+	}
+	for _, value := range []string{"*", "'self'", "https://*.edupool.de", "https://edupool.de/path", "https://edupool.de/", "https://user@edupool.de", "https://edupool.de?x", "https://edupool.de#x", "https://edupool.de;script-src *", "https://edupool.de:65536", "javascript:alert(1)", "https://edupool.de https://*.antares.net"} {
+		if _, err := parseFrameAncestors(value); err == nil {
+			t.Errorf("accepted unsafe origin list %q", value)
+		}
+	}
+}
+
 func candidate() revision {
 	return revision{SourceID: 41, SourceUpdated: 100, Slug: "einrichtung", Title: "Einrichtung", Category: "Erste Schritte", Kind: "Anleitung", Markdown: "## Einrichtung\n\nFreigegebener Inhalt.", CreatedBy: "reviewer"}
 }

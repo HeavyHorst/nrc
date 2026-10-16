@@ -237,8 +237,24 @@ Revision history and audit are stored; a history/rollback UI is not provided yet
 | `PUBLISH_CONTACT_URL` | Optional Kontakt link: HTTP(S) URL or root-relative path |
 | `PUBLISH_THEME_FILE` | Optional trusted local CSS file, loaded at startup and appended to the base stylesheet |
 | `PUBLISH_LOGO_FILE` | Optional local PNG, JPEG or WebP file, loaded at startup; shown on the home page and in page headers |
+| `PUBLISH_FRAME_ANCESTORS` | Space-separated HTTP(S) origins allowed to embed public pages; empty disables embedding. Admin pages always deny embedding. |
 | `PUBLISH_DATA_DIR` | `data`; contains `publish.db` |
 | `PUBLISH_FILES_DIR` | Existing NRC attachment directory; required for notes with files |
+
+### Embedding public documentation
+
+Set the allowed parent origins in `publish.env`, then recreate Publish:
+
+```dotenv
+PUBLISH_FRAME_ANCESTORS="https://antares.net https://www.antares.net https://edupool.de https://www.edupool.de"
+```
+
+Specify exact origins, including the scheme and any non-default port. Paths,
+trailing slashes, wildcards and CSP keywords are rejected at startup. An empty
+value restores `frame-ancestors 'none'`. This setting never relaxes the private
+admin listener's policy. In nested frames, every ancestor must be allowed.
+The parent website still needs an iframe and must allow it in its own CSP;
+this setting does not add automatic iframe height adjustment.
 
 ### Corporate design and legal links
 

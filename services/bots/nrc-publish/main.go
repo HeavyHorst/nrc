@@ -34,6 +34,7 @@ type config struct {
 	FooterText, ImprintURL, PrivacyURL, TermsURL, ContactURL                                                                          string
 	ThemeCSS                                                                                                                          []byte
 	Logo                                                                                                                              []byte
+	FrameAncestors                                                                                                                    string
 }
 
 type app struct {
@@ -145,7 +146,7 @@ func (a *app) public() http.Handler {
 	mux.HandleFunc("GET /articles/{slug}", a.article)
 	mux.HandleFunc("GET /articles/by-note/{id}", a.articleByNote)
 	mux.HandleFunc("GET /media/{revision}/{file}", func(w http.ResponseWriter, r *http.Request) { a.media(w, r, true) })
-	return headers(mux, false)
+	return a.headers(mux, false)
 }
 
 func (a *app) admin() http.Handler {
@@ -191,7 +192,7 @@ func (a *app) admin() http.Handler {
 		a.action(w, r, a.store.withdraw(r.PathValue("slug"), r.FormValue("revision"), a.cfg.User))
 	})
 	mux.HandleFunc("GET /media/{revision}/{file}", func(w http.ResponseWriter, r *http.Request) { a.media(w, r, false) })
-	return headers(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return a.headers(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			agent.ServeHTTP(w, r)
 			return
@@ -219,11 +220,32 @@ func (a *app) admin() http.Handler {
 	}), true)
 }
 
-func headers(next http.Handler, admin bool) http.Handler {
+func parseFrameAncestors(value string) (string, error) {
+	origins := strings.Fields(value)
+	for _, origin := range origins {
+		u, err := url.Parse(origin)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil || origin != u.Scheme+"://"+u.Host || strings.Trim(u.Hostname(), "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:") != "" {
+			return "", fmt.Errorf("frame ancestors must be space-separated HTTP(S) origins without paths or wildcards")
+		}
+		if port := u.Port(); port != "" {
+			n, err := strconv.Atoi(port)
+			if err != nil || n < 1 || n > 65535 {
+				return "", fmt.Errorf("invalid frame ancestor port")
+			}
+		}
+	}
+	return strings.Join(origins, " "), nil
+}
+
+func (a *app) headers(next http.Handler, admin bool) http.Handler {
+	ancestors := "'none'"
+	if !admin && a.cfg.FrameAncestors != "" {
+		ancestors = a.cfg.FrameAncestors
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors "+ancestors)
 		// Withdrawal must not leave a browser/CDN copy available from this origin.
 		w.Header().Set("Cache-Control", "no-store")
 		if admin {
@@ -683,6 +705,12 @@ func main() {
 	cfg := config{PublicAddr: env("PUBLISH_ADDR", ":8093"), AdminAddr: env("PUBLISH_ADMIN_ADDR", "127.0.0.1:8094"), User: os.Getenv("PUBLISH_ADMIN_USER"), Password: os.Getenv("PUBLISH_ADMIN_PASSWORD"), Workspace: os.Getenv("NRC_WORKSPACE"), FilesDir: os.Getenv("PUBLISH_FILES_DIR"), Brand: env("PUBLISH_BRAND", "Dokumentation"), DataDir: env("PUBLISH_DATA_DIR", "data"), NRCServer: env("NRC_SERVER", "ws://localhost:8080"), BotSecret: os.Getenv("NRC_BOT_SECRET")}
 	cfg.FooterText, cfg.ImprintURL, cfg.PrivacyURL = os.Getenv("PUBLISH_FOOTER_TEXT"), os.Getenv("PUBLISH_IMPRINT_URL"), os.Getenv("PUBLISH_PRIVACY_URL")
 	cfg.TermsURL, cfg.ContactURL = os.Getenv("PUBLISH_TERMS_URL"), os.Getenv("PUBLISH_CONTACT_URL")
+	var err error
+	cfg.FrameAncestors, err = parseFrameAncestors(os.Getenv("PUBLISH_FRAME_ANCESTORS"))
+	if err != nil {
+		slog.Error("invalid PUBLISH_FRAME_ANCESTORS", "error", err)
+		os.Exit(1)
+	}
 	for _, value := range []string{cfg.ImprintURL, cfg.PrivacyURL, cfg.TermsURL, cfg.ContactURL} {
 		if value == "" {
 			continue
