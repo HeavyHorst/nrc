@@ -1,7 +1,7 @@
 @import url("foundation.css?v=20261012slicebars1");
 @import url("workspace.css?v=20261016cleanup1");
 @import url("entities.css?v=20261014sliceheader3");
-@import url("ledger.css?v=20261016sullivannav1");
+@import url("ledger.css?v=20261016registertabs2");
 @import url("mobile-tasks.css?v=20261007people1");
 @import url("mobile.css?v=20261016cleanup1");
 
@@ -92,51 +92,7 @@ body.sullivan-workbench #chatAttach {
 .customer-record-header .customer-identity h2 { font-size: 1rem; margin-block: 0.25rem; }
 .customer-record .customer-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem 1rem; margin-block: 0.75rem; font-size: var(--font-base); }
 .customer-record-header .customer-identity { padding: 0.75rem; border-inline: 1px solid var(--border-primary); }
-.customer-tabs { position: relative; padding-inline: 0.5rem; overflow-x: auto; min-height: 2.25rem; align-items: end; gap: 0; box-shadow: inset 0 -1px var(--border-primary); }
-/* Index dividers sit behind the open sheet; the selected tab joins its edge. */
-.customer-tabs.tab-group > .btn.nav-tab {
-    position: relative;
-    isolation: isolate;
-    flex-shrink: 0;
-    align-self: end;
-    min-height: 2rem;
-    padding-inline: 0.875rem;
-    border: 0;
-    background: transparent;
-    box-shadow: none;
-}
-.customer-tabs.tab-group > .btn.nav-tab + .btn.nav-tab { margin-left: -6px; }
-.customer-tabs.tab-group > .btn.nav-tab::before,
-.customer-tabs.tab-group > .btn.nav-tab::after {
-    content: "";
-    position: absolute;
-    z-index: -1;
-    inset: 0;
-    pointer-events: none;
-    mask-size: 100% 100%;
-    mask-repeat: no-repeat;
-}
-/* Draw the slant directly; only the SVG contour is antialiased, not a transformed border. */
-.customer-tabs.tab-group > .btn.nav-tab::before {
-    background: var(--surface-panel);
-    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 40' preserveAspectRatio='none'%3E%3Cpath d='M.5 40 5 6Q5.7.5 11.5.5H113Q119.5.5 118.7 7L114.5 40Z'/%3E%3C/svg%3E");
-}
-.customer-tabs.tab-group > .btn.nav-tab::after {
-    background: var(--border-primary);
-    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 40' preserveAspectRatio='none'%3E%3Cpath d='M.5 40 5 6Q5.7.5 11.5.5H113Q119.5.5 118.7 7L114.5 40' fill='none' stroke='black' stroke-width='1' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E");
-}
-.customer-tabs.tab-group > .btn.nav-tab:hover { background: transparent; }
-.customer-tabs.tab-group > .btn.nav-tab:hover::before { background: var(--bg-hover); }
-.customer-tabs.tab-group > .btn.nav-tab.active {
-    z-index: 1;
-    min-height: 2.25rem;
-    background: transparent;
-    box-shadow: none;
-}
-.customer-tabs.tab-group > .btn.nav-tab.active::before {
-    background: color-mix(in srgb, var(--accent-selected) 10%, var(--surface-content));
-}
-.customer-tabs.tab-group > .btn.nav-tab:focus-visible { outline: 2px solid var(--focus-interactive); outline-offset: -4px; }
+.customer-tabs { --tab-rise: 0.25rem; --tab-padding: 0.875rem; min-height: 2.25rem; padding-inline: 0.5rem; }
 .customer-record-body { min-width: 0; border: 1px solid var(--border-primary); border-top: 0; border-radius: 0 0 6px 6px; padding: 0.625rem; background: var(--surface-content); }
 .customer-overview-grid.is-overview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1rem; align-items: start; }
 .customer-page { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding-block: 0.5rem; }
@@ -275,8 +231,7 @@ body.sullivan-workbench #chatAttach {
     .customer-record-header { top: -0.625rem; }
     .customer-record .customer-facts { font-size: var(--mobile-font-base); }
     .customer-record .customer-history-filter input { font-size: 16px; }
-    .customer-tabs.tab-group > .btn.nav-tab { min-height: 40px; }
-    .customer-tabs.tab-group > .btn.nav-tab.active { min-height: 46px; }
+    .customer-tabs { --tab-rise: 6px; min-height: 46px; }
     .customer-work-row, .customer-history-timeline > .customer-event { font-size: var(--mobile-font-base); }
     .customer-facts { grid-template-columns: 1fr; }
     .customers-panel > .panel-header { flex-shrink: 0; }

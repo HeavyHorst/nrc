@@ -7872,8 +7872,9 @@ function initKeyboardShortcuts() {
 
 function initHeaderControlFocus() {
   document.addEventListener("focusin", (event) => {
+    const tabs = event.target.closest?.(".tab-group, .task-detail-tabs, .note-link-picker-types");
     const row = event.target.closest?.(".header-register-control-row, .inspector-mode-row");
-    if (!row || row.scrollWidth <= row.clientWidth) return;
+    if ((!tabs || tabs.scrollWidth <= tabs.clientWidth) && (!row || row.scrollWidth <= row.clientWidth)) return;
     event.target.scrollIntoView({ block: "nearest", inline: "nearest" });
   });
 }

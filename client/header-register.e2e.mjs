@@ -300,21 +300,38 @@ try {
           });
           assert.equal(style.labelFont, style.fontFamily, `${family}: label inherits tab font`);
           for (const side of ["Top", "Right", "Bottom", "Left"]) assert.equal(style[`border${side}Width`], "0px", `${family}/${state}: no border`);
-          // The band owns the height, so only the baseline travels with the tab.
+          // The group owns the baseline; index dividers replace underlines.
           assert.equal(style.outlineStyle, state === "focus" ? "solid" : "none", `${family}/${state}: no resting outline, keyboard focus visible`);
           if (state === "focus") {
             assert.equal(style.outlineWidth, "2px", `${family}/${state}: focus ring width`);
             assert.equal(style.outlineOffset, "-2px", `${family}/${state}: focus ring stays inside the segment`);
           }
-          if (state.startsWith("active")) assert.match(style.boxShadow, /0px -3px 0px 0px inset$/,
-            `${family}/${state}: the selected segment replaces the group baseline`);
-          else assert.match(style.boxShadow, /0px -1px 0px 0px inset$/,
-            `${family}/${state}: the segment draws the group baseline`);
+          assert.equal(style.boxShadow, "none", `${family}/${state}: no old selection underline`);
+          const geometry = await tab.evaluate(el => {
+            const box = el.getBoundingClientRect(), group = el.parentElement.getBoundingClientRect();
+            return { top: box.top - group.top, bottom: box.bottom - group.bottom, height: box.height,
+              labelHeight: parseFloat(getComputedStyle(el).fontSize) };
+          });
+          assert.equal(geometry.top, state.startsWith("active") ? 0 : 3,
+            `${family}/${state}: selected register is raised within its band`);
+          assert.equal(geometry.bottom, 0, `${family}/${state}: tabs join the shared baseline`);
+          assert.ok(geometry.height >= geometry.labelHeight, `${family}/${state}: label fits the compact tab`);
           if (!expected.has(state)) expected.set(state, style);
           else assert.deepEqual(style, expected.get(state), `${width}/${theme}/${family}/${state}: identical tab appearance`);
         }
         await tab.evaluate((el, active) => { el.classList.toggle("active", active); el.blur(); }, wasActive);
       }
+      const narrowTabs = page.locator(".catalog-tabs");
+      await narrowTabs.evaluate(el => { el.style.width = "144px"; });
+      assert.ok(await narrowTabs.evaluate(el => el.scrollWidth > el.clientWidth), "narrow tabs scroll instead of crushing labels");
+      await narrowTabs.locator("button").first().focus();
+      for (let i = 0; i < 3; i++) await page.keyboard.press("Tab");
+      await page.waitForFunction(() => {
+        const el = document.querySelector(".catalog-tabs button:last-child");
+        const tab = el.getBoundingClientRect(), group = el.parentElement.getBoundingClientRect();
+        return document.activeElement === el && tab.left >= group.left - 1 && tab.right <= group.right + 1;
+      });
+      await narrowTabs.evaluate(el => { el.style.removeProperty("width"); el.scrollLeft = 0; });
       // A count owns a fixed slot: a second digit grows into reserved space
       // instead of moving the segment and the controls after it.
       const countGroup = page.locator(".reminder-header-controls .tab-group").first();

@@ -83,6 +83,7 @@
   });
 
   document.querySelectorAll(".catalog-tabs .nav-tab").forEach((tab) => {
+    tab.addEventListener("focus", () => tab.scrollIntoView({ block: "nearest", inline: "nearest" }));
     tab.addEventListener("click", () => {
       document.querySelectorAll(".catalog-tabs .nav-tab").forEach((item) => {
         item.classList.remove("active");
