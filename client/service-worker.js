@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261016cleanup1";
+const CACHE_NAME = "nrc-terminal-20261016sullivannav1";
 
 const APP_SHELL = [
   "./",
@@ -11,11 +11,11 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261016cleanup1",
+  "./css/main.css?v=20261016sullivannav1",
   "./css/foundation.css?v=20261012slicebars1",
   "./css/workspace.css?v=20261016cleanup1",
   "./css/entities.css?v=20261014sliceheader3",
-  "./css/ledger.css?v=20261016cleanup1",
+  "./css/ledger.css?v=20261016sullivannav1",
   "./css/mobile-tasks.css?v=20261007people1",
   "./css/mobile.css?v=20261016cleanup1",
   "./css/custom-select.css?v=20260926nesting1",
@@ -30,7 +30,7 @@ const APP_SHELL = [
   "./files.js?v=20261008files1",
   "./links-ui.js?v=20261014batch1",
   "./inspector.js?v=20261015chatrail1",
-  "./view-manager.js?v=20261012overview1",
+  "./view-manager.js?v=20261016sullivannav1",
   "./list-navigation.js?v=20260805b",
   "./virtual-list.js?v=20260908a",
   "./loading-indicator.js?v=20261013loading1",
@@ -53,10 +53,10 @@ const APP_SHELL = [
   "./note-html.js?v=20261007fragments1",
   "./notes.js?v=20261013loading1",
   "./task-references.js?v=20260914workspace1",
-  "./ai.js?v=20261015copy2",
+  "./ai.js?v=20261016sullivannav1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20261015copy3",
-  "./app.js?v=20261015copy3",
+  "./app.js?v=20261016sullivannav1",
   "./customers.js?v=20261014batch2",
   "./mobile-shell.js?v=20260914chats1",
   "./latency-worker.js",

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261016cleanup1">
+    <link rel="stylesheet" href="../css/main.css?v=20261016sullivannav1">
     <link rel="stylesheet" href="../css/custom-select.css?v=20260926nesting1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -355,6 +355,7 @@
                                             <div id="toolsViewsLabel" class="sidebar-section-label">TOOLS</div>
                                             <button id="sullivanBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">
                                                 <span>SULLIVAN</span>
+                                                <span class="sidebar-unread-count" role="status">RUNNING</span>
                                             </button>
                                             <button id="systemLogBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">SYSTEM LOG</button>
                                         </div>
@@ -777,7 +778,7 @@
                         <div class="catalog-log">
                             <div class="log-row type-activity ai-run-row"><span class="message-meta"><span class="col-tag">SULLIVAN</span><time class="col-time">09:44</time></span><div class="col-message message-content"><div class="ai-run-block"><button class="ai-run-header" type="button" aria-expanded="false"><span class="ai-run-title"><span class="ai-run-indicator" aria-hidden="true">■</span><span class="ai-run-title-label">SULLIVAN THINKING</span></span><span class="ai-run-status">ROOM CONTEXT + GRAPH TRAVERSAL</span></button><div class="ai-run-steps"><div class="ai-run-step ai-run-step--running"><span class="ai-run-mark">⟳</span><span class="ai-run-label">room context + graph traversal</span></div></div></div></div></div>
                         </div>
-                        <p class="catalog-usage"><b>CONTRACT</b> Active runs occupy one unboxed status line. Detailed steps remain available through explicit expansion; complete and error states retain semantic color.</p>
+                        <p class="catalog-usage"><b>CONTRACT</b> Active runs occupy one unboxed status line. The bounded Sullivan transcript is left-aligned with the chat. Navigation remains available during preparation, research and action execution; results stay in the workspace Sullivan history without changing the selected view. The Sullivan navigation entry shows RUNNING or APPLYING while work continues. Session reset, transcript clearing and duplicate execution remain disabled. Detailed steps remain available through explicit expansion; complete and error states retain semantic color.</p>
                     </div>
                 </div>
                 <div class="catalog-subsection">

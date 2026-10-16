@@ -1684,18 +1684,17 @@ body.sullivan-workbench #logOutput {
     width: 100%;
     margin: 0;
     border: 0;
-    padding: 24px clamp(16px, 4vw, 48px);
 }
 
 body.sullivan-workbench .ai-workbench-run {
     width: min(100%, 760px);
-    margin: 0 auto 24px;
+    margin: 0 0 24px;
     font-family: var(--font-sans);
 }
 
 body.sullivan-workbench #logOutput .log-row {
     width: min(100%, 760px);
-    margin-inline: auto;
+    margin-inline: 0;
 }
 
 body.sullivan-workbench #logOutput .ledger-ai-answer {

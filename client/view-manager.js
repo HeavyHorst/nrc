@@ -34,21 +34,13 @@ function getActiveView() {
   return activeView;
 }
 
-function setActiveView(view, options = {}) {
+function setActiveView(view) {
   if (view === "customers" && !window.NRCCustomers?.isEnabled()) return;
+  if (view !== "sullivan" && view !== "sullivanShare") window.NRCAI?.cancelSullivanOpen?.();
   if (view === activeView) return;
 
   const leavingSullivan = (activeView === "sullivan" || activeView === "sullivanShare") &&
     view !== "sullivan" && view !== "sullivanShare";
-  if (leavingSullivan && options.force !== true && window.NRCAI?.isWorkbenchBusy?.()) {
-    logMessage(
-      "Error",
-      "SULLIVAN RUN IS PINNED TO ITS CURRENT CONTEXT; STOP OR WAIT BEFORE CHANGING VIEWS",
-      window.NRCAI.getDisplayConvId?.(),
-      { aiContextRoomId: window.NRCAI.getContextConvId?.() },
-    );
-    return;
-  }
 
   document.body.classList.toggle("note-share-focused", view === "noteShare");
   document.body.classList.toggle("sullivan-share-focused", view === "sullivanShare");

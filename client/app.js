@@ -621,15 +621,6 @@ function handleVisibleSystemLogEntry() {
 }
 
 async function showSystemLog() {
-  if (window.NRCAI?.isWorkbenchBusy?.()) {
-    logMessage(
-      "Error",
-      "SULLIVAN RUN IS PINNED TO ITS CURRENT CONTEXT; STOP OR WAIT BEFORE OPENING SYSTEM LOG",
-      window.NRCAI.getDisplayConvId?.(),
-      { aiContextRoomId: window.NRCAI.getContextConvId?.() },
-    );
-    return false;
-  }
   if (window.NRCInspector?.hasEntity?.() && !(await window.NRCInspector.close())) {
     return false;
   }
@@ -4508,12 +4499,6 @@ function switchToRoom(roomId) {
   if (roomId === 0n) return; // Workspace data is not a chat destination.
   if (roomId === SYSTEM_ROOM_ID) {
     showSystemLog();
-    return;
-  }
-
-  if (window.NRCAI?.isWorkbenchBusy?.()) {
-    logMessage("Error", "SULLIVAN RUN IS PINNED TO ITS CURRENT CONTEXT; STOP OR WAIT BEFORE CHANGING ROOMS",
-      window.NRCAI.getDisplayConvId?.(), { aiContextRoomId: window.NRCAI.getContextConvId?.() });
     return;
   }
 

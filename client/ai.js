@@ -76,6 +76,11 @@
     const stop = document.getElementById("sullivanStop");
     if (send) send.disabled = busy;
     if (stop) stop.hidden = !(ownsRun && inSullivan);
+    const status = document.getElementById("sullivanViewStatus");
+    if (status) {
+      status.hidden = !isWorkbenchBusy();
+      status.textContent = activeActionPlanApply ? "APPLYING" : activeAskRun ? "RUNNING" : "";
+    }
     messageInput.disabled = busy;
     ["askResetChip", "askClearViewChip"].forEach((id) => {
       const control = document.getElementById(id);
@@ -479,7 +484,7 @@
     }
     sullivanDisplayConvId = null;
     sullivanShareContextConvId = null;
-    if (isSullivanView()) window.NRCViewManager?.setActiveView?.("chat", { force: true });
+    if (isSullivanView()) window.NRCViewManager?.setActiveView?.("chat");
     loadRoomHistory(currentRoomId);
   }
 
@@ -1286,15 +1291,6 @@
     return null;
   }
 
-  function ensureChatViewForAskDM() {
-    if (window.NRCViewManager?.setActiveView) {
-      if (window.NRCViewManager.getActiveView?.() === "sullivanShare") {
-        return;
-      }
-      window.NRCViewManager.setActiveView("sullivan");
-    }
-  }
-
   function waitForDM(username, timeoutMs, requireOnline = false, signal = null) {
     return new Promise((resolve) => {
       const deadline = Date.now() + timeoutMs;
@@ -1408,7 +1404,7 @@
 
   async function openSullivanWithContext(contextConvId, options = {}) {
     if (isWorkbenchBusy()) {
-      logWorkbenchMessage("Error", "SULLIVAN IS BUSY; STOP OR WAIT BEFORE CHANGING CONTEXT");
+      showSullivanConversation(BigInt(activeAskRun?.displayConvId ?? activeActionPlanApply.displayConvId), options);
       return;
     }
     activeSullivanOpenController?.abort();
@@ -1441,12 +1437,19 @@
 
     const displayConvId = BigInt(displayInfo.convId);
     activeSullivanOpenDisplayConvId = displayConvId;
-    sullivanShareContextConvId = contextID;
-    sullivanDisplayConvId = displayConvId;
     closeStaleAIDMs(displayConvId);
-    setAskContext(displayConvId, contextID, true);
     rememberLastNonDMRoom(contextID);
+    showSullivanConversation(displayConvId, options);
+    if (activeSullivanOpenController === controller) {
+      activeSullivanOpenController = null;
+      activeSullivanOpenDisplayConvId = null;
+    }
+  }
 
+  function showSullivanConversation(displayConvId, options) {
+    sullivanShareContextConvId = 0n;
+    sullivanDisplayConvId = displayConvId;
+    setAskContext(displayConvId, 0n, true);
     if (options.focused !== false && window.NRCViewManager?.setActiveView) {
       window.NRCViewManager.setActiveView("sullivanShare");
     } else if (window.NRCViewManager?.setActiveView) {
@@ -1455,15 +1458,10 @@
 
     updateAskContextChip();
     if (typeof updateRoomUI === "function") updateRoomUI();
-    await loadRoomHistory(displayConvId, { aiContextRoomId: contextID });
-    if (!isCurrentOpen()) return;
+    loadRoomHistory(displayConvId, { aiContextRoomId: 0n });
     if (typeof clearDMUnread === "function") clearDMUnread(displayConvId);
     roomActivity?.delete?.(displayConvId);
     if (typeof updateDMListUI === "function") updateDMListUI();
-    if (activeSullivanOpenController === controller) {
-      activeSullivanOpenController = null;
-      activeSullivanOpenDisplayConvId = null;
-    }
   }
 
   function buildAskUserTurn(question, contextConvId, mode) {
@@ -1590,6 +1588,9 @@
       return;
     }
     const originConvId = BigInt(options.displayConvID ?? sullivanDisplayConvId ?? currentRoomId);
+    // Open on submission, never after asynchronous preparation: navigation is
+    // independent of the request and must not be undone when readiness resolves.
+    if (options.forceRoom !== true && !isSullivanView()) window.NRCViewManager?.setActiveView("sullivan");
     const controller = new AbortController();
     const aiRunId = `ai-${Date.now().toString(36)}-${++aiRunSequence}`;
     activeAskRun = { id: aiRunId, controller, displayConvId: originConvId };
@@ -1674,7 +1675,7 @@
       sullivanDisplayConvId = resolvedDisplayConvId;
       activeAskRun.displayConvId = resolvedDisplayConvId;
       setAskContext(resolvedDisplayConvId, contextConvId, true);
-      ensureChatViewForAskDM();
+      if (isSullivanView()) loadRoomHistory(resolvedDisplayConvId, { aiContextRoomId: contextConvId });
       closeStaleAIDMs(resolvedDisplayConvId);
     }
 
@@ -1873,8 +1874,8 @@
       String(current.contextConvId) === String(plan.contextConvId);
   }
 
-  function refreshActionPlanCards() {
-    document.querySelectorAll(".ai-action-plan").forEach((card) => {
+  function refreshActionPlanCards(cards = document.querySelectorAll(".ai-action-plan")) {
+    cards.forEach((card) => {
       const plan = card._nrcActionPlan;
       if (!plan) return;
       const valid = isCurrentActionPlan(plan);
@@ -2206,7 +2207,7 @@
     });
 
     rootEl.appendChild(card);
-    refreshActionPlanCards();
+    refreshActionPlanCards([card]);
   }
 
   function parseApplyShortcut(text) {
