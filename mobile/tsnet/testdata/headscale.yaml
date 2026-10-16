@@ -1,0 +1,28 @@
+# Disposable, loopback-only lab. Run from a private scratch directory, never
+# expose this HTTP/admin configuration as a production control server.
+server_url: http://127.0.0.1:18080
+listen_addr: 127.0.0.1:18080
+metrics_listen_addr: 127.0.0.1:19090
+grpc_listen_addr: 127.0.0.1:15043
+noise:
+  private_key_path: noise.key
+prefixes:
+  v4: 100.64.0.0/24
+  v6: fd7a:115c:a1e0::/48
+derp:
+  urls: [https://controlplane.tailscale.com/derpmap/default]
+  auto_update_enabled: false
+database:
+  type: sqlite
+  sqlite:
+    path: headscale.sqlite
+    write_ahead_log: true
+dns:
+  magic_dns: true
+  base_domain: nrc-lab.test
+  override_local_dns: false
+unix_socket: headscale.sock
+unix_socket_permission: "0600"
+disable_check_updates: true
+log:
+  level: warn

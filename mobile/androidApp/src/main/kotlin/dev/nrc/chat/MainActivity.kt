@@ -1,7 +1,11 @@
 package dev.nrc.chat
 
 import android.content.Context
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -23,19 +27,24 @@ import kotlinx.serialization.json.Json
 
 class MainActivity : ComponentActivity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val http = HttpClient(OkHttp) {
-        // OkHttp rejects custom maxFrameSize settings after a successful upgrade.
-        install(WebSockets)
-        followRedirects = false
-        expectSuccess = true
-    }
+    private lateinit var http: HttpClient
+    private lateinit var transport: NrcTransport
     private lateinit var chat: ChatClient
     private lateinit var attachments: AndroidAttachments
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        transport = NrcTransport(applicationContext)
+        http = HttpClient(OkHttp) {
+            engine { config { transport.configure(this) } }
+            // OkHttp rejects custom maxFrameSize settings after a successful upgrade.
+            install(WebSockets)
+            followRedirects = false
+            expectSuccess = true
+        }
         chat = ChatClient(http, AndroidStore(this), scope, AndroidMessageStore.get(this))
+        transport.configureServer(chat.state.value.profile)
         attachments = AndroidAttachments(this, chat, scope)
         scope.launch {
             var previous = chat.state.value
@@ -49,6 +58,7 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             val state by chat.state.collectAsState()
+            val signInUrl by transport.signInUrl.collectAsState()
             val pending = attachments.pending?.takeIf { it.target.profile == state.profile &&
                 it.target.username == state.username && it.target.conversationId == state.selected }
             NrcApp(state, { id ->
@@ -56,7 +66,9 @@ class MainActivity : ComponentActivity() {
                 chat.select(id)
             }, chat::draft, chat::sendSelected, { profile ->
                 if (profile != chat.state.value.profile) attachments.contextChanged()
-                chat.configure(profile)
+                transport.configureServer(profile)
+                try { chat.configure(profile) }
+                finally { transport.configureServer(chat.state.value.profile) }
             },
                 chat::startDM, chat::loadOlder, { chat.disconnect(); chat.connect() }, chat::dismissNotice,
                 darkTheme = isSystemInDarkTheme(), onClearDiagnostics = chat::clearDiagnostics,
@@ -71,7 +83,9 @@ class MainActivity : ComponentActivity() {
                     state.retention[it.target.conversationId] in listOf(Retention.Enabled, Retention.Ephemeral) } == true && state.fileTransfer == null,
                 onSendAttachment = attachments::send, onDismissAttachment = attachments::dismiss,
                 preparingAttachment = attachments.preparing,
-                fileActionError = attachments.error, onDismissFileError = { attachments.error = null })
+                fileActionError = attachments.error, onDismissFileError = { attachments.error = null },
+                attachmentHttp = http,
+                onTailnetSignIn = signInUrl?.let { url -> { openTailnetSignIn(url) } })
         }
     }
     override fun onStart() { super.onStart(); chat.connect() }
@@ -81,7 +95,14 @@ class MainActivity : ComponentActivity() {
         scope.launch(start = CoroutineStart.UNDISPATCHED) { chat.flushCache() }
         super.onStop()
     }
-    override fun onDestroy() { attachments.close(); scope.cancel(); http.close(); super.onDestroy() }
+    override fun onDestroy() { attachments.close(); scope.cancel(); http.close(); transport.close(); super.onDestroy() }
+
+    private fun openTailnetSignIn(url: String) {
+        try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+        catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "Install a browser to continue Tailscale sign-in.", Toast.LENGTH_LONG).show()
+        }
+    }
 }
 
 /** One app-lifetime connection; activities never hold a database Context. */

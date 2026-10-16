@@ -50,10 +50,12 @@ import dev.snipme.highlights.Highlights
 import dev.snipme.highlights.model.SyntaxThemes
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.expectSuccess
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.Url
 import io.ktor.utils.io.readAvailable
+import kotlinx.coroutines.withTimeout
 import okio.Buffer
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
@@ -67,12 +69,14 @@ import org.intellij.markdown.html.entities.Entities
 import org.intellij.markdown.lexer.Compat.codePointToString
 import org.intellij.markdown.parser.MarkdownParser
 
-/** One credential-free image client for the screen, never the authenticated chat transport. */
+/** External Markdown owns its client; NRC attachments borrow the chat transport.
+ * Loaders and caches remain separate, and disposing a loader never closes a borrowed client.
+ */
 @OptIn(ExperimentalCoilApi::class)
 @Composable
-internal fun rememberMarkdownImageLoader(): ImageLoader {
+internal fun rememberMarkdownImageLoader(transport: HttpClient? = null): ImageLoader {
     val context = LocalPlatformContext.current
-    val http = remember { HttpClient {
+    val http = remember(transport) { transport ?: HttpClient {
         followRedirects = false
         // Check status ourselves before reading any body, including huge proxy error pages.
         expectSuccess = false
@@ -83,7 +87,7 @@ internal fun rememberMarkdownImageLoader(): ImageLoader {
         .memoryCache { MemoryCache.Builder().maxSizeBytes(16L * 1024 * 1024).weakReferencesEnabled(false).build() }
         .diskCache(null)
         .build() }
-    DisposableEffect(loader) { onDispose { loader.shutdown(); http.close() } }
+    DisposableEffect(loader) { onDispose { loader.shutdown(); if (transport == null) http.close() } }
     return loader
 }
 
@@ -101,11 +105,13 @@ private fun allowedLink(value: String, image: Boolean = false): Boolean {
         url.user == null && url.password == null && url.host.isNotBlank()
 }
 
-/** Stream into a bounded buffer, including responses without a Content-Length. No redirects/cookies/auth. */
+/** Stream into a bounded buffer, including responses without a Content-Length.
+ * The host supplies redirect-disabled clients; external images never borrow chat credentials.
+ */
 private class MarkdownImageClient(private val http: HttpClient) : NetworkClient {
     override suspend fun <T> executeRequest(request: NetworkRequest, block: suspend (NetworkResponse) -> T): T {
         require(allowedLink(request.url, image = true)) { "Only credential-free HTTPS images are supported" }
-        return http.prepareGet(request.url).execute { response ->
+        return withTimeout(15_000) { http.prepareGet(request.url) { expectSuccess = false }.execute { response ->
             check(response.status.value == 200) { "Image request was not successful" }
             check((response.headers["Content-Length"]?.toLongOrNull() ?: 0L) <= 8 * 1024 * 1024) { "Image exceeds 8 MiB" }
             val channel = response.bodyAsChannel()
@@ -122,7 +128,7 @@ private class MarkdownImageClient(private val http: HttpClient) : NetworkClient 
             val body = NetworkResponseBody(bytes)
             try { block(NetworkResponse(code = 200, headers = headers.build(), body = body)) }
             finally { body.close() }
-        }
+        } }
     }
 }
 

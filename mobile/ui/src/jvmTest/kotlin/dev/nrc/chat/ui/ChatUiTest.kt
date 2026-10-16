@@ -4,6 +4,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import dev.nrc.chat.*
@@ -16,6 +17,100 @@ import kotlin.test.assertTrue
 
 class ChatUiTest {
     @get:Rule val compose = createComposeRule()
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun copyKeepsMarkdownAndReplyPreservesDraftUntilExplicitSend() {
+        val markdown = "**Important**\nSecond line with `code`."
+        var state by mutableStateOf(ChatState(profile = Profile("https://nrc.example", "studio"), selected = 2,
+            username = "rene", connection = Connection.Connected, retention = mapOf(2L to Retention.Enabled),
+            drafts = mapOf(2L to "Existing draft"), messages = mapOf(2L to listOf(
+                Message("peer", 2, author = "maya", timestampNanos = 1000, text = markdown)))))
+        var copied: AnnotatedString? = null
+        var denied = false
+        val sent = mutableListOf<String>()
+        val clipboard = object : ClipboardManager {
+            override fun setText(annotatedString: AnnotatedString) {
+                if (denied) throw IllegalStateException("Clipboard unavailable")
+                copied = annotatedString
+            }
+            override fun getText() = copied
+        }
+        compose.setContent {
+            CompositionLocalProvider(LocalClipboardManager provides clipboard) {
+                NrcApp(state, {}, { id, text -> state = state.copy(drafts = state.drafts + (id to text)) },
+                    { sent.add(state.drafts[2].orEmpty()) }, {}, {}, {}, {}, {})
+            }
+        }
+        compose.onNodeWithContentDescription("Copy Markdown").performClick()
+        assertEquals(markdown, copied?.text)
+        compose.onNodeWithText("Copied Markdown").assertExists()
+        denied = true
+        compose.onNodeWithContentDescription("Copy Markdown").performClick()
+        compose.onNodeWithText("Could not copy message").assertExists()
+        val expected = "> maya:\n> **Important**\n> Second line with `code`.\n\nExisting draft"
+        compose.onNode(hasSetTextAction()).performTextInputSelection(TextRange(3))
+        compose.onNodeWithContentDescription("Reply to maya").performClick()
+        compose.onNodeWithText("Cancel reply").performClick()
+        assertEquals(TextRange("Existing draft".length),
+            compose.onNode(hasSetTextAction()).fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.TextSelectionRange])
+        compose.onNodeWithContentDescription("Reply to maya").performClick()
+        compose.onNode(hasSetTextAction()).assertIsFocused().assertTextEquals(expected)
+        compose.onNode(hasSetTextAction()).performTextInputSelection(TextRange(3))
+        compose.onNodeWithContentDescription("Reply to maya").performClick()
+        assertEquals(TextRange(expected.length),
+            compose.onNode(hasSetTextAction()).fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.TextSelectionRange])
+        compose.onNode(hasSetTextAction()).performTextInput(" + edit")
+        compose.onNode(hasSetTextAction()).assertTextEquals(expected + " + edit")
+        assertTrue(sent.isEmpty())
+        compose.onNodeWithText("Cancel reply").performClick()
+        compose.onNode(hasSetTextAction()).assertTextEquals("Existing draft + edit")
+        compose.onNodeWithContentDescription("Reply to maya").performClick()
+        compose.onNodeWithContentDescription("Reply to maya").performClick()
+        compose.onNode(hasSetTextAction()).assertTextEquals(expected + " + edit") // No stacked quotes on repeated taps.
+        compose.onNodeWithContentDescription("Send message").performClick()
+        assertEquals(listOf(expected + " + edit"), sent)
+        compose.runOnIdle { state = state.copy(storageBlocked = true) }
+        compose.onNodeWithContentDescription("Reply to maya").assertIsNotEnabled()
+    }
+
+    @Test fun consecutiveAuthorsGroupOnlyInsideFiveMinuteBoundary() {
+        val base = java.time.LocalDate.now().atTime(12, 0).atZone(java.time.ZoneId.systemDefault()).toEpochSecond() * 1_000_000_000L
+        var messages by mutableStateOf(listOf(0L, 299L, 599L).mapIndexed { index, seconds ->
+            Message("message-$index", 2, author = "maya", timestampNanos = base + seconds * 1_000_000_000L, text = "Line $index")
+        })
+        compose.setContent {
+            NrcApp(ChatState(profile = Profile("https://nrc.example", "studio"), selected = 2,
+                connection = Connection.Connected, messages = mapOf(2L to messages)),
+                {}, { _, _ -> }, {}, {}, {}, {}, {}, {})
+        }
+        compose.onAllNodesWithText("maya").assertCountEquals(2)
+        compose.onAllNodesWithText("MA").assertCountEquals(2)
+        compose.onAllNodesWithContentDescription("Copy Markdown").assertCountEquals(3)
+        compose.onAllNodesWithContentDescription("Reply to maya").assertCountEquals(3)
+        compose.runOnIdle { messages = messages.mapIndexed { index, message ->
+            if (index == 1) message.copy(timestampNanos = base - 1) else message
+        } }
+        compose.onAllNodesWithText("maya").assertCountEquals(3)
+    }
+
+    @Test fun pendingTailnetSignInCanBeRetriedAndReturnsAfterExpiry() {
+        var pending by mutableStateOf(false)
+        var attempts = 0
+        val state = ChatState(profile = Profile("https://nrc.example", "studio"))
+        compose.setContent {
+            NrcApp(state, {}, { _, _ -> }, {}, {}, {}, {}, {}, {},
+                onTailnetSignIn = if (pending) ({ attempts++ }) else null)
+        }
+        compose.onNodeWithText("Continue Tailscale sign-in").assertDoesNotExist()
+        compose.runOnIdle { pending = true }
+        repeat(2) { compose.onNodeWithText("Continue Tailscale sign-in").assertIsDisplayed().performClick() }
+        assertEquals(2, attempts)
+        compose.runOnIdle { pending = false }
+        compose.onNodeWithText("Tailscale sign-in required").assertDoesNotExist()
+        compose.runOnIdle { pending = true }
+        compose.onNodeWithText("Continue Tailscale sign-in").assertIsDisplayed().performClick()
+        assertEquals(3, attempts)
+    }
 
     @Test fun offlineDraftRemainsEditableButCannotSendAndReconnectEnablesIt() {
         var state by mutableStateOf(ChatState(profile = Profile("https://nrc.example", "studio"), selected = 2,

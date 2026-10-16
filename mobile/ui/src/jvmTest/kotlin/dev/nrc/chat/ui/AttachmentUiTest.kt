@@ -14,6 +14,10 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.nrc.chat.*
 import dev.nrc.chat.Retention
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.request.get
+import kotlinx.coroutines.runBlocking
 import io.ktor.utils.io.ByteReadChannel
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -56,7 +60,7 @@ class AttachmentUiTest {
         connection = Connection.Connected, drafts = mapOf(2L to draft),
         messages = mapOf(2L to listOf(Message("attachment", 2, author = "peer", timestampNanos = 1, text = payload))))
 
-    private fun show(initial: ChatState, fileActions: Boolean = false) {
+    private fun show(initial: ChatState, fileActions: Boolean = false, http: HttpClient? = null) {
         state = initial
         compose.setContent {
             Box(Modifier.width(320.dp).height(720.dp)) {
@@ -70,7 +74,7 @@ class AttachmentUiTest {
                     onSendAttachment = { confirmed++; pending = null },
                     onDismissAttachment = { dismissed++; pending = null },
                     preparingAttachment = preparing, fileActionError = actionError,
-                    onDismissFileError = { actionError = null })
+                    onDismissFileError = { actionError = null }, attachmentHttp = http)
             }
         }
     }
@@ -128,6 +132,32 @@ class AttachmentUiTest {
             previous.forEach { (key, value) -> if (value == null) System.clearProperty(key) else System.setProperty(key, value) }
             directory.deleteRecursively()
         }
+    }
+
+    @Test fun attachmentsBorrowChatTransportButExternalMarkdownNeverDoes() = tls { server, origin ->
+        val http = HttpClient {
+            followRedirects = false
+            defaultRequest { headers.append("X-NRC-Test-Transport", "chat") }
+        }
+        try {
+            server.enqueue(image()); show(snapshot(origin), http = http); decoded(); pixels()
+            assertEquals("chat", assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)).getHeader("X-NRC-Test-Transport"))
+            change(snapshot(origin, "![Pixel]($origin/external.png)"))
+            compose.onNodeWithText("Load image · Pixel").assertExists()
+            server.enqueue(image()); compose.onNodeWithText("Load image · Pixel").performClick()
+            compose.waitUntil(15_000) {
+                compose.onAllNodesWithText("Loading image…").fetchSemanticsNodes().isEmpty() &&
+                    compose.onAllNodesWithText("Image unavailable · Retry").fetchSemanticsNodes().isEmpty() &&
+                    compose.onAllNodesWithContentDescription("Pixel").fetchSemanticsNodes().isNotEmpty()
+            }
+            val external = assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+            assertEquals("/external.png", external.path)
+            assertNull(external.getHeader("X-NRC-Test-Transport"))
+            // Disposing the image loaders must not close the borrowed chat client.
+            change(state.copy(selected = null)); compose.waitForIdle()
+            server.enqueue(MockResponse().setBody("still open"))
+            assertEquals(200, runBlocking { http.get("$origin/probe").status.value })
+        } finally { http.close() }
     }
 
     @Test fun ownServerEnvelopeAutomaticallyDecodesRetriesAndEnlargesWithoutLosingDraft() = tls { server, origin ->

@@ -6,18 +6,22 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.automirrored.outlined.Reply
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
@@ -26,6 +30,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
@@ -33,10 +39,12 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -95,6 +103,8 @@ fun NrcApp(
     preparingAttachment: Boolean = false,
     fileActionError: String? = null,
     onDismissFileError: () -> Unit = {},
+    attachmentHttp: io.ktor.client.HttpClient? = null,
+    onTailnetSignIn: (() -> Unit)? = null,
 ) {
     var settings by rememberSaveable { mutableStateOf(state.profile.server.isBlank()) }
     var diagnostics by rememberSaveable { mutableStateOf(false) }
@@ -115,6 +125,15 @@ fun NrcApp(
                     Text("DESIGN PREVIEW · SAMPLE DATA", Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
                         .padding(horizontal = 20.dp, vertical = 7.dp), fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (onTailnetSignIn != null) {
+                    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = 24.dp, vertical = 12.dp)) {
+                        Text("Tailscale sign-in required", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        Text("Sign in in your browser, then return to NRC. You can retry if you closed the browser.",
+                            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton(onClick = onTailnetSignIn) { Text("Continue Tailscale sign-in") }
+                    }
                 }
                 if (diagnostics) {
                     SystemLog(state, onClose = { diagnostics = false }, onClear = onClearDiagnostics)
@@ -178,7 +197,7 @@ fun NrcApp(
                         Conversations(state, onSelect = { onSelect(it) }, onNewDM = { newDM = true })
                     } else {
                         Transcript(state, selected, onDraft, onSend, onOlder, { onStartDM(selected.name) },
-                            onPickAttachment, onOpenAttachment, onSaveAttachment, preparingAttachment)
+                            onPickAttachment, onOpenAttachment, onSaveAttachment, preparingAttachment, attachmentHttp)
                     }
                 }
             }
@@ -334,11 +353,23 @@ private fun ColumnScope.Conversations(state: ChatState, onSelect: (Long) -> Unit
 private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation, onDraft: (Long, String) -> Unit,
                                    onSend: () -> Unit, onOlder: (Long) -> Unit, onReopenDM: () -> Unit,
                                    onPickAttachment: ((Boolean) -> Unit)?, onOpenAttachment: ((ChatAttachment) -> Unit)?,
-                                   onSaveAttachment: ((ChatAttachment) -> Unit)?, preparingAttachment: Boolean) {
+                                   onSaveAttachment: ((ChatAttachment) -> Unit)?, preparingAttachment: Boolean,
+                                   attachmentHttp: io.ktor.client.HttpClient?) {
     val id = conversation.id
     val markdownImages = key(state.profile, state.username) { rememberMarkdownImageLoader() }
+    val attachmentImages = if (attachmentHttp == null) markdownImages else
+        key(state.profile, state.username, attachmentHttp) { rememberMarkdownImageLoader(attachmentHttp) }
     val messages = state.messages[id].orEmpty()
     val draft = state.drafts[id].orEmpty()
+    val clipboard = LocalClipboardManager.current
+    val composerFocus = remember { FocusRequester() }
+    var composerValue by remember(state.profile, state.username, id) {
+        mutableStateOf(TextFieldValue(draft, TextRange(draft.length)))
+    }
+    // Programmatic draft changes (reply/cancel/profile restore) put the caret at
+    // the end; ordinary typing and selection keep the IME's selection/composition.
+    val fieldValue = if (composerValue.text == draft) composerValue else TextFieldValue(draft, TextRange(draft.length))
+    var replyPrefix by remember(state.profile, state.username, id) { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
     var lastKey by remember(id) { mutableStateOf<String?>(null) }
     LaunchedEffect(id, messages.lastOrNull()?.key) {
@@ -371,8 +402,12 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp, lineHeight = 23.sp)
             }
         }
-        items(messages, key = { it.key }) { message ->
-            val previous = messages.getOrNull(messages.indexOf(message) - 1)
+        itemsIndexed(messages, key = { _, message -> message.key }) { index, message ->
+            val previous = messages.getOrNull(index - 1)
+            val continuation = previous != null && message.author.isNotBlank() && previous.author == message.author &&
+                message.timestampNanos >= previous.timestampNanos &&
+                message.timestampNanos - previous.timestampNanos < 300_000_000_000L &&
+                localDate(previous.timestampNanos) == localDate(message.timestampNanos)
             if (previous == null || localDate(previous.timestampNanos) != localDate(message.timestampNanos)) {
                 Row(Modifier.padding(horizontal = 24.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
@@ -381,29 +416,68 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
                 }
             }
             val own = message.author == state.username
-            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp)) {
-                Row {
-                    Text(if (own) "you" else message.author, Modifier.weight(1f, fill = false).alignByBaseline(),
-                        fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Meta(" · ${clockTime(message.timestampNanos)}", Modifier.padding(start = 6.dp).alignByBaseline())
-                }
-                val attachment = remember(message.text) { ChatAttachment.parse(message.text) }
-                if (attachment != null) {
-                    key(state.profile, state.username, state.connection, state.storageBlocked) {
-                        ChatAttachmentView(attachment, state, markdownImages, onOpenAttachment, onSaveAttachment, preparingAttachment)
+            val attachment = remember(message.text) { ChatAttachment.parse(message.text) }
+            var copyFeedback by remember(message.text) { mutableStateOf<String?>(null) }
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = if (continuation) 0.dp else 12.dp, bottom = 8.dp)) {
+                Box(Modifier.width(40.dp).padding(top = 8.dp)) {
+                    if (!continuation) Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.secondaryContainer, CircleShape),
+                        contentAlignment = Alignment.Center) {
+                        Text(message.author.take(2).uppercase(), color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                     }
-                } else SelectionContainer {
-                    ChatMarkdown(message.text, markdownImages, Modifier.padding(top = 8.dp))
                 }
-                if (own && message.delivery != Delivery.Received && message.delivery != Delivery.Sent) Meta(when (message.delivery) {
-                    Delivery.Sending -> "sending…"
-                    Delivery.Unconfirmed -> "delivery unknown · check before resending"
-                    Delivery.Failed -> "not sent"; else -> ""
-                }, Modifier.padding(top = 7.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(if (continuation) "" else if (own) "you" else message.author, Modifier.weight(1f),
+                            fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Meta(" · ${clockTime(message.timestampNanos)}")
+                        if (attachment == null) IconButton(onClick = {
+                            copyFeedback = try { clipboard.setText(AnnotatedString(message.text)); "Copied Markdown" }
+                                catch (_: Exception) { "Could not copy message" }
+                        }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Outlined.ContentCopy, "Copy Markdown", Modifier.size(18.dp))
+                        }
+                        IconButton(onClick = {
+                            val text = attachment?.filename ?: message.text
+                            val prefix = "> ${message.author}:\n" + text.lines().joinToString("\n") { "> $it" } + "\n\n"
+                            onDraft(id, prefix + draft.removePrefix(replyPrefix.orEmpty()))
+                            composerValue = fieldValue.copy(selection = TextRange(draft.length), composition = null)
+                            replyPrefix = prefix
+                            composerFocus.requestFocus()
+                        }, enabled = !state.storageBlocked, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.AutoMirrored.Outlined.Reply, "Reply to ${message.author}", Modifier.size(18.dp))
+                        }
+                    }
+                    if (attachment != null) {
+                        key(state.profile, state.username, state.connection, state.storageBlocked) {
+                            ChatAttachmentView(attachment, state, attachmentImages, onOpenAttachment, onSaveAttachment, preparingAttachment)
+                        }
+                    } else SelectionContainer {
+                        ChatMarkdown(message.text, markdownImages, Modifier.padding(top = 8.dp))
+                    }
+                    if (copyFeedback != null) Meta(copyFeedback!!, Modifier.padding(top = 4.dp))
+                    if (own && message.delivery != Delivery.Received && message.delivery != Delivery.Sent) Meta(when (message.delivery) {
+                        Delivery.Sending -> "sending…"
+                        Delivery.Unconfirmed -> "delivery unknown · check before resending"
+                        Delivery.Failed -> "not sent"; else -> ""
+                    }, Modifier.padding(top = 7.dp))
+                }
             }
         }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    replyPrefix?.takeIf { draft.startsWith(it) }?.let { prefix ->
+        Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(start = 20.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text("Reply ${prefix.lineSequence().first().removePrefix("> ")}", Modifier.weight(1f),
+                maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+            TextButton(onClick = {
+                onDraft(id, draft.removePrefix(prefix))
+                composerValue = fieldValue.copy(selection = TextRange(draft.length), composition = null)
+                replyPrefix = null
+            }) { Text("Cancel reply") }
+        }
+    }
     Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 6.dp),
         verticalAlignment = Alignment.Bottom) {
         if (onPickAttachment != null) {
@@ -421,7 +495,10 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
                 }
             }
         }
-        OutlinedTextField(draft, { onDraft(id, it) }, Modifier.weight(1f).heightIn(min = 56.dp, max = 160.dp),
+        OutlinedTextField(fieldValue, {
+            composerValue = it
+            if (it.text != draft) onDraft(id, it.text)
+        }, Modifier.weight(1f).heightIn(min = 56.dp, max = 160.dp).focusRequester(composerFocus),
             enabled = !state.storageBlocked,
             placeholder = { Text("Message ${if (conversation.direct) "@" else "#"}${conversation.name}", fontSize = 15.sp) },
             shape = square, maxLines = 5, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
@@ -480,7 +557,7 @@ private fun Setup(profile: Profile, onClose: () -> Unit, canClose: Boolean, onSa
             }
             Meta("QUIET, PRECISE, HUMAN.", Modifier.padding(top = 12.dp, bottom = 40.dp))
             Text("Connect to your workspace", fontSize = 23.sp, fontWeight = FontWeight.SemiBold)
-            Text("Use your existing NRC address. Tailscale must be connected on this phone; your identity comes from the trusted NRC proxy.",
+            Text("Use your existing NRC address. NRC connects to Tailscale directly; continue sign-in when prompted. Your identity comes from the trusted NRC proxy.",
                 Modifier.padding(top = 14.dp, bottom = 24.dp), fontSize = 15.sp, lineHeight = 24.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(server, { server = it; error = null }, Modifier.fillMaxWidth(),
                 label = { Text("Server address") }, placeholder = { Text("https://nrc.example.ts.net") }, singleLine = true,

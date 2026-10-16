@@ -2,10 +2,16 @@ import groovy.json.JsonSlurper
 
 plugins { kotlin("android"); kotlin("plugin.compose"); id("com.android.application") }
 val signingDirectory = providers.environmentVariable("NRC_ANDROID_SIGNING_DIRECTORY").orNull
+val tailscaleControlURL = providers.gradleProperty("nrcTailscaleControlURL").orNull.orEmpty()
 android {
     namespace = "dev.nrc.chat"
     compileSdk = 35
-    defaultConfig { applicationId = "dev.nrc.chat"; minSdk = 26; targetSdk = 35; versionCode = 10; versionName = "0.2.8" }
+    defaultConfig {
+        applicationId = "dev.nrc.chat"
+        minSdk = 26; targetSdk = 35; versionCode = 13; versionName = "0.2.11"
+        buildConfigField("String", "TAILSCALE_CONTROL_URL", groovy.json.JsonOutput.toJson(tailscaleControlURL))
+        ndk { abiFilters += "arm64-v8a" }
+    }
     if (signingDirectory != null) {
         val credentials = JsonSlurper().parse(file("$signingDirectory/signing.json")) as Map<*, *>
         signingConfigs.getByName("debug") {
@@ -16,10 +22,17 @@ android {
             keyPassword = credentials["key_password"] as String
         }
     }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }
+val tailnetAar = tasks.register<Exec>("buildEmbeddedTailnet") {
+    workingDir = rootProject.file("tsnet")
+    commandLine("bash", "build-android.sh")
+    inputs.files(rootProject.fileTree("tsnet") { include("*.go", "go.mod", "go.sum", "build-android.sh") })
+    outputs.file(rootProject.file("tsnet/build/tailnet.aar"))
+}
+tasks.named("preBuild").configure { dependsOn(tailnetAar) }
 // Never silently replace the identity already installed on testers' phones.
 tasks.configureEach {
     if (name == "validateSigningDebug") {
@@ -30,6 +43,7 @@ tasks.configureEach {
     }
 }
 dependencies {
+    implementation(files(rootProject.file("tsnet/build/tailnet.aar")))
     implementation(project(":ui"))
     implementation(project(":shared"))
     implementation("androidx.activity:activity-compose:1.9.3")
@@ -37,4 +51,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("app.cash.sqldelight:android-driver:2.0.2")
+    testImplementation("junit:junit:4.13.2")
 }

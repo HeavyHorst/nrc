@@ -2,7 +2,7 @@
 
 A real NRC chat client, not a WebView. The interface follows the selected warm,
 text-first design: ivory/forest-green, monospace identity and state labels, flat
-message transcripts, no avatars or bubble chat. Dark mode follows Android's theme.
+message transcripts with local initial avatars, no bubble chat. Dark mode follows Android's theme.
 The folded mark uses the exact paths in `logo/logo.svg`, monochrome in the UI and
 white on a dark padded tile for Android adaptive/themed launcher icons.
 
@@ -26,6 +26,14 @@ white on a dark padded tile for Android adaptive/themed launcher icons.
   with technical causes and copy/clear actions.
 - Native Markdown/GFM chat rendering: headings, emphasis, strikethrough, quotes,
   nested lists, read-only task lists, links, tables and selectable code blocks.
+- Compact consecutive messages from the same author within five minutes, without
+  repeating their name/avatar; every message keeps its timestamp and actions.
+- Copy original Markdown and reply beside the timestamp, with native 48-dp touch
+  targets. Reply inserts a Markdown quote before the existing draft, focuses the
+  composer and never sends automatically. Cancel reply removes the unchanged quote
+  prefix, preserving draft edits; attachment replies quote the filename, not JSON.
+  If the quote itself is edited, it becomes ordinary draft text. Formatted HTML
+  clipboard and Sullivan/record panels remain web-only.
 
 **This is not yet a production mobile messenger.** There is no durable outbox,
 FCM integration, notification permission flow, reactions, or read
@@ -33,6 +41,10 @@ receipts. Current web-client image attachments display directly in the transcrip
 all file types have native Open/Save actions, subject to a compatible viewer app.
 Legacy chunked-image JSON is not assembled. Markdown-linked external HTTPS images
 can be loaded explicitly in the transcript.
+The default ARM64 APK embeds Tailscale, without requiring the external VPN app;
+see [the tsnet transport and isolated Headscale test](tsnet/README.md). It keeps
+the existing NRC app ID/signature, settings and history: there is no second APK
+variant. Android runtime behavior still needs real-device validation.
 The UI does not claim that `sent` means the recipient read or received a message.
 Unacknowledged sends become `delivery unknown`; they are never automatically
 resent, because ephemeral sends cannot safely deduplicate and retained deduplication
@@ -176,8 +188,10 @@ Access denial and sends are never automatically retried.
 
 ## Build and install
 
-Requires JDK 17, Android SDK platform 35, and accepted SDK licenses. Set
+Requires JDK 17, Go 1.27.1+, Android SDK platform 35, an NDK (tested with
+27.2.12479018), and accepted SDK licenses. Set
 `ANDROID_HOME`, or put `sdk.dir=/path/to/sdk` in ignored `local.properties`.
+Set `ANDROID_NDK_HOME` to the installed NDK directory for the gomobile build.
 The checked-in Gradle wrapper downloads Gradle 8.11.1.
 
 ```sh
@@ -189,8 +203,12 @@ adb install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk
 
 The debug APK is for private testing, not store submission. Its existing signing
 identity must be preserved for in-place updates; see the signing procedure below.
-Android 8.0/API 26 or newer is required. Enable Tailscale on the phone, then enter
-the NRC HTTPS origin (without a path) and workspace name in the app. Normal TLS
+Android 8.0/API 26 or newer and an ARM64 phone are required. Enter the NRC HTTPS
+origin (without a path) and workspace name, then use **Continue Tailscale sign-in**
+to enroll NRC's own node in your browser. The action remains available after a
+cancelled browser visit and returns when reauthentication is required. The
+separate Tailscale app is not needed. NRC attachments use the embedded transport;
+external Markdown images and browser links do not. Normal TLS
 certificate verification is enforced; HTTP and embedded credentials are rejected.
 No Firebase project or Play Store account is needed for this foreground alpha.
 
