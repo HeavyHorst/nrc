@@ -23,6 +23,8 @@ import tailnet.Tailnet
 internal class NrcTransport(context: Context) {
     private val session = runtime(context.noBackupFilesDir.resolve("embedded-tailnet").absolutePath).acquire()
     val signInUrl = session.signInUrl
+    val diagnostic = session.diagnostic
+    val switching = session.switching
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val networkChanges = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = session.networkChanged()
@@ -56,6 +58,9 @@ internal class NrcTransport(context: Context) {
                     override val password get() = native.password()
                     override fun status() = native.status()
                     override fun authUrl() = native.authURL()
+                    override fun dialFailure() = native.dialFailure()
+                    override fun dialFailureCount() = native.dialFailureCount()
+                    override fun logout() = native.logout()
                     override fun login() = native.login()
                     override fun close() = native.close()
                 }
@@ -75,6 +80,8 @@ internal class NrcTransport(context: Context) {
     }
 
     private fun proxyFor(uri: URI) = session.proxyFor(authority(uri))
+
+    fun switchAccount() = session.switchAccount()
 
     fun configure(builder: OkHttpClient.Builder) {
         builder.proxySelector(object : ProxySelector() {

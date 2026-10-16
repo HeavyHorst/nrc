@@ -3,6 +3,7 @@ package dev.nrc.chat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.IOException
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -13,6 +14,9 @@ internal interface TailnetNode {
     val password: String
     fun status(): String
     fun authUrl(): String
+    fun dialFailure(): String
+    fun dialFailureCount(): Long
+    fun logout()
     fun login()
     fun close()
 }
@@ -33,6 +37,7 @@ internal class TailnetRuntime(private val start: (String) -> TailnetNode,
     private var node: TailnetNode? = null
     private var target: String? = null
     private var lastStatus: String? = null
+    private var lastDialFailureCount = 0L
     private var observedRunning = false
 
     init { executor.scheduleWithFixedDelay({ poll() }, 0, 500, TimeUnit.MILLISECONDS) }
@@ -46,6 +51,10 @@ internal class TailnetRuntime(private val start: (String) -> TailnetNode,
         private var configuredAuthority: String? = null
         private val pendingSignIn = MutableStateFlow<String?>(null)
         val signInUrl: StateFlow<String?> = pendingSignIn
+        private val dialDiagnostic = MutableStateFlow<DiagnosticEvent?>(null)
+        val diagnostic: StateFlow<DiagnosticEvent?> = dialDiagnostic
+        private val changingAccount = MutableStateFlow(false)
+        val switching: StateFlow<Boolean> = changingAccount
 
         fun configure(authority: String?) {
             executor.execute {
@@ -57,16 +66,10 @@ internal class TailnetRuntime(private val start: (String) -> TailnetNode,
 
         fun proxyFor(authority: String): TailnetProxy {
             if (released) throw IOException("Tailnet session closed")
+            if (changingAccount.value) throw IOException("Tailnet account change in progress")
             try {
                 return executor.submit<TailnetProxy> {
-                    if (released || activeSession !== this || configuredAuthority != authority)
-                        throw IOException("Obsolete tailnet request")
-                    if (owner !== this || target != authority) {
-                        detach()
-                        owner = this
-                        target = authority
-                    }
-                    val current = node ?: start(authority).also { node = it }
+                    val current = currentNode(authority)
                     TailnetProxy(current.address, current.password)
                 }.get()
             } catch (failure: ExecutionException) {
@@ -75,6 +78,41 @@ internal class TailnetRuntime(private val start: (String) -> TailnetNode,
                 Thread.currentThread().interrupt()
                 throw IOException("Tailnet request interrupted", interrupted)
             }
+        }
+
+        // Called only on the runtime queue, including replacement after logout.
+        private fun currentNode(authority: String): TailnetNode {
+            if (released || activeSession !== this || configuredAuthority != authority)
+                throw IOException("Obsolete tailnet request")
+            if (owner !== this || target != authority) {
+                detach()
+                owner = this
+                target = authority
+            }
+            return node ?: start(authority).also { node = it }
+        }
+
+        fun switchAccount(): CompletableFuture<Unit> {
+            val result = CompletableFuture<Unit>()
+            if (!changingAccount.compareAndSet(false, true)) {
+                result.completeExceptionally(IOException("Tailnet account change already in progress"))
+                return result
+            }
+            executor.execute {
+                try {
+                    val authority = configuredAuthority ?: throw IOException("No tailnet endpoint configured")
+                    currentNode(authority).logout()
+                    // Retire every old CONNECT tunnel before exposing a new login.
+                    detach()
+                    currentNode(authority).login()
+                    changingAccount.value = false
+                    result.complete(Unit)
+                } catch (failure: Exception) {
+                    changingAccount.value = false
+                    result.completeExceptionally(failure)
+                }
+            }
+            return result
         }
 
         fun networkChanged() {
@@ -87,12 +125,35 @@ internal class TailnetRuntime(private val start: (String) -> TailnetNode,
         }
 
         internal fun showSignIn(url: String?) { pendingSignIn.value = url }
+        internal fun showDiagnostic(event: DiagnosticEvent?) { dialDiagnostic.value = event }
     }
 
     private fun poll() {
         val current = node ?: return
         try {
-            val status = current.status()
+            val status = try { current.status() }
+                catch (failure: Exception) { onFailure(failure); null }
+            val failureCount = current.dialFailureCount()
+            val failure = current.dialFailure()
+            val detail = when (failure) {
+                "" -> null
+                "dns" -> "DNS lookup failed inside tsnet. Check the configured hostname and whether this node can see the server peer."
+                "refused" -> "The server connection was refused. Check the server port and listening proxy."
+                "timeout" -> "The server dial timed out. Check peer reachability, routing, access policy and server availability."
+                "unreachable" -> "The server network or host is unreachable. Check peer visibility and routing."
+                "permission" -> "The dial was denied by a local socket or OS permission. This does not establish a tailnet ACL rejection."
+                "canceled" -> "The dial was canceled while the embedded node was stopping."
+                else -> "The embedded dial failed with an unclassified error."
+            }
+            val safeStatus = if (status == null) "Unavailable" else
+                status.takeIf { it in setOf("NoState", "Stopped", "Starting", "NeedsLogin", "NeedsMachineAuth", "Running", "InUseOtherUser") } ?: "Unknown"
+            if (detail == null) owner?.showDiagnostic(null)
+            else if (failureCount != lastDialFailureCount || status != lastStatus) {
+                owner?.showDiagnostic(DiagnosticEvent(System.currentTimeMillis(), DiagnosticLevel.Error,
+                    "Embedded Tailscale dial failed", "Backend: $safeStatus. $detail"))
+            }
+            lastDialFailureCount = failureCount
+            if (status == null) { lastStatus = null; return }
             // tsnet handles initial enrollment itself. Do not force login on
             // its transient startup states when restoring a persisted identity.
             if (status == "Running") observedRunning = true
@@ -106,9 +167,11 @@ internal class TailnetRuntime(private val start: (String) -> TailnetNode,
         val previous = node
         node = null
         owner?.showSignIn(null)
+        owner?.showDiagnostic(null)
         owner = null
         target = null
         lastStatus = null
+        lastDialFailureCount = 0L
         observedRunning = false
         previous?.close()
     }

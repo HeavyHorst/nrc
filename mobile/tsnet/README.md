@@ -22,8 +22,8 @@ export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
 ./sign-debug-apk.sh
 ```
 
-The signing wrapper verifies the existing NRC debug certificate. Version 0.2.11
-(code 13) updates the original app in place. Debug builds and ARM64 phones only
+The signing wrapper verifies the existing NRC debug certificate. Version 0.2.17
+(code 19) updates the original app in place. Debug builds and ARM64 phones only
 are currently supported.
 
 1. Install the NRC APK as an update and disable the separate Tailscale app/VPN.
@@ -35,6 +35,14 @@ are currently supported.
    Initial connection attempts can fail while enrollment is pending.
 4. Verify the correct NRC identity, send/receive messages, then close/reopen the
    app. Repeat with a process restart and WLAN/mobile-data changes.
+
+To change tailnet, open the app menu → **Switch Tailscale account** →
+**Sign out / sign in**, then **Continue Tailscale sign-in**. Choose the intended
+account/tailnet in the browser (switch browser account if necessary). This logs
+out only the embedded node and closes its old connections; NRC settings, history
+and drafts are not reset. The existing identity-isolation rule still applies:
+if the NRC server authenticates a different username afterward, the old user's
+local cache and drafts are cleared.
 
 There is no embedded auth key, JWT secret, certificate-verification bypass,
 VPN permission or `VpnService`. Clearing NRC's app storage removes
@@ -50,8 +58,12 @@ HTTP lab configuration below to the Internet or put an auth key into the APK.
 `tailnet.Start` owns a userspace `tsnet.Server` and an authenticated loopback HTTP
 CONNECT proxy limited to one destination. OkHttp retains the original HTTPS
 URL, so TLS SNI, hostname checking and HTTP/WebSocket authority remain unchanged;
-private DNS resolution and dialing happen inside tsnet, not Android's DNS.
-The bridge exposes only start, status, enrollment URL, interactive login, proxy credentials and close.
+resolution and dialing are delegated to tsnet. Known MagicDNS peers resolve
+internally; unknown names can fall back to the platform resolver. Running does
+not guarantee that a particular peer is present in the current network map.
+The bridge exposes only start, status, enrollment URL, logout, interactive login, proxy
+credentials, fixed dial-failure categories/counts and close. Android adds those
+categories and an allowlisted backend state to the sanitized system log.
 It does not expose the Tailscale LocalAPI to other phone applications.
 
 Android supplies interface addresses through Java `NetworkInterface`, following
@@ -101,6 +113,7 @@ cp mobile/tsnet/testdata/headscale.yaml "$lab/config.yaml"
 # Put the Headscale 0.29.5 Linux binary at "$lab/headscale" and make it executable.
 amp orb service start nrc-headscale --command "cd '$lab' && ./headscale serve -c config.yaml"
 (cd "$lab" && ./headscale -c config.yaml users create nrc-lab --email nrc-lab@example.test)
+(cd "$lab" && ./headscale -c config.yaml users create nrc-lab-switch --email nrc-lab-switch@example.test)
 cd mobile/tsnet
 NRC_HEADSCALE_BINARY="$lab/headscale" NRC_HEADSCALE_CONFIG="$lab/config.yaml" \
   GOMAXPROCS=2 go test -p 2 -run TestHeadscale -v -count=3 -timeout=4m .
@@ -137,6 +150,8 @@ The real two-node Headscale test verifies private DNS, HTTPS with verified
 WhoIs identity, exact binary WSS roundtrips, proxy authentication/destination
 restrictions, TLS rejection of unknown certificates and wrong hostnames,
 closure of active tunnels, and reconnect with the same identity after restart.
+It also logs out and re-enrolls the same private directory as a different user,
+checking the resulting identity through the server's WhoIs response.
 The JVM probe exercises real OkHttp against that same tailnet endpoint.
 The lab explicitly trusts its generated test certificate; the APK does not.
 

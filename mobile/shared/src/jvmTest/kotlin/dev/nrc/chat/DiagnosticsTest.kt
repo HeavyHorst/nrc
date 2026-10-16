@@ -172,6 +172,43 @@ class DiagnosticsTest {
         } finally { server.shutdown() }
     }
 
+    @Test fun realConnectRejectionsRemainDistinctFromWebSocketUpgradesWithoutLeakingProxyText() = runBlocking {
+        val server = MockWebServer()
+        server.start()
+        try {
+            for (status in listOf(403, 407, 502)) {
+                val directory = Files.createTempDirectory("nrc-connect-status-").toFile()
+                val settings = DiskSettings(directory, profile)
+                val job = SupervisorJob(); val scope = CoroutineScope(coroutineContext + job)
+                val http = HttpClient(OkHttp) {
+                    install(WebSockets)
+                    engine { config { proxySelector(object : java.net.ProxySelector() {
+                        override fun select(uri: java.net.URI) = listOf(java.net.Proxy(java.net.Proxy.Type.HTTP,
+                            java.net.InetSocketAddress("127.0.0.1", server.port)))
+                        override fun connectFailed(uri: java.net.URI, address: java.net.SocketAddress, failure: IOException) = Unit
+                    }) } }
+                }
+                server.enqueue(MockResponse().setStatus("HTTP/1.1 $status PRIVATE_REASON_SENTINEL")
+                    .setHeader("X-Private-Token", sentinels[2]).setBody(sentinels.joinToString(" ")))
+                val client = ChatClient(http, settings, scope)
+                try {
+                    client.connect()
+                    val error = client.errorEvent()
+                    assertTrue(error.detail.contains("HTTP $status:"), error.detail)
+                    assertTrue(error.detail.contains("before TLS or NRC handshake"), error.detail)
+                    assertFalse(error.detail.contains("WebSocket upgrade failed"))
+                    assertFalse(client.state.value.diagnostics.any { it.summary == "WebSocket opened" || it.summary == "Connected" })
+                    assertSanitized(client.state.value.diagnostics)
+                    val report = diagnosticReport(client.state.value.diagnostics)
+                    assertFalse(report.contains("PRIVATE_REASON_SENTINEL"))
+                    assertFalse(report.contains("X-Private-Token"))
+                    val request = server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)
+                    assertNotNull(request); assertEquals("CONNECT", request.method)
+                } finally { client.disconnect(); job.cancelAndJoin(); http.close(); directory.deleteRecursively() }
+            }
+        } finally { server.shutdown() }
+    }
+
     @Test fun androidOkHttpAcceptsVerifiedTlsAndAuthenticatedNrcReadyWithoutErrors() = runBlocking {
         val server = MockWebServer()
         val cert = HeldCertificate.Builder().commonName("localhost").addSubjectAlternativeName("localhost").build()

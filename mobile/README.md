@@ -28,9 +28,12 @@ white on a dark padded tile for Android adaptive/themed launcher icons.
   nested lists, read-only task lists, links, tables and selectable code blocks.
 - Compact consecutive messages from the same author within five minutes, without
   repeating their name/avatar; every message keeps its timestamp and actions.
-- Copy original Markdown and reply beside the timestamp, with native 48-dp touch
-  targets. Reply inserts a Markdown quote before the existing draft, focuses the
-  composer and never sends automatically. Cancel reply removes the unchanged quote
+- Long-press a message for Reply, Copy Markdown, or Select text; timestamps stay
+  visible without a permanent action toolbar. Text selection opens a selectable
+  source-text dialog so it does not compete with the message's long-press gesture.
+  Menu actions retain native 48-dp touch targets. Reply inserts a Markdown quote
+  before the existing draft, focuses the composer and never sends automatically.
+  Cancel reply removes the unchanged quote
   prefix, preserving draft edits; attachment replies quote the filename, not JSON.
   If the quote itself is edited, it becomes ordinary draft text. Formatted HTML
   clipboard and Sullivan/record panels remain web-only.
@@ -139,6 +142,20 @@ HTTP status or an allowlisted OS error code when available, and troubleshooting
 hints for DNS, TLS, routing and proxy errors. Hints are possible checks, not proof
 of a root cause. Raw exception text, stack traces, URLs, usernames, message contents,
 headers, tokens and server error payloads are never stored in this log.
+Proxy CONNECT rejections are reported separately from WebSocket upgrade failures:
+407 means proxy authentication failed, and 502 in the embedded transport means
+tsnet could not open the upstream connection. A 502 alone does not distinguish
+DNS, routing, access policy or server availability; successful tailnet enrollment
+does not establish permission or reachability to the NRC endpoint.
+The separate **Embedded Tailscale dial failed** event includes the observed
+backend state and a fixed Go error category (DNS, refusal, timeout, unreachable,
+local permission, cancellation or unclassified). It contains no native error
+text. Polling does not repeatedly log the same attempt, but a new failed dial is
+reported even when its category is unchanged. A Running backend does not guarantee
+that a particular peer has arrived in its network map or is reachable.
+If the native status query fails, dial diagnostics still appear with
+`Backend: Unavailable`; the query's exception text is not exported. Each Android
+foreground start records the installed app version and embedded transport mode.
 
 The latest 200 events are kept in Android-private preferences across ordinary
 app restarts (best-effort persistence, not a crash-safe audit trail). **Clear log**

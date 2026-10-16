@@ -8,7 +8,7 @@ android {
     compileSdk = 35
     defaultConfig {
         applicationId = "dev.nrc.chat"
-        minSdk = 26; targetSdk = 35; versionCode = 13; versionName = "0.2.11"
+        minSdk = 26; targetSdk = 35; versionCode = 19; versionName = "0.2.17"
         buildConfigField("String", "TAILSCALE_CONTROL_URL", groovy.json.JsonOutput.toJson(tailscaleControlURL))
         ndk { abiFilters += "arm64-v8a" }
     }

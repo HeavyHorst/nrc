@@ -3,6 +3,7 @@ package dev.nrc.chat.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -38,6 +40,7 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -105,11 +108,14 @@ fun NrcApp(
     onDismissFileError: () -> Unit = {},
     attachmentHttp: io.ktor.client.HttpClient? = null,
     onTailnetSignIn: (() -> Unit)? = null,
+    onSwitchTailnet: (() -> Unit)? = null,
+    switchingTailnet: Boolean = false,
 ) {
     var settings by rememberSaveable { mutableStateOf(state.profile.server.isBlank()) }
     var diagnostics by rememberSaveable { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var newDM by remember { mutableStateOf(false) }
+    var confirmTailnetSwitch by rememberSaveable { mutableStateOf(false) }
     val selected = state.conversations.firstOrNull { it.id == state.selected }
     platformBackHandler(diagnostics || (settings && state.profile.server.isNotBlank()) || selected != null) {
         when {
@@ -126,7 +132,14 @@ fun NrcApp(
                         .padding(horizontal = 20.dp, vertical = 7.dp), fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (onTailnetSignIn != null) {
+                if (switchingTailnet) {
+                    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = 24.dp, vertical = 12.dp)) {
+                        Text("Changing Tailscale account…", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        Text("NRC is disconnected. Your local data is not being deleted.",
+                            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else if (onTailnetSignIn != null) {
                     Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
                         .padding(horizontal = 24.dp, vertical = 12.dp)) {
                         Text("Tailscale sign-in required", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
@@ -142,7 +155,7 @@ fun NrcApp(
                         onConfigure(it); settings = false
                     }
                 } else {
-                    Row(Modifier.fillMaxWidth().heightIn(min = 88.dp).padding(start = if (selected == null) 24.dp else 8.dp, end = 8.dp),
+                    Row(Modifier.fillMaxWidth().heightIn(min = if (selected == null) 88.dp else 72.dp).padding(start = if (selected == null) 24.dp else 8.dp, end = 8.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         if (selected != null) IconButton(onClick = { onSelect(null) }) {
                             Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back to conversations")
@@ -170,8 +183,10 @@ fun NrcApp(
                         Box {
                             IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Connection settings and actions") }
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                DropdownMenuItem(text = { Text("Connection settings") }, onClick = { menu = false; settings = true })
-                                DropdownMenuItem(text = { Text("Reconnect") }, onClick = { menu = false; onReconnect() })
+                                DropdownMenuItem(text = { Text("Connection settings") }, enabled = !switchingTailnet, onClick = { menu = false; settings = true })
+                                DropdownMenuItem(text = { Text("Reconnect") }, enabled = !switchingTailnet, onClick = { menu = false; onReconnect() })
+                                if (onSwitchTailnet != null) DropdownMenuItem(text = { Text("Switch Tailscale account") },
+                                    enabled = !switchingTailnet, onClick = { menu = false; confirmTailnetSwitch = true })
                                 DropdownMenuItem(text = { Text("System log") }, onClick = { menu = false; diagnostics = true })
                             }
                         }
@@ -204,6 +219,16 @@ fun NrcApp(
         }
         if (newDM) NewDM(state.connection == Connection.Connected, { newDM = false }) {
             onStartDM(it); newDM = false
+        }
+        if (confirmTailnetSwitch && onSwitchTailnet != null) {
+            AlertDialog(onDismissRequest = { confirmTailnetSwitch = false }, shape = square,
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                title = { Text("Switch Tailscale account?") },
+                text = { Text("Disconnect NRC and sign out of its embedded Tailscale account. This action keeps your server settings, local history and drafts. Choose the intended account or tailnet in the browser; change the browser account if needed.\n\nIf the authenticated NRC username changes, NRC still clears the previous user's cached history and drafts.") },
+                confirmButton = { TextButton(enabled = !switchingTailnet, onClick = {
+                    confirmTailnetSwitch = false; onSwitchTailnet()
+                }) { Text("Sign out / sign in") } },
+                dismissButton = { TextButton(onClick = { confirmTailnetSwitch = false }) { Text("Cancel") } })
         }
         pendingAttachment?.let { file ->
             AlertDialog(onDismissRequest = onDismissAttachment, shape = square,
@@ -350,6 +375,7 @@ private fun ColumnScope.Conversations(state: ChatState, onSelect: (Long) -> Unit
 }
 
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation, onDraft: (Long, String) -> Unit,
                                    onSend: () -> Unit, onOlder: (Long) -> Unit, onReopenDM: () -> Unit,
                                    onPickAttachment: ((Boolean) -> Unit)?, onOpenAttachment: ((ChatAttachment) -> Unit)?,
@@ -387,7 +413,7 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
         TextButton(onClick = onReopenDM, modifier = Modifier.fillMaxWidth()) { Text("Reopen DM") }
     } else if (state.retention[id] == Retention.Ephemeral) Notice("Saved on this device. Messages missed while offline cannot be recovered.")
     if (id in state.syncPaused) Notice("Incoming messages are waiting for history recovery. Unread counts may be incomplete.")
-    LazyColumn(Modifier.weight(1f), state = list, contentPadding = PaddingValues(top = 18.dp, bottom = 16.dp)) {
+    LazyColumn(Modifier.weight(1f), state = list, contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp)) {
         item {
             if (id in state.failedHistory) TextButton(onClick = { onOlder(id) },
                 enabled = state.connection == Connection.Connected, modifier = Modifier.fillMaxWidth()) { Text("Retry message history") }
@@ -409,7 +435,7 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
                 message.timestampNanos - previous.timestampNanos < 300_000_000_000L &&
                 localDate(previous.timestampNanos) == localDate(message.timestampNanos)
             if (previous == null || localDate(previous.timestampNanos) != localDate(message.timestampNanos)) {
-                Row(Modifier.padding(horizontal = 24.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.padding(horizontal = 24.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
                     Meta(localDate(message.timestampNanos), Modifier.padding(horizontal = 12.dp))
                     HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
@@ -418,50 +444,85 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
             val own = message.author == state.username
             val attachment = remember(message.text) { ChatAttachment.parse(message.text) }
             var copyFeedback by remember(message.text) { mutableStateOf<String?>(null) }
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = if (continuation) 0.dp else 12.dp, bottom = 8.dp)) {
-                Box(Modifier.width(40.dp).padding(top = 8.dp)) {
-                    if (!continuation) Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.secondaryContainer, CircleShape),
-                        contentAlignment = Alignment.Center) {
-                        Text(message.author.take(2).uppercase(), color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-                    }
-                }
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (continuation) "" else if (own) "you" else message.author, Modifier.weight(1f),
-                            fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Meta(" · ${clockTime(message.timestampNanos)}")
-                        if (attachment == null) IconButton(onClick = {
-                            copyFeedback = try { clipboard.setText(AnnotatedString(message.text)); "Copied Markdown" }
-                                catch (_: Exception) { "Could not copy message" }
-                        }, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Outlined.ContentCopy, "Copy Markdown", Modifier.size(18.dp))
+            var actions by remember(message.key) { mutableStateOf(false) }
+            var selectText by remember(message.key) { mutableStateOf(false) }
+            Box {
+                Row(Modifier.fillMaxWidth().testTag("message:${message.key}")
+                    .background(if (actions) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                    .combinedClickable(onClick = {}, onLongClickLabel = "Message actions", onLongClick = { actions = true })
+                    .padding(start = 16.dp, end = 20.dp, top = if (continuation) 4.dp else 12.dp, bottom = 4.dp)) {
+                    Box(Modifier.width(40.dp)) {
+                        if (!continuation) Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.secondaryContainer, CircleShape),
+                            contentAlignment = Alignment.Center) {
+                            Text(message.author.take(2).uppercase(), color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                         }
-                        IconButton(onClick = {
+                    }
+                    Column(Modifier.weight(1f)) {
+                        if (!continuation) {
+                            Text(if (own) "you" else message.author,
+                                fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Spacer(Modifier.height(3.dp))
+                        }
+                        if (attachment != null) {
+                            key(state.profile, state.username, state.connection, state.storageBlocked) {
+                                ChatAttachmentView(attachment, state, attachmentImages, onOpenAttachment, onSaveAttachment, preparingAttachment)
+                            }
+                        } else ChatMarkdown(message.text, markdownImages)
+                        if (copyFeedback != null) Meta(copyFeedback!!, Modifier.padding(top = 4.dp))
+                        if (own && message.delivery != Delivery.Received && message.delivery != Delivery.Sent) Meta(when (message.delivery) {
+                            Delivery.Sending -> "sending…"
+                            Delivery.Unconfirmed -> "delivery unknown · check before resending"
+                            Delivery.Failed -> "not sent"; else -> ""
+                        }, Modifier.padding(top = 7.dp))
+                    }
+                    Text(clockTime(message.timestampNanos), Modifier.padding(start = 12.dp, top = 1.dp),
+                        fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                DropdownMenu(expanded = actions, onDismissRequest = { actions = false },
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant) {
+                    DropdownMenuItem(text = { Text("Reply") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Reply, null) },
+                        enabled = !state.storageBlocked, onClick = {
+                            actions = false
                             val text = attachment?.filename ?: message.text
                             val prefix = "> ${message.author}:\n" + text.lines().joinToString("\n") { "> $it" } + "\n\n"
                             onDraft(id, prefix + draft.removePrefix(replyPrefix.orEmpty()))
                             composerValue = fieldValue.copy(selection = TextRange(draft.length), composition = null)
                             replyPrefix = prefix
                             composerFocus.requestFocus()
-                        }, enabled = !state.storageBlocked, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.AutoMirrored.Outlined.Reply, "Reply to ${message.author}", Modifier.size(18.dp))
-                        }
+                        })
+                    if (attachment == null) {
+                        DropdownMenuItem(text = { Text("Copy Markdown") }, leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) }, onClick = {
+                            actions = false
+                            copyFeedback = try { clipboard.setText(AnnotatedString(message.text)); "Copied Markdown" }
+                                catch (_: Exception) { "Could not copy message" }
+                        })
+                        DropdownMenuItem(text = { Text("Select text") }, leadingIcon = { Icon(Icons.Outlined.TextFields, null) },
+                            onClick = { actions = false; selectText = true })
                     }
-                    if (attachment != null) {
-                        key(state.profile, state.username, state.connection, state.storageBlocked) {
-                            ChatAttachmentView(attachment, state, attachmentImages, onOpenAttachment, onSaveAttachment, preparingAttachment)
-                        }
-                    } else SelectionContainer {
-                        ChatMarkdown(message.text, markdownImages, Modifier.padding(top = 8.dp))
-                    }
-                    if (copyFeedback != null) Meta(copyFeedback!!, Modifier.padding(top = 4.dp))
-                    if (own && message.delivery != Delivery.Received && message.delivery != Delivery.Sent) Meta(when (message.delivery) {
-                        Delivery.Sending -> "sending…"
-                        Delivery.Unconfirmed -> "delivery unknown · check before resending"
-                        Delivery.Failed -> "not sent"; else -> ""
-                    }, Modifier.padding(top = 7.dp))
                 }
+            }
+            if (selectText) {
+                AlertDialog(onDismissRequest = { selectText = false }, shape = square,
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Icon(Icons.Outlined.TextFields, null, tint = MaterialTheme.colorScheme.primary)
+                            Text("Select text", Modifier.weight(1f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }, text = {
+                        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Meta("${message.author} · ${clockTime(message.timestampNanos)}")
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            SelectionContainer {
+                                Text(message.text, fontSize = 16.sp, lineHeight = 25.sp, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                            Text("Long-press or drag to select a passage.", fontSize = 12.sp, lineHeight = 18.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }, confirmButton = {
+                        Button(onClick = { selectText = false }, shape = square) { Text("Done") }
+                    })
             }
         }
     }
@@ -478,7 +539,7 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
             }) { Text("Cancel reply") }
         }
     }
-    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 6.dp),
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
         verticalAlignment = Alignment.Bottom) {
         if (onPickAttachment != null) {
             var pickMenu by remember { mutableStateOf(false) }
@@ -510,7 +571,7 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
             contentPadding = PaddingValues(0.dp)) { Icon(Icons.AutoMirrored.Outlined.Send, "Send message", Modifier.size(22.dp)) }
     }
     Meta(if (draft.isNotBlank()) "Draft saved locally" else if (state.username.isNotBlank()) "SIGNED IN · ${state.username}" else "",
-        Modifier.padding(start = 22.dp, end = 20.dp, top = 3.dp, bottom = 12.dp))
+        Modifier.padding(start = 18.dp, end = 16.dp, top = 2.dp, bottom = 6.dp))
 }
 
 @Composable

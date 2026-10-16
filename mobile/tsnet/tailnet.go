@@ -6,12 +6,15 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"tailscale.com/tsnet"
@@ -21,16 +24,18 @@ import (
 // to one NRC endpoint. The original URL stays in OkHttp, preserving DNS authority,
 // TLS SNI, certificate verification and the WebSocket handshake.
 type Node struct {
-	server   tsnet.Server
-	proxy    *http.Server
-	address  string
-	password string
-	target   string
-	ctx      context.Context
-	cancel   context.CancelFunc
-	mu       sync.Mutex
-	closed   bool
-	tunnels  map[net.Conn]bool
+	server           tsnet.Server
+	proxy            *http.Server
+	address          string
+	password         string
+	target           string
+	ctx              context.Context
+	cancel           context.CancelFunc
+	mu               sync.Mutex
+	closed           bool
+	tunnels          map[net.Conn]bool
+	dialFailure      string
+	dialFailureCount int64
 }
 
 // Start uses browser enrollment (no auth key in an APK). State must be stored in
@@ -71,6 +76,34 @@ func Start(directory, controlURL, target string) (*Node, error) {
 
 func (n *Node) Address() string  { return n.address }
 func (n *Node) Password() string { return n.password }
+
+// DialFailure returns only a fixed diagnostic code, never an address or raw
+// error. It describes the most recently completed dial and clears on success.
+func (n *Node) DialFailure() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.dialFailure
+}
+
+// DialFailureCount lets the host report each failed attempt, including a retry
+// after the user clears the system log. It never includes error text.
+func (n *Node) DialFailureCount() int64 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.dialFailureCount
+}
+
+// Logout removes the active embedded login/profile, not the application's data
+// directory. The host closes this node before starting the next browser login.
+func (n *Node) Logout() error {
+	lc, err := n.server.LocalClient()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(n.ctx, 10*time.Second)
+	defer cancel()
+	return lc.Logout(ctx)
+}
 
 // Login requests a fresh interactive URL, including after node-key expiry.
 func (n *Node) Login() error {
@@ -126,9 +159,33 @@ func (n *Node) connect(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	upstream, err := n.server.Dial(ctx, "tcp", n.target)
 	if err != nil {
+		var dns *net.DNSError
+		var network net.Error
+		code := "other"
+		switch {
+		case errors.As(err, &dns):
+			code = "dns"
+		case errors.Is(err, context.Canceled):
+			code = "canceled"
+		case errors.Is(err, context.DeadlineExceeded), errors.As(err, &network) && network.Timeout():
+			code = "timeout"
+		case errors.Is(err, syscall.ECONNREFUSED), strings.HasSuffix(err.Error(), "connection was refused"):
+			code = "refused"
+		case errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH):
+			code = "unreachable"
+		case errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
+			code = "permission"
+		}
+		n.mu.Lock()
+		n.dialFailure = code
+		n.dialFailureCount++
+		n.mu.Unlock()
 		http.Error(w, "tailnet unavailable", http.StatusBadGateway)
 		return
 	}
+	n.mu.Lock()
+	n.dialFailure = ""
+	n.mu.Unlock()
 	client, buffered, err := w.(http.Hijacker).Hijack()
 	if err != nil {
 		upstream.Close()

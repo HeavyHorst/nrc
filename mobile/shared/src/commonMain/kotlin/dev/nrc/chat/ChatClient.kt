@@ -59,7 +59,8 @@ class ChatClient(private val http: HttpClient, private val store: LocalStore, pr
 
     init { restoreCache() }
 
-    private fun recordDiagnostic(level: DiagnosticLevel, summary: String, detail: String = "") {
+    /** Platform hosts must call on the owning scope and pass only sanitized operational facts. */
+    fun recordDiagnostic(level: DiagnosticLevel, summary: String, detail: String = "") {
         val event = DiagnosticEvent(Clock.System.now().toEpochMilliseconds(), level, summary, detail)
         mutable.update { it.copy(diagnostics = (it.diagnostics + event).takeLast(MAX_DIAGNOSTIC_EVENTS)) }
         saveDiagnostics()

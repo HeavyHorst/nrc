@@ -12,13 +12,23 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class TailnetRuntimeTest {
-    private class Node(private val closeAction: () -> Unit = {}) : TailnetNode {
+    private class Node(private val logoutAction: () -> Unit = {}, private val closeAction: () -> Unit = {}) : TailnetNode {
         override val address = "127.0.0.1:12345"
         override val password = "test-only"
         @Volatile var state = "NeedsLogin"
         @Volatile var url = "https://login.example/initial"
-        override fun status() = state
+        @Volatile var failureCount = 0L
+        @Volatile var failure = ""
+            set(value) { field = value; failureCount++ }
+        @Volatile var statusFailure: Exception? = null
+        override fun status(): String {
+            statusFailure?.let { throw it }
+            return state
+        }
         override fun authUrl() = url
+        override fun dialFailure() = failure
+        override fun dialFailureCount() = failureCount
+        override fun logout() { logoutAction(); state = "NeedsLogin"; url = "" }
         override fun login() { url = "https://login.example/renewed" }
         override fun close() = closeAction()
     }
@@ -42,6 +52,80 @@ class TailnetRuntimeTest {
             node.state = "Running"
             withTimeout(5_000) { session.signInUrl.first { it == null } }
             synchronized(failures) { assertTrue(failures.isEmpty()) }
+        } finally { runtime.close() }
+    }
+
+    @Test fun dialDiagnosticsDistinguishFailuresRedactUnknownValuesAndClearOnRecovery(): Unit = runBlocking {
+        val node = Node().apply { state = "Running" }
+        val statusErrors = AtomicInteger()
+        val runtime = TailnetRuntime({ node }, { statusErrors.incrementAndGet() })
+        try {
+            val session = runtime.acquire()
+            session.configure("nrc.example:443"); session.proxyFor("nrc.example:443")
+            assertNull(session.diagnostic.value)
+            node.failure = "dns"
+            val dns = withTimeout(5_000) { session.diagnostic.first { it?.detail?.contains("DNS lookup failed inside tsnet") == true } }!!
+            assertTrue(dns.detail.contains("Backend: Running"))
+            node.failure = "dns" // A new failed attempt must still be reported after clearing the system log.
+            withTimeout(5_000) { session.diagnostic.first { it != null && it.timestampMillis > dns.timestampMillis } }
+            node.statusFailure = IOException("PRIVATE_STATUS_FAILURE_SENTINEL")
+            node.failure = "refused"
+            val refused = withTimeout(5_000) { session.diagnostic.first { it?.detail?.contains("connection was refused") == true } }!!
+            assertTrue(refused.detail.contains("Backend: Unavailable"))
+            assertFalse(refused.detail.contains("PRIVATE_")); assertTrue(statusErrors.get() > 0)
+            node.statusFailure = null
+            node.failure = "PRIVATE_FAILURE_SENTINEL"; node.state = "PRIVATE_STATE_SENTINEL"
+            val unknown = withTimeout(5_000) { session.diagnostic.first { it?.detail?.contains("unclassified") == true && it.detail.contains("Backend: Unknown") } }!!
+            assertTrue(unknown.detail.contains("Backend: Unknown")); assertFalse(unknown.detail.contains("PRIVATE_"))
+            node.failure = ""
+            withTimeout(5_000) { session.diagnostic.first { it == null } }
+            node.failure = "timeout"
+            withTimeout(5_000) { session.diagnostic.first { it?.detail?.contains("dial timed out") == true } }
+            session.close()
+            withTimeout(5_000) { session.diagnostic.first { it == null } }
+        } finally { runtime.close() }
+    }
+
+    @Test fun switchingAccountIsNonBlockingRejectsDuplicatesAndWaitsForOldNodeClose(): Unit = runBlocking {
+        val entered = CountDownLatch(1)
+        val allowLogout = CountDownLatch(1)
+        val liveNodes = AtomicInteger()
+        val runtime = TailnetRuntime({
+            check(liveNodes.incrementAndGet() == 1) { "Overlapping identity-directory owners" }
+            Node(logoutAction = { entered.countDown(); check(allowLogout.await(5, TimeUnit.SECONDS)) },
+                closeAction = { liveNodes.decrementAndGet() })
+        }, { throw AssertionError(it) })
+        try {
+            val session = runtime.acquire()
+            session.configure("nrc.example:443"); session.proxyFor("nrc.example:443")
+            val switched = session.switchAccount()
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            assertFalse(switched.isDone); assertTrue(session.switching.value)
+            assertThrows(IOException::class.java) { session.proxyFor("nrc.example:443") }
+            assertThrows(java.util.concurrent.ExecutionException::class.java) { session.switchAccount().get(2, TimeUnit.SECONDS) }
+            allowLogout.countDown()
+            switched.get(5, TimeUnit.SECONDS)
+            assertFalse(session.switching.value)
+            withTimeout(5_000) { session.signInUrl.first { it == "https://login.example/renewed" } }
+            session.proxyFor("nrc.example:443")
+            assertEquals(1, liveNodes.get())
+        } finally { allowLogout.countDown(); runtime.close() }
+    }
+
+    @Test fun failedLogoutIsRetryableWithoutReplacingTheActiveNode() {
+        var deny = true
+        val node = Node(logoutAction = { if (deny) throw IOException("PRIVATE_LOGOUT_FAILURE") })
+        val started = AtomicInteger()
+        val runtime = TailnetRuntime({ started.incrementAndGet(); node }, { throw AssertionError(it) })
+        try {
+            val session = runtime.acquire()
+            session.configure("nrc.example:443"); session.proxyFor("nrc.example:443")
+            assertThrows(java.util.concurrent.ExecutionException::class.java) { session.switchAccount().get(5, TimeUnit.SECONDS) }
+            assertFalse(session.switching.value)
+            session.proxyFor("nrc.example:443"); assertEquals(1, started.get())
+            deny = false
+            session.switchAccount().get(5, TimeUnit.SECONDS)
+            assertFalse(session.switching.value); assertEquals(2, started.get())
         } finally { runtime.close() }
     }
 

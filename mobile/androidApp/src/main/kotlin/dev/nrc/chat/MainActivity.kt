@@ -13,6 +13,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
 import app.cash.sqldelight.driver.android.AndroidSqliteDriver
 import dev.nrc.chat.db.ChatDatabase
 import dev.nrc.chat.ui.NrcApp
@@ -47,6 +48,11 @@ class MainActivity : ComponentActivity() {
         transport.configureServer(chat.state.value.profile)
         attachments = AndroidAttachments(this, chat, scope)
         scope.launch {
+            transport.diagnostic.collect { event ->
+                if (event != null) chat.recordDiagnostic(event.level, event.summary, event.detail)
+            }
+        }
+        scope.launch {
             var previous = chat.state.value
             chat.state.collect { current ->
                 if (previous.profile != current.profile || previous.username != current.username || previous.selected != current.selected)
@@ -59,6 +65,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state by chat.state.collectAsState()
             val signInUrl by transport.signInUrl.collectAsState()
+            val switchingTailnet by transport.switching.collectAsState()
             val pending = attachments.pending?.takeIf { it.target.profile == state.profile &&
                 it.target.username == state.username && it.target.conversationId == state.selected }
             NrcApp(state, { id ->
@@ -85,10 +92,16 @@ class MainActivity : ComponentActivity() {
                 preparingAttachment = attachments.preparing,
                 fileActionError = attachments.error, onDismissFileError = { attachments.error = null },
                 attachmentHttp = http,
-                onTailnetSignIn = signInUrl?.let { url -> { openTailnetSignIn(url) } })
+                onTailnetSignIn = signInUrl?.let { url -> { openTailnetSignIn(url) } },
+                onSwitchTailnet = ::switchTailnet, switchingTailnet = switchingTailnet)
         }
     }
-    override fun onStart() { super.onStart(); chat.connect() }
+    override fun onStart() {
+        super.onStart()
+        chat.recordDiagnostic(DiagnosticLevel.Info, "Android transport",
+            "NRC ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}). Embedded Tailscale enabled.")
+        if (!transport.switching.value) chat.connect()
+    }
     override fun onStop() {
         attachments.backgrounded()
         chat.disconnect()
@@ -96,6 +109,26 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
     override fun onDestroy() { attachments.close(); scope.cancel(); http.close(); transport.close(); super.onDestroy() }
+
+    private fun switchTailnet() {
+        if (transport.switching.value) return
+        attachments.contextChanged()
+        chat.disconnect()
+        val changed = transport.switchAccount()
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { changed.get() }
+                chat.recordDiagnostic(DiagnosticLevel.Info, "Tailscale signed out",
+                    "Choose the intended account or tailnet in the browser. NRC settings, history and drafts were not reset.")
+                if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) chat.connect()
+            } catch (canceled: CancellationException) { throw canceled }
+            catch (failure: Exception) {
+                chat.recordDiagnostic(DiagnosticLevel.Error, "Tailscale account change failed",
+                    "The operation did not complete. NRC data was not reset. Check connectivity and retry. ${failure.javaClass.simpleName}")
+                Toast.makeText(this@MainActivity, "Could not change Tailscale login. Check System log and try again.", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     private fun openTailnetSignIn(url: String) {
         try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }

@@ -16,6 +16,14 @@ data class DiagnosticEvent(val timestampMillis: Long, val level: DiagnosticLevel
 internal fun connectionFailure(error: Throwable, phase: String, reason: String?): Pair<String, String> {
     val causes = generateSequence(error) { it.cause }.take(8).toList()
     val names = causes.map { it::class.simpleName.orEmpty().take(80).ifEmpty { "Exception" } }
+    // CONNECT failures happen before TLS/WebSocket and have no Ktor response.
+    // Match only OkHttp's fixed messages; never export arbitrary proxy text.
+    val tunnelStatus = causes.firstNotNullOfOrNull { cause ->
+        if (cause::class.simpleName != "IOException") null
+        else if (cause.message == "Failed to authenticate with proxy") 407
+        else Regex("^Unexpected response code for CONNECT: ([1-5][0-9]{2})$")
+            .matchEntire(cause.message.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+    }
     val status = causes.filterIsInstance<ResponseException>().firstOrNull()?.response?.status?.value
         // Ktor 3/OkHttp discard the typed response for rejected WebSocket upgrades.
         // Read only the numeric status from their exact error prefixes, never the reason phrase.
@@ -32,6 +40,9 @@ internal fun connectionFailure(error: Throwable, phase: String, reason: String?)
         .firstOrNull { code -> causes.any { it.message?.contains(code) == true } }
     val hint = when {
         reason != null -> reason
+        tunnelStatus == 407 -> "HTTP 407: proxy authentication failed before TLS or NRC handshake. Check proxy credentials and embedded transport lifecycle."
+        tunnelStatus == 502 -> "HTTP 502: proxy CONNECT failed before TLS or NRC handshake. In embedded Tailscale mode, the node could not open the server connection. Check tailnet DNS, routing and access policy."
+        tunnelStatus != null -> "HTTP $tunnelStatus: proxy CONNECT rejected before TLS or NRC handshake. Check the proxy destination and access policy."
         status == 401 || status == 403 -> "HTTP $status: access rejected. Check proxy authentication and Tailscale access policy."
         status != null -> "HTTP $status: WebSocket upgrade failed. Check the HTTPS proxy and NRC route."
         names.any { it == "UnknownHostException" || it == "UnresolvedAddressException" } ->
