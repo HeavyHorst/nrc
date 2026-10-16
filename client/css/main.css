@@ -94,7 +94,19 @@ body.sullivan-workbench #chatAttach {
 .customer-record-header .customer-identity { padding: 0.75rem; border-inline: 1px solid var(--border-primary); }
 .customer-tabs { --tab-rise: 0.25rem; --tab-padding: 0.875rem; min-height: 2.25rem; padding-inline: 0.5rem; }
 .customer-record-body { min-width: 0; border: 1px solid var(--border-primary); border-top: 0; border-radius: 0 0 6px 6px; padding: 0.625rem; background: var(--surface-content); }
-.customer-overview-grid.is-overview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1rem; align-items: start; }
+/* The overview is a work surface, not a content-height document. Each quadrant
+   owns its overflow so empty and populated records keep the same coordinates. */
+.customer-record:has(.is-overview) { display: flex; flex-direction: column; min-height: 0; }
+.customer-record:has(.is-overview) > .customer-record-header { flex: none; }
+.customer-record:has(.is-overview) .customer-identity { height: 6rem; overflow: auto; flex-wrap: nowrap; }
+.customer-record-body:has(.is-overview) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.customer-record-body:has(.is-overview) > .customer-facts { flex: 0 0 7rem; min-height: 0; overflow: auto; align-content: start; }
+.customer-overview-grid.is-overview { display: grid; flex: 1; min-height: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 0.75rem 1rem; }
+.customer-overview-grid.is-overview > .customer-section { min-height: 0; margin: 0; overflow: auto; scrollbar-gutter: stable; }
+.customer-overview-grid.is-overview .file-assets-section { margin: 0; padding: 0; min-height: 100%; }
+.customer-overview-grid.is-overview .panel-header { position: sticky; top: 0; z-index: 1; }
+.customer-overview-grid.is-overview .panel-header > div > span:first-child { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.customer-overview-grid.is-overview .panel-header .btn { flex-shrink: 0; }
 .customer-page { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding-block: 0.5rem; }
 .customer-page > .customer-meta:first-child { margin-right: auto; }
 .customer-record .customer-history-filter { flex-wrap: wrap; }
@@ -104,8 +116,12 @@ body.sullivan-workbench #chatAttach {
 .customer-history-timeline > .customer-event { position: relative; padding: 0.5rem 0.75rem; font-size: var(--font-base); }
 .customer-history-timeline > .customer-event::before { content: ""; position: absolute; left: -0.1875rem; top: 0.75rem; width: 0.3125rem; height: 0.3125rem; background: var(--text-dim); }
 @container (max-width: 640px) {
-    .customer-overview-grid.is-overview { grid-template-columns: minmax(0, 1fr); }
+    .customer-record:has(.is-overview) .customer-identity { height: 9rem; flex-wrap: wrap; }
+    .customer-record-body:has(.is-overview) { flex: none; }
+    .customer-overview-grid.is-overview { flex: none; grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(4, 16rem); }
+    .customer-record-body:has(.is-overview) > .customer-facts { flex-basis: 11rem; }
     .customer-record-body .customer-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .customer-overview-grid.is-overview .file-assets-section .panel-header > div { flex-wrap: wrap; }
 }
 .customer-identity, .customer-actions { display: flex; gap: 0.5rem; justify-content: space-between; align-items: center; }
 .customer-identity { align-items: flex-start; flex-wrap: wrap; }

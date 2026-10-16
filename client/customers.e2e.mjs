@@ -117,6 +117,19 @@ try {
   assert.equal(await page.locator(".company-facts dd").nth(5).textContent(), "javascript:alert(1)");
   assert.equal(await page.locator(".company-facts dd").nth(5).locator("a").count(), 0);
   await page.click("#customerClose");
+  const overviewBoxes = () => page.locator(".is-overview > .customer-section").evaluateAll(sections =>
+    sections.map(section => {
+      const { x, y, width, height } = section.getBoundingClientRect();
+      return { x, y, width, height };
+    }));
+  const emptyGrid = await overviewBoxes();
+  assert.equal(emptyGrid.length, 4);
+  assert.equal(emptyGrid[0].y, emptyGrid[1].y, "top quadrants align");
+  assert.equal(emptyGrid[2].y, emptyGrid[3].y, "bottom quadrants align");
+  assert.equal(emptyGrid[0].height, emptyGrid[2].height, "both rows share the available height");
+  const recordBox = await page.locator("#customerRecord").boundingBox();
+  assert.ok(recordBox.y + recordBox.height - (emptyGrid[3].y + emptyGrid[3].height) < 50,
+    "overview fills the record down to its bottom inset");
   await page.click("#customerContactNew");
   await assertInspector();
   await page.fill('[name="title"]', "Anna Berger");
@@ -151,6 +164,7 @@ try {
   await page.selectOption("#customerHistoryFilter", "Call", { force: true });
   assert.equal(await page.locator("[data-activity]:visible").count(), 1);
   await page.locator('nav [data-customer-tab="overview"]').click();
+  assert.deepEqual(await overviewBoxes(), emptyGrid, "contacts and activities do not move the overview quadrants");
 
   // A second real WebSocket session observes acknowledged updates without reload.
   const peer = await context.newPage();

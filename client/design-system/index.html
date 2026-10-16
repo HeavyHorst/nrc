@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261016registertabs2">
+    <link rel="stylesheet" href="../css/main.css?v=20261016customergrid2">
     <link rel="stylesheet" href="../css/custom-select.css?v=20260926nesting1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -977,6 +977,22 @@ status      ← Service Worker</code></pre>
 
             <section class="catalog-section" id="customers">
                 <header class="catalog-section-header"><span>08C</span><h2>CUSTOMER WORKSPACE</h2><span>WORKSPACE ASSETS</span></header>
+                <p class="catalog-usage"><b>OVERVIEW GRID</b> The record fills the available workspace height. Identity and facts have reserved bands; contacts and activities occupy the upper half, linked work and files the lower half. Each quadrant scrolls independently without moving its neighbors, with its section header pinned. Below 640px record width, the four fixed-height sections stack in the same order.</p>
+                <div class="customer-record" style="height: 42rem" aria-label="Fixed customer overview grid example">
+                    <div class="customer-record-header">
+                        <nav class="tab-group customer-tabs" aria-label="Grid example sections"><button class="btn nav-tab active" aria-pressed="true">OVERVIEW</button></nav>
+                        <div class="customer-identity"><div><span class="customer-meta">CUSTOMER #184 / ACTIVE</span><h2>Nordwerk GmbH</h2><span class="customer-meta">Hamburg · RESPONSIBLE / Anna Berger</span></div><div class="customer-actions"><button class="btn">EDIT</button><button class="btn">ARCHIVE</button></div></div>
+                    </div>
+                    <div class="customer-record-body">
+                        <dl class="customer-facts"><div><dt>CUSTOMER NO.</dt><dd>K-184</dd></div><div><dt>TYPE / SECTOR</dt><dd>Customer / Media</dd></div><div><dt>PHONE</dt><dd>—</dd></div><div><dt>ADDRESS</dt><dd>Werkstraße 18, Hamburg</dd></div><div><dt>WEBSITE</dt><dd>—</dd></div></dl>
+                        <div class="customer-overview-grid is-overview">
+                            <section class="customer-section"><div class="panel-header"><div><span>CONTACTS / 1</span><button class="btn">+ CONTACT</button></div></div><div class="customer-contacts"><button class="customer-contact" aria-pressed="false"><span><strong>Anna Berger</strong></span><span>anna@example.test</span><span>—</span></button></div></section>
+                            <section class="customer-section"><div class="panel-header"><div><span>LATEST RECORDED ACTIVITIES / 0</span><button class="btn">+ ACTIVITY</button></div></div><p class="customer-empty">No activities in this selection.</p></section>
+                            <section class="customer-section"><div class="panel-header"><div><span>LINKED SLICES, TASKS & NOTES / 0</span><button class="btn">+ LINK</button></div></div><p class="customer-empty">No linked slices, tasks or notes in this selection.</p></section>
+                            <section class="customer-section"><div class="file-assets-section"><div class="panel-header"><div><span class="file-assets-title">FILES (0)</span><button class="btn">+ UPLOAD</button></div></div><p class="file-assets-empty">NO FILES IN LOADED LINKS</p></div></section>
+                        </div>
+                    </div>
+                </div>
                 <p class="catalog-usage"><b>KEYBOARD</b> Tab reaches company and contact rows. Up/Down navigates from the focused row within its list; company navigation selects the record, while Enter or Space opens a focused contact. A desktop inspector does not block navigation in the lists outside it. Inputs, pickers and modal dialogs keep their own keyboard handling.</p>
                 <div class="catalog-customer-register customers-register" aria-label="Customer register example">
                     <button type="button" class="customer-row" aria-pressed="true" title="Katholische Medienzentrale Fulda"><span class="customer-row-copy"><strong class="customer-row-title">Katholische Medienzentrale Fulda</strong><span class="customer-meta customer-row-meta">Fulda · Arne List</span></span></button>
