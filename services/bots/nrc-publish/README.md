@@ -236,10 +236,21 @@ Revision history and audit are stored; a history/rollback UI is not provided yet
 | `PUBLISH_TERMS_URL` | Optional Nutzungsbedingungen link: HTTP(S) URL or root-relative path |
 | `PUBLISH_CONTACT_URL` | Optional Kontakt link: HTTP(S) URL or root-relative path |
 | `PUBLISH_THEME_FILE` | Optional trusted local CSS file, loaded at startup and appended to the base stylesheet |
+| `PUBLISH_LOGO_FILE` | Optional local PNG, JPEG or WebP file, loaded at startup; shown on the home page and in page headers |
 | `PUBLISH_DATA_DIR` | `data`; contains `publish.db` |
 | `PUBLISH_FILES_DIR` | Existing NRC attachment directory; required for notes with files |
 
 ### Corporate design and legal links
+
+For the Antares deployment, copy `docker/branding/antares.css` and
+`docker/branding/antares-logo.png` into `publish-branding/` as `theme.css` and
+`logo.png`. The logo comes from
+`https://antares.net/images/Antares-logo-adjusted_2022_1024px-p-500.png`.
+Set `PUBLISH_THEME_FILE=/branding/theme.css` and
+`PUBLISH_LOGO_FILE=/branding/logo.png` in `publish.env`, then recreate Publish.
+Logo bytes are served locally; browsers do not contact the Antares site.
+An unreadable or unsupported configured logo prevents startup. Without a logo,
+headers retain the site name. `PUBLISH_BRAND` also supplies the logo's alternative text.
 
 Set the site name, footer text and legal URLs in the private `publish.env` file.
 Without footer text or links, no footer is displayed. Legal links point to your

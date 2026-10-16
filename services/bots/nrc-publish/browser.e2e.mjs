@@ -78,7 +78,12 @@ try {
   assert.equal(await page.locator(".category-card").count(), 4);
   assert.equal(await page.locator(".topic-number").count(), 4);
   assert.equal(await page.getByRole("heading", { name: "Alle Artikel", exact: true }).count(), 0);
-  assert.equal((await page.locator(".brand").textContent()).trim(), process.env.PUBLISH_BRAND || "Dokumentation");
+  assert.equal(await page.title(), `Knowledge Base · ${process.env.PUBLISH_BRAND || "Dokumentation"}`);
+  assert.equal(await page.getByRole("link", { name: "Thema entdecken", exact: true }).count(), 0);
+  assert.equal(await page.locator(".home-brand img").count(), process.env.PUBLISH_LOGO_FILE ? 1 : 0);
+  if (process.env.PUBLISH_LOGO_FILE) {
+    assert(await page.locator(".home-brand img").evaluate(img => img.complete && img.naturalWidth > 0));
+  }
   assert.equal(await page.locator("footer").count(), process.env.PUBLISH_FOOTER_TEXT || process.env.PUBLISH_IMPRINT_URL || process.env.PUBLISH_PRIVACY_URL || process.env.PUBLISH_TERMS_URL || process.env.PUBLISH_CONTACT_URL ? 1 : 0);
   for (const [name, variable] of [["Impressum", "PUBLISH_IMPRINT_URL"], ["Datenschutz", "PUBLISH_PRIVACY_URL"], ["Nutzungsbedingungen", "PUBLISH_TERMS_URL"], ["Kontakt", "PUBLISH_CONTACT_URL"]]) {
     if (process.env[variable]) {

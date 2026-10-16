@@ -161,6 +161,20 @@ p {
 .brand:hover {
   text-decoration: none;
 }
+.brand-logo {
+  display: block;
+  width: 96px;
+  height: 58px;
+  object-fit: contain;
+}
+.home-brand {
+  display: inline-block;
+  margin-bottom: 24px;
+}
+.home-brand .brand-logo {
+  width: 128px;
+  height: 78px;
+}
 .header nav {
   display: flex;
   gap: 28px;
@@ -205,14 +219,6 @@ p {
   padding-top: 48px;
   padding-bottom: 36px;
   text-align: left;
-}
-.hero .eyebrow::before {
-  content: "";
-  display: block;
-  width: 32px;
-  height: 4px;
-  background: var(--accent);
-  margin-bottom: 20px;
 }
 .hero h1 {
   font-size: 48px;
@@ -346,15 +352,6 @@ p {
 }
 .category-card li span {
   color: var(--muted);
-}
-.card-more {
-  display: flex;
-  justify-content: space-between;
-  margin-top: auto;
-  border-top: 1px solid var(--line);
-  padding-top: 17px;
-  font-size: 13px;
-  font-weight: 650;
 }
 .footer {
   border-top: 1px solid var(--line);

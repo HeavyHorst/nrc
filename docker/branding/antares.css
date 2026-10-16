@@ -1,0 +1,89 @@
+/* Publish deployment theme: copy to publish-branding/theme.css and set
+   PUBLISH_THEME_FILE=/branding/theme.css in publish.env. */
+:root {
+  --ink: #354c5d;
+  --muted: #526979;
+  --accent: #006b9d;
+  --accent-hover: #102e4b;
+  --line: #d9e3ea;
+  --pale: #edf3f7;
+  --background: #ffffff;
+  --surface: #ffffff;
+  --antares-navy: #102e4b;
+  --antares-paper: #f5f8fa;
+  font-family: Arial, sans-serif;
+}
+
+h1,
+h2,
+h3,
+.brand,
+.header nav a,
+.header nav a:first-child,
+.category-card h3 a,
+.sidebar h2 a {
+  color: var(--antares-navy);
+}
+
+.hero h1,
+.article-main > h1,
+.error-page h1 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 400;
+  letter-spacing: -0.035em;
+}
+
+.header,
+.search,
+.header-search {
+  background: var(--surface);
+}
+
+.hero,
+.footer {
+  background: var(--antares-paper);
+}
+
+.eyebrow {
+  font-family: inherit;
+  color: var(--accent);
+}
+
+.search button,
+.button:not(.secondary):not(.danger) {
+  background: var(--antares-navy);
+  border-color: var(--antares-navy);
+  font-weight: 700;
+}
+
+.search button:hover,
+.button:not(.secondary):not(.danger):hover {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.button.secondary {
+  color: var(--antares-navy);
+}
+
+.button.secondary:hover,
+.sidebar li a[aria-current] {
+  background: var(--pale);
+}
+
+.category-card {
+  border-top-color: var(--line);
+}
+
+.header nav a:hover,
+.category-card h3 a:hover,
+.breadcrumb a:hover,
+.toc li a:hover,
+.mobile-toc li a:hover {
+  color: var(--accent);
+}
+
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid var(--accent);
+}

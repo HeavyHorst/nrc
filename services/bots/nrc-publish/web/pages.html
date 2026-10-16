@@ -21,7 +21,7 @@
       <header class="header">
         <div class="header-inner">
           <a class="brand" href="/" aria-label="{{ .Brand }} Startseite"
-            >{{ .Brand }}</a
+            >{{ if .HasLogo }}<img class="brand-logo" src="/branding/logo" alt="{{ .Brand }}" />{{ else }}{{ .Brand }}{{ end }}</a
           >
           <nav aria-label="Hauptnavigation">
             <a href="/"
@@ -104,7 +104,9 @@
   <main id="main">
     <section class="hero">
       <div class="container hero-inner">
-        <span class="eyebrow">DOKUMENTATION</span>
+        {{ if .HasLogo }}
+          <a class="home-brand" href="/" aria-label="{{ .Brand }} Startseite"><img class="brand-logo" src="/branding/logo" alt="{{ .Brand }}" /></a>
+        {{ end }}
         <h1>Anleitungen und Dokumentation</h1>
         <p>
           Einrichtung, Schnittstellen und praktische Hilfe. Finden Sie den
@@ -209,9 +211,6 @@
                   {{ end }}
                 {{ end }}
               </ul>
-              <a class="card-more" href="/?category={{ .Name }}"
-                >Thema entdecken <span aria-hidden="true">→</span></a
-              >
             </section>
           {{ else }}
             <div class="empty">

@@ -35,6 +35,13 @@ func TestBrowserPreview(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if path := os.Getenv("PUBLISH_LOGO_FILE"); path != "" {
+		var err error
+		a.cfg.Logo, err = loadLogo(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	a.cfg.JWTSecret = os.Getenv("PUBLISH_PREVIEW_JWT_SECRET")
 	a.cfg.JWTIssuer = "nrc-tailscale-proxy"
 	a.cfg.Workspace = "test-workspace"

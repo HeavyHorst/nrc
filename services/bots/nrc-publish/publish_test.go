@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -48,6 +49,9 @@ func testApp(t *testing.T) *app {
 func TestBrandingHTTP(t *testing.T) {
 	a := testApp(t)
 	plain := request(a.public(), "GET", "/", nil, false).Body.String()
+	if strings.Contains(plain, "/branding/logo") || request(a.public(), "GET", "/branding/logo", nil, false).Code != 404 {
+		t.Fatal("unconfigured logo must be absent")
+	}
 	if strings.Contains(plain, "NRC") || strings.Contains(plain, "Wissen") || strings.Contains(plain, `<footer`) {
 		t.Fatal("default site contains fixed branding or footer")
 	}
@@ -58,8 +62,16 @@ func TestBrandingHTTP(t *testing.T) {
 	a.cfg.TermsURL = "https://example.org/terms"
 	a.cfg.ContactURL = "https://example.org/contact"
 	a.cfg.ThemeCSS = []byte(":root { --accent: #123456; }")
+	a.cfg.Logo = []byte("\x89PNG\r\n\x1a\nlogo-fixture")
 	for _, handler := range []http.Handler{a.public(), a.admin()} {
 		got := request(handler, "GET", "/", nil, true)
+		if !strings.Contains(got.Body.String(), `src="/branding/logo" alt="Example &amp; Co"`) {
+			t.Fatal("configured logo missing or alt text not escaped")
+		}
+		logo := request(handler, "GET", "/branding/logo", nil, true)
+		if logo.Code != 200 || logo.Header().Get("Content-Type") != "image/png" || !bytes.Equal(logo.Body.Bytes(), a.cfg.Logo) {
+			t.Fatal("logo response differs from configured image")
+		}
 		for _, want := range []string{"Example &amp; Co", "© Example &lt;Team&gt;", `href="https://example.org/impressum"`, `href="/articles/datenschutz"`, `href="https://example.org/terms"`, `href="https://example.org/contact"`} {
 			if !strings.Contains(got.Body.String(), want) {
 				t.Fatalf("branding missing %q", want)

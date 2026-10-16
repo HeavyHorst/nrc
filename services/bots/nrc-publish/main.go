@@ -33,6 +33,7 @@ type config struct {
 	PublicAddr, AdminAddr, User, Password, Workspace, FilesDir, Brand, DataDir, NRCServer, BotSecret, JWTSecret, JWTIssuer, ReviewURL string
 	FooterText, ImprintURL, PrivacyURL, TermsURL, ContactURL                                                                          string
 	ThemeCSS                                                                                                                          []byte
+	Logo                                                                                                                              []byte
 }
 
 type app struct {
@@ -65,6 +66,7 @@ type page struct {
 	Reviews                                                  []page
 	Missing                                                  []string
 	Changed, IsDraft                                         bool
+	HasLogo                                                  bool
 }
 
 func newApp(s *store, source noteSource, cfg config) *app {
@@ -90,6 +92,7 @@ func noteMetadata(asset protocol.Asset) (string, string, string) {
 
 func (a *app) render(w http.ResponseWriter, status int, p page) {
 	p.Brand = a.cfg.Brand
+	p.HasLogo = len(a.cfg.Logo) > 0
 	p.FooterText, p.ImprintURL, p.PrivacyURL = a.cfg.FooterText, a.cfg.ImprintURL, a.cfg.PrivacyURL
 	p.TermsURL, p.ContactURL = a.cfg.TermsURL, a.cfg.ContactURL
 	p.CSRF = a.csrf
@@ -137,6 +140,7 @@ func (a *app) public() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /style.css", a.style)
+	mux.HandleFunc("GET /branding/logo", a.logo)
 	mux.HandleFunc("GET /{$}", a.home)
 	mux.HandleFunc("GET /articles/{slug}", a.article)
 	mux.HandleFunc("GET /articles/by-note/{id}", a.articleByNote)
@@ -148,6 +152,7 @@ func (a *app) admin() http.Handler {
 	mux := http.NewServeMux()
 	agent := a.agentAPI()
 	mux.HandleFunc("GET /style.css", a.style)
+	mux.HandleFunc("GET /branding/logo", a.logo)
 	mux.HandleFunc("GET /{$}", a.dashboard)
 	mux.HandleFunc("GET /order", a.order)
 	mux.HandleFunc("POST /order", a.saveOrder)
@@ -226,6 +231,28 @@ func headers(next http.Handler, admin bool) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func loadLogo(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	switch http.DetectContentType(data) {
+	case "image/png", "image/jpeg", "image/webp":
+		return data, nil
+	default:
+		return nil, fmt.Errorf("logo must be PNG, JPEG or WebP")
+	}
+}
+
+func (a *app) logo(w http.ResponseWriter, r *http.Request) {
+	if len(a.cfg.Logo) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", http.DetectContentType(a.cfg.Logo))
+	w.Write(a.cfg.Logo)
 }
 
 func (a *app) style(w http.ResponseWriter, r *http.Request) {
@@ -671,6 +698,14 @@ func main() {
 		cfg.ThemeCSS, err = os.ReadFile(path)
 		if err != nil {
 			slog.Error("read theme stylesheet", "error", err)
+			os.Exit(1)
+		}
+	}
+	if path := os.Getenv("PUBLISH_LOGO_FILE"); path != "" {
+		var err error
+		cfg.Logo, err = loadLogo(path)
+		if err != nil {
+			slog.Error("read logo", "error", err)
 			os.Exit(1)
 		}
 	}
