@@ -218,7 +218,7 @@ class DiagnosticsTest {
         server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 val ready = ByteArrayOutputStream().also { bytes -> DataOutputStream(bytes).use {
-                    it.writeShort(100); it.writeUTF("fixture"); it.writeInt(8); it.writeUTF("test")
+                    it.writeShort(100); it.writeUTF("fixture"); it.writeInt(9); it.writeUTF("test")
                     it.writeUTF(sentinels[1]); it.writeBoolean(true)
                 } }.toByteArray()
                 webSocket.send(ready.toByteString())

@@ -55,7 +55,7 @@ class AttachmentFilesTest {
                         return MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
                             override fun onOpen(socket: WebSocket, response: Response) {
                                 wire = socket
-                                socket.send(frame(100) { text("fixture"); writeInt(8); text("test"); text(username); writeBoolean(true) }.toByteString())
+                                socket.send(frame(100) { text("fixture"); writeInt(9); text("test"); text(username); writeBoolean(true) }.toByteString())
                             }
                             override fun onClosing(socket: WebSocket, code: Int, reason: String) { socket.close(code, reason) }
                             override fun onMessage(socket: WebSocket, data: ByteString) {

@@ -1,6 +1,6 @@
 @import url("foundation.css?v=20261012slicebars1");
 @import url("workspace.css?v=20261017subsystems1");
-@import url("entities.css?v=20261014sliceheader3");
+@import url("entities.css?v=20261017ticketslices2");
 @import url("ledger.css?v=20261016registertabs2");
 @import url("mobile-tasks.css?v=20261016sliceinspector1");
 @import url("mobile.css?v=20261017subsystems1");
@@ -78,6 +78,43 @@ body.sullivan-workbench #chatAttach {
 #customersBtn[hidden], .customer-event[hidden], .customer-status[hidden] { display: none; }
 .customers-layout { display: grid; grid-template-columns: 15rem minmax(0, 1fr); flex: 1; min-height: 0; }
 .customers-register { border-right: var(--frame-border); overflow: auto; }
+/* Tickets compose the customer register and the shared detail fields. */
+#ticketsPanel { font-size: var(--font-base); }
+.ticket-metadata > .detail-read-register { margin-inline: 0; }
+#ticketEditor form { display: grid; gap: 0.625rem; padding: 0.75rem 0; }
+#ticketEditor :is(input, select, textarea) { min-width: 0; width: 100%; box-sizing: border-box; }
+#ticketEditor .detail-edit-field { display: grid; align-content: start; gap: 0.375rem; }
+#ticketEditor form > button { justify-self: start; }
+#ticketEditor h2 { font-family: var(--font-sans); font-size: var(--font-lg); margin: 0.75rem 0; overflow-wrap: anywhere; }
+#ticketReply { border: var(--control-border); padding: 0.75rem !important; }
+.ticket-internal .customer-event { background: var(--surface-priority-subtle); }
+#ticketReply[data-visibility="internal"] > :is(label, .customer-meta) { border-inline-start: 2px solid var(--border-subtle); padding-inline-start: 0.5rem; }
+#ticketReply[data-visibility="public"] { border: 2px solid var(--identity-scope); }
+#ticketVisibility { margin: 0; }
+.ticket-resources .document-resource-action { gap: 0.5rem; }
+.document-resources .ticket-work-context { display: block; overflow: hidden; text-overflow: ellipsis; }
+@media (min-width: 769px) {
+    #ticketFields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #ticketFields > :is(:first-child, .ticket-original-request, button) { grid-column: 1 / -1; }
+}
+#ticketsList .customer-contact { display: grid; grid-template-columns: minmax(0, 1fr); }
+#ticketsList .customer-contact > span { grid-area: auto; }
+@media (max-width: 768px) {
+    #ticketsPanel > .header-register > .header-register-control-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #ticketsPanel > .header-register > .header-register-control-row > * { grid-area: auto; }
+    #ticketsPanel .header-filter-cell { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+    #ticketsPanel .header-filter-cell > :is(input, select) { width: 100%; min-width: 0; }
+    #ticketsPanel :is(input, select, textarea) { font-size: 16px; }
+    #ticketsList { display: block; overflow: auto; max-height: 12rem; }
+    #ticketsList .customer-contact { width: 100%; min-width: 0; overflow-wrap: anywhere; }
+    #ticketEditor > .panel-header { font-size: var(--mobile-font-sm); }
+    .ticket-resources .note-link-item { display: grid; grid-template-columns: 1rem auto minmax(0, 1fr) auto; }
+    .ticket-resources .note-link-target { grid-column: 2 / 4; grid-row: 2; white-space: normal; overflow-wrap: anywhere; }
+    .ticket-resources .note-link-delete { grid-column: 4; grid-row: 1; }
+    #ticketEditor .customer-section > .panel-header { height: auto; }
+    #ticketEditor .customer-section > .panel-header > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+    #ticketEditor .customer-section > .panel-header > div > span { grid-column: 1 / -1; font-size: var(--mobile-font-sm); }
+}
 .customer-row { display: block; width: 100%; min-height: 2.5rem; padding: 0; border: 0; background: var(--surface-content); color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; }
 .customer-row-copy { display: grid; align-content: center; gap: 0.1875rem; min-width: 0; padding: 0.4375rem 0.625rem; }
 .customer-row-title, .customer-row-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

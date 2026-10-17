@@ -16,13 +16,17 @@
 // - dependencies: all pages of open blocked tasks, including other assignees.
 //   Only actionable prerequisites owned by the reader become UNBLOCKS rows.
 window.NRCAttention = (() => {
-  const FILTERS = ["all", "task", "reminder", "message"];
+  const FILTERS = ["all", "task", "ticket", "reminder", "message"];
   // One primary reason per row. Overdue wins over unblocks for actionable tasks; kind
   // filters still operate independently of the reason sections.
   const REASONS = [
     ["overdue", "OVERDUE / MY WORK"],
     ["waiting", "OVERDUE / WAITING"],
     ["unblocks", "UNBLOCKS / MY WORK"],
+    ["ticket_waiting", "CUSTOMER WAITING / ASSIGNED TO ME"],
+    ["ticket_inbox", "SUPPORT INBOX / UNASSIGNED"],
+    ["comment", "UNREAD COMMENTS / MY TASKS"],
+    ["ticket_unread", "UNREAD / MY TICKETS"],
     ["assigned", "ASSIGNED TO ME"],
     ["reminder", "DUE REMINDERS / WORKSPACE"],
     ["mention", "MENTIONED / SESSION"],
@@ -310,6 +314,29 @@ window.NRCAttention = (() => {
     return due.map(reminderRow).sort((left, right) => left.sortKey - right.sortKey);
   }
 
+  function ticketRows() {
+    return (window.NRCTickets?.snapshot() || []).filter(item => item.waiting || item.unread).map(item => {
+      const m = window.NRCTickets.metadata(item.asset), inbox = !m.assignee;
+      return {
+        kind: "TICKET", group: "ticket", id: item.asset.assetId, title: m.title,
+        reason: inbox ? "ticket_inbox" : item.waiting ? "ticket_waiting" : "ticket_unread",
+        detail: `${inbox ? "UNASSIGNED" : "ASSIGNED TO ME"} · ${m.requester}${item.unread ? ` · ${item.unread} UNREAD` : ""}`,
+        chip: item.waiting ? { label: "REPLY NEEDED", tone: "priority" } : { label: `${item.unread} NEW`, tone: "new" },
+        age: formatAge(item.timestamp), sortKey: -Number(item.timestamp),
+        open: () => window.NRCTickets.open("", String(item.asset.assetId)),
+      };
+    });
+  }
+
+  function commentRows() {
+    return (window.NRCRecordActivity?.snapshot() || []).map(({ task, count, first, last }) => ({
+      kind: "COMMENT", group: "task", id: task.id, title: task.title, reason: "comment",
+      detail: `ASSIGNED TO ME · ${last.owner} · ${count} UNREAD COMMENT${count === 1 ? "" : "S"}`,
+      chip: { label: `${count} NEW`, tone: "new" }, age: formatAge(last.createdAt), sortKey: -Number(last.createdAt),
+      open: () => window.NRCTasks.openTaskComments(task, first.assetId),
+    }));
+  }
+
   // The order follows the same vocabulary as the chips: what is due now, then
   // what has a deadline, then blocked work, then everything else. Sorting by a
   // raw timestamp would put an overdue task behind a task without a due date.
@@ -332,6 +359,8 @@ window.NRCAttention = (() => {
       ...state.tasks.map(task => taskRow(task, dependents.get(task.id) || [], tasksById.get(task.blockedBy))),
       ...reminderRows(),
       ...messageRows(),
+      ...ticketRows(),
+      ...commentRows(),
     ].filter((row) => row?.title);
     for (const row of rows) row.key = `${row.kind}:${row.id}`;
     rows.sort((left, right) =>
@@ -581,6 +610,8 @@ window.NRCAttention = (() => {
     document.addEventListener("keydown", handleKeyboardNavigation);
     document.addEventListener("nrc:task-changed", refreshSoon);
     document.addEventListener("nrc:asset-created", refreshSoon);
+    document.addEventListener("nrc:tickets-activity", refreshDerived);
+    document.addEventListener("nrc:record-activity", refreshDerived);
   }
 
   function isActive() {

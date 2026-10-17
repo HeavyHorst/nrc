@@ -322,7 +322,7 @@ func TestListAssetTypeRequiresExactType(t *testing.T) {
 			t.Fatalf("%q: %d, %v", tc.name, got, err)
 		}
 	}
-	for _, name := range []string{"all", "task", "0", "13", "unknown"} {
+	for _, name := range []string{"all", "task", "0", "15", "unknown"} {
 		if _, err := parseListAssetType(name); err == nil {
 			t.Fatalf("accepted %q", name)
 		}

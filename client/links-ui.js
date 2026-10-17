@@ -163,6 +163,8 @@ class NRCLinkPicker extends HTMLElement {
       const assetType =
         kind === "file"
           ? window.NRCAssets?.AssetType?.File
+          : kind === "slice" ? window.NRCAssets?.AssetType?.Slice
+          : kind === "ticket" ? window.NRCAssets?.AssetType?.Ticket
           : window.NRCAssets?.AssetType?.Note;
       if (assetType == null || !window.NRCAssets?.sendListAssetsPaged)
         return this.pickerLoadFailed("PAGINATION UNAVAILABLE");
@@ -214,6 +216,8 @@ class NRCLinkPicker extends HTMLElement {
             room,
             kind === "file"
               ? window.NRCAssets.AssetType.File
+              : kind === "slice" ? window.NRCAssets.AssetType.Slice
+              : kind === "ticket" ? window.NRCAssets.AssetType.Ticket
               : window.NRCAssets.AssetType.Note,
             false,
             50,
@@ -280,20 +284,24 @@ class NRCLinkPicker extends HTMLElement {
           });
         }
       }
-    } else if (linkPickerState.targetKind === "file") {
+    } else if (["file", "slice", "ticket"].includes(linkPickerState.targetKind)) {
       const assets = window.NRCAssets?.roomAssets?.get(sourceEntity.convId);
       if (assets) {
         for (const asset of assets.values()) {
-          if (asset.assetType !== window.NRCAssets.AssetType.File) continue;
+          const slice = linkPickerState.targetKind === "slice";
+          const ticket = linkPickerState.targetKind === "ticket";
+          if (asset.assetType !== (slice ? window.NRCAssets.AssetType.Slice : ticket ? window.NRCAssets.AssetType.Ticket : window.NRCAssets.AssetType.File)) continue;
+          let sliceTitle = "";
+          if (slice || ticket) { try { const metadata = JSON.parse(asset.preview); sliceTitle = metadata.name || metadata.title || ""; } catch {} }
           const title =
-            window.NRCFiles?.parseMetadata?.(asset)?.title ||
-            `FILE #${asset.assetId}`;
+            (slice || ticket ? sliceTitle : window.NRCFiles?.parseMetadata?.(asset)?.title) ||
+            `${LINK_PICKER_KINDS[linkPickerState.targetKind].label} #${asset.assetId}`;
           if (searchTerm && !title.toLowerCase().includes(searchTerm)) continue;
           items.push({
             id: asset.assetId,
             label: `#${asset.assetId}`,
             title,
-            type: "file",
+            type: linkPickerState.targetKind,
             asset,
           });
         }
@@ -484,6 +492,8 @@ const LINK_PICKER_KINDS = {
   note: { label: "NOTE", targetType: 1 },
   task: { label: "TASK", targetType: 2 },
   file: { label: "FILE", targetType: 1 },
+  slice: { label: "SLICE", targetType: 1 },
+  ticket: { label: "TICKET", targetType: 1 },
 };
 
 function renderLinkPickerContent() {
@@ -814,6 +824,10 @@ function navigateToTarget(convId, targetType, targetId, sourceType = 1) {
       window.NRCCustomers?.openRecord(asset.assetType === 9 ? "contact" : "activity", targetId);
       return;
     }
+    if (asset && asset.assetType === window.NRCAssets?.AssetType?.Ticket) {
+      window.NRCTickets?.open('', String(targetId));
+      return;
+    }
     // Linked slices keep the current view, just like linked tasks and notes.
     // Resolve by stable ID, never by the potentially duplicate display name.
     const sliceId = asset ? asset.assetType === (window.NRCAssets?.AssetType?.Slice ?? 11) : Boolean(sliceName(targetId));
@@ -822,7 +836,7 @@ function navigateToTarget(convId, targetType, targetId, sourceType = 1) {
       return;
     }
     if (window.NRCInspector) {
-      window.NRCInspector.openEntity({ roomId: convId, type: "note", id: targetId });
+      window.NRCInspector.openEntity({ roomId: convId, type: asset?.assetType === 3 ? "file" : "note", id: targetId });
     }
   } else if (targetType === TargetType.Task) {
     if (window.NRCInspector) {

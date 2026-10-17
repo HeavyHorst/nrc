@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -339,9 +340,25 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workspace := r.URL.Query().Get("workspace")
+	storeUpload(w, r, workspace, login)
+}
+
+// storeUpload shares bounded multipart parsing and storage between authenticated endpoints.
+func storeUpload(w http.ResponseWriter, r *http.Request, workspace, login string) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFileSize+64*1024)
+	defer func() {
+		if r.MultipartForm != nil {
+			r.MultipartForm.RemoveAll()
+		}
+	}()
 	// Parse multipart form
-	if err := r.ParseMultipartForm(maxFileSize); err != nil {
-		http.Error(w, fmt.Sprintf("failed to parse form: %v", err), http.StatusBadRequest)
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
+		status := http.StatusBadRequest
+		var sizeErr *http.MaxBytesError
+		if errors.As(err, &sizeErr) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, fmt.Sprintf("failed to parse form: %v", err), status)
 		return
 	}
 

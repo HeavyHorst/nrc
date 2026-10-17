@@ -6,7 +6,7 @@ import kotlinx.serialization.json.jsonPrimitive
 
 /** Only chat opcodes; all integers use the server's big-endian wire format. */
 object Protocol {
-    const val VERSION = 8
+    const val VERSION = 9
     const val MAX_CONTENT_BYTES = 50 * 1024
 
     fun send(conversation: Long, request: Int, text: String, messageId: ByteArray? = null): ByteArray {

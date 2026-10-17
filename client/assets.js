@@ -17,6 +17,8 @@ const AssetType = {
   CustomerActivity: 10,
   Slice: 11,
   Appointment: 12,
+  Ticket: 13,
+  TicketEntry: 14,
 };
 
 // Asset limits (must match server protocol/assets.odin)
@@ -282,6 +284,10 @@ function getAssetTypeLabel(assetType) {
       return "SLICE";
     case AssetType.Appointment:
       return "APPOINTMENT";
+    case AssetType.Ticket:
+      return "TICKET";
+    case AssetType.TicketEntry:
+      return "TICKET ENTRY";
     default:
       return assetType == null ? "ANY" : `TYPE ${assetType}`;
   }

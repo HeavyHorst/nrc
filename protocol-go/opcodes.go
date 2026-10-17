@@ -199,6 +199,8 @@ const (
 	// owner, outcome and closure. Membership stays the project label.
 	AssetTypeSlice       uint16 = 11
 	AssetTypeAppointment uint16 = 12
+	AssetTypeTicket      uint16 = 13
+	AssetTypeTicketEntry uint16 = 14
 )
 
 // WorkspaceDataConvID is the reserved scope for all durable tasks, assets,

@@ -29,6 +29,7 @@ const viewPageTitles = {
   sullivanShare: "SULLIVAN",
   customers: "CUSTOMERS",
   newsletter: "NEWSLETTER",
+  tickets: "TICKETS",
 };
 
 function getActiveView() {
@@ -58,6 +59,7 @@ function setActiveView(view) {
   const notesPanel = document.getElementById("notesPanel");
   const noteSharePanel = document.getElementById("noteSharePanel");
   const customersPanel = document.getElementById("customersPanel");
+  const ticketsPanel = document.getElementById("ticketsPanel");
   const attentionPanel = document.getElementById("attentionPanel");
   const calendarPanel = document.getElementById("calendarPanel");
   const searchPanel = document.getElementById("workspaceSearchPanel");
@@ -95,6 +97,8 @@ function setActiveView(view) {
   if (customersPanel) customersPanel.style.display = "none";
   const newsletterPanel = document.getElementById("newsletterPanel");
   if (newsletterPanel) newsletterPanel.style.display = "none";
+  if (ticketsPanel) ticketsPanel.style.display = "none";
+  document.getElementById("ticketsBtn")?.classList?.toggle("active", view === "tickets");
   if (attentionPanel) attentionPanel.style.display = "none";
   if (calendarPanel) calendarPanel.style.display = "none";
   if (searchPanel) searchPanel.style.display = "none";
@@ -171,6 +175,9 @@ function setActiveView(view) {
     case "customers":
       if (customersPanel) customersPanel.style.display = "flex";
       window.NRCCustomers.reload();
+      break;
+    case "tickets":
+      if (ticketsPanel) ticketsPanel.style.display = "flex";
       break;
   }
 

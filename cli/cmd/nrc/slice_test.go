@@ -16,12 +16,13 @@ func TestSliceEntryIndependentCounterSums(t *testing.T) {
 	for _, s := range []protocol.TaskSlice{
 		{Backlog: 65535},
 		{Backlog: 65535, Todo: 1},
+		{Tickets: 65535},
 		{Backlog: 40000, Todo: 30000, Done: 65535, Notes: 1, Files: 2},
 	} {
 		entry := toSliceEntry(s, nil)
 		open := uint32(s.Backlog) + uint32(s.Todo)
 		tasks := open + uint32(s.Done)
-		if entry.Open != open || entry.Tasks != tasks || entry.Members != tasks+uint32(s.Notes)+uint32(s.Files) {
+		if entry.Open != open || entry.Tasks != tasks || entry.Tickets != s.Tickets || entry.Members != tasks+uint32(s.Notes)+uint32(s.Files)+uint32(s.Tickets) {
 			t.Fatalf("wrapped slice entry: %+v", entry)
 		}
 	}

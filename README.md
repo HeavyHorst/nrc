@@ -40,6 +40,9 @@ Configure [workspace access](docs/OPERATIONS.md#workspace-access) before you sto
 private data. Do not expose Nginx, the server or private sidecar APIs directly to users.
 Optional [Publish](services/bots/nrc-publish/README.md) has a separate public
 listener for approved articles; its administration must stay private.
+Optional [Tickets](docs/TICKETS.md) provides a separate customer portal with
+private, account-scoped requests. Staff work on the same durable records in
+NRC's ticket register and customer view; internal notes never enter the portal.
 
 Start the services and check their logs:
 

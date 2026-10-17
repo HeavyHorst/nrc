@@ -17,7 +17,7 @@ import (
 )
 
 // A slice is an explicit work stream: an asset of type AssetTypeSlice whose
-// members are the tasks, notes and files linked to it with a member-of edge.
+// members are tasks, notes, files and tickets linked to it with a member-of edge.
 // The server reads those edges, so this command family reads slices and never
 // assembles them: deriving membership here from project labels would be a second
 // definition that could disagree with the register.
@@ -98,6 +98,7 @@ type sliceEntry struct {
 	Tasks          uint32 `json:"tasks"`
 	Notes          uint16 `json:"notes"`
 	Files          uint16 `json:"files"`
+	Tickets        uint16 `json:"tickets"`
 	Open           uint32 `json:"open"`
 	Backlog        uint16 `json:"backlog"`
 	Todo           uint16 `json:"todo"`
@@ -127,6 +128,7 @@ func toSliceEntry(slice protocol.TaskSlice, record *sliceRecord) sliceEntry {
 		Tasks:          slice.TaskCount(),
 		Notes:          slice.Notes,
 		Files:          slice.Files,
+		Tickets:        slice.Tickets,
 		Open:           slice.OpenCount(),
 		Backlog:        slice.Backlog,
 		Todo:           slice.Todo,
@@ -415,11 +417,12 @@ var sliceListCmd = &cobra.Command{
 				strconv.FormatUint(uint64(entry.Open), 10),
 				strconv.FormatUint(uint64(entry.Blocked), 10),
 				strconv.FormatUint(uint64(entry.Done), 10),
+				strconv.FormatUint(uint64(entry.Tickets), 10),
 				sliceAge(entry.LastMovedAt),
 				sliceState(entry),
 			})
 		}
-		table := tablewriter.NewTable(os.Stdout, tablewriter.WithHeader([]string{"ID", "SLICE", "MEM", "OPEN", "BLK", "DONE", "MOVED", "STATE"}))
+		table := tablewriter.NewTable(os.Stdout, tablewriter.WithHeader([]string{"ID", "SLICE", "MEM", "OPEN", "BLK", "DONE", "TICKETS", "MOVED", "STATE"}))
 		for _, row := range rows {
 			table.Append(row)
 		}
@@ -469,6 +472,7 @@ var sliceGetCmd = &cobra.Command{
 			{"DONE", strconv.FormatUint(uint64(entry.Done), 10)},
 			{"NOTES", strconv.FormatUint(uint64(entry.Notes), 10)},
 			{"FILES", strconv.FormatUint(uint64(entry.Files), 10)},
+			{"TICKETS", strconv.FormatUint(uint64(entry.Tickets), 10)},
 			{"OLDEST OPEN", sliceAge(entry.OldestActiveAt)},
 			{"LAST MOVED", sliceAge(entry.LastMovedAt)},
 			{"OUTCOME", sliceOrDash(entry.Outcome)},
@@ -568,6 +572,12 @@ func assetMember(s *conn.Session, assetID uint64) sliceMember {
 	}
 	member.Title = preview.Title
 	switch asset.AssetType {
+	case protocol.AssetTypeTicket:
+		var metadata map[string]json.RawMessage
+		if json.Unmarshal([]byte(asset.Preview), &metadata) == nil {
+			member.Status = ticketString(metadata, "status")
+			member.Assignee = ticketString(metadata, "assignee")
+		}
 	case protocol.AssetTypeNote:
 		member.Project = preview.Project
 	case protocol.AssetTypeFile:
@@ -647,7 +657,7 @@ func sliceMembers(s *conn.Session, slice protocol.TaskSlice) ([]sliceMember, err
 // carries, and nothing invented for a kind that has none.
 func memberState(member sliceMember) string {
 	switch member.Kind {
-	case "task":
+	case "task", "ticket":
 		state := member.Status
 		if member.Assignee != "" {
 			state += " · " + member.Assignee

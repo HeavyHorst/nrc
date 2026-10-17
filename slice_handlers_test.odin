@@ -8,10 +8,39 @@ import pr "protocol"
 slice_test_bytes :: proc(value: string) -> []byte {return transmute([]byte)value}
 
 @(test)
+test_slice_ticket_membership :: proc(t: ^testing.T) {
+	conv: Conversation_State
+	slice_test_state(&conv)
+	defer slice_test_destroy(&conv)
+	slice_asset := slice_test_slice_asset(77, `{"version":1,"name":"Tickets"}`)
+	slice_test_add_asset(&conv, &slice_asset)
+	assets := [?]pr.Asset {
+		{asset_id = 1, asset_type = .Ticket, updated_at = 9000},
+		{asset_id = 2, asset_type = .TicketEntry, updated_at = 10000},
+		{asset_id = 3, asset_type = .Ticket, updated_at = 11000},
+	}
+	for &asset in assets do slice_test_add_asset(&conv, &asset)
+	slice_test_member_of(&conv, .Asset, 1, 77)
+	slice_test_member_of(&conv, .Asset, 2, 77)
+	slice_test_member_of(&conv, .Asset, 3, 77, .RelatedTo)
+	slices := make([dynamic]pr.TaskSlice)
+	defer delete(slices)
+	page := collect_task_slices(&conv, Slice_Query{limit = 10, with_work_counters = true}, &slices, nil, context.temp_allocator)
+	testing.expect_value(t, page.assigned_tasks, u32(0))
+	testing.expect_value(t, page.unassigned_tasks, u32(0))
+	testing.expect_value(t, len(slices), 1)
+	if len(slices) != 1 do return
+	testing.expect_value(t, slices[0].tickets, u16(1))
+	testing.expect_value(t, pr.task_slice_member_count(slices[0]), 1)
+	testing.expect_value(t, pr.task_slice_open_count(slices[0]), u16(0))
+	testing.expect_value(t, slices[0].last_moved_at, i64(9000))
+}
+
+@(test)
 test_slice_member_category_boundaries :: proc(t: ^testing.T) {
 	// Each wire category accepts 65535, and the next fold must signal overflow
 	// without wrapping. Blocked is independent of the status categories.
-	for category in 0 ..< 7 {
+	for category in 0 ..< 8 {
 		entry: pr.TaskSlice
 		overflow := false
 		task := pr.Task {
@@ -36,6 +65,8 @@ test_slice_member_category_boundaries :: proc(t: ^testing.T) {
 			count = &entry.notes
 		case 6:
 			asset.asset_type = .File; count = &entry.files
+		case 7:
+			asset.asset_type = .Ticket; count = &entry.tickets
 		}
 		for i in 0 ..< 65535 {
 			if category < 5 {
@@ -598,6 +629,7 @@ test_task_slice_list_wire_roundtrip :: proc(t: ^testing.T) {
 				blocked = 5,
 				notes = 6,
 				files = 7,
+				tickets = 8,
 				oldest_active_at = 111,
 				last_moved_at = 222,
 			},
@@ -638,10 +670,11 @@ test_task_slice_list_wire_roundtrip :: proc(t: ^testing.T) {
 	testing.expect_value(t, first.blocked, u16(5))
 	testing.expect_value(t, first.notes, u16(6))
 	testing.expect_value(t, first.files, u16(7))
+	testing.expect_value(t, first.tickets, u16(8))
 	testing.expect_value(t, first.oldest_active_at, i64(111))
 	testing.expect_value(t, first.last_moved_at, i64(222))
 	testing.expect_value(t, pr.task_slice_open_count(first), u16(6))
-	testing.expect_value(t, pr.task_slice_member_count(first), 23)
+	testing.expect_value(t, pr.task_slice_member_count(first), 31)
 
 	second := parsed.slices[1]
 	testing.expect_value(t, string(second.name), "Beta")

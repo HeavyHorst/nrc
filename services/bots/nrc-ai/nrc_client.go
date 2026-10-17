@@ -27,6 +27,7 @@ type NRCClient struct {
 	workspace string
 	nickname  string
 	botSecret string
+	filesURL  string
 	cancel    context.CancelFunc
 
 	writeMu         sync.Mutex
@@ -180,6 +181,7 @@ func NewNRCClient(cfg Config, workspace string) *NRCClient {
 		workspace:           workspace,
 		nickname:            cfg.NRCNickname,
 		botSecret:           cfg.NRCBotSecret,
+		filesURL:            cfg.FilesURL,
 		subscribedRooms:     make(map[uint64]bool),
 		taskCache:           make(map[uint64]map[uint64]*protocol.Task),
 		ready:               make(chan struct{}),
@@ -341,7 +343,7 @@ func (c *NRCClient) pingLoop(ctx context.Context) {
 	}
 }
 
-func (c *NRCClient) sendProtocolMessage(opcode uint16, payload []byte) error {
+func (c *NRCClient) sendProtocolMessage(opcode uint16, payload []byte, ticketWrite ...bool) error {
 	if !c.connected.Load() {
 		return errNotConnected
 	}
@@ -363,6 +365,9 @@ func (c *NRCClient) sendProtocolMessage(opcode uint16, payload []byte) error {
 	err = conn.WriteMessage(websocket.BinaryMessage, buf)
 	c.writeMu.Unlock()
 	if err != nil {
+		if len(ticketWrite) > 0 && ticketWrite[0] {
+			return ticketWriteError(err)
+		}
 		return err
 	}
 
@@ -426,7 +431,7 @@ func (c *NRCClient) readPump(ctx context.Context) {
 			c.handleTaskListResponse(msg.Data)
 		case protocol.S_TaskListPage:
 			c.handleTaskListPage(msg.Data)
-		case protocol.S_TaskFull, protocol.S_CalendarPage, protocol.S_TaskSliceList, protocol.S_EdgeListPage:
+		case protocol.S_TransactionResult, protocol.S_TaskFull, protocol.S_CalendarPage, protocol.S_TaskSliceList, protocol.S_EdgeListPage:
 			c.handleDataRead(msg.Opcode, msg.Data)
 		case protocol.S_EdgeCreated:
 			c.handleEdgeCreated(msg.Data)
@@ -464,7 +469,7 @@ func (c *NRCClient) handleErrorResponse(payload []byte) {
 		slog.Warn("failed to decode error response", "error", err)
 		return
 	}
-	c.settleDataRead(resp.CorrelationID, resp.OriginOpcode, nil, fmt.Errorf("%s", resp.ErrorMessage))
+	c.settleDataRead(resp.CorrelationID, resp.OriginOpcode, nil, &ticketWriteRejection{resp.ErrorMessage})
 
 	if resp.CorrelationID != 0 && resp.OriginOpcode == protocol.C_CreateTask {
 		c.settleTaskCreate(resp.CorrelationID, nil, fmt.Errorf("%s", resp.ErrorMessage))
@@ -472,6 +477,9 @@ func (c *NRCClient) handleErrorResponse(payload []byte) {
 
 	if resp.CorrelationID != 0 && resp.OriginOpcode == protocol.C_UpdateTask {
 		c.settleTaskUpdate(resp.CorrelationID, nil, fmt.Errorf("%s", resp.ErrorMessage))
+	}
+	if resp.CorrelationID != 0 && resp.OriginOpcode == protocol.C_ApplyTransaction {
+		c.settleDataRead(resp.CorrelationID, resp.OriginOpcode, nil, fmt.Errorf("%s", resp.ErrorMessage))
 	}
 
 	if resp.CorrelationID != 0 && resp.OriginOpcode == protocol.C_ListTasksPaged {
@@ -488,7 +496,7 @@ func (c *NRCClient) handleErrorResponse(payload []byte) {
 		delete(c.pendingAssetWrites, resp.CorrelationID)
 		c.pendingAssetWritesMu.Unlock()
 
-		result := assetWriteResult{Err: fmt.Errorf("%s", resp.ErrorMessage)}
+		result := assetWriteResult{Err: &ticketWriteRejection{resp.ErrorMessage}}
 		for _, ch := range waiters {
 			ch <- result
 		}
@@ -1276,6 +1284,10 @@ func (c *NRCClient) DeleteEdge(ctx context.Context, convID uint64, edgeID uint64
 
 // CreateAsset sends C_CreateAsset and waits for the correlated S_AssetCreated.
 func (c *NRCClient) CreateAsset(ctx context.Context, convID uint64, assetType uint16, parentType uint16, parentID uint64, preview, payload string) (*protocol.Asset, error) {
+	return c.createAssetAttachments(ctx, convID, assetType, parentType, parentID, preview, payload, nil)
+}
+
+func (c *NRCClient) createAssetAttachments(ctx context.Context, convID uint64, assetType uint16, parentType uint16, parentID uint64, preview, payload string, attachments []protocol.Attachment, parentUpdatedAt ...int64) (*protocol.Asset, error) {
 	if convID != protocol.WorkspaceDataConvID {
 		return nil, errWorkspaceDataScope
 	}
@@ -1296,21 +1308,36 @@ func (c *NRCClient) CreateAsset(ctx context.Context, convID uint64, assetType ui
 
 	defer removePendingAssetWrite(c, correlationID, ch)
 
-	payloadBytes := protocol.EncodeCreateAssetWithCorrelation(protocol.WorkspaceDataConvID, assetType, parentType, parentID, preview, payload, correlationID)
-	if err := c.sendProtocolMessage(protocol.C_CreateAsset, payloadBytes); err != nil {
+	payloadBytes, err := protocol.EncodeCreateAssetWithAttachmentsAndCorrelation(protocol.WorkspaceDataConvID, assetType, parentType, parentID, preview, payload, attachments, correlationID)
+	if len(parentUpdatedAt) > 0 {
+		payloadBytes, err = protocol.EncodeCreateAssetWithParentVersionAndCorrelation(protocol.WorkspaceDataConvID, assetType, parentType, parentID, preview, payload, attachments, parentUpdatedAt[0], correlationID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	writeErr := func(err error) error {
+		if assetType == 13 || assetType == 14 {
+			return ticketWriteError(err)
+		}
+		return err
+	}
+	if err := c.sendProtocolMessage(protocol.C_CreateAsset, payloadBytes, assetType == 13 || assetType == 14); err != nil {
 		return nil, err
 	}
 
 	select {
 	case result := <-ch:
 		if result.Err != nil {
-			return nil, result.Err
+			return nil, writeErr(result.Err)
 		}
 		return result.Asset, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, writeErr(ctx.Err())
 	case <-time.After(15 * time.Second):
-		return nil, fmt.Errorf("timeout waiting for asset create response for conv_id %d", convID)
+		return nil, writeErr(fmt.Errorf("timeout waiting for asset create response for conv_id %d", convID))
 	}
 }
 

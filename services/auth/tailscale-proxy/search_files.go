@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/subtle"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,21 @@ func searchFilesHandler(secret string) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if r.Method != http.MethodGet {
+		if r.URL.Path == "/upload" {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			query, err := url.ParseQuery(r.URL.RawQuery)
+			workspaces := query["workspace"]
+			if err != nil || len(workspaces) != 1 || !workspaceNamePattern.MatchString(workspaces[0]) {
+				http.Error(w, "invalid workspace", http.StatusBadRequest)
+				return
+			}
+			storeUpload(w, r, workspaces[0], "private-bot")
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}

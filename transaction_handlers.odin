@@ -354,6 +354,15 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 				if r.parent_type !=
 				   .None {expected := pr.TransactionEntityType.Task; if r.parent_type == .Asset do expected = .Asset; ok: bool; parent, ok = transaction_resolve_id(&p, r.parent, expected, r.conv_id)
 					if !ok {failed = u16(i); break planning}}
+				if !validate_ticket_asset(
+					r.asset_type,
+					r.parent_type,
+					parent,
+					r.payload_encoding,
+					r.payload_raw_len,
+					r.preview,
+					r.payload,
+				) {failed = u16(i); break planning}
 				a := alloc_asset(creator, r.preview, r.payload, nil)
 				if a == nil {failed = u16(i); break planning}
 				a.asset_id = pr.AssetID(p.results[i].entity_id)
@@ -451,6 +460,15 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 					   encoding == .Plain && raw_len != u32(len(payload)) {failed = u16(i)
 						break planning}}
 				if !validate_appointment_asset(old.asset_type, encoding, raw_len, preview, payload) {failed = u16(i); break planning}
+				if !validate_ticket_asset(
+					old.asset_type,
+					old.parent_type,
+					old.parent_id,
+					encoding,
+					raw_len,
+					preview,
+					payload,
+				) {failed = u16(i); break planning}
 				a := alloc_asset(old.owner, preview, payload, old.attachments)
 				if a == nil {failed = u16(i); break planning}
 				a.asset_type = old.asset_type
@@ -493,6 +511,7 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 					live := conv == nil ? nil : conv.assets[pr.AssetID(a.parent_id)]
 					parent := (^pr.Asset)(transaction_projected_entity(&p, .Asset, a.conv_id, a.parent_id, live))
 					if reminder_is_personal(parent) {failed = u16(i); break planning}
+					if a.asset_type == .TicketEntry && (parent == nil || parent.asset_type != .Ticket) {failed = u16(i); break planning}
 				}
 				if a.parent_type != .None {typ := pr.TransactionEntityType.Task
 					if a.parent_type == .Asset do typ = .Asset

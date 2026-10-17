@@ -667,14 +667,14 @@
       if (open && focus) input?.focus();
     }
 
-    function setMessagesOpen(open, { focusComposer = false, notifyChange = true } = {}) {
+    function setMessagesOpen(open, { focusComposer = false, notifyChange = true, scroll = true } = {}) {
       area.dataset.messagesOpen = open ? "true" : "false";
       strip?.setAttribute("aria-expanded", open ? "true" : "false");
       const hint = strip?.querySelector("i");
       if (hint) hint.textContent = open ? "−" : "+";
       if (open) {
         if (focusComposer) setComposerOpen(true, { focus: true });
-        scrollStreamToEnd();
+        if (scroll) scrollStreamToEnd();
       } else {
         setComposerOpen(false);
       }
@@ -762,8 +762,8 @@
       scrollToEnd: scrollStreamToEnd,
       columnWidth: () => columnResize?.width() ?? null,
       resetColumnWidth: () => columnResize?.reset(),
-      open({ focusComposer = false } = {}) {
-        setMessagesOpen(true, { focusComposer });
+      open({ focusComposer = false, scroll = true } = {}) {
+        setMessagesOpen(true, { focusComposer, scroll });
       },
       close: () => setMessagesOpen(false),
     };

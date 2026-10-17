@@ -26,10 +26,10 @@ for (let shard = 0; shard < 256; shard++) {
 fs.writeFileSync(path.join(dir, "data/storage-layout.manifest"), Buffer.from("TlJDTAABAAAAAAAAAAAAAQIBAAAAAAAAAAABAAABAACsNnTeRP92XA==", "base64"));
 const secret = crypto.randomBytes(32).toString("hex");
 const backend = spawn(binary, [], { cwd: dir, env: { ...process.env, NRC_PORT: String(backendPort), NRC_JWT_SECRET: secret, NRC_THREAD_COUNT: "1", NRC_DISABLE_CPU_AFFINITY: "1", NRC_LOG_LEVEL: "error" }, stdio: "inherit" });
-function token() {
+function token(username = 'customer-preview') {
   const now = Math.floor(Date.now() / 1000);
   const encode = data => Buffer.from(JSON.stringify(data)).toString("base64url");
-  const input = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ sub: "customer-preview", username: "customer-preview", iss: "nrc-tailscale-proxy", aud: "nrc", nbf: now - 2, exp: now + 300 })}`;
+  const input = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ sub: username, username, iss: "nrc-tailscale-proxy", aud: "nrc", nbf: now - 2, exp: now + 300 })}`;
   return input + "." + crypto.createHmac("sha256", secret).update(input).digest("base64url");
 }
 // Attachment stand-in. The disposable fixture has no tailscale-proxy, so uploads
@@ -104,6 +104,9 @@ const server = http.createServer((req, res) => {
   });
 });
 server.on("upgrade", (req, socket, head) => {
+  // Test-only identity selection enables genuine two-user subscription checks.
+  const candidate = req.headers['x-nrc-test-user'];
+  const username = typeof candidate === 'string' && /^[a-z0-9_-]{1,48}$/.test(candidate) ? candidate : 'customer-preview';
   const upstream = net.connect(backendPort, "127.0.0.1", () => {
     // Portal requests carry cookies and proxy metadata that the NRC handshake
     // does not need and that can exceed its deliberately small header budget.
@@ -112,7 +115,7 @@ server.on("upgrade", (req, socket, head) => {
       .filter(([key, value]) => forwarded.has(key) && value !== undefined)
       .map(([key, value]) => `${key}: ${value}`);
     headers.unshift("Host: 127.0.0.1:8080", "Connection: Upgrade", "Upgrade: websocket");
-    upstream.write(`${req.method} ${req.url} HTTP/1.1\r\n${headers.join("\r\n")}\r\nX-NRC-Auth: ${token()}\r\n\r\n`);
+    upstream.write(`${req.method} ${req.url} HTTP/1.1\r\n${headers.join("\r\n")}\r\nX-NRC-Auth: ${token(username)}\r\n\r\n`);
     if (head.length) upstream.write(head);
     socket.pipe(upstream);
     let response = Buffer.alloc(0);

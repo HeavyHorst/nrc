@@ -33,7 +33,7 @@ All messages use big-endian byte order and have the following structure:
 
 ## Protocol Version
 
-- Current protocol version: `8`
+- Current protocol version: `9`
 - Server advertises this in `S_ServerReady`
 - Clients should reject or warn on mismatches
 
@@ -48,6 +48,7 @@ Version history:
 | 6 | Durable entities use workspace scope `0`; conversations are chat-only |
 | 7 | Move flags on `C_MoveTask`: `Append` asks for the end of the target column |
 | 8 | Calendar kind 2 appointment rows append actual start and optional end instants |
+| 9 | Slice rows append an independent `Tickets` u16 counter after `Files` |
 
 For server-side error return policy (generic vs domain-specific channels), see `docs/ERROR_HANDLING.md`.
 
@@ -551,7 +552,7 @@ Each attachment is `[FileIDLength: 2 bytes] [FileID: variable] [FilenameLength: 
 ### Work slices
 
 A slice is an explicit work stream: an asset of type `AssetType.Slice` whose
-members are the tasks, notes and files linked to it with a `MemberOf` edge.
+members are the tasks, notes, files and tickets linked to it with a `MemberOf` edge.
 Nothing is derived from project labels, so a slice spans projects freely and one
 task can belong to more than one slice. There is no slice-specific opcode: a
 slice is created with `C_CreateAsset`, its record is written with
@@ -613,7 +614,7 @@ One page is one frame. `HasMore` says whether another page follows, and the next
 Each slice is:
 
 ```
-[NameLength: 2 bytes] [Name: variable] [SliceID: 8 bytes] [OwnerLength: 2 bytes] [Owner: variable] [Flags: 1 byte] [Backlog: 2 bytes] [Todo: 2 bytes] [InProgress: 2 bytes] [Done: 2 bytes] [Blocked: 2 bytes] [Notes: 2 bytes] [Files: 2 bytes] [OldestActiveAt: 8 bytes] [LastMovedAt: 8 bytes]
+[NameLength: 2 bytes] [Name: variable] [SliceID: 8 bytes] [OwnerLength: 2 bytes] [Owner: variable] [Flags: 1 byte] [Backlog: 2 bytes] [Todo: 2 bytes] [InProgress: 2 bytes] [Done: 2 bytes] [Blocked: 2 bytes] [Notes: 2 bytes] [Files: 2 bytes] [Tickets: 2 bytes] [OldestActiveAt: 8 bytes] [LastMovedAt: 8 bytes]
 ```
 
 | Field | Meaning |
@@ -626,8 +627,13 @@ Each slice is:
 | `Blocked` | Task members whose `blocked_by` points at another task. |
 | `Notes` | Note members. |
 | `Files` | File members. |
+| `Tickets` | Ticket members, excluding TicketEntry records. Independent u16 overflow limit. Included in member totals and movement, never task-status or assigned/unassigned task counters. |
 | `OldestActiveAt` | `created_at` of the oldest non-Done task member, `0` when there is none. |
 | `LastMovedAt` | `updated_at` of the most recently changed member. |
+
+Tickets belong to slices through `MemberOf` (either direction). General ticket/task
+work links remain `RelatedTo`; legacy `RelatedTo` slice links are not memberships
+and are not implicitly migrated. Version 9 rows are wire-incompatible with version 8.
 
 Slices are name sorted. `TotalCount` counts every slice matching the filter, so a
 client can tell a truncated list from a short one. `AssignedTasks` counts the

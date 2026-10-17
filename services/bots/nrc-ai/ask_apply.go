@@ -37,6 +37,7 @@ type askApplyResponse struct {
 }
 
 type applyActionResult struct {
+	TicketAssetID  string              `json:"ticket_asset_id,omitempty"`
 	ActionID       string              `json:"action_id"`
 	Type           string              `json:"type"`
 	Status         string              `json:"status"`
@@ -194,6 +195,8 @@ func handleAskApply(wm *WorkspaceManager, store *AgentSessionStore) http.Handler
 
 		for _, pending := range toApply {
 			switch pending.Action.Type {
+			case "ticket_create", "ticket_update_metadata", "ticket_entry", "ticket_delete":
+				applyTicketAction(ctx, client, store, pending, &result)
 			case actionTypeCreateTask:
 				applyCreateTaskAction(ctx, client, store, sessionSnapshot.ContextConvID, pending, &result)
 			case actionTypeUpdateTask:
@@ -597,6 +600,10 @@ func resolveActionEndpoint(typeName string, id uint64, actionID string, plan Act
 			}
 			return targetType, action.CreatedTaskID, nil
 		case protocol.TargetTypeAsset:
+			if action.TicketResultID != "" {
+				id, err := dataUint(action.TicketResultID)
+				return targetType, id, err
+			}
 			if action.CreatedAssetID != 0 {
 				return targetType, action.CreatedAssetID, nil
 			}
@@ -639,7 +646,7 @@ func findEquivalentEdge(edges []protocol.Edge, sourceType uint16, sourceID uint6
 		if edge.SourceType == sourceType && edge.SourceID == sourceID && edge.TargetType == targetType && edge.TargetID == targetID && edge.Relation == relation {
 			return edge
 		}
-		if relation == protocol.RelationReferences && edge.Relation == relation && edge.SourceType == targetType && edge.SourceID == targetID && edge.TargetType == sourceType && edge.TargetID == sourceID {
+		if (relation == protocol.RelationReferences || relation == protocol.RelationMemberOf) && edge.Relation == relation && edge.SourceType == targetType && edge.SourceID == targetID && edge.TargetType == sourceType && edge.TargetID == sourceID {
 			return edge
 		}
 	}
@@ -667,6 +674,10 @@ func buildApplyAuditMessage(result askApplyResponse) string {
 	}
 
 	for _, applied := range result.Applied {
+		if applied.TicketAssetID != "" {
+			lines = append(lines, fmt.Sprintf("%s [Asset:%s] (action %s)", applied.Type, applied.TicketAssetID, applied.ActionID))
+			continue
+		}
 		if applied.DeletedEntity != nil && applied.DeletedEntity.Type == "note" {
 			verb := "Deleted"
 			if applied.AlreadyApplied {

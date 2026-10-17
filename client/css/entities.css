@@ -5254,6 +5254,14 @@ nrc-link-picker {
         display: none;
     }
 
+    .slice-member--ticket > :nth-child(3) {
+        display: block;
+    }
+
+    .slice-member--ticket > :nth-child(4) {
+        display: none;
+    }
+
     .slice-member--file {
         grid-template-columns: 2.5rem minmax(0, 1fr) var(--slice-action-column);
     }
@@ -5335,6 +5343,10 @@ nrc-link-picker {
 
     .slice-member--plain > :nth-child(5) {
         grid-area: action;
+    }
+
+    .slice-member--ticket > :nth-child(3) {
+        grid-area: mod;
     }
 }
 

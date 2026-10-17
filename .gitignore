@@ -47,3 +47,7 @@ cli/toolbox/nrc
 
 # Tailscale proxy binary
 services/auth/tailscale-proxy/tailscale-proxy
+
+# Operator-owned ticket portal branding (use deployment config, not Git).
+/ticket-branding/
+/services/bots/nrc-tickets/.amp/

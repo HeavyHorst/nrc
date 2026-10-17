@@ -44,6 +44,14 @@ func (c *NRCClient) handleDataRead(opcode uint16, payload []byte) {
 	var value any
 	var err error
 	switch opcode {
+	case protocol.S_TransactionResult:
+		origin = protocol.C_ApplyTransaction
+		var p *protocol.TransactionResult
+		p, err = protocol.DecodeTransactionResult(payload)
+		if err == nil {
+			id = p.CorrelationID
+			value = p
+		}
 	case protocol.S_TaskFull:
 		origin = protocol.C_GetTask
 		var p *protocol.TaskFull
@@ -89,7 +97,7 @@ func (c *NRCClient) handleDataRead(opcode uint16, payload []byte) {
 	}
 }
 
-func (c *NRCClient) correlatedDataRead(ctx context.Context, convID uint64, opcode uint16, encode func(uint32) ([]byte, error)) (any, error) {
+func (c *NRCClient) correlatedDataRead(ctx context.Context, convID uint64, opcode uint16, encode func(uint32) ([]byte, error), ticketWrite ...bool) (any, error) {
 	if convID != protocol.WorkspaceDataConvID {
 		return nil, errWorkspaceDataScope
 	}
@@ -117,21 +125,33 @@ func (c *NRCClient) correlatedDataRead(ctx context.Context, convID uint64, opcod
 	c.dataReads[id] = pendingDataRead{opcode, ch}
 	c.dataReadsMu.Unlock()
 	defer func() { c.dataReadsMu.Lock(); delete(c.dataReads, id); c.dataReadsMu.Unlock() }()
-	if err := c.sendProtocolMessage(opcode, payload); err != nil {
+	writeErr := func(err error) error {
+		if len(ticketWrite) > 0 && ticketWrite[0] {
+			return ticketWriteError(err)
+		}
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := c.sendProtocolMessage(opcode, payload, ticketWrite...); err != nil {
 		return nil, err
 	}
 	timer := time.NewTimer(15 * time.Second)
 	defer timer.Stop()
 	select {
 	case r := <-ch:
+		if len(ticketWrite) > 0 && ticketWrite[0] {
+			return r.value, writeErr(r.err)
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		return r.value, r.err
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, writeErr(ctx.Err())
 	case <-timer.C:
-		return nil, fmt.Errorf("timeout waiting for data read opcode %d", opcode)
+		return nil, writeErr(fmt.Errorf("timeout waiting for data read opcode %d", opcode))
 	}
 }
 
@@ -351,7 +371,7 @@ func newADKDataReadTools(wm *WorkspaceManager, cache *adkAssetSourceCache) ([]to
 		titles := map[uint64]string{}
 		for _, s := range p.Slices {
 			titles[s.SliceID] = s.Name
-			rows = append(rows, map[string]any{"slice_id": dataString(s.SliceID), "name": s.Name, "owner": s.Owner, "closed": s.IsClosed(), "backlog": s.Backlog, "todo": s.Todo, "in_progress": s.InProgress, "done": s.Done, "blocked": s.Blocked, "notes": s.Notes, "files": s.Files, "oldest_active_at": dataTime(s.OldestActiveAt), "last_moved_at": dataTime(s.LastMovedAt)})
+			rows = append(rows, map[string]any{"slice_id": dataString(s.SliceID), "name": s.Name, "owner": s.Owner, "closed": s.IsClosed(), "backlog": s.Backlog, "todo": s.Todo, "in_progress": s.InProgress, "done": s.Done, "blocked": s.Blocked, "notes": s.Notes, "files": s.Files, "tickets": s.Tickets, "oldest_active_at": dataTime(s.OldestActiveAt), "last_moved_at": dataTime(s.LastMovedAt)})
 		}
 		if cache != nil {
 			cache.put(ws, conv, titles)

@@ -112,7 +112,7 @@ function encodeSliceList({ convId = 0n, success = true, hasMore = false, nextCur
     slice,
   }));
   let size = 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + errorBytes.length + 4;
-  for (const entry of encoded) size += 2 + entry.name.length + 8 + 2 + entry.owner.length + 1 + 14 + 16;
+  for (const entry of encoded) size += 2 + entry.name.length + 8 + 2 + entry.owner.length + 1 + 16 + 16;
   const buffer = new ArrayBuffer(size);
   const view = new DataView(buffer);
   let offset = 0;
@@ -135,6 +135,7 @@ function encodeSliceList({ convId = 0n, success = true, hasMore = false, nextCur
     view.setUint16(offset, slice.blocked ?? 0, false); offset += 2;
     view.setUint16(offset, slice.notes ?? 0, false); offset += 2;
     view.setUint16(offset, slice.files ?? 0, false); offset += 2;
+    view.setUint16(offset, slice.tickets ?? 0, false); offset += 2;
     view.setBigInt64(offset, BigInt(slice.oldestActiveAt ?? 0), false); offset += 8;
     view.setBigInt64(offset, BigInt(slice.lastMovedAt ?? 0), false); offset += 8;
   }
@@ -183,7 +184,7 @@ test("slice list decode reads counters, closure and the work counters", () => {
     assignedTasks: 21,
     unassignedTasks: 15,
     slices: [
-      { name: "Alpha", sliceId: 77n, owner: "rene", flags: 1, backlog: 1, todo: 2, inProgress: 3, done: 4, blocked: 5, notes: 6, files: 7, oldestActiveAt: 111, lastMovedAt: 222 },
+      { name: "Alpha", sliceId: 77n, owner: "rene", flags: 1, backlog: 1, todo: 2, inProgress: 3, done: 4, blocked: 5, notes: 6, files: 7, tickets: 8, oldestActiveAt: 111, lastMovedAt: 222 },
       { name: "Beta", sliceId: 78n, todo: 1, lastMovedAt: 333 },
     ],
   }));
@@ -201,11 +202,12 @@ test("slice list decode reads counters, closure and the work counters", () => {
   assert.equal(alpha.owner, "rene");
   assert.equal(slices.isClosed(alpha), true);
   assert.equal(slices.taskCount(alpha), 10, "tasks are the members with a status");
-  assert.equal(slices.memberCount(alpha), 23, "members are tasks, notes and files");
+  assert.equal(slices.memberCount(alpha), 31, "members are tasks, notes, files and tickets");
   assert.equal(slices.openCount(alpha), 6);
   assert.equal(alpha.blocked, 5);
   assert.equal(alpha.notes, 6);
   assert.equal(alpha.files, 7);
+  assert.equal(alpha.tickets, 8);
   assert.equal(alpha.oldestActiveAt, 111n);
   assert.equal(alpha.lastMovedAt, 222n);
 

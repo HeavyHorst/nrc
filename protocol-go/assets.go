@@ -848,6 +848,20 @@ func EncodeCreateAssetWithAttachmentsAndCorrelation(convID int64, assetType, par
 	return EncodeCreateAssetWithMetadataAttachmentsAndCorrelation(convID, assetType, parentType, parentID, AssetPayloadEncodingPlain, uint32(len(payload)), preview, payload, attachments, correlationID)
 }
 
+// EncodeCreateAssetWithParentVersionAndCorrelation atomically guards creation on
+// the asset parent's version. Older servers reject the extra trailer, failing
+// closed rather than silently creating an unguarded child.
+func EncodeCreateAssetWithParentVersionAndCorrelation(convID int64, assetType, parentType uint16, parentID uint64, preview, payload string, attachments []Attachment, parentUpdatedAt int64, correlationID uint32) ([]byte, error) {
+	if parentType != ParentTypeAsset || parentID == 0 || parentUpdatedAt <= 0 {
+		return nil, fmt.Errorf("positive asset parent ID and version required")
+	}
+	data, err := EncodeCreateAssetWithAttachmentsAndCorrelation(convID, assetType, parentType, parentID, preview, payload, attachments, correlationID)
+	if err != nil {
+		return nil, err
+	}
+	return binary.BigEndian.AppendUint64(data, uint64(parentUpdatedAt)), nil
+}
+
 // EncodeCreateAssetZstd encodes C_CreateAsset with zstd-compressed payload and metadata.
 func EncodeCreateAssetZstd(convID int64, assetType, parentType uint16, parentID uint64, preview, payload string) ([]byte, error) {
 	return EncodeCreateAssetZstdWithCorrelation(convID, assetType, parentType, parentID, preview, payload, 0)

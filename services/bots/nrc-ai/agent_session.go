@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"sort"
@@ -83,34 +84,36 @@ type ActionPlan struct {
 }
 
 type ProposedAction struct {
-	ID                string    `json:"id"`
-	Type              string    `json:"type"`
-	Status            string    `json:"status"`
-	TaskID            uint64    `json:"task_id,omitempty"`
-	TaskStatus        string    `json:"task_status,omitempty"`
-	Title             string    `json:"title,omitempty"`
-	Description       string    `json:"description,omitempty"`
-	Content           string    `json:"content,omitempty"`
-	Format            string    `json:"format,omitempty"`
-	Project           string    `json:"project,omitempty"`
-	Tags              []string  `json:"tags,omitempty"`
-	Priority          uint8     `json:"priority,omitempty"`
-	BlockedBy         uint64    `json:"blocked_by,omitempty"`
-	AssetID           uint64    `json:"asset_id,omitempty"`
-	EdgeID            uint64    `json:"edge_id,omitempty"`
-	CreatedTaskID     uint64    `json:"created_task_id,omitempty"`
-	CreatedAssetID    uint64    `json:"created_asset_id,omitempty"`
-	CreatedEdgeID     uint64    `json:"created_edge_id,omitempty"`
-	ExpectedUpdatedAt int64     `json:"expected_updated_at,omitempty,string"`
-	SourceType        string    `json:"source_type,omitempty"`
-	SourceID          uint64    `json:"source_id,omitempty"`
-	SourceActionID    string    `json:"source_action_id,omitempty"`
-	TargetType        string    `json:"target_type,omitempty"`
-	TargetID          uint64    `json:"target_id,omitempty"`
-	TargetActionID    string    `json:"target_action_id,omitempty"`
-	Relation          string    `json:"relation,omitempty"`
-	AppliedAt         time.Time `json:"applied_at,omitempty"`
-	Error             string    `json:"error,omitempty"`
+	TicketResultID    string        `json:"ticket_result_id,omitempty"`
+	Ticket            *ticketAction `json:"ticket,omitempty"`
+	ID                string        `json:"id"`
+	Type              string        `json:"type"`
+	Status            string        `json:"status"`
+	TaskID            uint64        `json:"task_id,omitempty"`
+	TaskStatus        string        `json:"task_status,omitempty"`
+	Title             string        `json:"title,omitempty"`
+	Description       string        `json:"description,omitempty"`
+	Content           string        `json:"content,omitempty"`
+	Format            string        `json:"format,omitempty"`
+	Project           string        `json:"project,omitempty"`
+	Tags              []string      `json:"tags,omitempty"`
+	Priority          uint8         `json:"priority,omitempty"`
+	BlockedBy         uint64        `json:"blocked_by,omitempty"`
+	AssetID           uint64        `json:"asset_id,omitempty"`
+	EdgeID            uint64        `json:"edge_id,omitempty"`
+	CreatedTaskID     uint64        `json:"created_task_id,omitempty"`
+	CreatedAssetID    uint64        `json:"created_asset_id,omitempty"`
+	CreatedEdgeID     uint64        `json:"created_edge_id,omitempty"`
+	ExpectedUpdatedAt int64         `json:"expected_updated_at,omitempty,string"`
+	SourceType        string        `json:"source_type,omitempty"`
+	SourceID          uint64        `json:"source_id,omitempty"`
+	SourceActionID    string        `json:"source_action_id,omitempty"`
+	TargetType        string        `json:"target_type,omitempty"`
+	TargetID          uint64        `json:"target_id,omitempty"`
+	TargetActionID    string        `json:"target_action_id,omitempty"`
+	Relation          string        `json:"relation,omitempty"`
+	AppliedAt         time.Time     `json:"applied_at,omitempty"`
+	Error             string        `json:"error,omitempty"`
 }
 
 type notePreviewJSON struct {
@@ -761,7 +764,12 @@ func (s *AgentSessionStore) prepareApply(sessionID, planID string, actionIDs []s
 
 		switch action.Status {
 		case actionStatusApplied:
+			ticketID := ""
+			if action.Ticket != nil {
+				ticketID = action.TicketResultID
+			}
 			alreadyApplied = append(alreadyApplied, applyActionResult{
+				TicketAssetID:  ticketID,
 				ActionID:       action.ID,
 				Type:           action.Type,
 				Status:         actionStatusApplied,
@@ -774,6 +782,8 @@ func (s *AgentSessionStore) prepareApply(sessionID, planID string, actionIDs []s
 			})
 		case actionStatusApplying:
 			failures = append(failures, applyActionFailure{ActionID: action.ID, Type: action.Type, Error: "action is already applying"})
+		case "outcome_unknown":
+			failures = append(failures, applyActionFailure{ActionID: action.ID, Type: action.Type, Error: action.Error})
 		case actionStatusPending, actionStatusFailed:
 			action.Status = actionStatusApplying
 			action.Error = ""
@@ -903,6 +913,10 @@ func (s *AgentSessionStore) completeAction(sessionID, planID, actionID string, a
 		}
 		if applyErr != nil {
 			action.Status = actionStatusFailed
+			var unknown *ticketOutcomeUnknown
+			if action.Ticket != nil && errors.As(applyErr, &unknown) {
+				action.Status = "outcome_unknown"
+			}
 			action.Error = applyErr.Error()
 		} else {
 			action.Status = actionStatusApplied
@@ -1028,6 +1042,12 @@ func cloneActionPlan(plan ActionPlan) ActionPlan {
 	for i, action := range plan.Actions {
 		clone.Actions[i] = action
 		clone.Actions[i].Tags = cloneStringSlice(action.Tags)
+		if action.Ticket != nil {
+			b, _ := json.Marshal(action.Ticket)
+			var owned ticketAction
+			json.Unmarshal(b, &owned)
+			clone.Actions[i].Ticket = &owned
+		}
 	}
 	return clone
 }
@@ -1242,7 +1262,7 @@ func normalizeActionTargetType(value string) (string, uint16, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "task", "tasks", "2":
 		return targetTypeName(protocol.TargetTypeTask), protocol.TargetTypeTask, nil
-	case "asset", "assets", "note", "notes", "document", "documents", "1":
+	case "asset", "assets", "note", "notes", "document", "documents", "ticket", "tickets", "entry", "ticketentry", "slice", "1":
 		return targetTypeName(protocol.TargetTypeAsset), protocol.TargetTypeAsset, nil
 	default:
 		return "", 0, fmt.Errorf("unsupported target type %q", value)
@@ -1263,6 +1283,8 @@ func normalizeActionRelation(value string) (string, uint16, error) {
 		return relationName(protocol.RelationDerivedFrom), protocol.RelationDerivedFrom, nil
 	case "supersedes", "supersede", "6":
 		return relationName(protocol.RelationSupersedes), protocol.RelationSupersedes, nil
+	case "member-of", "memberof", "membership", "7":
+		return relationName(protocol.RelationMemberOf), protocol.RelationMemberOf, nil
 	default:
 		return "", 0, fmt.Errorf("unsupported relation %q", value)
 	}
@@ -1300,7 +1322,7 @@ func validateActionEndpointReference(actions []ProposedAction, actionID, endpoin
 				return nil
 			}
 		case targetTypeName(protocol.TargetTypeAsset):
-			if action.Type == actionTypeCreateNote || action.Type == actionTypeUpdateNote {
+			if action.Type == actionTypeCreateNote || action.Type == actionTypeUpdateNote || action.Type == "ticket_create" {
 				return nil
 			}
 		}

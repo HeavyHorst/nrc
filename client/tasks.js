@@ -3890,7 +3890,7 @@ function revertTaskDetail() {
 // asset list is still in flight the caller retries.
 function tryFocusPendingCommentInDetailPanel() {
   if (pendingCommentFocusAssetId == null) return;
-  taskMessagesController?.open();
+  taskMessagesController?.open({ scroll: false });
 
   const target = document.querySelector(`.record-message[data-asset-id="${String(pendingCommentFocusAssetId)}"]`);
   if (!target) return;
@@ -4259,6 +4259,7 @@ function showTaskDetailPanel(task, { view = true } = {}) {
     },
     focusPending: pendingCommentFocusAssetId != null,
   });
+  window.NRCRecordActivity?.watchTask(agendaContent, task, comments);
 
   // Initialize field stats with current values
   updateDetailFieldStats();

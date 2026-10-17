@@ -4175,6 +4175,9 @@ when NRC_SIMULATION {
 	}
 
 	semantic_deferred_rotation_asset_exact :: proc(asset: ^pr.Asset, payload: string) -> bool {
+		// This fixture creates "body", then updates it once to "updated" while
+		// virtual time stays frozen. Each accepted update advances the revision.
+		expected_updated_at := NRC_SIM_TIME_EPOCH_NANOS + (payload == "updated" ? 1 : 0)
 		return(
 			asset != nil &&
 			asset.asset_id == 1 &&
@@ -4188,7 +4191,7 @@ when NRC_SIMULATION {
 			string(asset.payload) == payload &&
 			string(asset.owner) == "requester" &&
 			asset.created_at == NRC_SIM_TIME_EPOCH_NANOS &&
-			asset.updated_at == NRC_SIM_TIME_EPOCH_NANOS &&
+			asset.updated_at == expected_updated_at &&
 			len(asset.attachments) == 0 \
 		)
 	}

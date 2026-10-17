@@ -922,7 +922,7 @@ func DecodeAttachments(buf *bytes.Reader) ([]Attachment, error) {
 // ============================================================================
 //
 // A slice is an explicit work stream: an asset of type AssetTypeSlice whose
-// members are the tasks, notes and files linked to it with a MemberOf edge. The
+// members are tasks, notes, files and tickets linked to it with a MemberOf edge. The
 // server reads those edges, so a client reads slices and never derives them.
 
 // Task slice flags - matches server TaskSliceFlags.
@@ -942,6 +942,7 @@ type TaskSlice struct {
 	Blocked        uint16
 	Notes          uint16
 	Files          uint16
+	Tickets        uint16
 	OldestActiveAt int64
 	LastMovedAt    int64
 }
@@ -952,11 +953,11 @@ func (s TaskSlice) OpenCount() uint32 {
 	return uint32(s.Backlog) + uint32(s.Todo) + uint32(s.InProgress)
 }
 
-// MemberCount is every member the slice carries: tasks with a status, notes and
-// files. The sum is widened because the counters are independent.
+// MemberCount is every member the slice carries: tasks, notes, files and tickets.
+// The sum is widened because the counters are independent.
 func (s TaskSlice) MemberCount() uint32 {
 	return uint32(s.Backlog) + uint32(s.Todo) + uint32(s.InProgress) +
-		uint32(s.Done) + uint32(s.Notes) + uint32(s.Files)
+		uint32(s.Done) + uint32(s.Notes) + uint32(s.Files) + uint32(s.Tickets)
 }
 
 // TaskCount is the members that carry a task status.
@@ -1090,7 +1091,7 @@ func DecodeTaskSliceList(payload []byte) (*TaskSliceList, error) {
 		if err := binary.Read(buf, binary.BigEndian, &slice.Flags); err != nil || slice.Flags&^uint8(0x01) != 0 {
 			return nil, fmt.Errorf("invalid slice flags")
 		}
-		for _, field := range []*uint16{&slice.Backlog, &slice.Todo, &slice.InProgress, &slice.Done, &slice.Blocked, &slice.Notes, &slice.Files} {
+		for _, field := range []*uint16{&slice.Backlog, &slice.Todo, &slice.InProgress, &slice.Done, &slice.Blocked, &slice.Notes, &slice.Files, &slice.Tickets} {
 			if err := binary.Read(buf, binary.BigEndian, field); err != nil {
 				return nil, fmt.Errorf("slice counters: %w", err)
 			}

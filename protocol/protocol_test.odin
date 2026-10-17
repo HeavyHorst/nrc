@@ -1489,6 +1489,24 @@ test_roundtrip_create_asset_request_with_attachments :: proc(t: ^testing.T) {
 	testing.expect(t, test_attachment_equal(parsed.attachments[0], attachments[0]), "create asset attachment mismatch")
 	_, err = parseCreateAssetRequest(buf[2:])
 	testing.expect_value(t, err, ProtocolParseError.TooMany)
+
+	req.parent_type = .Asset
+	req.parent_id = 789
+	req.if_parent_updated_at = 0x0102030405060708
+	guarded := make([]byte, getSizeCreateAssetRequest(req))
+	defer delete(guarded)
+	testing.expect_value(t, len(guarded), len(buf) + 8)
+	testing.expect_value(t, serializeCreateAssetRequest(req, guarded), len(guarded))
+	parsed, err = parseCreateAssetRequest(guarded[2:], decoded[:])
+	testing.expect_value(t, err, nil)
+	testing.expect_value(t, parsed.if_parent_updated_at, req.if_parent_updated_at)
+	testing.expect_value(t, parsed.correlation_id, req.correlation_id)
+	testing.expect(t, test_attachment_equal(parsed.attachments[0], attachments[0]))
+	_, err = parseCreateAssetRequest(guarded[2:len(guarded) - 1], decoded[:])
+	testing.expect_value(t, err, ProtocolParseError.ContentLengthMismatch)
+	endian.put_u64(guarded[len(guarded) - 8:], .Big, 0)
+	_, err = parseCreateAssetRequest(guarded[2:], decoded[:])
+	testing.expect_value(t, err, ProtocolParseError.InvalidContentType)
 }
 
 @(test)

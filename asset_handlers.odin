@@ -22,6 +22,10 @@ import pr "protocol"
 
 handle_create_asset :: proc(c: ^NRC_Connection, req: pr.CreateAssetRequest) {
 	workspace_id := c.workspace_id
+	if !validate_ticket_asset(req.asset_type, req.parent_type, req.parent_id, req.payload_encoding, req.payload_raw_len, req.preview, req.payload) {
+		send_error_response(c, .C_CreateAsset, "Invalid ticket record", req.correlation_id)
+		return
+	}
 	if !validate_appointment_asset(req.asset_type, req.payload_encoding, req.payload_raw_len, req.preview, req.payload) {
 		send_error_response(c, .C_CreateAsset, "Invalid appointment record", req.correlation_id)
 		return
@@ -34,6 +38,20 @@ handle_create_asset :: proc(c: ^NRC_Connection, req: pr.CreateAssetRequest) {
 
 	ws := get_or_create_connection_workspace(c)
 	conv := get_or_create_conversation(ws, req.conv_id)
+	if req.if_parent_updated_at != 0 {
+		parent := conv.assets[pr.AssetID(req.parent_id)]
+		if req.parent_type != .Asset || parent == nil || parent.updated_at != req.if_parent_updated_at {
+			send_error_response(c, .C_CreateAsset, "Asset parent version conflict", req.correlation_id)
+			return
+		}
+	}
+	if req.asset_type == .TicketEntry {
+		parent := conv.assets[pr.AssetID(req.parent_id)]
+		if parent == nil || parent.asset_type != .Ticket {
+			send_error_response(c, .C_CreateAsset, "Ticket parent not found", req.correlation_id)
+			return
+		}
+	}
 
 	// Legacy public rooms can contribute several agendas. Preserve each until
 	// the caller explicitly chooses an asset ID; map iteration is not a choice.
@@ -168,6 +186,18 @@ handle_update_asset :: proc(c: ^NRC_Connection, req: pr.UpdateAssetRequest) {
 		send_error_response(c, .C_UpdateAsset, "Room mappings are immutable", req.correlation_id)
 		return
 	}
+	if !validate_ticket_asset(
+		existing.asset_type,
+		existing.parent_type,
+		existing.parent_id,
+		req.payload_encoding,
+		req.payload_raw_len,
+		req.preview,
+		req.payload,
+	) {
+		send_error_response(c, .C_UpdateAsset, "Invalid ticket record", req.correlation_id)
+		return
+	}
 	if !validate_appointment_asset(existing.asset_type, req.payload_encoding, req.payload_raw_len, req.preview, req.payload) {
 		send_error_response(c, .C_UpdateAsset, "Invalid appointment record", req.correlation_id)
 		return
@@ -202,7 +232,7 @@ handle_update_asset :: proc(c: ^NRC_Connection, req: pr.UpdateAssetRequest) {
 	new_asset.parent_type = existing.parent_type
 	new_asset.parent_id = existing.parent_id
 	new_asset.created_at = existing.created_at
-	new_asset.updated_at = now
+	new_asset.updated_at = max(now, existing.updated_at + 1)
 	new_asset.conv_id = existing.conv_id
 	new_asset.payload_encoding = req.payload_encoding
 	new_asset.payload_raw_len = req.payload_raw_len

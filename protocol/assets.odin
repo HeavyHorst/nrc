@@ -26,6 +26,8 @@ AssetType :: enum u16 {
 	// edges, so no member list is stored on the asset itself.
 	Slice            = 11,
 	Appointment      = 12,
+	Ticket           = 13,
+	TicketEntry      = 14,
 }
 
 MAX_APPOINTMENT_DESCRIPTION_LENGTH :: 2048
@@ -68,16 +70,17 @@ MAX_PAYLOAD_LENGTH :: 65535 // Payload length is encoded as u16 on the wire
 // ============================================================================
 
 CreateAssetRequest :: struct {
-	conv_id:          ConversationID,
-	asset_type:       AssetType,
-	parent_type:      ParentType,
-	parent_id:        u64,
-	payload_encoding: PayloadEncoding,
-	payload_raw_len:  u32,
-	preview:          []byte,
-	payload:          []byte,
-	attachments:      []Attachment,
-	correlation_id:   u32, // Client-generated, echoed in S_AssetCreated for request/response correlation
+	conv_id:              ConversationID,
+	asset_type:           AssetType,
+	parent_type:          ParentType,
+	parent_id:            u64,
+	payload_encoding:     PayloadEncoding,
+	payload_raw_len:      u32,
+	preview:              []byte,
+	payload:              []byte,
+	attachments:          []Attachment,
+	correlation_id:       u32, // Client-generated, echoed in S_AssetCreated for request/response correlation
+	if_parent_updated_at: i64, // Optional positive asset-parent version; checked atomically with creation
 }
 
 // Returned fields borrow data and the caller's attachment descriptors. Without
@@ -178,11 +181,18 @@ parseCreateAssetRequestWithAttachments :: proc(data: []byte, attachments: []Atta
 	if len(data) < offset + 4 {
 		return result, .TooShort
 	}
-	if len(data) != offset + 4 {
+	if len(data) != offset + 4 && len(data) != offset + 12 {
 		return result, .ContentLengthMismatch
 	}
 	corr_id, _ := endian.get_u32(data[offset:], .Big)
 	result.correlation_id = corr_id
+	if len(data) == offset + 12 {
+		version, _ := endian.get_u64(data[offset + 4:], .Big)
+		if i64(version) <= 0 || result.parent_type != .Asset || result.parent_id == 0 {
+			return result, .InvalidContentType
+		}
+		result.if_parent_updated_at = i64(version)
+	}
 
 	return result, nil
 }

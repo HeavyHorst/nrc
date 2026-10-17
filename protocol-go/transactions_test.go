@@ -97,6 +97,8 @@ func TestTransactionAssetCreateCustomerTypeBounds(t *testing.T) {
 		AssetTypeCustomerActivity,
 		AssetTypeSlice,
 		AssetTypeAppointment,
+		AssetTypeTicket,
+		AssetTypeTicketEntry,
 	} {
 		_, err := EncodeTransactionAssetCreate(TransactionAssetCreate{
 			AssetType:     assetType,
@@ -108,7 +110,7 @@ func TestTransactionAssetCreateCustomerTypeBounds(t *testing.T) {
 		}
 	}
 
-	for _, assetType := range []uint16{0, AssetTypeAgenda, AssetTypeRoomMapping, AssetTypeAppointment + 1} {
+	for _, assetType := range []uint16{0, AssetTypeAgenda, AssetTypeRoomMapping, AssetTypeTicketEntry + 1} {
 		_, err := EncodeTransactionAssetCreate(TransactionAssetCreate{
 			AssetType:     assetType,
 			ParentType:    ParentTypeNone,

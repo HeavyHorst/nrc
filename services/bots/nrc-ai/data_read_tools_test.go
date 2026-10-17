@@ -144,7 +144,7 @@ func TestDomainToolsWirePaginationAndMetadata(t *testing.T) {
 					if msg.Opcode != protocol.C_ListTaskSlices || !bytes.Equal(msg.Data, protocol.EncodeListTaskSlices(0, q, id)) {
 						t.Fatalf("bad slice query %x", msg.Data)
 					}
-					c.settleDataRead(id, msg.Opcode, &protocol.TaskSliceList{Success: true, HasMore: more, NextCursor: protocol.SliceCursor{Closed: true, SortAt: at, SliceID: largeID}, TotalCount: 7, Slices: []protocol.TaskSlice{{SliceID: largeID, Name: "slice", Flags: 1, Backlog: 2, Todo: 3, InProgress: 5, Done: 7, Blocked: 11, Notes: 13, Files: 17, LastMovedAt: at}}}, nil)
+					c.settleDataRead(id, msg.Opcode, &protocol.TaskSliceList{Success: true, HasMore: more, NextCursor: protocol.SliceCursor{Closed: true, SortAt: at, SliceID: largeID}, TotalCount: 7, Slices: []protocol.TaskSlice{{SliceID: largeID, Name: "slice", Flags: 1, Backlog: 2, Todo: 3, InProgress: 5, Done: 7, Blocked: 11, Notes: 13, Files: 17, Tickets: 19, LastMovedAt: at}}}, nil)
 				case 2:
 					after := uint64(0)
 					if page == 1 {
@@ -176,7 +176,7 @@ func TestDomainToolsWirePaginationAndMetadata(t *testing.T) {
 				if index == 0 && !strings.Contains(resp.Content, `"actual_start_at":"1790812799999999878"`) {
 					t.Fatal(resp.Content)
 				}
-				if index == 1 && (!strings.Contains(resp.Content, `"files":17`) || !strings.Contains(resp.Content, `"blocked":11`)) {
+				if index == 1 && (!strings.Contains(resp.Content, `"files":17`) || !strings.Contains(resp.Content, `"blocked":11`) || !strings.Contains(resp.Content, `"tickets":19`)) {
 					t.Fatal(resp.Content)
 				}
 				if index == 2 {

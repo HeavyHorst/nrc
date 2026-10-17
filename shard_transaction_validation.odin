@@ -179,6 +179,7 @@ validate_shard_asset_body :: proc(m: Shard_Mutation) -> (req: Shard_High_Water_R
 	preview, preview_ok := shard_read_u16_bytes(m.payload, &o); if !preview_ok do return req, .Malformed
 	payload, payload_ok := shard_read_u16_bytes(m.payload, &o); if !payload_ok do return req, .Malformed
 	if !validate_appointment_asset(asset_type, encoding, raw_len, preview, payload) do return req, .Malformed
+	if !validate_ticket_asset(asset_type, pr.ParentType(parent), parent_id, encoding, raw_len, preview, payload) do return req, .Malformed
 	if m.entity_record_version == 3 {
 		if !validate_shard_attachment_codec(m.payload[o:]) do return req, .Malformed
 		o = len(m.payload)

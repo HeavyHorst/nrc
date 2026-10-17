@@ -14,7 +14,7 @@ import pr "protocol"
 // ============================================================================
 //
 // A slice is an explicit work stream: an asset of type `AssetType.Slice` whose
-// members are the tasks, notes and files linked to it with a `MemberOf` edge.
+// members are the tasks, notes, files and tickets linked to it with a `MemberOf` edge.
 //
 // Nothing is derived from project labels. A label says which repository or
 // module something belongs to, and that is a different question from which work
@@ -117,7 +117,7 @@ fold_task_member :: proc(entry: ^pr.TaskSlice, task: ^pr.Task, overflow: ^bool =
 	return true
 }
 
-// fold_asset_member adds one note or file member. Other asset kinds are not
+// fold_asset_member adds one note, file or ticket member. Other asset kinds are not
 // members of a work stream, so a link to one does not invent a member.
 fold_asset_member :: proc(entry: ^pr.TaskSlice, asset: ^pr.Asset, overflow: ^bool = nil) {
 	if asset == nil do return
@@ -126,6 +126,8 @@ fold_asset_member :: proc(entry: ^pr.TaskSlice, asset: ^pr.Asset, overflow: ^boo
 		slice_increment_count(&entry.notes, overflow)
 	case .File:
 		slice_increment_count(&entry.files, overflow)
+	case .Ticket:
+		slice_increment_count(&entry.tickets, overflow)
 	case:
 		return
 	}

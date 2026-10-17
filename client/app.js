@@ -168,7 +168,7 @@ const Opcode = {
   S_MessagePage: 159,
 };
 
-const EXPECTED_PROTOCOL_VERSION = 8;
+const EXPECTED_PROTOCOL_VERSION = 9;
 
 const ContentType = {
   PlainText: 0,
@@ -1439,6 +1439,8 @@ async function connectWebSocket() {
     window.NRCOverview?.disconnect();
     window.NRCSlices?.disconnect();
     window.NRCAppointmentNotify?.disconnect();
+    window.NRCRecordActivity?.disconnect();
+    window.NRCTickets?.disconnect();
     window.NRCCustomers?.onDisconnect();
     window.NRCNewsletter?.disconnect();
     pendingInitialization = null; // Clear any pending initialization
@@ -1545,6 +1547,8 @@ async function initializeSession() {
   subscribeToConversations([0n, ...subscribedRooms]);
   window.NRCAssets.sendGetAllAssets(0n);
   window.NRCTasks.loadActiveTasks(0n);
+  window.NRCTickets?.sessionStarted();
+  window.NRCRecordActivity?.refresh();
 
   if (window.NRCAssets?.sendGetRoomMappings) {
     window.NRCAssets.sendGetRoomMappings();

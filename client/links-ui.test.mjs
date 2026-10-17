@@ -20,6 +20,7 @@ function loadLinksUI({ edges = [], getEdgesForEntity = null, onRequestTask = nul
   const assetTypeLabels = { 3: "FILE", 5: "NOTE", 6: "REMINDER", 8: "COMPANY", 9: "CONTACT", 10: "ACTIVITY", 11: "SLICE" };
   const window = {
     NRCAssets: {
+      AssetType: { Ticket: 13 },
       roomAssets,
       requestAsset: (...args) => onRequestAsset?.(...args),
       requestAssetsByIds: (room, ids) => Promise.all(ids.map(id => new Promise((resolve, reject) => {
@@ -42,6 +43,7 @@ function loadLinksUI({ edges = [], getEdgesForEntity = null, onRequestTask = nul
       ensureLoaded: () => { sliceLoads += 1; },
     },
     NRCCustomers: { openRecord: (type, id) => customerOpened.push([type, id]) },
+    NRCTickets: { open: (company, id) => customerOpened.push(["ticket", id]) },
     NRCNotes: {
       clearNoteSelection: () => { noteClears += 1; },
       parseNotePreview: preview => {
@@ -142,6 +144,22 @@ test("contact and activity links open typed customer inspectors rather than note
   linksUI.navigateToTarget(0n, 1, 91n);
   linksUI.navigateToTarget(0n, 1, 104n);
   assert.deepEqual(customerOpened, [["contact", 91n], ["activity", 104n]]);
+  assert.deepEqual(opened, []);
+});
+
+test("file links open the file inspector rather than a note", () => {
+  const { linksUI, opened, roomAssets } = loadLinksUI();
+  roomAssets.set(0n, new Map([[93n, { assetType: 3 }]]));
+  linksUI.navigateToTarget(0n, 1, 93n);
+  assert.equal(opened[0].type, "file");
+  assert.equal(opened[0].id, 93n);
+});
+
+test("ticket backlinks open the ticket register instead of a note inspector", () => {
+  const { linksUI, opened, customerOpened, roomAssets } = loadLinksUI();
+  roomAssets.set(0n, new Map([[92n, { assetType: 13 }]]));
+  linksUI.navigateToTarget(0n, 1, 92n, 2);
+  assert.deepEqual(customerOpened, [["ticket", "92"]]);
   assert.deepEqual(opened, []);
 });
 

@@ -187,3 +187,68 @@ validate_appointment_asset :: proc(asset_type: pr.AssetType, encoding: pr.Payloa
 	_, ok := parse_appointment_preview(preview, virtual.arena_allocator(&arena))
 	return ok
 }
+
+// Tickets keep their public/private classification in validated metadata, not
+// in their body text. Use the same contract for live writes and WAL replay.
+validate_ticket_asset :: proc(
+	asset_type: pr.AssetType,
+	parent_type: pr.ParentType,
+	parent_id: u64,
+	encoding: pr.PayloadEncoding,
+	raw_len: u32,
+	preview, payload: []byte,
+) -> bool {
+	if asset_type != .Ticket && asset_type != .TicketEntry do return true
+	if raw_len > 32000 do return false
+	decoded: [32000]byte
+	body := payload
+	switch encoding {
+	case .Plain:
+		if raw_len != u32(len(payload)) do return false
+	case .Zstd:
+		body = decoded[:int(raw_len)]
+		size := ZSTD_decompress(raw_data(body), uintptr(len(body)), raw_data(payload), uintptr(len(payload)))
+		if ZSTD_isError(size) != 0 || size != uintptr(raw_len) do return false
+	case:
+		return false
+	}
+	arena: virtual.Arena
+	if virtual.arena_init_growing(&arena) != nil do return false
+	defer virtual.arena_destroy(&arena)
+	a := virtual.arena_allocator(&arena)
+	if asset_type == .TicketEntry {
+		if parent_type != .Asset || parent_id == 0 || len(strings.trim_space(string(body))) == 0 do return false
+		f, object, valid := json_metadata_fields(preview, [?]string{"version", "kind", "author"}, a)
+		if !valid || !object || f[0].kind != .Integer || f[0].text != "1" || f[1].kind != .String || f[2].kind != .String do return false
+		kind := json_metadata_string(f[1], a)
+		return (kind == "customer_reply" || kind == "public_reply" || kind == "internal_note") && len(json_metadata_string(f[2], a)) <= 256
+	}
+	if parent_type != .None || parent_id != 0 do return false
+	f, object, valid := json_metadata_fields(
+		preview,
+		[?]string{"version", "title", "company_id", "contact_id", "requester", "requester_name", "status", "assignee"},
+		a,
+	)
+	if !valid || !object || f[0].kind != .Integer || f[0].text != "1" do return false
+	limits := [?]int{256, 20, 20, 320, 256, 32, 64}
+	values: [7]string
+	for token, i in f[1:] {
+		if token.kind != .String do return false
+		values[i] = json_metadata_string(token, a)
+		if len(values[i]) > limits[i] do return false
+	}
+	if len(strings.trim_space(values[0])) == 0 do return false
+	for id in values[1:3] {
+		if id == "" do continue
+		if id[0] == '0' do return false
+		n: u64
+		for c in id {
+			if c < '0' || c > '9' do return false
+			digit := u64(c - '0')
+			if n > (max(u64) - digit) / 10 do return false
+			n = n * 10 + digit
+		}
+	}
+	status := values[5]
+	return status == "open" || status == "in_progress" || status == "waiting_customer" || status == "resolved" || status == "closed"
+}

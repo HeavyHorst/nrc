@@ -247,7 +247,7 @@ func EncodeTransactionTaskPatch(v TransactionTaskPatch) ([]byte, error) {
 func EncodeTransactionAssetCreate(v TransactionAssetCreate) ([]byte, error) {
 	// The bound tracks the enum, not a hand-picked maximum, so a new asset type
 	// cannot be transaction-creatable on the server but unencodable here.
-	if v.AssetType < AssetTypeComment || v.AssetType > AssetTypeAppointment || v.AssetType == AssetTypeAgenda || v.AssetType == AssetTypeRoomMapping {
+	if v.AssetType < AssetTypeComment || v.AssetType > AssetTypeTicketEntry || v.AssetType == AssetTypeAgenda || v.AssetType == AssetTypeRoomMapping {
 		return nil, fmt.Errorf("asset type is not transaction-creatable")
 	}
 	if v.ParentType > ParentTypeAsset {

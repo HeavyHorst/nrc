@@ -31,7 +31,7 @@ together. Without workspace restrictions, authenticated users share file access.
 With restrictions, a file is readable through any one of its authorized workspaces.
 Unreferenced blobs are handled by [offline attachment GC](../../../docs/ATTACHMENT_GC.md).
 
-### Private Search downloads
+### Private bot uploads and downloads
 
 `NRC_SEARCH_FILES_ADDR` enables a separate HTTP listener (Compose uses `:8094`).
 Search uses its private origin as `FILES_URL` and authenticates
@@ -40,7 +40,14 @@ The secret must be configured; every download also requires an explicit stored
 grant for exactly that workspace. Unscoped legacy blobs are denied even in open
 mode. This endpoint is never mounted on the public Tailscale mux and must not be
 published on the host or routed through Nginx. Leave the address unset to disable
-it in standalone deployments. Search indexes file contents locally; its API
+it in standalone deployments. The ticket portal also uses this listener for
+`POST /upload?workspace=NAME` (multipart field `file`, same bearer authentication).
+Uploads require an explicit valid workspace before reading the body and use the
+same blob storage/grants as staff uploads. Requests are capped at 100 MiB + 64 KiB;
+multipart staging files are removed. `HEAD /files/ID` is supported too. The
+ticket portal applies additional requester/ticket/public-entry authorization
+before exposing any download; do not route this private listener to customers.
+Search indexes file contents locally; its API
 continues to enforce access through the public gateway.
 
 ## Existing files in any workspace

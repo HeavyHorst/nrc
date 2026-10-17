@@ -77,6 +77,17 @@ function bindMessages(dom, { onSubmit, onDelete = () => {}, onToggle } = {}) {
   });
 }
 
+test("targeted opening preserves comment scroll instead of jumping to newest", () => {
+  const dom = makeMessagesDom();
+  const controller = bindMessages(dom, { onSubmit() {} });
+  dom.stream.scrollTop = 27;
+  controller.open({ scroll: false });
+  assert.equal(dom.area.dataset.messagesOpen, "true");
+  assert.equal(dom.stream.scrollTop, 27);
+  controller.close(); controller.open();
+  assert.equal(dom.stream.scrollTop, 500, "ordinary opening retains newest-message behavior");
+});
+
 test("metadata ledger renders explicit labels, actor roles, and escaped values", () => {
   const detailUI = loadDetailUI();
 

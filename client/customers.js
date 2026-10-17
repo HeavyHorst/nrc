@@ -466,13 +466,14 @@
     const visibleFiles = overview ? files : files.filter(ref => matches(window.NRCLinksUI.resolveTargetName(room, 1, ref.assetId)));
     const sectionHidden = tab => overview || recordTab === tab ? "" : "hidden";
     updateHtml(el("customerRecord"), `
-      <div class="customer-record-header"><nav class="tab-group customer-tabs" aria-label="Customer sections">${[["overview", "OVERVIEW", null], ["contacts", "CONTACTS", people.length], ["activities", "ACTIVITIES", activities.length], ["work", "LINKS", work.length], ["files", "FILES", files.length]].map(([tab, label, total]) => `<button type="button" class="btn nav-tab ${recordTab === tab ? "active" : ""}" data-customer-tab="${tab}" aria-pressed="${recordTab === tab}">${label}${total === null ? "" : `<span class="tab-count">${count(total)}</span>`}</button>`).join("")}</nav>
+      <div class="customer-record-header"><nav class="tab-group customer-tabs" aria-label="Customer sections">${[["overview", "OVERVIEW", null], ["contacts", "CONTACTS", people.length], ["activities", "ACTIVITIES", activities.length], ["tickets", "TICKETS", null], ["work", "LINKS", work.length], ["files", "FILES", files.length]].map(([tab, label, total]) => `<button type="button" class="btn nav-tab ${recordTab === tab ? "active" : ""}" data-customer-tab="${tab}" aria-pressed="${recordTab === tab}">${label}${total === null ? "" : `<span class="tab-count">${count(total)}</span>`}</button>`).join("")}</nav>
       <div class="customer-identity"><div><span class="customer-meta">CUSTOMER #${selected} / ${d.archived ? "ARCHIVED" : "ACTIVE"}</span><h2>${escape(d.title)}</h2><span class="customer-meta">${escape(d.city || "—")} · RESPONSIBLE / ${escape(d.assignee || "UNASSIGNED")}</span></div><div class="customer-actions"><button class="btn" data-edit="${selected}" ${disabled}>EDIT</button><button class="btn" id="customerArchive" ${disabled}>${d.archived ? "RESTORE" : "ARCHIVE"}</button></div></div></div>
       <div class="customer-record-body">
       ${partial && !overview ? '<p class="customer-meta customer-footnote">PARTIAL · Counts and search cover loaded links only. Load more below.</p>' : ""}
-      ${overview ? "" : `<label class="customer-history-filter"><span class="filter-label">SEARCH ${recordTab.toUpperCase()}</span><input id="customerRecordSearch" class="filter-input" type="search" value="${escape(recordQuery)}" placeholder="Search loaded records"></label>`}
+      ${overview || recordTab === "tickets" ? "" : `<label class="customer-history-filter"><span class="filter-label">SEARCH ${recordTab.toUpperCase()}</span><input id="customerRecordSearch" class="filter-input" type="search" value="${escape(recordQuery)}" placeholder="Search loaded records"></label>`}
       <dl class="customer-facts" ${overview ? "" : "hidden"}><div><dt>CUSTOMER NO.</dt><dd>${escape(d.number || "—")}</dd></div><div><dt>TYPE / SECTOR</dt><dd>${escape([d.account_type, d.sector].filter(Boolean).join(" / ") || "—")}</dd></div><div><dt>PHONE</dt><dd>${escape(d.phone || "—")}</dd></div><div><dt>ADDRESS</dt><dd>${escape(d.address || "—")}</dd></div><div><dt>WEBSITE</dt><dd>${escape(d.website || "—")}</dd></div></dl>
       <div class="customer-overview-grid ${overview ? "is-overview" : ""}">
+      <section class="customer-section" ${sectionHidden("tickets")}><div class="panel-header"><div><span>TICKETS · SAME NRC RECORDS</span><button class="btn" id="customerTickets">OPEN TICKETS →</button></div></div><div id="customerTicketRecords"></div><p class="customer-meta">Customer context uses the ticket's company ID, independently of work links.</p></section>
       <section class="customer-section" ${sectionHidden("contacts")}><div class="panel-header"><div><span>CONTACTS / ${count(people.length)}</span><button class="btn" id="customerContactNew" ${archived}>+ CONTACT</button></div></div><div class="customer-contacts">${contacts.length ? '<div class="customer-contact-head" aria-hidden="true"><span>NAME / ROLE</span><span>EMAIL</span><span>PHONE</span></div>' : ""}${pageItems(contacts, "contacts").map(a => {
         const p = metadata(a);
         return `<button type="button" class="customer-contact" data-contact="${a.assetId}" aria-pressed="${inspection?.type === "contact" && inspection.id === a.assetId}"><span><strong>${escape(p.title)}</strong>${p.role ? `<span class="customer-meta">${escape(p.role)}</span>` : ""}</span><span>${escape(p.email || "—")}</span><span>${escape(p.phone || "—")}</span></button>`;
@@ -493,6 +494,8 @@
     if (el("customerRelationshipsMore")) el("customerRelationshipsMore").onclick = () => loadRelationships(!!error);
     el("customerContactNew").onclick = () => edit("contact");
     el("customerActivityNew").onclick = () => edit("activity");
+    el("customerTickets").onclick = () => window.NRCTickets.open(String(selected));
+    window.NRCTickets?.mountCustomer(el("customerTicketRecords"), selected);
     el("customerArchive").onclick = () => saveRecord(company, { ...d, archived: !d.archived }, "");
     el("customerLinkAdd").onclick = event => {
       event.stopPropagation();

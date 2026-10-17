@@ -7,8 +7,8 @@ import (
 )
 
 func TestTaskSliceIndependentCounterSums(t *testing.T) {
-	s := TaskSlice{Backlog: 40000, Todo: 30000, Done: 65535, Notes: 1, Files: 2}
-	if s.OpenCount() != 70000 || s.TaskCount() != 135535 || s.MemberCount() != 135538 {
+	s := TaskSlice{Backlog: 40000, Todo: 30000, Done: 65535, Notes: 1, Files: 2, Tickets: 65535}
+	if s.OpenCount() != 70000 || s.TaskCount() != 135535 || s.MemberCount() != 201073 {
 		t.Fatalf("wrapped independent counters: open=%d tasks=%d members=%d", s.OpenCount(), s.TaskCount(), s.MemberCount())
 	}
 	for _, s := range []TaskSlice{{Backlog: 65535}, {Backlog: 65535, Todo: 1}} {
@@ -72,7 +72,7 @@ func writeSlice(buf *bytes.Buffer, slice TaskSlice) {
 	binary.Write(buf, binary.BigEndian, slice.SliceID)
 	writeString(buf, slice.Owner)
 	buf.WriteByte(slice.Flags)
-	for _, value := range []uint16{slice.Backlog, slice.Todo, slice.InProgress, slice.Done, slice.Blocked, slice.Notes, slice.Files} {
+	for _, value := range []uint16{slice.Backlog, slice.Todo, slice.InProgress, slice.Done, slice.Blocked, slice.Notes, slice.Files, slice.Tickets} {
 		binary.Write(buf, binary.BigEndian, value)
 	}
 	binary.Write(buf, binary.BigEndian, slice.OldestActiveAt)
@@ -108,7 +108,7 @@ func TestDecodeTaskSliceList(t *testing.T) {
 	binary.Write(buf, binary.BigEndian, uint16(2))
 	writeSlice(buf, TaskSlice{
 		Name: "Alpha", SliceID: 77, Owner: "rene", Flags: TaskSliceFlagClosed,
-		Backlog: 1, Todo: 2, InProgress: 3, Done: 4, Blocked: 5, Notes: 6, Files: 7,
+		Backlog: 1, Todo: 2, InProgress: 3, Done: 4, Blocked: 5, Notes: 6, Files: 7, Tickets: 8,
 		OldestActiveAt: 111, LastMovedAt: 222,
 	})
 	writeSlice(buf, TaskSlice{Name: "Beta", SliceID: 78, Todo: 1, LastMovedAt: 333})
@@ -139,8 +139,8 @@ func TestDecodeTaskSliceList(t *testing.T) {
 	}
 	// Members are tasks with a status, notes and files; the task count is the
 	// subset that carries a status.
-	if alpha.MemberCount() != 23 || alpha.TaskCount() != 10 || alpha.OpenCount() != 6 ||
-		alpha.Blocked != 5 || alpha.Notes != 6 || alpha.Files != 7 {
+	if alpha.MemberCount() != 31 || alpha.TaskCount() != 10 || alpha.OpenCount() != 6 ||
+		alpha.Blocked != 5 || alpha.Notes != 6 || alpha.Files != 7 || alpha.Tickets != 8 {
 		t.Fatalf("unexpected slice counters: %+v", alpha)
 	}
 	if alpha.OldestActiveAt != 111 || alpha.LastMovedAt != 222 {

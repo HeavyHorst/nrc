@@ -611,7 +611,7 @@
   function setActiveView(view) {
     state.activeView = view;
     if (view !== "systemLog") document.body.classList.remove("system-log-inspector-empty");
-    shell()?.classList.toggle("inspector-entity-only", ["chat", "kanban", "notes", "customers", "reminders", "attention", "calendar", "search"].includes(view));
+    shell()?.classList.toggle("inspector-entity-only", ["chat", "kanban", "notes", "customers", "tickets", "reminders", "attention", "calendar", "search"].includes(view));
     // Overview has no inspector operations; preserve the record for return but
     // give its rail back to the charts, rather than displaying empty context.
     shell()?.classList.toggle("inspector-overview-hidden", view === "overview" || view === "newsletter");

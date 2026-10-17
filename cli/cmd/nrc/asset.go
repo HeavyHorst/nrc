@@ -39,6 +39,10 @@ func parseAssetTypeName(s string) (uint16, error) {
 		return protocol.AssetTypeSlice, nil
 	case "appointment":
 		return protocol.AssetTypeAppointment, nil
+	case "ticket":
+		return protocol.AssetTypeTicket, nil
+	case "ticket_entry":
+		return protocol.AssetTypeTicketEntry, nil
 	default:
 		return 0, fmt.Errorf("unknown asset type: %s", s)
 	}
@@ -70,6 +74,10 @@ func assetTypeName(t uint16) string {
 		return "slice"
 	case protocol.AssetTypeAppointment:
 		return "appointment"
+	case protocol.AssetTypeTicket:
+		return "ticket"
+	case protocol.AssetTypeTicketEntry:
+		return "ticket_entry"
 	default:
 		return fmt.Sprintf("unknown(%d)", t)
 	}
@@ -391,10 +399,10 @@ func outputAssetsTable(assets []protocol.Asset) {
 }
 
 func init() {
-	assetListCmd.Flags().String("type", "", "Filter by type (comment|document|file|agenda|note|reminder|room_mapping|company|contact|activity)")
+	assetListCmd.Flags().String("type", "", "Filter by type (comment|document|file|agenda|note|reminder|room_mapping|company|contact|activity|slice|appointment|ticket|ticket_entry)")
 	assetListCmd.Flags().Bool("full", false, "Include full payload")
 
-	assetCreateCmd.Flags().String("type", "document", "Asset type (comment|document|file|agenda|note|reminder|room_mapping|company|contact|activity)")
+	assetCreateCmd.Flags().String("type", "document", "Asset type (comment|document|file|agenda|note|reminder|room_mapping|company|contact|activity|slice|appointment|ticket|ticket_entry)")
 	assetCreateCmd.Flags().String("parent-type", "none", "Parent type (none|task|asset)")
 	assetCreateCmd.Flags().String("parent-id", "", "Parent ID")
 

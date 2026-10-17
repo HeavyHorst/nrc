@@ -778,3 +778,115 @@ test_edge_delete_persistence_failure_preserves_both_adjacencies :: proc(t: ^test
 	testing.expect(t, td.shard_writers.writers[0].poisoned, "failed edge delete should poison the shard writer")
 	testing.expect_value(t, send_queue_len(&c), 0)
 }
+
+@(test)
+test_ticket_records_validate_and_preserve_entry_visibility :: proc(t: ^testing.T) {
+	workspace_id := "ticket-handler-contract"
+	if !init_room_mapping_test_state("ticket_handler_contract.log", workspace_id) {
+		testing.expect(t, false, "ticket WAL should initialize")
+		return
+	}
+	defer cleanup_room_mapping_test_state()
+	when NRC_SIMULATION {
+		sim: Sim_Runtime
+		nrc_sim_runtime_init(&sim)
+		sim.world.now = 100
+		defer nrc_sim_runtime_destroy(&sim)
+	}
+	td.asset_seq = 0
+	c := make_room_mapping_test_connection(workspace_id)
+	defer send_queue_destroy(&c)
+	preview := `{"version":1,"title":"Login failure","company_id":"42","contact_id":"","requester":"ada@example.test","requester_name":"Ada","status":"open","assignee":"Sam"}`
+	asset_handler_test_create(&c, 0, .Ticket, .None, 0, preview, "Cannot sign in")
+	conv := get_conversation(get_workspace(workspace_id), 0)
+	testing.expect(t, conv != nil && conv.assets[1] != nil, "valid ticket is persisted")
+	if conv == nil || conv.assets[1] == nil do return
+	asset_handler_test_create(&c, 0, .TicketEntry, .Asset, 1, `{"version":1,"kind":"internal_note","author":"Sam"}`, "Private analysis")
+	asset_handler_test_create(&c, 0, .TicketEntry, .Asset, 1, `{"version":1,"kind":"public_reply","author":"Sam"}`, "We are investigating")
+	testing.expect_value(t, len(conv.assets), 3)
+	testing.expect(t, conv.assets[2].parent_id == 1 && string(conv.assets[2].payload) == "Private analysis")
+	asset_handler_test_create(&c, 0, .TicketEntry, .Asset, 1, `{"version":1,"kind":"typo","author":"Sam"}`, "Must not enter ambiguous visibility")
+	asset_handler_test_create(&c, 0, .TicketEntry, .None, 0, `{"version":1,"kind":"public_reply","author":"Sam"}`, "Missing ticket")
+	asset_handler_test_create(&c, 0, .Ticket, .None, 0, `{"version":1,"title":"Incomplete"}`, "Invalid metadata")
+	testing.expect_value(t, len(conv.assets), 3)
+	handle_update_asset(
+		&c,
+		pr.UpdateAssetRequest {
+			conv_id = 0,
+			asset_id = 2,
+			payload_encoding = .Plain,
+			payload_raw_len = 16,
+			preview = transmute([]byte)string(`{"version":1,"kind":"unknown","author":"Sam"}`),
+			payload = transmute([]byte)string("Private analysis"),
+		},
+	)
+	testing.expect(
+		t,
+		string(conv.assets[2].preview) == `{"version":1,"kind":"internal_note","author":"Sam"}`,
+		"rejected mutation preserves the private record",
+	)
+
+	// A reply approved for one recipient must not be delivered after reassignment.
+	approved_version := conv.assets[1].updated_at
+	reassigned := `{"version":1,"title":"Login failure","company_id":"42","contact_id":"","requester":"bob@example.test","requester_name":"Bob","status":"open","assignee":"Sam"}`
+	handle_update_asset(
+		&c,
+		pr.UpdateAssetRequest {
+			conv_id = 0,
+			asset_id = 1,
+			payload_encoding = .Plain,
+			payload_raw_len = 14,
+			preview = transmute([]byte)reassigned,
+			payload = transmute([]byte)string("Cannot sign in"),
+		},
+	)
+	testing.expect(t, conv.assets[1].updated_at != approved_version)
+	when NRC_SIMULATION {
+		testing.expect_value(t, conv.assets[1].updated_at, approved_version + 1)
+		nrc_sim_runtime.world.now = 0
+		handle_update_asset(
+			&c,
+			pr.UpdateAssetRequest {
+				conv_id = 0,
+				asset_id = 1,
+				payload_encoding = .Plain,
+				payload_raw_len = 14,
+				preview = transmute([]byte)preview,
+				payload = transmute([]byte)string("Cannot sign in"),
+			},
+		)
+		testing.expect_value(t, conv.assets[1].updated_at, approved_version + 2)
+	}
+	attachment := pr.Attachment {
+		file_id     = transmute([]byte)string("att_approved_reply"),
+		filename    = transmute([]byte)string("private.txt"),
+		mime_type   = transmute([]byte)string("text/plain"),
+		size        = 7,
+		uploaded_at = 123,
+	}
+	reply := pr.CreateAssetRequest {
+		conv_id              = 0,
+		asset_type           = .TicketEntry,
+		parent_type          = .Asset,
+		parent_id            = 1,
+		payload_encoding     = .Plain,
+		payload_raw_len      = 7,
+		preview              = transmute([]byte)string(`{"version":1,"kind":"public_reply","author":"Sam"}`),
+		payload              = transmute([]byte)string("For Ada"),
+		attachments          = []pr.Attachment{attachment},
+		if_parent_updated_at = approved_version,
+	}
+	handle_create_asset(&c, reply)
+	testing.expect_value(t, len(conv.assets), 3)
+	testing.expect_value(t, td.asset_seq, u64(3))
+	reply.if_parent_updated_at = conv.assets[1].updated_at
+	handle_create_asset(&c, reply)
+	testing.expect_value(t, len(conv.assets), 4)
+	if entry := conv.assets[4]; entry != nil {
+		testing.expect_value(t, string(entry.payload), "For Ada")
+		testing.expect_value(t, len(entry.attachments), 1)
+		if len(entry.attachments) == 1 do testing.expect_value(t, string(entry.attachments[0].filename), "private.txt")
+	} else {
+		testing.expect(t, false, "matching parent version creates the entry and attachment together")
+	}
+}

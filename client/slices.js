@@ -2,7 +2,7 @@
 // NRC SLICE VIEW
 // =============================================================================
 // A slice is an explicit work stream: an asset of type `AssetType.Slice` whose
-// members are the tasks, notes and files linked to it with a `member-of` edge.
+// members are the tasks, notes, files and tickets linked with a `member-of` edge.
 //
 // This module derives nothing. The server lists the records and folds each one's
 // counters from its membership edges, so the register, the record and the CLI
@@ -16,6 +16,7 @@
   const SLICE_ASSET_TYPE = 11;
   const NOTE_ASSET_TYPE = 5;
   const FILE_ASSET_TYPE = 3;
+  const TICKET_ASSET_TYPE = 13;
 
   const MAX_PROJECT_LENGTH = 128;
   const MAX_OWNER_LENGTH = 32;
@@ -77,6 +78,7 @@
     members: { mode: "idle", tasks: [] },
     notes: { mode: "idle", assets: [] },
     files: { mode: "idle", assets: [] },
+    tickets: { mode: "idle", assets: [] },
     createOpen: false,
     writeError: "",
     refreshError: "",
@@ -188,9 +190,9 @@
     return slice.backlog + slice.todo + slice.inProgress + slice.done;
   }
 
-  // Only tasks contribute to status shares; MEM also includes notes and files.
+  // Only tasks contribute to status shares; MEM also includes other members.
   function memberCount(slice) {
-    return taskCount(slice) + slice.notes + slice.files;
+    return taskCount(slice) + slice.notes + slice.files + (slice.tickets ?? 0);
   }
 
   function ageHours(timestamp) {
@@ -232,6 +234,7 @@
       ["DONE", slice.done, false],
       ["NOTES", slice.notes, false],
       ["FILES", slice.files, false],
+      ["TICKETS", slice.tickets ?? 0, false],
       ["OLDEST OPEN", formatAge(slice.oldestActiveAt), false],
       ["LAST MOVED", formatAge(slice.lastMovedAt), false],
     ];
@@ -602,11 +605,12 @@
       const blocked = dataView.getUint16(offset, false); offset += 2;
       const notes = dataView.getUint16(offset, false); offset += 2;
       const files = dataView.getUint16(offset, false); offset += 2;
+      const tickets = dataView.getUint16(offset, false); offset += 2;
       const oldestActiveAt = dataView.getBigInt64(offset, false); offset += 8;
       const lastMovedAt = dataView.getBigInt64(offset, false); offset += 8;
       slices.push({
         name: name.value, sliceId, owner: owner.value, flags,
-        backlog, todo, inProgress, done, blocked, notes, files,
+        backlog, todo, inProgress, done, blocked, notes, files, tickets,
         oldestActiveAt, lastMovedAt,
       });
     }
@@ -695,7 +699,7 @@
     if (first) {
       const signature = state.slices.map((slice) => [slice.sliceId, slice.name, slice.owner, slice.flags,
         slice.backlog, slice.todo, slice.inProgress, slice.done, slice.blocked, slice.notes,
-        slice.files, slice.lastMovedAt].join(":")).join("|");
+        slice.files, slice.tickets, slice.lastMovedAt].join(":")).join("|");
       if (signature !== listSignature) {
         listSignature = signature;
         if (typeof document?.dispatchEvent === "function") {
@@ -878,6 +882,7 @@
       state.members = { mode: "idle", tasks: [] };
       state.notes = { mode: "idle", assets: [] };
       state.files = { mode: "idle", assets: [] };
+      state.tickets = { mode: "idle", assets: [] };
       state.refreshError = "";
       render();
       return;
@@ -897,6 +902,7 @@
       state.members = { mode: "loading", tasks: [] };
       state.notes = { mode: "loading", assets: [] };
       state.files = { mode: "loading", assets: [] };
+      state.tickets = { mode: "loading", assets: [] };
       state.refreshError = "";
     }
     render();
@@ -936,6 +942,7 @@
         state.members = { mode: "ready", tasks: resolved.tasks };
         state.notes = { mode: "ready", assets: resolved.notes };
         state.files = { mode: "ready", assets: resolved.files };
+        state.tickets = { mode: "ready", assets: resolved.tickets };
         state.detail = { mode: "ready", error: "" };
         state.refreshError = "";
         detailLoading = false;
@@ -956,6 +963,7 @@
         state.members = { mode: "error", tasks: [] };
         state.notes = { mode: "error", assets: [] };
         state.files = { mode: "error", assets: [] };
+        state.tickets = { mode: "error", assets: [] };
         render();
       });
   }
@@ -971,6 +979,7 @@
       tasks,
       notes: assets.filter(asset => asset.assetType === NOTE_ASSET_TYPE),
       files: assets.filter(asset => asset.assetType === FILE_ASSET_TYPE),
+      tickets: assets.filter(asset => asset.assetType === TICKET_ASSET_TYPE),
     };
   }
 
@@ -1282,8 +1291,10 @@
       state.members = { mode: "idle", tasks: [] };
       state.notes = { mode: "idle", assets: [] };
       state.files = { mode: "idle", assets: [] };
+      state.tickets = { mode: "idle", assets: [] };
       state.refreshError = "";
     }
+    state.tickets.assets = state.tickets.assets.filter(ticket => ticket.assetId !== assetId);
     invalidate({ debounce: false });
     render();
   }
@@ -1296,7 +1307,17 @@
   // nonzero correlation ids are acknowledgements of local writes whose callbacks
   // already refresh the view; broadcasts from other clients carry zero.
   function onAssetChanged(asset, reason, correlationId) {
-    if (reason !== "mutation" || correlationId !== 0 || asset?.convId !== state.roomId) return;
+    if (reason !== "mutation" || asset?.convId !== state.roomId) return;
+    if (asset.assetType === TICKET_ASSET_TYPE) {
+      invalidate();
+      const index = state.tickets.assets.findIndex(ticket => ticket.assetId === asset.assetId);
+      if (index !== -1) {
+        state.tickets.assets[index] = asset;
+        render();
+      }
+      return;
+    }
+    if (correlationId !== 0) return;
     if (asset.assetType === NOTE_ASSET_TYPE) {
       const index = state.notes.assets.findIndex(note => note.assetId === asset.assetId);
       if (index !== -1) {
@@ -1342,7 +1363,7 @@
   // that case its relation is unknown and the safe answer is to refresh because
   // the wire deletion carries only the edge id.
   function onEdgeChanged(edge, reason, correlationId) {
-    if (correlationId !== 0 || edge?.convId !== state.roomId || (reason !== "created" && reason !== "deleted")) return;
+    if (edge?.convId !== state.roomId || (reason !== "created" && reason !== "deleted")) return;
     const relationUnknown = reason === "deleted" && edge.relation == null;
     if (!relationUnknown && edge.relation !== edgeRelations().MemberOf) return;
 
@@ -1577,7 +1598,7 @@
         </div>
       </div>
       <section class="slice-section">
-        <div class="panel-header"><div><span>MEMBERS / ${taskCount(slice)}</span><button class="btn" data-slice-action="assign" data-slice-kind="task" ${state.writePending ? "disabled" : ""}>+ ASSIGN TASK</button></div></div>
+        <div class="panel-header"><div><span>TASKS / ${taskCount(slice)}</span><button class="btn" data-slice-action="assign" data-slice-kind="task" ${state.writePending ? "disabled" : ""}>+ ASSIGN TASK</button></div></div>
         ${renderMembers(members)}
       </section>
       <section class="slice-section">
@@ -1588,7 +1609,28 @@
         <div class="panel-header"><div><span>FILES / ${slice.files}</span><button class="btn" data-slice-action="assign" data-slice-kind="file" ${state.writePending ? "disabled" : ""}>+ ASSIGN FILE</button></div></div>
         ${renderFiles(files)}
       </section>
+      <section class="slice-section">
+        <div class="panel-header"><div><span>TICKETS / ${slice.tickets ?? 0}</span><button class="btn" data-slice-action="assign" data-slice-kind="ticket" ${state.writePending ? "disabled" : ""}>+ ASSIGN TICKET</button></div></div>
+        ${renderTickets(state.tickets)}
+      </section>
       <p class="slice-footnote">MEMBERS ARE ASSIGNED. A LABEL SAYS WHICH REPOSITORY SOMETHING BELONGS TO; A SLICE SAYS WHICH WORK STREAM IT MOVES.</p>`;
+  }
+
+  function renderTickets(tickets) {
+    if (!tickets.assets.length) return `<p class="slice-empty">No tickets are assigned to this slice.</p>`;
+    const head = `<div class="slice-member-head slice-member--plain slice-member--ticket"><span>ID</span><span>TITLE</span><span>STATUS</span><span>ASSIGNEE</span><span></span></div>`;
+    const rows = tickets.assets.map(asset => {
+      let metadata = {};
+      try { metadata = JSON.parse(asset.preview) || {}; } catch { /* retain ID fallback */ }
+      return `<div class="slice-member slice-member--plain slice-member--ticket" data-member-ticket="${asset.assetId}">
+        <span class="slice-dim">#${asset.assetId}</span>
+        <button type="button" class="slice-member-open" data-member-open="ticket:${asset.assetId}">${escape(metadata.title || `Ticket #${asset.assetId}`)}</button>
+        <span class="slice-dim">${escape(metadata.status || "—")}</span>
+        <span class="slice-dim">${escape(metadata.assignee || "—")}</span>
+        <button type="button" class="btn btn--row" data-slice-unassign="ticket" data-slice-member="${asset.assetId}" ${state.writePending ? "disabled" : ""}>UNASSIGN</button>
+      </div>`;
+    }).join("");
+    return `<div class="slice-members">${head}${rows}</div>`;
   }
 
   function renderMembers(members) {
@@ -1766,7 +1808,8 @@
     activateMemberRow(row);
     opener.focus({ preventScroll: true });
     row.scrollIntoView({ block: "nearest" });
-    window.NRCInspector?.openEntity?.({ roomId: 0n, type: kind, id: BigInt(id) });
+    if (kind === "ticket") window.NRCTickets?.open?.("", id);
+    else window.NRCInspector?.openEntity?.({ roomId: 0n, type: kind, id: BigInt(id) });
     return true;
   }
 
@@ -1965,6 +2008,7 @@
     state.members = { mode: "idle", tasks: [] };
     state.notes = { mode: "idle", assets: [] };
     state.files = { mode: "idle", assets: [] };
+    state.tickets = { mode: "idle", assets: [] };
     activeMember = null;
     state.createOpen = false;
     state.refreshError = "";

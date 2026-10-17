@@ -80,7 +80,7 @@ class ReviewRegressionTest {
             upgrade = MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     wire = webSocket
-                    emit(frame(100) { text("fixture"); writeInt(8); text("test"); text(username); writeBoolean(true) })
+                    emit(frame(100) { text("fixture"); writeInt(9); text("test"); text(username); writeBoolean(true) })
                 }
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, reason) }
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {

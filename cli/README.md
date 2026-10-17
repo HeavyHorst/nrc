@@ -35,6 +35,69 @@ Rooms and DMs are chat-only. All stored work belongs to the configured workspace
 Changing chat rooms does not change the tasks, notes or other records you see.
 Use `--room` only for chat commands, not for data or graph commands.
 
+## Staff tickets
+
+Tickets use direct NRC workspace assets, entries and graph edges; no ticket portal
+or search service is required. All IDs below are stable positive numeric IDs,
+never display names. Use the normal authenticated staff proxy configuration.
+
+```sh
+nrc ticket list --status open --assignee alice --company 41 --search invoice
+nrc ticket create --requester customer@example.com --title 'Invoice question' \
+  --body 'Original customer request' --contact 42 --attach /tmp/invoice.pdf
+nrc ticket get 100
+nrc ticket update 100 --status in_progress --assignee alice --expect-updated-at 123456
+nrc ticket reply 100 --body 'Staff-only investigation'  # internal by default
+nrc ticket internal-note 100 --body-file /tmp/investigation.md --attach /tmp/log.txt
+nrc ticket reply 100 --public --body 'Here is the answer'
+nrc ticket attachments 100
+nrc ticket attachments 100 --entry 101
+nrc ticket download-attachment 100 0 /tmp/invoice.pdf
+nrc ticket download-attachment 100 0 /tmp/log.txt --entry 101
+nrc ticket links 100
+nrc ticket link 100 --task 200
+nrc ticket link 100 --slice 300
+nrc ticket unlink 100 --task 200
+nrc ticket create-task 100 --title 'Investigate billing' --description 'Follow up'
+nrc ticket delete 100
+```
+
+`list` follows every live NRC page (not a snapshot). Exact filters are `--status`,
+`--assignee`, `--company`, `--contact`, `--requester`, `--requester-name`, `--title`;
+`--search` is a local case-insensitive substring search of title, requester and
+original body. Status is `open`, `in_progress`, `waiting_customer`, `resolved` or
+`closed`. Create requires explicit requester, title and nonempty body, with optional
+company, contact, requester-name, assignee, status (default open), and attachments.
+Use either `--body` or `--body-file`; bodies are limited to 32,000 bytes.
+
+Contact validation uses actual `MemberOf` edges in either direction, not legacy
+metadata hints. Contact-only creation infers its company only when exactly one
+company membership exists. Multiple memberships require `--company`; an explicitly
+wrong company is rejected. Company/contact IDs must reference the correct asset type.
+
+`get` includes the original read-only body, attachment metadata and all public and
+internal entries ordered by creation time then ID. Entries retain their kind and
+server owner identity; the CLI does not invent an author name. Staff entry writes
+can only be internal notes or explicit public replies, never `customer_reply`.
+Attachments can only be added while creating an original or entry (10 files maximum,
+100 MB each). Downloads select a zero-based index or exact file ID and verify an
+entry belongs to the ticket. Omitted output paths use the attachment basename.
+
+`update` changes only supplied metadata flags, preserving unknown metadata fields,
+original payload and attachments. Empty optional flags clear values. Every update
+is a conditional server transaction against the version just read;
+`--expect-updated-at` additionally rejects stale caller versions. Work links use
+`RelatedTo` edges, read in either direction; duplicate links are refused.
+`create-task` creates and links atomically. Delete follows the server asset lifecycle
+(including server-owned child/edge cleanup); linked tasks and slices are not deleted.
+All mutations report explicit results and are never automatically retried. If an
+acknowledgement is lost, inspect records before manually retrying. Uploaded blobs
+can remain unreferenced if a subsequent create fails.
+
+JSON is default; `--human`, `--pretty`, `--fields` on reads, and `nrc capabilities`
+follow the shared CLI contract. Ticket lists use the `entries` envelope. Generic
+`nrc asset` also recognizes `ticket` and `ticket_entry` for raw administrative use.
+
 ## Public knowledge-base drafts
 
 `nrc publish` uses `/publish/api/...` on the existing Tailscale proxy. It uses the

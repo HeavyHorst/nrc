@@ -687,11 +687,15 @@ func parseListAssetType(value string) (uint16, error) {
 		return protocol.AssetTypeSlice, nil
 	case "appointment":
 		return protocol.AssetTypeAppointment, nil
+	case "ticket", "tickets":
+		return 13, nil
+	case "entry", "entries", "ticketentry", "ticketentries":
+		return 14, nil
 	case "roommapping":
 		return protocol.AssetTypeRoomMapping, nil
 	}
 	types, err := parseAssetTypeFilters([]string{value})
-	if err != nil || len(types) != 1 || types[0] < protocol.AssetTypeComment || types[0] > protocol.AssetTypeAppointment {
+	if err != nil || len(types) != 1 || types[0] < protocol.AssetTypeComment || types[0] > 14 {
 		return 0, fmt.Errorf("asset_type must name one exact supported asset type, got %q", value)
 	}
 	return types[0], nil
@@ -1962,7 +1966,7 @@ Workspace data is source of truth. The ask/agent session is ephemeral working co
 
 Modes:
 - ask: read-only. Answer with grounded workspace evidence. Do not call propose_* tools.
-- plan: safe proposal mode. You may answer read-only questions normally. Stage actions only when the current user message explicitly asks to mutate room state, create durable memory, or create/change/delete tasks/notes/edges. Stageable/applyable mutations today are create_task, update_task, create_note, update_note, delete_note, create_edge, and delete_edge. For every staged mutation, call the matching propose_* tool exactly once. Do not call propose_* tools for summaries, analysis, "what should we do?", or vague planning unless the user explicitly asks to create/stage/turn/capture/update/delete/link/unlink durable room objects. Never imply a mutation is applied in plan mode.
+- plan: safe proposal mode. Stage only explicit user mutation requests. Supported mutations are create_task, update_task, create_note, update_note, delete_note, create_edge, delete_edge, ticket_create, ticket_update_metadata, ticket_entry, and ticket_delete. Use propose_ticket for tickets, internal_note by default. public_reply requires an explicit request: disclose PUBLIC customer-portal visibility, recipient and filenames; read_tickets first and pass expected_updated_at. Never impersonate customer_reply or synchronize ticket/task status. Link tasks to tickets using related-to; assign Ticket Asset to Slice Asset using member-of. Linked task creation uses task plus edge proposals. For each staged mutation call its proposal tool exactly once. Never stage summaries, analysis or vague planning, upload blobs, or claim proposals are applied.
 
 Mutation proposal rules:
 - Task creation: call propose_create_task.
@@ -1970,7 +1974,7 @@ Mutation proposal rules:
 - Note creation / durable memory: search for an existing canonical note first and prefer updating it over creating a duplicate. Call propose_create_note with the exact markdown content to store only for a distinct durable concept. Give a distinct incident, decision, or troubleshooting conclusion its own note instead of burying it late in a broader note. Put stable identifiers and distinctive names people will search for in the title when they identify the concept, otherwise in the opening metadata or finding. Set project to the canonical repo/project scope when known, and set tags to stable topical tags; use empty project/tags only when no durable scope applies.
 - Note update: call get_asset first, verify it is a Note, then call propose_update_note with asset_id, full replacement title/content/project/tags, format, and expected_updated_at from get_asset. Preserve the existing format (markdown or html) and project/tags from get_asset unless the user asked to change them. HTML note content is HTML, not Markdown. If you cannot load the note, or if payload_truncated is true and the user did not provide the full replacement content, stage no update.
 - Note deletion: call get_asset first, verify it is a Note, then call propose_delete_note with asset_id, title, and expected_updated_at from get_asset. If you cannot load the note, stage no deletion.
-- Edge creation: call propose_create_edge with source_type/target_type as Task or Asset and relation as references, related-to, depends-on, blocks, derived-from, or supersedes. Notes are Asset endpoints. For existing tasks/assets/notes, use source_id/target_id. For an endpoint created earlier in the same pending plan, use source_action_id or target_action_id instead of inventing an ID.
+- Edge creation: call propose_create_edge with source_type/target_type as Task or Asset and relation as references, related-to, depends-on, blocks, derived-from, supersedes, or member-of. Notes, tickets and slices are Asset endpoints. Assign Ticket to Slice with member-of. For existing tasks/assets/notes, use source_id/target_id. For an endpoint created earlier in the same pending plan, use source_action_id or target_action_id instead of inventing an ID.
 - Edge deletion: identify the exact edge_id first, usually from graph_walk or task_neighbors where edges are returned as Edge:<id>, then call propose_delete_edge with edge_id. Do not stage edge deletion by guessing from endpoints alone.
 
 When mode=plan and you have proposed actions, include a compact PROPOSED ACTIONS section in the final answer and tell the operator to use the action card or reply apply all/apply 1,3. If no action should be staged, say that explicitly.
@@ -2044,6 +2048,7 @@ Sourcebot code research:
 		return nil, fmt.Errorf("wrap ask tools for fantasy: %w", err)
 	}
 	fantasyTools = append(fantasyTools, newAttachmentTools(wm, search, cfg)...)
+	fantasyTools = append(fantasyTools, newTicketTools(wm, agentSessions)...)
 
 	askAgent := fantasy.NewAgent(fantasyModel,
 		fantasy.WithSystemPrompt(askSystemPrompt),
@@ -2295,6 +2300,7 @@ func buildAgentModelInput(req askRequest, sessionSnapshot AgentSession, plan Act
 
 	if req.Mode == agentModePlan {
 		b.WriteString("\nPLAN MODE CONTRACT\n")
+		b.WriteString("Ticket mutations are also whitelisted: ticket_create, ticket_update_metadata, ticket_entry and ticket_delete via propose_ticket. Read read_tickets first for existing tickets. Internal notes default; public_reply only by explicit request, disclosing customer visibility, recipient and filenames, with expected_updated_at. Never customer_reply. RelatedTo task links and MemberOf Ticket Asset to Slice Asset membership use edge proposals; linked tasks use task/edge proposals, without status synchronization. No uploads or writes before approval.\n")
 		b.WriteString("Plan mode is safe by default: answer read-only questions without staging anything. Stage create_task, update_task, create_note, update_note, delete_note, create_edge, and delete_edge only when the current user message explicitly asks to create/stage/add/record/turn/capture/update/delete/link/unlink durable room objects. Call one matching propose_* tool per staged action. For update_task, call get_task first and pass expected_updated_at plus full replacement title/description/task_status/priority/blocked_by; task deletion is not stageable yet. For create_note, include project and tags when the note has a durable scope. For update_note, call get_asset first, verify Note, preserve or intentionally replace title/content/project/tags, and pass expected_updated_at from the loaded note; do not stage an update from a truncated payload unless the user supplied the full replacement content. For delete_note, call get_asset first, verify Note, and pass expected_updated_at from the loaded note. For create_edge, use source_id/target_id for existing tasks/assets/notes; notes are Asset endpoints. For create_edge endpoints produced earlier in this same plan, use source_action_id or target_action_id. For delete_edge, identify the exact edge_id from graph_walk/task_neighbors before staging. Do not claim any action was applied. If no action is staged, say so explicitly.\n")
 	}
 
@@ -2700,6 +2706,10 @@ func parseAssetTypeFilters(values []string) ([]uint16, error) {
 			t = protocol.AssetTypeCustomerContact
 		case "activity", "activities", "customeractivity", "customeractivities":
 			t = protocol.AssetTypeCustomerActivity
+		case "ticket", "tickets":
+			t = 13
+		case "entry", "entries", "ticketentry", "ticketentries":
+			t = 14
 		default:
 			n, err := strconv.ParseUint(normalized, 10, 16)
 			if err != nil {

@@ -1,0 +1,42 @@
+# Optional customer portal. Publish ONLY through a TLS reverse proxy.
+# docker compose --env-file .env -f docker/docker-compose.yml -f docker/compose.tickets.yml up -d --build tickets
+services:
+  tickets:
+    build:
+      context: ..
+      dockerfile: services/bots/nrc-tickets/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      NRC_SERVER: ws://websocket-server:8080
+      NRC_WORKSPACE: ${NRC_TICKETS_WORKSPACE:?set NRC_TICKETS_WORKSPACE}
+      TICKETS_ORIGIN: ${TICKETS_ORIGIN:?set HTTPS TICKETS_ORIGIN}
+      TICKETS_ACCOUNTS_FILE: /run/secrets/ticket-accounts.json
+      TICKETS_ADDR: :8096
+      FILES_URL: http://tailscale-proxy:8094
+      TICKETS_BRAND: ${TICKETS_BRAND:-Ihr Kundenportal}
+      TICKETS_FOOTER_TEXT: ${TICKETS_FOOTER_TEXT:-}
+      TICKETS_IMPRINT_URL: ${TICKETS_IMPRINT_URL:-}
+      TICKETS_PRIVACY_URL: ${TICKETS_PRIVACY_URL:-}
+      TICKETS_TERMS_URL: ${TICKETS_TERMS_URL:-}
+      TICKETS_CONTACT_URL: ${TICKETS_CONTACT_URL:-}
+      TICKETS_THEME_FILE: ${TICKETS_THEME_FILE:-}
+      TICKETS_LOGO_FILE: ${TICKETS_LOGO_FILE:-}
+    ports:
+      - "127.0.0.1:8096:8096"
+    volumes:
+      - ${TICKETS_ACCOUNTS_FILE:?set absolute private accounts file path}:/run/secrets/ticket-accounts.json:ro
+      - ${TICKETS_BRANDING_DIR:-../ticket-branding}:/branding:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=112m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - websocket-server
+      - tailscale-proxy
+    restart: unless-stopped
+    networks:
+      - orion-network

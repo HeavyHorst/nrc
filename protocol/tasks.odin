@@ -1333,6 +1333,7 @@ TaskSlice :: struct {
 	blocked:          u16, // Task members whose blocked_by points at another task.
 	notes:            u16, // Note members.
 	files:            u16, // File members.
+	tickets:          u16, // Ticket members, not TicketEntry records.
 	oldest_active_at: i64, // created_at of the oldest non-Done task member, 0 if none.
 	last_moved_at:    i64, // updated_at of the most recently changed member.
 }
@@ -1454,7 +1455,7 @@ TaskSliceList :: struct {
 }
 
 getSizeTaskSlice :: proc(slice: TaskSlice) -> int {
-	size := 2 + len(slice.name) + 8 + 2 + len(slice.owner) + 1 + 2 * 7 + 8 + 8
+	size := 2 + len(slice.name) + 8 + 2 + len(slice.owner) + 1 + 2 * 8 + 8 + 8
 	return size
 }
 
@@ -1490,6 +1491,7 @@ serializeTaskSliceList :: proc(msg: TaskSliceList, buf: []byte) -> int {
 		endian.put_u16(buf[offset:], .Big, slice.blocked); offset += 2
 		endian.put_u16(buf[offset:], .Big, slice.notes); offset += 2
 		endian.put_u16(buf[offset:], .Big, slice.files); offset += 2
+		endian.put_u16(buf[offset:], .Big, slice.tickets); offset += 2
 		endian.put_i64(buf[offset:], .Big, slice.oldest_active_at); offset += 8
 		endian.put_i64(buf[offset:], .Big, slice.last_moved_at); offset += 8
 	}
@@ -1540,7 +1542,7 @@ parseTaskSliceList :: proc(data: []byte, allocator := context.allocator) -> (Tas
 			if offset + 1 > len(data) do return result, .TooShort
 			result.slices[i].flags = transmute(TaskSliceFlags)data[offset]
 			offset += 1
-			if offset + 14 + 16 > len(data) do return result, .TooShort
+			if offset + 16 + 16 > len(data) do return result, .TooShort
 			result.slices[i].backlog, _ = endian.get_u16(data[offset:], .Big); offset += 2
 			result.slices[i].todo, _ = endian.get_u16(data[offset:], .Big); offset += 2
 			result.slices[i].in_progress, _ = endian.get_u16(data[offset:], .Big); offset += 2
@@ -1548,6 +1550,7 @@ parseTaskSliceList :: proc(data: []byte, allocator := context.allocator) -> (Tas
 			result.slices[i].blocked, _ = endian.get_u16(data[offset:], .Big); offset += 2
 			result.slices[i].notes, _ = endian.get_u16(data[offset:], .Big); offset += 2
 			result.slices[i].files, _ = endian.get_u16(data[offset:], .Big); offset += 2
+			result.slices[i].tickets, _ = endian.get_u16(data[offset:], .Big); offset += 2
 			result.slices[i].oldest_active_at, _ = endian.get_i64(data[offset:], .Big); offset += 8
 			result.slices[i].last_moved_at, _ = endian.get_i64(data[offset:], .Big); offset += 8
 		}
@@ -1578,10 +1581,10 @@ task_slice_open_count :: proc(slice: TaskSlice) -> u16 {
 }
 
 // task_slice_member_count is every member the slice carries: tasks with a
-// status, notes and files. It is widened because the counters are independent
+// status, notes, files and tickets. It is widened because the counters are independent
 // and their sum is not bounded by any single one of them.
 task_slice_member_count :: proc(slice: TaskSlice) -> int {
-	return int(slice.backlog) + int(slice.todo) + int(slice.in_progress) + int(slice.done) + int(slice.notes) + int(slice.files)
+	return int(slice.backlog) + int(slice.todo) + int(slice.in_progress) + int(slice.done) + int(slice.notes) + int(slice.files) + int(slice.tickets)
 }
 
 getSizeTaskListPage :: proc(msg: TaskListPage) -> int {

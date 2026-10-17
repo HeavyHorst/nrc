@@ -432,12 +432,30 @@ serializeGetTaskRequest :: proc(req: GetTaskRequest, buf: []byte) -> int {
 // ----------------------------------------------------------------------------
 
 getSizeCreateAssetRequest :: proc(req: CreateAssetRequest) -> int {
-	return 2 + 8 + 2 + 2 + 8 + 1 + 4 + 2 + len(req.preview) + 2 + len(req.payload) + getSizeAssetAttachments(req.attachments) + 4
+	return(
+		2 +
+		8 +
+		2 +
+		2 +
+		8 +
+		1 +
+		4 +
+		2 +
+		len(req.preview) +
+		2 +
+		len(req.payload) +
+		getSizeAssetAttachments(req.attachments) +
+		4 +
+		(req.if_parent_updated_at != 0 ? 8 : 0) \
+	)
 }
 
 serializeCreateAssetRequest :: proc(req: CreateAssetRequest, buf: []byte) -> int {
 	total_size := getSizeCreateAssetRequest(req)
 
+	if req.if_parent_updated_at != 0 && (req.if_parent_updated_at < 0 || req.parent_type != .Asset || req.parent_id == 0) {
+		return -1
+	}
 	if len(buf) < total_size {
 		return -1
 	}
@@ -470,6 +488,10 @@ serializeCreateAssetRequest :: proc(req: CreateAssetRequest, buf: []byte) -> int
 	if attachments_size < 0 do return -1
 	offset += attachments_size
 	endian.put_u32(buf[offset:], .Big, req.correlation_id)
+	offset += 4
+	if req.if_parent_updated_at != 0 {
+		endian.put_u64(buf[offset:], .Big, u64(req.if_parent_updated_at))
+	}
 
 	return total_size
 }
