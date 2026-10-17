@@ -66,6 +66,93 @@ reviewer using the browser can publish. Source workspace is fixed by the service
 instance, not the CLI's default workspace. After an ambiguous create failure, list
 drafts before retrying; creation is not idempotent and is never automatically retried.
 
+## Newsletter and service information
+
+`nrc newsletter` operates the same optional newsletter service as the browser,
+through `/newsletter/api/...` on the configured Tailscale proxy. It uses the
+configured workspace and Tailscale identity; workspace access and the explicit
+`NRC_NEWSLETTER_USERS` sending permission are required. There are no additional
+CLI credentials and no direct Zoho connection. `nrc capabilities` includes all
+commands and flags. Responses default to JSON; `--human` prints indented JSON.
+
+```sh
+nrc newsletter state
+nrc newsletter templates
+nrc newsletter customers
+nrc newsletter subscriber list
+nrc newsletter campaign list
+
+# Preview first; only the second command imports existing consent. Neither sends mail.
+nrc newsletter consent import --input consents.json
+nrc newsletter consent import --input consents.json --confirm
+```
+
+Consent input is a JSON array or `{"records":[...]}`; stdin (also `--input -`)
+is supported. Each row requires `email`, `source`, past RFC3339 `confirmed_at`,
+`evidence`, and `scope`; `external_id` is optional. For example:
+
+```json
+[{"email":"anna@example.test","source":"Zoho export","confirmed_at":"2025-02-03T10:20:00Z","evidence":"DOI record 123","scope":"Product newsletter","external_id":"123"}]
+```
+
+Import customers/contacts first: consent matches existing live contact addresses.
+Unknown addresses, duplicates, existing subscriptions, optouts and delivery blocks
+are reported/skipped. Invalid records or conflicting duplicates reject the batch.
+Import preserves the original proof and sends no invitation. Use at most 200 rows
+per batch and keep the complete request within 64 KiB. A `confirm` property in the
+file is rejected: only the explicit CLI flag authorizes writing.
+
+Campaign create/update take a complete draft JSON object, not a partial patch:
+
+```json
+{"kind":"service","audience":"selected_customers","customer_ids":["7"],"service_reason":"Necessary API migration","title":"API migration","template_id":"12","subject":"API migration on December 1","variables":{"introduction":"Migration details"}}
+```
+
+Use an approved template ID from `templates` and its actual Mailjet variable
+names. For all nonarchived customers set `audience:"all_customers"` and
+`customer_ids:[]`. A newsletter draft uses `kind:"newsletter"` with no audience,
+customer IDs or service reason. Service information must be necessary and
+non-promotional; this is not an override for marketing consent.
+
+```sh
+nrc newsletter campaign create --input campaign.json
+nrc newsletter campaign update <id> --revision 1 --input campaign.json
+nrc newsletter campaign audience <id> --revision 2
+nrc newsletter campaign preview <id> --revision 2
+
+# These commands send real mail when the service is configured.
+nrc newsletter campaign test <id> --revision 2 --email tester@example.test
+nrc newsletter campaign send <id> --revision 2 \
+  --confirm-subject 'API migration on December 1' --audience-token '<review token>'
+
+# Only for an individual, documented signup request; never invite the whole CRM.
+nrc newsletter subscriber invite 81 --source 'Signup request ticket #123'
+nrc newsletter subscriber unsubscribe 81
+```
+
+Inspect `campaign list` for IDs, revisions, status and delivery outcomes. Updating
+invalidates the test. `preview` returns raw template HTML/text as JSON, never
+executes it, and is not a personalized Mailjet render. Sending requires a test of
+the exact revision and its exact subject. Service campaigns additionally require
+the token returned by `audience`; changed recipients reject sending. The CLI never
+automatically reviews, tests, confirms or retries sending. After an ambiguous
+failure inspect state before retrying; sending is queued, not completed by the
+command returning successfully.
+
+Service roles belong to contacts, separately for each linked company:
+
+```sh
+nrc contact create --company 7 --title 'Service mailbox' --email service@example.test --service-for 7
+nrc contact update 81 --service-for 7,9
+nrc contact update 81 --service-for '' # Clear all service roles
+```
+
+`--service-for` replaces the complete list. IDs must be unique, nonarchived
+companies linked by `member-of` (either orientation); create can designate its
+`--company`. Omit the flag to preserve existing roles. A role without a live
+membership never authorizes service delivery. Newsletter optouts do not block
+necessary service information, but hard-bounce/spam blocks always do.
+
 ## Workspace data commands
 
 ```sh

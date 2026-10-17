@@ -1,0 +1,38 @@
+# Optional Mailjet newsletter sidecar. Administration stays on the private network.
+# Expose ONLY loopback port 8097 through your public HTTPS reverse proxy.
+services:
+  tailscale-proxy:
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      NRC_SEARCH_FILES_ADDR: :8094
+      NRC_NEWSLETTER_BACKEND: http://newsletter:8096
+      NRC_NEWSLETTER_WORKSPACE: ${NRC_NEWSLETTER_WORKSPACE:?set NRC_NEWSLETTER_WORKSPACE}
+  newsletter:
+    build:
+      context: ..
+      dockerfile: services/bots/nrc-newsletter/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      NRC_SERVER: ws://websocket-server:8080
+      NRC_WORKSPACE: ${NRC_NEWSLETTER_WORKSPACE:?set NRC_NEWSLETTER_WORKSPACE}
+      NEWSLETTER_ADMIN_ADDR: :8096
+      NEWSLETTER_PUBLIC_ADDR: :8097
+      NEWSLETTER_DATA_DIR: /data
+    ports:
+      - "127.0.0.1:8097:8097"
+    volumes:
+      - newsletter-data:/data
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - websocket-server
+    restart: unless-stopped
+    networks:
+      - orion-network
+
+volumes:
+  newsletter-data:

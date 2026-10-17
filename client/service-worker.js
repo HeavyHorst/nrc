@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261017subsystems1";
+const CACHE_NAME = "nrc-terminal-20261017newsletter4";
 
 const APP_SHELL = [
   "./",
@@ -11,7 +11,7 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261017subsystems1",
+  "./css/main.css?v=20261017newsletter4",
   "./css/foundation.css?v=20261012slicebars1",
   "./css/workspace.css?v=20261017subsystems1",
   "./css/entities.css?v=20261014sliceheader3",
@@ -29,8 +29,8 @@ const APP_SHELL = [
   "./edges.js?v=20260924slicelive1",
   "./files.js?v=20261008files1",
   "./links-ui.js?v=20261016sliceinspector1",
-  "./inspector.js?v=20261016sliceinspector1",
-  "./view-manager.js?v=20261016sullivannav1",
+  "./inspector.js?v=20261017service2",
+  "./view-manager.js?v=20261016newsletter1",
   "./list-navigation.js?v=20260805b",
   "./virtual-list.js?v=20260908a",
   "./loading-indicator.js?v=20261013loading1",
@@ -56,8 +56,9 @@ const APP_SHELL = [
   "./ai.js?v=20261016sullivannav1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20261015copy3",
-  "./app.js?v=20261017subsystems1",
-  "./customers.js?v=20261016customertabs6",
+  "./app.js?v=20261017newsletter4",
+  "./newsletter.js?v=20261017contacts1",
+  "./customers.js?v=20261017service1",
   "./mobile-shell.js?v=20260914chats1",
   "./latency-worker.js",
 ];

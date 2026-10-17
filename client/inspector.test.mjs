@@ -762,3 +762,26 @@ test("real link preparation keeps failed target fan-out inside the speculative b
   for (const id of [21n, 22n, 23n, 24n, 31n, 32n, 33n, 34n]) await f.finish(id);
   assert.deepEqual(f.rendered, [], "speculative failure and success never publish details");
 });
+
+test("newsletter exposes the inspector only for an explicitly opened record and gives space back on close", async () => {
+  const f = loadInspector();
+  const classes = new Set();
+  const shell = {
+    classList: {
+      add: (...names) => names.forEach(name => classes.add(name)),
+      remove: (...names) => names.forEach(name => classes.delete(name)),
+      toggle(name, on) { if (on) classes.add(name); else classes.delete(name); },
+      contains: name => classes.has(name),
+    },
+    removeAttribute() {},
+  };
+  f.context.document.getElementById = id => id === "inspector" ? shell : null;
+  f.inspector.setActiveView("newsletter");
+  assert.equal(classes.has("inspector-overview-hidden"), true);
+  await f.inspector.openEntity({roomId:0n,type:"task",id:10n});
+  assert.equal(classes.has("inspector-overview-hidden"), false);
+  assert.equal(classes.has("inspector-unavailable"), false);
+  assert.equal(classes.has("inspector-entity-only"), true);
+  await f.inspector.close();
+  assert.equal(classes.has("inspector-overview-hidden"), true);
+});

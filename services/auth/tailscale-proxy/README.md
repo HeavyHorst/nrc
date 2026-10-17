@@ -113,6 +113,22 @@ services report `unavailable`. Upstream 401/403/404 responses remain `unknown`,
 because health cannot be verified. No publishing admin, mutation or Prometheus
 endpoint is exposed by the status routes.
 
+## Newsletter administration
+
+The optional newsletter gateway is `/newsletter/api/...`, configured with
+`NRC_NEWSLETTER_BACKEND` (private origin), `NRC_NEWSLETTER_WORKSPACE` and
+`NRC_NEWSLETTER_USERS` (full Tailscale login allowlist). Unlike the customer UI
+visibility flag, this allowlist **enforces sending/admin permission**. Requests
+also require membership under `NRC_WORKSPACE_ACCESS` and an `X-NRC-Workspace`
+header matching the configured workspace. Foreign browser origins are denied.
+The proxy strips caller assertions and signs a short-lived workspace-bound
+`nrc-newsletter` audience assertion; no provider keys reach the browser.
+
+`/api/features` advertises `newsletter:true` and `newsletter_workspace` only
+to authorized users of a configured gateway. Only private API routes are
+forwarded, never public token pages or provider webhooks. Those use a separate
+public listener described in `services/bots/nrc-newsletter/README.md`.
+
 ## Development
 
 Requires Go 1.26.6 or newer and a writable attachment/state directory for running

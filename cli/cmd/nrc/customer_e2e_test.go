@@ -74,9 +74,30 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 	}
 	company := id(run(true, "customer", "create", "--title", "First", "--city", "Berlin"))
 	other := id(run(true, "customer", "create", "--title", "Second"))
-	contact := id(run(true, "contact", "create", "--company", company, "--title", "Alice", "--email", "rare@example.test"))
+	contact := id(run(true, "contact", "create", "--company", company, "--title", "Alice", "--email", "rare@example.test", "--service-for", company))
 	activity := id(run(true, "activity", "create", "--company", company, "--title", "Decision", "--kind", "Decision", "--body", "Keep the existing API."))
 	contact2 := id(run(true, "contact", "create", "--company", other, "--title", "Bob"))
+	assertService := func(contactID string, companies ...string) {
+		t.Helper()
+		var meta struct {
+			ServiceFor []string `json:"service_for"`
+			Email      string   `json:"email"`
+		}
+		_ = json.Unmarshal(run(true, "contact", "get", contactID)["metadata"], &meta)
+		want, _ := json.Marshal(companies)
+		got, _ := json.Marshal(meta.ServiceFor)
+		if string(got) != string(want) || (contactID == contact && meta.Email != "rare@example.test") {
+			t.Fatalf("service role or unrelated email changed: %+v; want %s", meta, want)
+		}
+	}
+	assertService(contact, company)
+	run(false, "contact", "update", contact, "--service-for", other) // No membership.
+	run(false, "contact", "update", contact, "--service-for", company+","+company)
+	run(true, "contact", "update", contact, "--service-for", "")
+	assertService(contact, []string{}...)
+	run(true, "contact", "update", contact, "--service-for", company)
+	run(true, "contact", "update", contact, "--phone", "123")
+	assertService(contact, company) // Unrelated edits preserve service roles.
 	for _, kind := range []string{"company", "contact", "activity"} {
 		failure := run(false, "customer", kind, "get", company)
 		if !strings.Contains(string(failure["error"]), "invalid_argument") {
@@ -141,6 +162,7 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 		t.Fatalf("body lost: %s", got)
 	}
 	run(true, "customer", "archive", company)
+	run(false, "contact", "update", contact, "--service-for", company)
 	if list := readEntries(run(true, "customer", "list")); len(list) != 1 || strconv.FormatUint(list[0].ID, 10) != other {
 		t.Fatalf("archive visibility: %+v", list)
 	}
@@ -150,6 +172,8 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 	run(true, "customer", "restore", company)
 	// Reverse direction membership must work, and unlink must retain its endpoint.
 	reverse := id(run(true, "edge", "create", "--source-type", "asset", "--source-id", company, "--target-type", "asset", "--target-id", contact2, "--relation", "member-of"))
+	run(true, "contact", "update", contact2, "--service-for", other+","+company)
+	assertService(contact2, other, company)
 	run(false, "customer", "unlink", other, reverse)
 	run(true, "customer", "unlink", company, reverse)
 	run(true, "contact", "get", contact2)
@@ -224,5 +248,5 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 	run(true, "customer", "delete", company)
 	run(true, "customer", "delete", other)
 	run(true, "contact", "get", contact2) // Deleting a company does not delete shared contacts.
-	t.Log("PASS customer CRUD, blank-search cursor/all paging, ranked paging rejection, incident/reverse edges, archive/restore, partial edits and unlink retention")
+	t.Log("PASS customer CRUD, service-contact create/replace/clear and membership validation, blank-search cursor/all paging, ranked paging rejection, incident/reverse edges, archive/restore, partial edits and unlink retention")
 }

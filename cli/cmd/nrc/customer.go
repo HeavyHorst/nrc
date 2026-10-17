@@ -167,6 +167,9 @@ func customerWrite(kind uint16, action string) *cobra.Command {
 			flag := strings.ReplaceAll(field, "_", "-")
 			c.Flags().String(flag, "", "Set "+flag+" (empty clears optional fields)")
 		}
+		if kind == protocol.AssetTypeCustomerContact {
+			c.Flags().StringSlice("service-for", nil, "Replace service-information company IDs (must be linked); empty clears all")
+		}
 		if kind == protocol.AssetTypeCustomerActivity {
 			c.Flags().String("body", "", "Activity record text")
 			c.Flags().String("body-file", "", "Read UTF-8 activity record from file")
@@ -241,7 +244,59 @@ func customerWrite(kind uint16, action string) *cobra.Command {
 			if action == "archive" || action == "restore" {
 				m["archived"], _ = json.Marshal(action == "archive")
 			}
-			if action == "update" && len(changes) == 0 && recordBody == nil {
+			serviceChanged := cmd.Flags().Changed("service-for")
+			if serviceChanged {
+				companies, _ := cmd.Flags().GetStringSlice("service-for")
+				memberships := map[uint64]bool{}
+				if action == "create" {
+					company, _ := cmd.Flags().GetUint64("company")
+					memberships[company] = true
+				} else if len(companies) > 0 {
+					edges, err := fetchIncidentEdges(s, protocol.TargetTypeAsset, id, 256)
+					if err != nil {
+						return err
+					}
+					for _, edge := range edges {
+						if edge.Relation != protocol.RelationMemberOf || edge.SourceType != protocol.TargetTypeAsset || edge.TargetType != protocol.TargetTypeAsset {
+							continue
+						}
+						if edge.SourceID == id {
+							memberships[edge.TargetID] = true
+						}
+						if edge.TargetID == id {
+							memberships[edge.SourceID] = true
+						}
+					}
+				}
+				ids := []string{}
+				seen := map[uint64]bool{}
+				for _, raw := range companies {
+					company, err := customerID(raw)
+					if err != nil {
+						return err
+					}
+					if seen[company] || !memberships[company] {
+						return &conn.InvalidArgumentError{Err: fmt.Errorf("service company %d must be unique and linked to this contact", company)}
+					}
+					asset, err := customerAsset(s, company, protocol.AssetTypeCustomerCompany)
+					if err != nil {
+						return err
+					}
+					meta, err := customerMetadata(asset.Preview)
+					if err != nil {
+						return err
+					}
+					var archived bool
+					_ = json.Unmarshal(meta["archived"], &archived)
+					if archived {
+						return &conn.InvalidArgumentError{Err: fmt.Errorf("service company %d is archived", company)}
+					}
+					seen[company] = true
+					ids = append(ids, strconv.FormatUint(company, 10))
+				}
+				m["service_for"], _ = json.Marshal(ids)
+			}
+			if action == "update" && len(changes) == 0 && recordBody == nil && !serviceChanged {
 				return &conn.InvalidArgumentError{Err: fmt.Errorf("no changes specified")}
 			}
 			preview, err := customerPreview(m, changes, kind, recordBody)

@@ -1025,7 +1025,7 @@ func taggedNodeLogin(node *tailcfg.Node) (string, error) {
 
 func injectIdentityHeaders(r *http.Request, localClient whoIsClient) (string, error) {
 	// These headers are assertions by this boundary, never by its callers.
-	for _, header := range []string{"X-Tailscale-Login", "X-Tailscale-User", "X-Tailscale-Node", "X-NRC-Auth", "X-NRC-Publish-Auth", "X-NRC-User-Type", "X-NRC-Bot-Secret", "X-NRC-Bot-Nickname", "X-NRC-Denied-Workspaces"} {
+	for _, header := range []string{"X-Tailscale-Login", "X-Tailscale-User", "X-Tailscale-Node", "X-NRC-Auth", "X-NRC-Publish-Auth", "X-NRC-Newsletter-Auth", "X-NRC-User-Type", "X-NRC-Bot-Secret", "X-NRC-Bot-Nickname", "X-NRC-Denied-Workspaces"} {
 		r.Header.Del(header)
 	}
 	remoteIP := extractRemoteIP(r)
@@ -1107,10 +1107,18 @@ func handleFeatures(allowed customerUsers, localClient whoIsClient) http.Handler
 		}
 
 		_, customers := allowed[whois.UserProfile.LoginName]
+		workspace := os.Getenv("NRC_NEWSLETTER_WORKSPACE")
+		_, configured := newsletterBackend(os.Getenv("NRC_NEWSLETTER_BACKEND"), workspace)
+		newsletter := configured && newsletterAllowed(whois.UserProfile.LoginName, workspace, requestWorkspaceAccess(r).policy)
+		if !newsletter {
+			workspace = ""
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
-			Customers bool `json:"customers"`
-		}{Customers: customers})
+			Customers           bool   `json:"customers"`
+			Newsletter          bool   `json:"newsletter,omitempty"`
+			NewsletterWorkspace string `json:"newsletter_workspace,omitempty"`
+		}{Customers: customers, Newsletter: newsletter, NewsletterWorkspace: workspace})
 	}
 }
 
@@ -1131,6 +1139,7 @@ func proxyHandler(proxy http.Handler, localClient tailscaleClient, policy worksp
 	mux.HandleFunc("/files/", handleDownload)
 	mux.HandleFunc("/exports", handleExport)
 	mux.Handle("/publish/api/", publishGateway(os.Getenv("NRC_PUBLISH_BACKEND"), os.Getenv("NRC_PUBLISH_WORKSPACE")))
+	mux.Handle("/newsletter/api/", newsletterGateway(os.Getenv("NRC_NEWSLETTER_BACKEND"), os.Getenv("NRC_NEWSLETTER_WORKSPACE")))
 	mux.Handle("/", proxy)
 	return workspaceBoundary(mux, localClient, policy)
 }

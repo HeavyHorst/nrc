@@ -286,6 +286,10 @@
 
   function showEntityHost() {
     const entity = entityHost();
+    if (state.activeView === "newsletter") {
+      shell()?.classList.remove("inspector-overview-hidden", "inspector-unavailable");
+      shell()?.classList.add("inspector-entity-only");
+    }
     if (chatContextHost()) chatContextHost().hidden = true;
     if (viewContextHost()) viewContextHost().hidden = true;
     if (entity) entity.hidden = false;
@@ -445,6 +449,11 @@
   function showContext() {
     if (current()) return;
     const view = state.activeView;
+    if (view === "newsletter") {
+      shell()?.classList.add("inspector-overview-hidden", "inspector-unavailable");
+      setDetailLoading(false);
+      return;
+    }
     if (view === "systemLog") {
       renderSystemLogEntry(window.NRCSystemLog?.getSelectedEntry?.() || null);
       return;
@@ -605,8 +614,8 @@
     shell()?.classList.toggle("inspector-entity-only", ["chat", "kanban", "notes", "customers", "reminders", "attention", "calendar", "search"].includes(view));
     // Overview has no inspector operations; preserve the record for return but
     // give its rail back to the charts, rather than displaying empty context.
-    shell()?.classList.toggle("inspector-overview-hidden", view === "overview");
-    const focused = view === "noteShare" || view === "sullivanShare" || view === "overview";
+    shell()?.classList.toggle("inspector-overview-hidden", view === "overview" || view === "newsletter");
+    const focused = view === "noteShare" || view === "sullivanShare" || view === "overview" || view === "newsletter";
     shell()?.classList.toggle("inspector-unavailable", focused);
     if (focused) setDrawer(false);
     else if (!current()) showContext();

@@ -1440,6 +1440,7 @@ async function connectWebSocket() {
     window.NRCSlices?.disconnect();
     window.NRCAppointmentNotify?.disconnect();
     window.NRCCustomers?.onDisconnect();
+    window.NRCNewsletter?.disconnect();
     pendingInitialization = null; // Clear any pending initialization
     retainedRoomStates.clear();
     retainedSubscriptionRequests.clear();
@@ -1806,6 +1807,7 @@ function handleBinaryMessage(arrayBuffer) {
         }
         serverReady = true;
         window.NRCCustomers?.refreshAccess();
+        window.NRCNewsletter?.refreshAccess();
         // Start ping interval for latency measurement
         startPingInterval();
         // Retry any pending asset requests (agenda via assets)
@@ -4855,6 +4857,7 @@ function switchToWorkspace(workspaceId) {
   // Reload page with new workspace
   logSystem(`SWITCHING TO WORKSPACE ${workspaceId}`, "workspace");
   window.location.hash = `workspace=${encodeURIComponent(workspaceId)}`;
+  window.NRCNewsletter?.clear();
   window.location.reload();
 
   return true;
@@ -6806,6 +6809,7 @@ function updateHeaderButtons() {
   document.getElementById("calendarBtn")?.classList.toggle("active", view === "calendar");
   document.getElementById("searchBtn")?.classList.toggle("active", view === "search");
   document.getElementById("customersBtn")?.classList.toggle("active", view === "customers");
+  document.getElementById("newsletterBtn")?.classList.toggle("active", view === "newsletter");
 
   if (sullivanBtn) {
     sullivanBtn.classList.toggle("active", view === "sullivan" || view === "sullivanShare");

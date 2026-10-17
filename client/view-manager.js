@@ -28,6 +28,7 @@ const viewPageTitles = {
   noteShare: "NOTE SHARE",
   sullivanShare: "SULLIVAN",
   customers: "CUSTOMERS",
+  newsletter: "NEWSLETTER",
 };
 
 function getActiveView() {
@@ -35,6 +36,7 @@ function getActiveView() {
 }
 
 function setActiveView(view) {
+  if (view === "newsletter" && !window.NRCNewsletter?.isEnabled()) return;
   if (view === "customers" && !window.NRCCustomers?.isEnabled()) return;
   if (view !== "sullivan" && view !== "sullivanShare") window.NRCAI?.cancelSullivanOpen?.();
   if (view === activeView) return;
@@ -91,6 +93,8 @@ function setActiveView(view) {
   if (notesPanel) notesPanel.style.display = "none";
   if (noteSharePanel) noteSharePanel.style.display = "none";
   if (customersPanel) customersPanel.style.display = "none";
+  const newsletterPanel = document.getElementById("newsletterPanel");
+  if (newsletterPanel) newsletterPanel.style.display = "none";
   if (attentionPanel) attentionPanel.style.display = "none";
   if (calendarPanel) calendarPanel.style.display = "none";
   if (searchPanel) searchPanel.style.display = "none";
@@ -122,6 +126,10 @@ function setActiveView(view) {
   window.NRCOverview?.onViewChanged(view);
 
   switch (view) {
+    case "newsletter":
+      if (newsletterPanel) newsletterPanel.style.display = "flex";
+      window.NRCNewsletter.open();
+      break;
     case "overview":
       if (overviewPanel) overviewPanel.style.display = "flex";
       break;

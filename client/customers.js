@@ -588,8 +588,8 @@
     for (const id of ["customerCancel", "customerView", "customerClose"]) {
       if (el(id)) el(id).disabled = editorBusy;
     }
-    for (const control of el("contactCompanies")?.querySelectorAll("[data-unlink-company], #contactLinkCompany, [data-link-company]") || []) {
-      control.disabled = blocked || control.dataset.archived === "true";
+    for (const control of el("contactCompanies")?.querySelectorAll("[data-unlink-company], #contactLinkCompany, [data-link-company], [data-service-company]") || []) {
+      control.disabled = blocked || control.dataset.archived === "true" || (control.hasAttribute("data-service-company") && inspection?.subview !== "edit");
     }
     for (const control of el("customerFields")?.querySelectorAll("input, textarea, select") || []) {
       if (control.tagName === "SELECT") control.disabled = blocked;
@@ -728,6 +728,21 @@
         <div id="contactCompanyPicker" hidden><label class="customer-history-filter"><span class="filter-label">COMPANY</span><input id="contactCompanySearch" class="filter-input" type="search" placeholder="Search companies" maxlength="200"></label><div id="contactCompanyResults" class="file-assets-picker-list"></div><button id="contactCompanyMore" class="btn" type="button" hidden>LOAD MORE</button></div>`;
       host.querySelectorAll("[data-open-company]").forEach(button => { button.onclick = () => openRecord("company", button.dataset.openCompany); });
       host.querySelectorAll("[data-unlink-company]").forEach(button => { button.onclick = () => removeRecord({ ...ref, companyId: BigInt(button.dataset.unlinkCompany) }, true); });
+      const form = el("customerForm");
+      const serviceSection = document.createElement("section");
+      serviceSection.className = "customer-section";
+      const editing = ref.subview === "edit";
+      serviceSection.innerHTML = `<header class="panel-header"><div><span>SERVICE INFORMATION</span></div></header><p class="customer-meta">Receive necessary, non-promotional service information for these companies. Independent of newsletter consent.</p>${companies.filter(a => !metadata(a).archived).map(a => `<label class="filter-checkbox-label"><input class="filter-checkbox" type="checkbox" data-service-company="${a.assetId}" ${form.serviceFor.has(String(a.assetId)) ? "checked" : ""} ${editing ? "" : "disabled"}><span>${escape(metadata(a).title)}</span></label>`).join("") || '<p class="customer-empty">Link an active company first.</p>'}`;
+      host.append(serviceSection);
+      serviceSection.querySelectorAll("input").forEach(input => {
+        input.onchange = () => {
+          if (!editing || editorBusy || editorStale || cancelled()) return;
+          if (input.checked) form.serviceFor.add(input.dataset.serviceCompany);
+          else form.serviceFor.delete(input.dataset.serviceCompany);
+          editorDirty = true;
+          updateEditorState();
+        };
+      });
       let searchGeneration = 0;
       let cursor = 0n;
       let timer;
@@ -823,6 +838,7 @@
     if (el("customerCancel")) el("customerCancel").onclick = () => asset ? openRecord(kind, ref.id, { ...ref, subview: "read" }) : window.NRCInspector.back();
     if (el("customerDelete")) el("customerDelete").onclick = () => removeRecord(ref, false);
     if (el("customerUnlink")) el("customerUnlink").onclick = () => removeRecord(ref, true);
+    el("customerForm").serviceFor = new Set(Array.isArray(d.service_for) ? d.service_for : []);
     if (contact) loadContactCompanies(ref, linksHydrated);
     for (const button of el("customerForm").querySelectorAll("[data-copy-contact], [data-copy-company]")) {
       button.onclick = async () => {
@@ -851,6 +867,7 @@
       delete values.body;
       const meta = { ...d, ...values, version: 1 };
       delete meta.companyId;
+      if (kind === "contact") meta.service_for = [...form.serviceFor];
       if (kind === "activity") meta.excerpt = body.slice(0, 160);
       editorBusy = true;
       updateEditorState();

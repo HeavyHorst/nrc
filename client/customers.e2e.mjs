@@ -122,6 +122,7 @@ try {
       const { x, y, width, height } = section.getBoundingClientRect();
       return { x, y, width, height };
     }));
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const emptyGrid = await overviewBoxes();
   assert.equal(emptyGrid.length, 4);
   assert.equal(emptyGrid[0].y, emptyGrid[1].y, "top quadrants align");
@@ -145,6 +146,32 @@ try {
   assert.equal(await contactCard.evaluate(el => getComputedStyle(el).display), "grid");
   await page.click("#customerClose");
   await page.waitForFunction(() => document.querySelector('.customer-contact')?.getAttribute('aria-pressed') === 'false');
+
+  // Mock only the sidecar directory; the contact itself is read from the real
+  // NRC server through the production inspector and customer renderer.
+  const newsletterContactId = await contactCard.getAttribute("data-contact");
+  await page.route("**/api/features", route => route.fulfill({json:{customers:true,newsletter:true,newsletter_workspace:workspace}}));
+  await page.route("**/newsletter/api/state", route => route.fulfill({json:{configured:false,templates:[],campaigns:[],customers:[],audience:{eligible:0},subscribers:[{contact_id:newsletterContactId,name:"Anna Berger",email:"anna@nordwerk.example",status:"not_subscribed",companies:[{customer_id:companyId,name:"Nordwerk GmbH"}]}]}}));
+  await page.evaluate(() => NRCNewsletter.refreshAccess());
+  await page.click("#newsletterBtn");
+  await page.click("#nlSubscriberTab");
+  for (const width of [1440,1280,390]) {
+    await page.setViewportSize({width,height:1000});
+    await page.getByRole("button",{name:"Kontakt Anna Berger öffnen",exact:true}).click();
+    await page.waitForSelector("#inspector #customerForm");
+    assert.equal(await page.evaluate(() => String(NRCInspector.current().id)),newsletterContactId);
+    assert.match(await page.locator("#customerForm").innerText(),/anna@nordwerk.example/);
+    assert.equal(await page.locator("#inspector").isVisible(),true,"newsletter reveals the real contact inspector");
+    assert.equal(await page.evaluate(() => NRCViewManager.getActiveView()),"newsletter");
+    if (width === 1280) assert.equal(await page.locator(".nl-contact").last().evaluate(el => getComputedStyle(el).gridTemplateColumns.split(" ").length),2,"narrowed desktop register uses readable two-column rows beside the inspector");
+    await capture(`newsletter-contact-${width}`);
+    await page.click("#customerClose");
+    assert.equal(await page.locator("#inspector").isHidden(),true,"closing returns the full width to subscribers");
+  }
+  await page.setViewportSize({width:1440,height:1000});
+  await page.unroute("**/api/features");
+  await page.unroute("**/newsletter/api/state");
+  await page.evaluate(() => NRCViewManager.setActiveView("customers"));
   await page.click("#customerActivityNew");
   await assertInspector();
   await page.fill('[name="title"]', "Rollout abgestimmt <Freitag>");
@@ -387,6 +414,7 @@ try {
   await page.click(`[data-contact="${ids.contact}"]`);
   await page.waitForFunction(() => document.querySelectorAll("[data-unlink-company]").length === 2);
   assert.equal(await page.locator(".contact-facts dd").nth(2).textContent(), "—");
+  assert.equal(await page.locator("[data-service-company]:disabled").count(), 2, "service roles are read-only outside editing");
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.click('[data-copy-contact="email"]');
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "anna@nordwerk.example");
@@ -398,13 +426,15 @@ try {
       await page.waitForFunction(() => document.querySelectorAll("[data-unlink-company]").length === 2);
       assert.equal(await page.locator(".customer-inspector-body").evaluate(el => el.scrollWidth <= el.clientWidth), true, "contact has no horizontal overflow");
       assert.equal(await page.locator("#contactCompanies").evaluate(el => getComputedStyle(el).borderLeftWidth), "0px", "linked companies has no outer box");
-      assert.equal(await page.locator("#contactCompanies > .panel-header").evaluate(el => getComputedStyle(el).borderBottomWidth), "0px", "section header has only one rule");
+      assert.equal(await page.locator("#contactCompanies > .panel-header").evaluate(el => getComputedStyle(el).borderBottomWidth), "1px", "linked companies uses the shared quiet section band");
       await capture(`contact-${mode}-${width}`);
     }
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.click("#customerEdit");
   await page.fill('[name="email"]', "anna.updated@nordwerk.example");
+  await page.locator(`[data-service-company="${companyId}"]`).check();
+  assert.equal(await page.locator(`[data-service-company="${ids.second}"]`).isChecked(), false, "service role is per customer, not global");
   await page.fill('[name="phone"]', "+49 5221 132206");
   await page.click("#customerClose");
   await page.locator(".nrc-dialog").getByRole("button", { name: "Cancel", exact: true }).click();
@@ -412,6 +442,9 @@ try {
   await save();
   await page.click(`[data-contact="${ids.contact}"]`);
   assert.match(await page.locator("#customerForm").textContent(), /anna.updated@nordwerk.example/);
+  await page.waitForSelector(`[data-service-company="${companyId}"]`);
+  assert.equal(await page.locator(`[data-service-company="${companyId}"]`).isChecked(), true, "service designation persists after acknowledged save");
+  assert.equal(await page.locator(`[data-service-company="${ids.second}"]`).isChecked(), false);
   assert.equal(await page.locator('.contact-facts a[href^="tel:"]').getAttribute("href"), "tel:+495221132206");
   await page.click('[data-copy-contact="phone"]');
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "+49 5221 132206");
@@ -449,7 +482,7 @@ try {
   await page.evaluate(() => NRCInspector.openEntity(NRCInspector.current()));
   await page.click("#customerDelete");
   const confirmation = page.getByRole("dialog", { name: "DELETE RECORD", exact: true });
-  assert.equal(await confirmation.getAttribute("aria-modal"), "true");
+  assert.equal(await confirmation.evaluate(node => node instanceof HTMLDialogElement && node.matches(":modal")), true, "native confirmation is modal above the inspector");
   assert.equal(await page.evaluate(() => document.activeElement.textContent), "Cancel", "destructive confirmation starts on safe action");
   await page.keyboard.press("Shift+Tab");
   assert.equal(await page.evaluate(() => document.activeElement.textContent), "Delete everywhere");
