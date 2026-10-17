@@ -1,9 +1,9 @@
 @import url("foundation.css?v=20261012slicebars1");
-@import url("workspace.css?v=20261016cleanup1");
+@import url("workspace.css?v=20261017subsystems1");
 @import url("entities.css?v=20261014sliceheader3");
 @import url("ledger.css?v=20261016registertabs2");
 @import url("mobile-tasks.css?v=20261016sliceinspector1");
-@import url("mobile.css?v=20261016cleanup1");
+@import url("mobile.css?v=20261017subsystems1");
 
 .chat-attachment {
     display: flex;

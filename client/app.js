@@ -3462,7 +3462,6 @@ function updateRoomPresence(
 
 function updatePresenceDisplay() {
   const currentUsers = roomPresence.get(currentRoomId) || new Map();
-  const userCount = currentUsers.size;
 
   // Update presence list if it exists
   // Convert Map entries to array of {username, isAuthenticated, userType}
@@ -3482,37 +3481,18 @@ function updateUsersList(users) {
 
   if (!usersList) return;
 
-  if (users.length === 0) {
-    usersList.innerHTML = '<div class="no-users">No users</div>';
-    return;
-  }
-
-  // Separate into bots and regular users
-  const bots = users.filter(
-    (u) =>
-      u.userType === UserType.Bot ||
-      u.userType === UserType.System ||
-      u.userType === UserType.Admin,
-  );
+  // Admins are people; service identities are not chat participants.
   const regularUsers = users.filter(
     (u) =>
       u.userType !== UserType.Bot &&
-      u.userType !== UserType.System &&
-      u.userType !== UserType.Admin,
+      u.userType !== UserType.System,
   );
 
-  // Sort alphabetically
-  bots.sort((a, b) => a.username.localeCompare(b.username));
   regularUsers.sort((a, b) => a.username.localeCompare(b.username));
 
   const renderUser = (user) => {
-    const isBot = user.userType === UserType.Bot || user.userType === UserType.System || user.userType === UserType.Admin;
-    let displayName = user.username;
-    if (isBot && user.isAuthenticated && displayName.includes("-")) {
-      displayName = displayName.split("-")[0];
-    }
     return `<div class="user-item" data-username="${escapeHtml(user.username)}" title="Click to start DM">
-                    <span class="username">${escapeHtml(displayName)}</span>
+                    <span class="username">${escapeHtml(user.username)}</span>
                 </div>`;
   };
 
@@ -3522,9 +3502,7 @@ function updateUsersList(users) {
     return `<div class="users-section">${labelHtml}${itemsHtml}</div>`;
   };
 
-  usersList.innerHTML =
-    renderSection("USERS", regularUsers.length, regularUsers) +
-    renderSection("BOTS", bots.length, bots);
+  usersList.innerHTML = renderSection("USERS", regularUsers.length, regularUsers);
 
   // Add click handlers for starting DMs
   usersList.querySelectorAll(".user-item[data-username]").forEach((el) => {
@@ -6304,6 +6282,111 @@ function loadRoomHistory(roomId, options = {}) {
 // =============================================================================
 // STATUS & METRICS DISPLAY
 // =============================================================================
+
+function initSubsystemStatus() {
+  const trigger = document.getElementById("subsystemsToggle");
+  const panel = document.getElementById("subsystemsPanel");
+  const summary = document.getElementById("subsystemsSummary");
+  const checked = document.getElementById("subsystemsChecked");
+  const close = document.getElementById("subsystemsClose");
+  const refresh = document.getElementById("subsystemsRefresh");
+  const portal = Portal.create(panel, trigger, { position: "top", align: "center", matchWidth: false, offsetY: 6 });
+  let controller;
+
+  function renderSummary() {
+    const issues = panel.querySelectorAll('[data-state="unavailable"], [data-state="degraded"]').length;
+    summary.textContent = issues ? `! ${issues} ISSUE${issues === 1 ? "" : "S"}` : "DETAILS";
+    trigger.classList.toggle("subsystems-has-issues", issues > 0);
+  }
+
+  async function check() {
+    controller?.abort();
+    const request = new AbortController();
+    controller = request;
+    refresh.setAttribute("aria-busy", "true");
+    checked.textContent = "CHECKING HTTP HEALTH…";
+    await Promise.all(["search", "ai", "publish", "metrics"].map(async id => {
+      const row = panel.querySelector(`[data-subsystem="${id}"]`);
+      const state = row.querySelector(".subsystems-state");
+      const evidence = row.querySelector(".subsystems-evidence");
+      row.dataset.state = "checking";
+      state.textContent = "… CHECKING";
+      evidence.textContent = "HTTP health";
+      let status = "unavailable", label = "! UNAVAILABLE", detail = "Request failed or timed out";
+      try {
+        const response = await fetch(`/api/subsystems/${id}`, {
+          cache: "no-store", signal: AbortSignal.any([request.signal, AbortSignal.timeout(5000)]),
+        });
+        if (response.ok) {
+          const body = await response.json();
+          if (body?.status === "ok") {
+            status = "reachable"; label = "✓ REACHABLE"; detail = "HTTP health · status ok";
+          } else if (body?.status === "degraded") {
+            status = "degraded"; label = "! DEGRADED"; detail = "HTTP health · degraded";
+          } else if (body?.status === "not_configured") {
+            status = "unknown"; label = "— NOT CONFIGURED"; detail = "Optional service not configured";
+          } else if (body?.status === "unavailable") {
+            detail = "Health endpoint unavailable";
+          } else {
+            status = "unknown"; label = "— NOT VERIFIED"; detail = "Health could not be verified";
+          }
+        } else if ([401, 403, 404].includes(response.status)) {
+          status = "unknown"; label = "— NOT VERIFIED"; detail = `HTTP ${response.status} · health not accessible`;
+        } else {
+          detail = `HTTP ${response.status}`;
+        }
+      } catch (error) {
+        if (request.signal.aborted) return;
+        if (error instanceof SyntaxError) {
+          status = "unknown"; label = "— NOT VERIFIED"; detail = "Unrecognized health response";
+        }
+      }
+      if (request.signal.aborted) return;
+      row.dataset.state = status;
+      state.textContent = label;
+      evidence.textContent = detail;
+      renderSummary();
+    }));
+    if (request.signal.aborted) return;
+    checked.textContent = `LAST CHECK ${new Date().toLocaleTimeString()}`;
+    refresh.setAttribute("aria-busy", "false");
+    renderSummary();
+  }
+
+  function hide(restoreFocus = false) {
+    portal.hide();
+    panel.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger.focus();
+  }
+  trigger.addEventListener("click", () => {
+    if (portal.isVisible) { hide(); return; }
+    panel.hidden = false;
+    portal.show();
+    trigger.setAttribute("aria-expanded", "true");
+    close.focus();
+    check();
+  });
+  close.addEventListener("click", () => hide(true));
+  refresh.addEventListener("click", check);
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && portal.isVisible) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      hide(true);
+    }
+  }, true);
+  document.addEventListener("click", event => {
+    if (portal.isVisible && !panel.contains(event.target) && !trigger.contains(event.target)) hide();
+  });
+  document.addEventListener("focusout", () => {
+    setTimeout(() => {
+      if (portal.isVisible && !panel.contains(document.activeElement) && document.activeElement !== trigger) hide();
+    }, 0);
+  });
+}
+
+initSubsystemStatus();
 
 function updateConnectionStatus(connected) {
   const connectionStatus = document.getElementById("connectionStatus");

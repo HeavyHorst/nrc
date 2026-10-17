@@ -14,7 +14,7 @@
         width: 100%;
         border: 0;
     }
-    .app-shell { grid-template: auto minmax(0, 1fr) auto / minmax(0, 1fr); padding: 0; gap: 0; }
+    .app-shell { grid-template: auto minmax(0, 1fr) auto auto / minmax(0, 1fr); padding: 0; gap: 0; }
     .mobile-only { display: flex; }
     .btn.mobile-only:not(.sidebar-nav-item) { align-items: center; justify-content: center; }
     .app-sidebar #mobileCommands::before { content: ">_"; background: none; mask: none; -webkit-mask: none; font: 700 var(--mobile-font-xs) var(--font-mono); }
@@ -32,7 +32,17 @@
     .mobile-connection { font: var(--mobile-font-xs) var(--font-mono); color: var(--text-dim); }
     .mobile-room:focus-visible, .mobile-bottom button:focus-visible { outline: 2px solid var(--focus-interactive); outline-offset: -2px; }
     .content-shell { grid-area: 2 / 1; }
-    .status-footer, .users-bar { display: none; }
+    .users-bar { display: none; }
+    .status-footer { grid-area: 4 / 1; display: flex; height: auto; min-height: 44px; padding: 0 0.75rem env(safe-area-inset-bottom); font-size: var(--mobile-font-xs); }
+    .status-footer-network, .status-footer-left > .status-footer-separator, .status-footer-right { display: none; }
+    .subsystems-toggle { min-height: 44px; font-size: var(--mobile-font-xs); }
+    .subsystems-panel { width: calc(100vw - 1rem); font-size: var(--mobile-font-sm); }
+    .subsystems-panel .btn { min-height: 44px; }
+    .subsystems-panel > .panel-header, .subsystems-panel > .panel-header > div { height: auto; min-height: 44px; }
+    .subsystems-table th, .subsystems-table td { padding: 0.5rem 0.375rem; }
+    .subsystems-table thead, .subsystems-table tbody th, .subsystems-state, .subsystems-check { font-size: var(--mobile-font-xs); }
+    .subsystems-evidence { overflow-wrap: anywhere; }
+    .subsystems-evidence, .subsystems-note { font-size: var(--mobile-font-xs); }
     .app-sidebar { display: none; }
     body.mobile-navigation-open .app-sidebar {
         display: flex;
@@ -55,7 +65,7 @@
     .app-sidebar .room-item, .app-sidebar .sidebar-nav-item, .app-sidebar .dm-item { width: 100%; min-height: 48px; font-size: var(--mobile-font-base); padding: 12px; }
     body.mobile-navigation-open:not(.mobile-navigation-more) .sidebar-section:has(.view-tabs) { display: none; }
     body.mobile-navigation-more .sidebar-section:not(:has(.view-tabs)) { display: none; }
-    .mobile-bottom { grid-area: 3 / 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--surface-panel); border-top: var(--frame-border); padding-bottom: env(safe-area-inset-bottom); }
+    .mobile-bottom { grid-area: 3 / 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--surface-panel); border-top: var(--frame-border); }
     .mobile-bottom button { min-width: 0; min-height: 56px; padding: 8px 4px; font: var(--mobile-font-sm) var(--font-mono); color: var(--text-dim); background: none; border: 0; border-right: var(--content-border); border-top: 3px solid transparent; cursor: pointer; }
     .mobile-bottom button[aria-current="page"] { font-weight: 700; color: var(--text-primary); border-top-color: var(--accent-current); background: var(--surface-control); }
     .mobile-bottom span { font: var(--mobile-font-xs) var(--font-mono); color: var(--accent-current); }

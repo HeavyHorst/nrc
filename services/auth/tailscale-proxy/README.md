@@ -93,6 +93,26 @@ The signing key stays infrastructure-only. Reviewer HTML, approval and withdrawa
 are not exposed by this route; they retain their separate reviewer credentials.
 No publishing route is added to nginx. See `services/bots/nrc-publish/README.md`.
 
+## Subsystem status
+
+The authenticated, same-origin `GET /api/subsystems/{search|ai|publish|metrics}`
+routes expose only a sanitized `status`: `ok`, `degraded`, `unavailable`,
+`unknown`, or `not_configured`. The footer requests these when opened or refreshed,
+not continuously. They are process-health snapshots, not workspace readiness checks.
+Metrics' detailed health payload and workspace names never reach the browser.
+Only fixed service targets are probed; caller credentials, redirects and arbitrary
+target URLs are not forwarded. Probes time out after three seconds.
+
+Enable probes only for deployed services using `NRC_SEARCH_HEALTH_URL`,
+`NRC_AI_HEALTH_URL`, `NRC_METRICS_HEALTH_URL` and `NRC_PUBLISH_HEALTH_URL` in the
+proxy's environment. Example Compose addresses are `http://search:8090/health`,
+`http://ai:8091/health` and `http://metrics-bot:8092/health` (see `.env.example`).
+The publishing overlay supplies `http://publish:8093/health` automatically.
+Empty values report `not_configured`, not an outage; configured but unreachable
+services report `unavailable`. Upstream 401/403/404 responses remain `unknown`,
+because health cannot be verified. No publishing admin, mutation or Prometheus
+endpoint is exposed by the status routes.
+
 ## Development
 
 Requires Go 1.26.6 or newer and a writable attachment/state directory for running

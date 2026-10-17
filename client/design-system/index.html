@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261016sliceinspector1">
+    <link rel="stylesheet" href="../css/main.css?v=20261017subsystems1">
     <link rel="stylesheet" href="../css/custom-select.css?v=20260926nesting1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -438,6 +438,25 @@
 
             <section class="catalog-section" id="status">
                 <header class="catalog-section-header"><span>05</span><h2>STATUS</h2><span>BADGES / SYSTEM STATE</span></header>
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>SUBSYSTEMS</h3><code>.subsystems-toggle / .subsystems-panel</code></div>
+                    <button class="btn subsystems-toggle subsystems-has-issues" type="button" disabled>SUBSYSTEMS <span>! 2 ISSUES</span> ▴</button>
+                    <section class="subsystems-panel" aria-label="Subsystem status example">
+                        <header class="panel-header"><div><span>SUBSYSTEMS / INSTANCE</span><button class="btn btn--danger task-detail-close" type="button" disabled aria-label="Close subsystem status example">×</button></div></header>
+                        <table class="subsystems-table">
+                            <thead><tr><th scope="col">SERVICE</th><th scope="col">STATE</th><th scope="col">EVIDENCE</th></tr></thead>
+                            <tbody>
+                                <tr data-state="reachable"><th scope="row">SEARCH</th><td class="subsystems-state">✓ REACHABLE</td><td class="subsystems-evidence">HTTP health · status ok</td></tr>
+                                <tr data-state="unavailable"><th scope="row">SULLIVAN / AI</th><td class="subsystems-state">! UNAVAILABLE</td><td class="subsystems-evidence">HTTP 503</td></tr>
+                                <tr data-state="unknown"><th scope="row">PUBLISH</th><td class="subsystems-state">— NOT CONFIGURED</td><td class="subsystems-evidence">Optional service not configured</td></tr>
+                                <tr data-state="degraded"><th scope="row">METRICS</th><td class="subsystems-state">! DEGRADED</td><td class="subsystems-evidence">HTTP health · degraded</td></tr>
+                            </tbody>
+                        </table>
+                        <p class="subsystems-note">HTTP reachability does not imply workspace readiness. Not checked does not mean unavailable.</p>
+                        <div class="subsystems-check"><span>EXAMPLE STATES · NOT LIVE</span><button class="btn" type="button" disabled>REFRESH</button></div>
+                    </section>
+                    <p class="catalog-usage"><b>CONTRACT</b> People (including admins) belong in chat presence; Bot and System identities do not count as people. Instance subsystem status lives in the global footer, also on narrow screens. Opening or REFRESH checks all four services through authenticated, bounded, read-only health routes. Only sanitized status is returned, never internal metrics, workspace names or credentials. Last-check time is explicit; inaccessible or unrecognized health stays unverified, absent Publish configuration is neutral, Metrics degradation counts as an issue. No operations, DM actions or inferred health from presence. Escape/close restores focus; outside click or leaving the panel dismisses it.</p>
+                </div>
                 <div class="catalog-subsection">
                     <div class="catalog-subhead"><h3>CALENDAR / WHEN</h3><code>.calendar-row / .calendar-grid</code></div>
                     <div class="calendar-context">WHEN · OPEN TASKS, APPOINTMENTS &amp; REMINDER DEADLINES · Europe/Berlin</div>
@@ -1271,6 +1290,7 @@ status      ← Service Worker</code></pre>
                     <table class="catalog-inventory-table">
                         <thead><tr><th>FAMILY</th><th>ELEMENTS</th><th>PRODUCTION HOOK</th><th>SOURCE</th><th>SCOPE</th></tr></thead>
                         <tbody id="inventoryBody">
+                            <tr><td>SUBSYSTEM STATUS</td><td>Compact global footer disclosure; instance HTTP reachability, failures, unchecked optional services and last-check evidence; never chat presence or operations</td><td><code>.subsystems-toggle</code>, <code>.subsystems-panel</code></td><td>app.js / index.html / css/workspace.css / css/mobile.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>WORKSPACE OVERVIEW</td><td>Unique status and coverage totals; fixed-size distributions of slice size, blockages and oldest-open age; no personal task queue</td><td><code>.overview-*</code>, <code>.panel-header</code></td><td>overview.js / css/main.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>EXCLUSIVE CHOICES</td><td>Native radio fieldset with a visible group legend, whole-row labels, selected/focus states and native keyboard selection; Personal/Team reminder visibility</td><td><code>.choice-field</code>, <code>.radio-choice</code></td><td>css/workspace.css / tasks.js</td><td><b>CORE</b></td></tr>
                             <tr><td>WORKSPACE SEARCH</td><td>Mixed relevance register for tasks and indexed assets; shared header-register query, type selector and actions. Loading/empty/error/stale states remain independent of the persistent offline notice; exact reads are blocked until reconnect. Keyboard navigation and exact-read inspector; indexed attachments enrich their owner result.</td><td><code>.workspace-search-*</code>, <code>.header-register</code></td><td>workspace-search.js / index.html / css/entities.css / css/mobile.css</td><td><b>FEATURE</b></td></tr>

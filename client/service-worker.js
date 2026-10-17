@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261016sliceinspector1";
+const CACHE_NAME = "nrc-terminal-20261017subsystems1";
 
 const APP_SHELL = [
   "./",
@@ -11,13 +11,13 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261016sliceinspector1",
+  "./css/main.css?v=20261017subsystems1",
   "./css/foundation.css?v=20261012slicebars1",
-  "./css/workspace.css?v=20261016cleanup1",
+  "./css/workspace.css?v=20261017subsystems1",
   "./css/entities.css?v=20261014sliceheader3",
   "./css/ledger.css?v=20261016registertabs2",
   "./css/mobile-tasks.css?v=20261016sliceinspector1",
-  "./css/mobile.css?v=20261016cleanup1",
+  "./css/mobile.css?v=20261017subsystems1",
   "./css/custom-select.css?v=20260926nesting1",
   "./dialog.js?v=20260925document17",
   "./portal.js?v=20260803a",
@@ -56,7 +56,7 @@ const APP_SHELL = [
   "./ai.js?v=20261016sullivannav1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20261015copy3",
-  "./app.js?v=20261016registertabs1",
+  "./app.js?v=20261017subsystems1",
   "./customers.js?v=20261016customertabs6",
   "./mobile-shell.js?v=20260914chats1",
   "./latency-worker.js",

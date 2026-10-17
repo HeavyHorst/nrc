@@ -85,6 +85,7 @@ run node client/note-surfaces.e2e.mjs
 run node client/note-html.e2e.mjs
 run node client/record-document.e2e.mjs
 run node client/mobile-shell.e2e.mjs
+run node client/subsystems.e2e.mjs
 run node client/reminder-notify.e2e.mjs
 run node client/attention.e2e.mjs
 run node client/overview.e2e.mjs
