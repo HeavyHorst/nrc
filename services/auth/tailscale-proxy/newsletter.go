@@ -47,7 +47,7 @@ func newsletterGateway(backend, workspace string) http.Handler {
 		}
 		path := strings.TrimPrefix(r.URL.Path, "/newsletter")
 		parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-		allowed := (r.Method == "GET" && path == "/api/state") || (r.Method == "POST" && (path == "/api/campaigns" || path == "/api/consents/import"))
+		allowed := (r.Method == "GET" && (path == "/api/state" || path == "/api/summary")) || (r.Method == "POST" && (path == "/api/campaigns" || path == "/api/consents/import" || path == "/api/subscribers/search"))
 		if len(parts) >= 3 && parts[0] == "api" && parts[1] == "campaigns" && len(parts[2]) == 64 && strings.Trim(parts[2], "0123456789abcdef") == "" {
 			allowed = (len(parts) == 3 && r.Method == "PUT") || (len(parts) == 4 && r.Method == "POST" && (parts[3] == "preview" || parts[3] == "test" || parts[3] == "send" || parts[3] == "audience"))
 		}

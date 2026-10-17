@@ -80,6 +80,7 @@ nrc newsletter state
 nrc newsletter templates
 nrc newsletter customers
 nrc newsletter subscriber list
+nrc newsletter subscriber search --query example.com --limit 25 --offset 0
 nrc newsletter campaign list
 
 # Preview first; only the second command imports existing consent. Neither sends mail.

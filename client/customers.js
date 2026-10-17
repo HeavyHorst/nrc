@@ -18,6 +18,7 @@
   let renderQueued = false;
   let companyIds = new Set();
   let companyCursor = 0n;
+  let companySearchOffset = 0;
   let companyHasMore = false;
   let companyTotal = 0;
   let companyPageError = "";
@@ -165,20 +166,27 @@
       searchMode = "idle";
       searchNotice = "";
       pendingNavigation = null; companyIds = new Set(); companyCursor = 0n; companyHasMore = false;
+      companySearchOffset = 0;
     }
     loading = true;
     error = "";
     companyPageError = "";
     render();
     try {
-      if (query && reset) {
+      if (query && (reset || searchMode === "results")) {
         companySearch ||= window.NRCSearch.createController();
         try {
           const data = await new Promise((resolve, reject) => companySearch.search({
-            query, top_n: 20, include_payload: true,
+            query, mode: "text", offset: companySearchOffset, top_n: PAGE_SIZE, include_payload: true,
             filters: { entity_types: ["asset"], asset_types: [8, 9], customer: { include_archived: includeArchived } },
           }, { onResult: resolve, onError: reject }));
           if (cancelled()) return;
+          if (data.mode !== "text" || !Array.isArray(data.results) || data.results.length > PAGE_SIZE || !Number.isSafeInteger(data.total_count) || data.total_count < 0 ||
+              !Number.isSafeInteger(data.next_offset) || data.next_offset !== Math.min(companySearchOffset, data.total_count) + data.results.length ||
+              data.next_offset > data.total_count || (data.has_more === true) !== (data.next_offset < data.total_count) || (data.has_more && !data.results.length)) {
+            throw new Error("Search service does not support paginated text search.");
+          }
+          const pageResults = [];
           for (const hit of data.results) {
             const ref = hit.entity;
             const asset = { assetId: typeof ref?.id === "string" && /^[1-9]\d*$/.test(ref.id) ? BigInt(ref.id) : 0n,
@@ -188,16 +196,20 @@
                 (!includeArchived && metadata(asset).archived)) {
               throw new Error("Search returned an invalid company record.");
             }
-            companySearchResults.set(asset.assetId, asset);
+            pageResults.push(asset);
           }
+          for (const asset of pageResults) companySearchResults.set(asset.assetId, asset);
           companyIds = new Set(companySearchResults.keys());
-          companyTotal = companyIds.size;
+          companyTotal = data.total_count;
+          companyHasMore = data.has_more === true;
+          companySearchOffset = data.next_offset;
           searchMode = "results";
           searchNotice = data.stale ? "Search results may be outdated. Refresh to retry reconciliation." : "";
           if (!metadata(records.get(selected))) automaticSelection = companyIds.values().next().value ?? null;
           return;
         } catch (failure) {
           if (cancelled()) return;
+          if (!reset) throw failure; // Never mix offsets from Search with Odin cursors.
           companySearchResults.clear();
           searchMode = "fallback";
           searchNotice = "Search service unavailable — using NRC server text search.";
@@ -407,7 +419,7 @@
     if (!loading || companies.length || showLoading || companyPageError) {
       el("customersState").textContent = companyPageError ? "CUSTOMER QUERY FAILED" :
         loading && companies.length === 0 ? "LOADING…" : searchMode === "results" ?
-        `${companies.length} RESULTS` : `${companies.length} / ${companyTotal} CUSTOMERS`;
+        `${companies.length} / ${companyTotal} RESULTS` : `${companies.length} / ${companyTotal} CUSTOMERS`;
     }
     el("customersPager").setState({
       hasMore: companyHasMore, loading, error: companyPageError, active: active(),

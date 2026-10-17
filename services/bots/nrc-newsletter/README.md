@@ -14,7 +14,7 @@ so old unsubscribe links continue working. Run one replica per data directory.
 Use the optional overlay from the repository root after filling `.env`:
 
 ```sh
-docker compose --env-file .env -f docker/docker-compose.yml -f docker/compose.newsletter.yml up -d --build
+docker compose --env-file .env --profile search -f docker/docker-compose.yml -f docker/compose.newsletter.yml up -d --build
 ```
 
 Set `NRC_NEWSLETTER_WORKSPACE` and `NRC_NEWSLETTER_USERS` (explicit comma-separated
@@ -43,6 +43,19 @@ No deployment or provider account provisioning happens automatically.
 Required infrastructure: `NRC_SERVER` (WebSocket base URL, no workspace suffix),
 `NRC_BOT_SECRET`, `NRC_WORKSPACE` (fixed workspace), `NRC_JWT_SECRET` (not the
 development default). `NRC_JWT_ISSUER` defaults to `nrc-tailscale-proxy`.
+
+The contacts register uses the private search service at `NEWSLETTER_SEARCH_URL`
+(default `http://search:8090/search`) with `mode:"text"`: case-insensitive substring
+search across contact names, emails and company names, without query embeddings.
+`POST /api/subscribers/search` accepts `query`, `offset`, `limit` (default 25, max 250)
+and returns `subscribers`, `total_count`, `next_offset`, `has_more`, `stale`.
+Use `nrc newsletter subscriber search --query example.com --limit 25 --offset 0`.
+Results are ordered by stable entity ID; concurrent edits can move page boundaries.
+The UI deduplicates IDs and can refresh a stale index. Search is not send authority.
+`GET /api/summary` supplies browser campaign data and global live audience counts,
+but no subscriber rows. The backend still reads all live contacts for these counts;
+`GET /api/state` and CLI `subscriber list` retain the full-list compatibility contract.
+Search outages show an error/retry, not a misleading local-only search.
 
 Mail configuration: `MAILJET_API_KEY`, `MAILJET_SECRET_KEY`,
 `NEWSLETTER_FROM_EMAIL`, `NEWSLETTER_FROM_NAME`, `NEWSLETTER_REPLY_TO`,

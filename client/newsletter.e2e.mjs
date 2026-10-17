@@ -83,11 +83,11 @@ try {
   assert.equal(await page.locator('#nlSend').isDisabled(),true,'finished campaigns cannot resend');
 
   await page.locator('#nlSubscriberTab').click();
-  assert.equal(await page.getByRole('button', {name:'Kontakte & Einwilligungen 5',pressed:true}).isVisible(),true);
+  assert.equal(await page.getByRole('button', {name:'Kontakte 5',pressed:true}).isVisible(),true);
   assert.match(await page.locator('[data-contact-id="1"]').innerText(),/Firma: Beispiel GmbH · Muster Software KG/);
   assert.match(await page.locator('[data-contact-id="5"]').innerText(),/Keine Zuordnung/);
   await page.getByLabel('Kontakte suchen').fill('Muster Software');
-  assert.equal(await page.locator('#nlContactCount').innerText(),'2 / 5 Kontakte');
+  await page.waitForFunction(()=>document.querySelector('#nlContactCount').textContent==='2 / 2 Kontakte');
   await page.evaluate(() => { window.NRCInspector = {openEntity(ref) { window.openedNewsletterContact = {...ref,roomId:String(ref.roomId),id:String(ref.id)}; }}; });
   const beforeOpen = mutations.length;
   await page.getByRole('button',{name:'Kontakt Anna Beispiel öffnen',exact:true}).click();
@@ -101,7 +101,7 @@ try {
   await page.evaluate(() => NRCNewsletter.refreshAccess());
   assert.equal(await page.getByRole('button',{name:'Kontakt Anna Beispiel öffnen',exact:true}).isEnabled(),true);
   await page.getByLabel('Kontakte suchen').fill('Clara');
-  assert.equal(await page.locator('#nlContactCount').innerText(),'1 / 5 Kontakte');
+  await page.waitForFunction(()=>document.querySelector('#nlContactCount').textContent==='1 / 1 Kontakte');
   assert.equal(await page.locator('#nlContacts .nl-contact').count(),1);
   await page.getByLabel('Kontakte suchen').fill('');
   await page.locator('[data-invite="0"]').click();
@@ -164,7 +164,7 @@ try {
   await page.locator('#nlCampaignTab').click();
 
   let concurrentEdit = false;
-  await page.route('**/newsletter/api/state', async route => {
+  await page.route('**/newsletter/api/summary', async route => {
     if (!concurrentEdit) {
       concurrentEdit = true;
       const changed = await page.request.put('http://127.0.0.1:18997/newsletter/api/campaigns/2', {data:{revision:1,title:'Parallel geändert',template_id:'demo',subject:'Anderer Betreff',variables:{inhalt:'Extern'}}});
@@ -181,12 +181,12 @@ try {
   await page.locator('#nlSave').click();
   assert.equal((await staleSave).postDataJSON().revision,1,'stale content stays bound to its actual base revision');
   await page.waitForFunction(() => document.querySelector('#nlStatus').textContent.includes('Versionskonflikt'));
-  await page.unroute('**/newsletter/api/state');
+  await page.unroute('**/newsletter/api/summary');
 
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', {name:/Parallel geändert/}).click();
   await page.locator('#nlTestEmail').fill('conflict@example.invalid');
-  await page.route('**/newsletter/api/state', async route => {
+  await page.route('**/newsletter/api/summary', async route => {
     const changed = await page.request.put('http://127.0.0.1:18997/newsletter/api/campaigns/2', {data:{revision:2,title:'Erneut geändert',template_id:'demo',subject:'Dritter Betreff',variables:{inhalt:'Noch neuer'}}});
     assert.equal(changed.status(),200);
     await route.continue();
@@ -196,7 +196,7 @@ try {
   await page.locator('#newsletterDialog').waitFor({state:'detached'});
   assert.equal(await page.locator('#nlPreview').isDisabled(),true);
   assert.equal(await page.locator('#nlRefresh').evaluate(node => node === document.activeElement),true,'conflict after successful test focuses an enabled fallback');
-  await page.unroute('**/newsletter/api/state');
+  await page.unroute('**/newsletter/api/summary');
 
   await page.reload();
   await page.locator('#nlTitle:enabled').waitFor();
@@ -264,6 +264,45 @@ try {
   assert.equal(mutations.filter(url => url.endsWith('/consents/import')).length,0);
   await page.locator('[data-contact-id="3"] summary').click();
   assert.match(await page.locator('[data-contact-id="3"] details').innerText(),/Produktnewsletter.*DOI export #123/,'existing imported proof remains readable');
+
+  // A match on a later server page must be found without downloading that page
+  // first. An outdated query response must not replace a newer result.
+  const searchCalls = [];
+  let searchFails = false, releaseSearch, holdSearch = false;
+  await page.route('**/newsletter/api/subscribers/search', async route => {
+    const body = route.request().postDataJSON(); searchCalls.push(body);
+    const all = Array.from({length:57},(_,i)=>({contact_id:String(1000+i),name:i===56?'Später Treffer':'Kontakt '+i,email:`person${i}@example.invalid`,status:'not_subscribed',companies:[{customer_id:'101',name:'Beispiel GmbH'}]}));
+    const matches = all.filter(s=>`${s.name} ${s.email}`.toLowerCase().includes(body.query.toLowerCase()));
+    const rows = matches.slice(body.offset,body.offset+body.limit);
+    if (holdSearch && body.query === 'person0') await new Promise(resolve=>releaseSearch=resolve);
+    await route.fulfill({status:searchFails?503:200,json:{subscribers:rows,total_count:matches.length,next_offset:Math.min(body.offset,matches.length)+rows.length,has_more:body.offset+rows.length<matches.length}}).catch(()=>{});
+  });
+  await page.locator('#nlSearch').fill('person');
+  await page.waitForFunction(()=>document.querySelector('#nlContactCount').textContent.includes('/ 57 Kontakte'));
+  await page.locator('#nlContactPager button').scrollIntoViewIfNeeded();
+  await page.waitForFunction(()=>document.querySelectorAll('#nlContacts .nl-contact').length >= 50);
+  assert.ok(searchCalls.some(c=>c.query==='person' && c.offset===25 && c.limit===25));
+  await page.locator('#nlSearch').fill('Später');
+  await page.waitForFunction(()=>document.querySelector('#nlContactCount').textContent==='1 / 1 Kontakte');
+  assert.match(await page.locator('#nlContacts').innerText(),/Später Treffer/i);
+  assert.equal(searchCalls.at(-1).offset,0);
+  holdSearch = true;
+  await page.locator('#nlSearch').fill('person0');
+  while (!releaseSearch) await new Promise(resolve=>setTimeout(resolve,10));
+  await page.locator('#nlSearch').fill('person56');
+  await page.waitForFunction(()=>document.querySelector('#nlContactCount').textContent==='1 / 1 Kontakte');
+  releaseSearch(); holdSearch=false;
+  await page.waitForTimeout(250);
+  assert.match(await page.locator('#nlContacts').innerText(),/person56@example.invalid/);
+  searchFails=true;
+  await page.locator('#nlSearch').fill('missing');
+  await page.locator('#nlContactPager').getByRole('button',{name:'RETRY'}).waitFor();
+  assert.equal(await page.locator('#nlContactCount').textContent(),'Suche fehlgeschlagen','search errors must not imply zero matches');
+  assert.equal(await page.locator('#nlContacts .nl-contact').count(),0,'failed search cannot retain old-query rows');
+  searchFails=false;
+  await page.locator('#nlContactPager button').click();
+  await page.getByText('Keine passenden Kontakte.',{exact:true}).waitFor();
+  await page.unroute('**/newsletter/api/subscribers/search');
 
   await page.route('**/api/features', route => route.fulfill({status:403,json:{error:'denied'}}));
   await page.evaluate(() => window.NRCNewsletter.refreshAccess());

@@ -75,14 +75,15 @@ func BigramBloom(s string) uint64 {
 }
 
 type SearchResult struct {
-	Entity     EntityIdentity `json:"entity"`
-	Metadata   SearchMetadata `json:"metadata"`
-	AssetID    uint64         `json:"asset_id,string,omitempty"`
-	Score      float64        `json:"score"`
-	Similarity float32        `json:"similarity,omitempty"`
-	Preview    string         `json:"preview"`
-	AssetType  uint16         `json:"asset_type,omitempty"`
-	Payload    string         `json:"payload,omitempty"`
+	Entity     EntityIdentity           `json:"entity"`
+	Metadata   SearchMetadata           `json:"metadata"`
+	AssetID    uint64                   `json:"asset_id,string,omitempty"`
+	Score      float64                  `json:"score"`
+	Similarity float32                  `json:"similarity,omitempty"`
+	Preview    string                   `json:"preview"`
+	AssetType  uint16                   `json:"asset_type,omitempty"`
+	Payload    string                   `json:"payload,omitempty"`
+	Companies  []protocol.SearchCompany `json:"companies,omitempty"`
 }
 
 type Config struct {
@@ -168,6 +169,8 @@ func parseAssetTypes(s string) []uint16 {
 
 type searchRequest struct {
 	Workspace      string          `json:"workspace"`
+	Mode           string          `json:"mode,omitempty"`
+	Offset         int             `json:"offset,omitempty"`
 	Query          string          `json:"query,omitempty"`
 	SimilarAssetID *uint64         `json:"similar_asset_id,string,omitempty"`
 	SimilarEntity  *EntityIdentity `json:"similar_entity,omitempty"`
@@ -179,8 +182,12 @@ type searchRequest struct {
 }
 
 type searchResponse struct {
-	Results []SearchResult `json:"results"`
-	Stale   bool           `json:"stale,omitempty"`
+	Results    []SearchResult `json:"results"`
+	Stale      bool           `json:"stale,omitempty"`
+	Mode       string         `json:"mode,omitempty"`
+	TotalCount int            `json:"total_count"`
+	HasMore    bool           `json:"has_more,omitempty"`
+	NextOffset int            `json:"next_offset"`
 }
 
 func sameAssetTypeSet(a, b []uint16) bool {
@@ -204,6 +211,15 @@ func sameAssetTypeSet(a, b []uint16) bool {
 }
 
 func (req *searchRequest) normalize() error {
+	if req.Mode != "" && req.Mode != "hybrid" && req.Mode != "text" {
+		return fmt.Errorf("mode must be hybrid or text")
+	}
+	if req.Offset < 0 || (req.Offset != 0 && req.Mode != "text") {
+		return fmt.Errorf("offset requires text mode and must not be negative")
+	}
+	if req.Mode == "text" && (req.SimilarAssetID != nil || req.SimilarEntity != nil || req.TopN > 250) {
+		return fmt.Errorf("text mode supports query search with at most 250 results per page")
+	}
 	if req.Workspace == "" {
 		return fmt.Errorf("workspace is required")
 	}
@@ -271,7 +287,7 @@ func (req *searchRequest) normalize() error {
 			return fmt.Errorf("filters.task.overdue_before must be greater than zero")
 		}
 	}
-	if req.Query == "" && req.SimilarEntity == nil && !(len(req.Filters.EntityTypes) == 1 && includesTask) {
+	if req.Mode != "text" && req.Query == "" && req.SimilarEntity == nil && !(len(req.Filters.EntityTypes) == 1 && includesTask) {
 		return fmt.Errorf("query or similarity seed is required")
 	}
 	if req.Query != "" && req.SimilarEntity != nil {
@@ -462,7 +478,15 @@ func newHTTPHandler(cfg Config, startTime time.Time, wm *WorkspaceManager, index
 		}
 
 		var results []SearchResult
-		if req.SimilarEntity != nil {
+		response := searchResponse{Stale: stale}
+		if req.Mode == "text" {
+			results, err = index.SearchText(req.Workspace, req.Query, req.ConvID, req.Filters)
+			response.Mode, response.TotalCount = "text", len(results)
+			start := min(req.Offset, len(results))
+			end := start + min(req.TopN, len(results)-start)
+			response.HasMore, response.NextOffset = end < len(results), end
+			results = results[start:end]
+		} else if req.SimilarEntity != nil {
 			results, err = index.SimilarEntityParallel(*req.SimilarEntity, req.TopN, req.Filters, runtime.NumCPU())
 		} else {
 			results, err = index.SearchEntitiesParallel(req.Workspace, req.Query, embedder, req.ConvID, req.TopN, req.Filters, runtime.NumCPU())
@@ -484,7 +508,8 @@ func newHTTPHandler(cfg Config, startTime time.Time, wm *WorkspaceManager, index
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(searchResponse{Results: results, Stale: stale})
+		response.Results = results
+		json.NewEncoder(w).Encode(response)
 	})
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

@@ -88,8 +88,12 @@ func (a *app) admin(w http.ResponseWriter, r *http.Request) {
 		a.importConsents(w, r)
 		return
 	}
-	if r.URL.Path == "/api/state" && r.Method == "GET" {
+	if (r.URL.Path == "/api/state" || r.URL.Path == "/api/summary") && r.Method == "GET" {
 		a.getState(w, r)
+		return
+	}
+	if r.URL.Path == "/api/subscribers/search" && r.Method == "POST" {
+		a.searchSubscribers(w, r)
 		return
 	}
 	if r.URL.Path == "/api/campaigns" && r.Method == "POST" {
@@ -257,6 +261,7 @@ func (a *app) admin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (a *app) getState(w http.ResponseWriter, r *http.Request) {
+	summary := r.URL.Path == "/api/summary"
 	contacts, e := a.source.contacts(r.Context())
 	if e != nil {
 		fail(w, 503, "contact register unavailable")
@@ -265,7 +270,7 @@ func (a *app) getState(w http.ResponseWriter, r *http.Request) {
 	customers := []customer{}
 	if src, ok := a.source.(interface {
 		directory(context.Context) ([]customer, error)
-	}); ok {
+	}); ok && !summary {
 		customers, e = src.directory(r.Context())
 	} else if src, ok := a.source.(customerSource); ok {
 		customers, e = src.customers(r.Context())
@@ -306,7 +311,9 @@ func (a *app) getState(w http.ResponseWriter, r *http.Request) {
 			v["confirmed_at"] = c.ConfirmedAt
 			v["import_proof"] = c.Imported
 		}
-		subs = append(subs, v)
+		if !summary {
+			subs = append(subs, v)
+		}
 		if s == "subscribed" {
 			if !seen[ct.Email] {
 				counts["eligible"]++

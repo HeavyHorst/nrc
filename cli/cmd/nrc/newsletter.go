@@ -205,6 +205,24 @@ func newNewsletterCommand() *cobra.Command {
 		}}
 		resource.command.AddCommand(list)
 	}
+	searchContacts := &cobra.Command{Use: "search", Short: "Search a bounded contact page by name, email or company (no embeddings)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		query, _ := cmd.Flags().GetString("query")
+		offset, _ := cmd.Flags().GetInt("offset")
+		limit, _ := cmd.Flags().GetInt("limit")
+		if offset < 0 || limit < 1 || limit > 250 {
+			return fmt.Errorf("offset must be nonnegative; limit must be 1–250")
+		}
+		var result map[string]any
+		if err := runNewsletter(cmd.Context(), http.MethodPost, "/subscribers/search", map[string]any{"query": query, "offset": offset, "limit": limit}, &result); err != nil {
+			return err
+		}
+		newsletterOutput(cmd, result)
+		return nil
+	}}
+	searchContacts.Flags().String("query", "", "Case-insensitive substring (empty lists all contacts)")
+	searchContacts.Flags().Int("offset", 0, "Offset from the preceding page's next_offset")
+	searchContacts.Flags().Int("limit", 25, "Maximum contacts per page (1–250)")
+	subscriber.AddCommand(searchContacts)
 	for _, action := range []string{"create", "update", "audience", "preview", "test", "send"} {
 		use, args := action+" <campaign-id>", cobra.ExactArgs(1)
 		if action == "create" {

@@ -19,6 +19,7 @@ services:
       NEWSLETTER_ADMIN_ADDR: :8096
       NEWSLETTER_PUBLIC_ADDR: :8097
       NEWSLETTER_DATA_DIR: /data
+      NEWSLETTER_SEARCH_URL: http://search:8090/search
     ports:
       - "127.0.0.1:8097:8097"
     volumes:
@@ -30,6 +31,7 @@ services:
       - no-new-privileges:true
     depends_on:
       - websocket-server
+      - search
     restart: unless-stopped
     networks:
       - orion-network

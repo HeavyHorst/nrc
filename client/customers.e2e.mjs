@@ -151,7 +151,8 @@ try {
   // NRC server through the production inspector and customer renderer.
   const newsletterContactId = await contactCard.getAttribute("data-contact");
   await page.route("**/api/features", route => route.fulfill({json:{customers:true,newsletter:true,newsletter_workspace:workspace}}));
-  await page.route("**/newsletter/api/state", route => route.fulfill({json:{configured:false,templates:[],campaigns:[],customers:[],audience:{eligible:0},subscribers:[{contact_id:newsletterContactId,name:"Anna Berger",email:"anna@nordwerk.example",status:"not_subscribed",companies:[{customer_id:companyId,name:"Nordwerk GmbH"}]}]}}));
+  await page.route("**/newsletter/api/summary", route => route.fulfill({json:{configured:false,templates:[],campaigns:[],customers:[],audience:{eligible:0,total:1}}}));
+  await page.route("**/newsletter/api/subscribers/search", route => route.fulfill({json:{total_count:1,next_offset:1,has_more:false,subscribers:[{contact_id:newsletterContactId,name:"Anna Berger",email:"anna@nordwerk.example",status:"not_subscribed",companies:[{customer_id:companyId,name:"Nordwerk GmbH"}]}]}}));
   await page.evaluate(() => NRCNewsletter.refreshAccess());
   await page.click("#newsletterBtn");
   await page.click("#nlSubscriberTab");
@@ -170,7 +171,8 @@ try {
   }
   await page.setViewportSize({width:1440,height:1000});
   await page.unroute("**/api/features");
-  await page.unroute("**/newsletter/api/state");
+  await page.unroute("**/newsletter/api/summary");
+  await page.unroute("**/newsletter/api/subscribers/search");
   await page.evaluate(() => NRCViewManager.setActiveView("customers"));
   await page.click("#customerActivityNew");
   await assertInspector();

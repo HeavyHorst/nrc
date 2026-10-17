@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
 
 type fakeSource struct{ rows []contact }
@@ -316,5 +318,52 @@ func TestPersistedWorkspaceCannotBeReassigned(t *testing.T) {
 	if other, err := openStore(path, "different"); err == nil {
 		other.db.Close()
 		t.Fatal("consent and campaign data reopened in another workspace")
+	}
+}
+
+func TestContactSearchPageScopeAndConsent(t *testing.T) {
+	f := setup(t)
+	response := protocol.SearchResponse{Mode: "text", TotalCount: 51, NextOffset: 26, HasMore: true, Stale: true,
+		Results: []protocol.SearchResult{{Entity: protocol.SearchEntityIdentity{Workspace: "w", EntityType: protocol.SearchEntityAsset, EntityID: 9007199254740993}, AssetType: 9, Preview: `{"version":1,"title":"Anna","email":"ANNA@example.test"}`, Companies: []protocol.SearchCompany{{CustomerID: "17", Name: "Example GmbH"}}}}}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.SearchRequest
+		if json.NewDecoder(r.Body).Decode(&req) != nil || req.Mode != "text" || req.Workspace != "w" || req.Offset != 25 || req.TopN != 1 || req.Query != "EXAMPLE" || len(req.Filters.AssetTypes) != 1 || req.Filters.AssetTypes[0] != 9 || r.Header.Get("X-NRC-Newsletter-Auth") != "" {
+			t.Error("incorrect scoped text request")
+		}
+		w.Header().Set(protocol.SearchAPIVersionHeader, protocol.SearchAPIVersion)
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer backend.Close()
+	f.a.cfg.SearchURL = backend.URL
+	f.a.s.Consent["anna@example.test"] = &consent{Status: "subscribed", Source: "DOI"}
+	w := f.req("POST", "/api/subscribers/search", `{"query":"EXAMPLE","offset":25,"limit":1}`)
+	expect(t, w, 200)
+	var got struct {
+		Subscribers []map[string]any `json:"subscribers"`
+		Total       int              `json:"total_count"`
+		Next        int              `json:"next_offset"`
+		Stale       bool             `json:"stale"`
+	}
+	if json.Unmarshal(w.Body.Bytes(), &got) != nil || len(got.Subscribers) != 1 || got.Total != 51 || got.Next != 26 || !got.Stale || got.Subscribers[0]["contact_id"] != "9007199254740993" || got.Subscribers[0]["status"] != "subscribed" {
+		t.Fatalf("page: %s", w.Body.String())
+	}
+	if len(f.calls) != 0 {
+		t.Fatal("search sent mail")
+	}
+	for _, mutate := range []func(){func() { response.Mode = "" }, func() { response.Results[0].Entity.Workspace = "other" }, func() { response.NextOffset = 25 }} {
+		original := response
+		original.Results = append([]protocol.SearchResult(nil), response.Results...)
+		mutate()
+		expect(t, f.req("POST", "/api/subscribers/search", `{"query":"EXAMPLE","offset":25,"limit":1}`), 503)
+		response = original
+	}
+	w = f.req("GET", "/api/summary", "")
+	expect(t, w, 200)
+	var summary struct {
+		Subscribers []any          `json:"subscribers"`
+		Audience    map[string]int `json:"audience"`
+	}
+	if json.Unmarshal(w.Body.Bytes(), &summary) != nil || len(summary.Subscribers) != 0 || summary.Audience["total"] != len(f.src.rows) {
+		t.Fatalf("summary: %s", w.Body.String())
 	}
 }

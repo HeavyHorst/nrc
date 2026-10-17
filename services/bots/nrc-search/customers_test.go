@@ -11,6 +11,66 @@ import (
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
 
+func TestTextCustomerSearchPagesWithoutEmbeddings(t *testing.T) {
+	storage, err := NewStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	index := NewIndex()
+	index.storage = storage
+	_, err = storage.customerInventory("ws", 0, func(inv *customerInventory) {
+		for _, asset := range []protocol.Asset{
+			{AssetID: 2, AssetType: 8, Preview: `{"version":1,"title":"Nordwerk"}`},
+			{AssetID: 7, AssetType: 8, Preview: `{"version":1,"title":"Südwerk"}`},
+			{AssetID: 10, AssetType: 9, Preview: `{"version":1,"title":"Anna","email":"anna@example.com"}`},
+			{AssetID: 21, AssetType: 9, Preview: `{"version":1,"title":"Ben","email":"ben@example.com"}`},
+			{AssetID: 31, AssetType: 9, Preview: `{"version":1,"title":"Archived","email":"old@example.com","archived":true}`},
+			{AssetID: 35, AssetType: 9, Preview: `{"version":1,"title":"Different","email":"else@other.org"}`},
+		} {
+			inv.Assets[asset.AssetID] = asset
+		}
+		for i, pair := range [][3]uint64{{10, 2, 7}, {7, 10, 7}, {10, 7, 7}, {21, 7, 7}, {35, 2, 6}} {
+			id := uint64(i + 1)
+			inv.Edges[id] = protocol.Edge{EdgeID: id, SourceType: 1, TargetType: 1, SourceID: pair[0], TargetID: pair[1], Relation: uint16(pair[2])}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No indexed vectors and no embedder: text-only reads must use live inventory.
+	cfg := Config{ReconcileInterval: time.Hour}
+	client, err := NewNRCClient(cfg, "ws", storage, nil, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := taskSearchTestHandler(t, cfg, storage, nil, index, client)
+	first, _ := postTaskSearch(t, handler, `{"workspace":"ws","mode":"text","query":"@EXAMPLE.COM","top_n":1,"filters":{"asset_types":[9]}}`)
+	if first.Mode != "text" || first.TotalCount != 2 || !first.HasMore || first.NextOffset != 1 || len(first.Results) != 1 || first.Results[0].AssetID != 10 || len(first.Results[0].Companies) != 2 {
+		t.Fatalf("first contact page: %+v", first)
+	}
+	second, _ := postTaskSearch(t, handler, `{"workspace":"ws","mode":"text","query":"@EXAMPLE.COM","offset":1,"top_n":1,"filters":{"asset_types":[9]}}`)
+	if second.TotalCount != 2 || second.HasMore || len(second.Results) != 1 || second.Results[0].AssetID != 21 {
+		t.Fatalf("second contact page: %+v", second)
+	}
+	projected, _ := postTaskSearch(t, handler, `{"workspace":"ws","mode":"text","query":"anna@","top_n":1,"filters":{"asset_types":[8,9],"customer":{}}}`)
+	if projected.TotalCount != 2 || !projected.HasMore || projected.Results[0].AssetID != 2 {
+		t.Fatalf("page before projection or duplicate memberships: %+v", projected)
+	}
+	byCompany, _ := postTaskSearch(t, handler, `{"workspace":"ws","mode":"text","query":"NORDWERK","filters":{"asset_types":[9]}}`)
+	if len(byCompany.Results) != 1 || byCompany.Results[0].AssetID != 10 {
+		t.Fatalf("company matching or RelatedTo leakage: %+v", byCompany)
+	}
+	empty, _ := postTaskSearch(t, handler, `{"workspace":"ws","mode":"text","query":"notfound","filters":{"asset_types":[9]}}`)
+	if len(empty.Results) != 0 || empty.TotalCount != 0 {
+		t.Fatalf("semantic false positive: %+v", empty)
+	}
+	all, _ := postTaskSearch(t, handler, `{"workspace":"ws","mode":"text","filters":{"asset_types":[9]}}`)
+	if len(all.Results) != 3 {
+		t.Fatalf("empty query or archived contact: %+v", all)
+	}
+}
+
 func TestCustomerRegisterProjectionArchiveDuplicatesAndRestart(t *testing.T) {
 	dir := t.TempDir()
 	storage, err := NewStorage(dir)

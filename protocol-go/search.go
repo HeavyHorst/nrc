@@ -125,6 +125,8 @@ type SearchCustomerFilters struct {
 // SimilarAssetID are retained for legacy asset-only clients.
 type SearchRequest struct {
 	Workspace      string                `json:"workspace"`
+	Mode           string                `json:"mode,omitempty"`
+	Offset         int                   `json:"offset,omitempty"`
 	Query          string                `json:"query,omitempty"`
 	SimilarAssetID *uint64               `json:"similar_asset_id,string,omitempty"`
 	SimilarEntity  *SearchEntityIdentity `json:"similar_entity,omitempty"`
@@ -144,9 +146,19 @@ type SearchResult struct {
 	Preview    string               `json:"preview"`
 	AssetType  uint16               `json:"asset_type,omitempty"`
 	Payload    string               `json:"payload,omitempty"`
+	Companies  []SearchCompany      `json:"companies,omitempty"`
+}
+
+type SearchCompany struct {
+	CustomerID string `json:"customer_id"`
+	Name       string `json:"name"`
 }
 
 type SearchResponse struct {
-	Results []SearchResult `json:"results"`
-	Stale   bool           `json:"stale,omitempty"`
+	Results    []SearchResult `json:"results"`
+	Stale      bool           `json:"stale,omitempty"`
+	Mode       string         `json:"mode,omitempty"`
+	TotalCount int            `json:"total_count,omitempty"`
+	HasMore    bool           `json:"has_more,omitempty"`
+	NextOffset int            `json:"next_offset,omitempty"`
 }

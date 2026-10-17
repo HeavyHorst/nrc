@@ -137,6 +137,12 @@ func TestNewsletterCLICampaignWorkflow(t *testing.T) {
 		}
 	}
 	decoder := json.NewDecoder(strings.NewReader(draft))
+	method, path, status = "POST", "/subscribers/search", 200
+	payload = map[string]any{"query": "example.com", "offset": json.Number("25"), "limit": json.Number("10")}
+	if _, err := executeNewsletter(t, "", "subscriber", "search", "--query", "example.com", "--offset", "25", "--limit", "10"); err != nil {
+		t.Fatal(err)
+	}
+	payload = nil
 	decoder.UseNumber()
 	_ = decoder.Decode(&payload)
 	method, path, status = "POST", "/campaigns", 201

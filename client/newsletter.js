@@ -9,8 +9,16 @@
   let activeDialog = null;
   let reviewedAudience = null;
   let controller = new AbortController();
+  let contactRows = [], contactTotal = 0, contactOffset = 0, contactMore = false, contactLoading = false, contactError = '', contactStale = false;
+  let contactGeneration = 0, contactController = null, searchTimer = null;
+  function cancelContacts() {
+    contactGeneration++; contactController?.abort(); contactController = null;
+    if (searchTimer !== null) { clearTimeout(searchTimer); searchTimer = null; }
+    contactLoading = false;
+  }
   const editable = () => !campaign || campaign.status === 'draft';
   function clear(reason) {
+    cancelContacts(); contactRows = []; contactTotal = contactOffset = 0; contactMore = false;
     epoch++; controller.abort(); controller = new AbortController();
     enabled = false; workspace = ''; state = campaign = null; dirty = busy = false;
     reviewedAudience = null;
@@ -22,6 +30,7 @@
     } else if (window.NRCViewManager?.getActiveView() === 'newsletter') window.NRCViewManager.setActiveView('chat');
   }
   function disconnect() {
+    cancelContacts();
     epoch++; controller.abort(); controller = new AbortController();
     enabled = false; busy = false;
     reviewedAudience = null;
@@ -29,9 +38,9 @@
     notice('Verbindung unterbrochen · Entwurf bleibt erhalten. Laufende Aktionen vor erneutem Versand prüfen.');
     controls();
   }
-  async function request(path, method = 'GET', body) {
+  async function request(path, method = 'GET', body, signal = controller.signal) {
     const generation = epoch;
-    const response = await fetch(path, {method, credentials:'same-origin', cache:'no-store', signal:controller.signal,
+    const response = await fetch(path, {method, credentials:'same-origin', cache:'no-store', signal,
       headers: {...(body ? {'Content-Type':'application/json'} : {}), ...(path.startsWith('/newsletter/api') ? {'X-NRC-Workspace':workspace} : {})}, body:body ? JSON.stringify(body) : undefined});
     if (generation !== epoch) throw new DOMException('Stale', 'AbortError');
     if (response.status === 401 || response.status === 403) { clear('Keine Berechtigung für Newsletter.'); throw new Error('Keine Berechtigung für Newsletter.'); }
@@ -63,7 +72,7 @@
   function field(id, title, type = 'text') { return `<label class="detail-edit-field"><span class="detail-edit-label">${title}</span><input class="task-detail-input" id="${id}" type="${type}"></label>`; }
   function mount() {
     $('newsletterPanel').innerHTML = `<header class="panel-header"><div><span>NEWSLETTER / MAILJET</span><span id="nlStatus" role="status" aria-live="polite">Lädt …</span></div></header>
-      <div class="nl-toolbar"><nav class="tab-group" aria-label="Newsletter-Bereiche"><button class="btn nav-tab active" id="nlCampaignTab" aria-pressed="true">Kampagnen<span class="tab-count" id="nlCampaignCount">0</span></button><button class="btn nav-tab" id="nlSubscriberTab" aria-pressed="false">Kontakte &amp; Einwilligungen<span class="tab-count" id="nlSubscriberCount">0</span></button></nav><div class="nl-actions"><button class="btn header-operation" id="nlRefresh">Aktualisieren</button><button class="btn btn--primary header-operation header-create-action" id="nlNew">+ Kampagne</button></div></div>
+      <div class="nl-toolbar"><nav class="tab-group" aria-label="Newsletter-Bereiche"><button class="btn nav-tab active" id="nlCampaignTab" aria-pressed="true">Kampagnen<span class="tab-count" id="nlCampaignCount">0</span></button><button class="btn nav-tab" id="nlSubscriberTab" aria-pressed="false">Kontakte<span class="tab-count" id="nlSubscriberCount">0</span></button></nav><div class="nl-actions"><button class="btn header-operation" id="nlRefresh">Aktualisieren</button><button class="btn btn--primary header-operation header-create-action" id="nlNew">+ Kampagne</button></div></div>
       <div id="nlCampaigns" class="nl-layout"><aside class="nl-register" aria-label="Kampagnen"><div id="nlList"></div></aside>
       <section class="nl-editor"><div class="nl-identity"><span class="nl-meta" id="nlRevision"></span><h2 id="nlHeading">Neue Kampagne</h2><p id="nlCampaignState" class="nl-meta"></p></div>
       <div class="nl-compose"><section class="nl-section"><header class="panel-header"><div><span>Inhalt & Vorlage</span></div></header>
@@ -106,7 +115,15 @@
       if (confirmation !== campaign.subject) throw new Error('Betreff stimmt nicht überein. Kein Versand.');
       await api(`/campaigns/${encodeURIComponent(campaign.id)}/send`, {revision:campaign.revision,confirmation,...(campaign.kind === 'service' ? {audience_token:reviewedAudience?.token || ''} : {})}); reviewedAudience = null; await reloadCampaign();
     });
-    $('nlSearch').oninput = contacts;
+    $('nlContacts').insertAdjacentHTML('afterend', '<nrc-page-loader id="nlContactPager"></nrc-page-loader>');
+    $('nlContactPager').addEventListener('nrc:load-more', () => loadContacts(false));
+    $('nlSearch').placeholder = 'Name, E-Mail oder Firma …';
+    $('nlSearch').oninput = () => {
+      if (!enabled) return;
+      cancelContacts(); contactRows = []; contactTotal = contactOffset = 0; contactMore = false; contactError = ''; contactStale = false;
+      contactLoading = true; contacts();
+      searchTimer = setTimeout(() => { searchTimer = null; loadContacts(true); }, 200);
+    };
   }
   const api = (path, body, method = 'POST') => request('/newsletter/api' + path, method, body);
   function serviceFields() {
@@ -120,6 +137,7 @@
     for (const [id, active] of [['nlCampaignTab', !subscribers], ['nlSubscriberTab', subscribers]]) {
       $(id).classList.toggle('active', active); $(id).setAttribute('aria-pressed', String(active));
     }
+    contactPager();
   }
   function variables(values) {
     const template = state?.templates?.find(t => t.id === $('nlTemplate').value);
@@ -170,7 +188,7 @@
   }
   async function reloadCampaign() { await loadState(); if (!dirty) notice('Provider-Status aktualisiert.'); }
   async function loadState() {
-    state = await request('/newsletter/api/state');
+    state = await request('/newsletter/api/summary');
     const selected = new Set([...$('nlCustomers').querySelectorAll('input:checked')].map(input => input.value));
     $('nlCustomers').innerHTML = (state.customers || []).map(c => `<label class="filter-checkbox-label"><input class="filter-checkbox" type="checkbox" value="${esc(c.customer_id)}" ${selected.has(c.customer_id) ? 'checked' : ''}><span>${esc(c.name)} / ${c.contacts.length} Servicekontakte</span></label>`).join('') || '<p class="nl-meta">Keine nicht archivierten Kunden.</p>';
     reviewedAudience = null;
@@ -187,9 +205,9 @@
     $('nlSender').textContent = `Absender: ${state.from_name || '—'} <${state.from_email || '—'}> · Antwort an: ${state.reply_to || '—'}`;
     $('nlEligible').textContent = state.audience?.eligible ?? 0;
     $('nlCampaignCount').textContent = state.campaigns?.length ?? 0;
-    $('nlSubscriberCount').textContent = state.subscribers?.length ?? 0;
+    $('nlSubscriberCount').textContent = state.audience?.total ?? 0;
     $('nlAudience').innerHTML = Object.entries({total:'Kontakte',eligible:'Berechtigt (eindeutig)',duplicates:'Doppelte Adressen',not_subscribed:'Nicht bestätigt',unsubscribed:'Abgemeldet',blocked:'Gesperrt / ohne E-Mail'}).map(([key,label]) => `<div><dt>${label}</dt><dd>${esc(state.audience?.[key] ?? 0)}</dd></div>`).join('');
-    register(); contacts();
+    register(); await loadContacts(true);
   }
   function register() {
     $('nlList').innerHTML = (state?.campaigns || []).map((c,i) => `<button class="nl-row" data-campaign="${i}" aria-pressed="${c.id === campaign?.id}"><strong>${esc(c.title)}</strong><span>${esc(campaignLabels[c.status] || c.status)} · R${esc(c.revision)}</span></button>`).join('') || '<p>Noch keine Kampagnen.</p>';
@@ -217,12 +235,33 @@
     $('nlRecipients').innerHTML = (campaign?.recipients || []).map(r => `<p>${esc(r.name)} · ${esc(r.email)}<br><span class="nl-meta">${esc(recipientLabels[r.status] || r.status)} ${esc(r.error)}</span></p>`).join('');
     $('nlRefresh').disabled = busy;
     $('nlContacts').querySelectorAll('button').forEach(button => button.disabled = button.hasAttribute('data-open-contact') ? !enabled || !customersEnabled || busy : !available);
+    contactPager();
+  }
+  function contactPager() {
+    $('nlContactPager')?.setState({hasMore:contactMore, loading:contactLoading, error:contactError, disabled:!enabled || busy, active:!$('nlSubscribers').hidden, root:$('newsletterPanel'), label:'MEHR LADEN'});
+  }
+  async function loadContacts(reset) {
+    if (!enabled || (!reset && (contactLoading || !contactMore && !contactError))) return;
+    if (reset) { cancelContacts(); contactRows = []; contactTotal = contactOffset = 0; contactMore = false; contactStale = false; }
+    const generation = ++contactGeneration;
+    contactController = new AbortController(); contactLoading = true; contactError = ''; contacts();
+    try {
+      const page = await request('/newsletter/api/subscribers/search', 'POST', {query:$('nlSearch').value.trim(), offset:contactOffset, limit:25}, contactController.signal);
+      if (generation !== contactGeneration) return;
+      if (!Array.isArray(page.subscribers) || !Number.isSafeInteger(page.total_count) || page.total_count < 0 ||
+          !Number.isSafeInteger(page.next_offset) || page.next_offset !== Math.min(contactOffset, page.total_count) + page.subscribers.length || page.next_offset > page.total_count ||
+          (page.has_more === true) !== (page.next_offset < page.total_count) || (page.has_more && !page.subscribers.length)) throw new Error('Ungültige Suchantwort. Bitte erneut versuchen.');
+      contactRows = [...new Map([...contactRows, ...page.subscribers].map(row => [row.contact_id, row])).values()];
+      contactTotal = page.total_count; contactOffset = page.next_offset; contactMore = page.has_more === true; contactStale ||= page.stale === true;
+    } catch (error) { if (generation === contactGeneration && error.name !== 'AbortError') contactError = 'Kontaktsuche nicht verfügbar. Bitte erneut versuchen.'; }
+    finally { if (generation === contactGeneration) { contactLoading = false; contacts(); } }
   }
   function contacts() {
-    const query = $('nlSearch').value.toLocaleLowerCase();
-    const rows = (state?.subscribers || []).filter(s => `${s.name} ${s.email} ${(s.companies || []).map(c => c.name).join(' ')}`.toLocaleLowerCase().includes(query));
-    $('nlContactCount').textContent = `${rows.length} / ${state?.subscribers?.length ?? 0} Kontakte`;
-    $('nlContacts').innerHTML = rows.map((s,i) => `<div class="nl-contact" data-contact-id="${esc(s.contact_id)}"><span><button class="btn btn--row" type="button" data-open-contact="${i}" aria-label="Kontakt ${esc(s.name)} öffnen"><strong>${esc(s.name)}</strong></button><br><span class="nl-meta">${esc(s.email)}</span><br><span class="nl-meta">Firma: ${esc((s.companies || []).map(c => c.name).join(' · ') || 'Keine Zuordnung')}</span></span><span>${esc(labels[s.status] || s.status)}${s.source ? `<br><span class="nl-meta">${esc(s.source)}</span>` : ''}${s.confirmed_at ? `<br><span class="nl-meta">Bestätigt: ${esc(new Date(s.confirmed_at).toLocaleString(undefined, {dateStyle:'medium',timeStyle:'short'}))}</span>` : ''}</span><span class="nl-contact-actions">${['not_subscribed','unsubscribed','pending'].includes(s.status) ? `<button class="btn btn--row" data-invite="${i}">${s.status === 'pending' ? 'Erneut anfordern' : 'Einladen'} …</button>` : ''}${s.status === 'subscribed' || s.status === 'pending' ? `<button class="btn btn--row" data-optout="${i}">Abmelden …</button>` : ''}</span></div>`).join('') || '<p>Keine passenden Kontakte.</p>';
+    const rows = contactRows;
+    $('nlContactCount').textContent = `${contactLoading ? 'Suche läuft … · ' : ''}${rows.length} / ${contactTotal} Kontakte${contactStale ? ' · Suchstand möglicherweise veraltet; bitte aktualisieren.' : ''}`;
+    if (!rows.length && contactLoading) $('nlContactCount').textContent = 'Suche läuft …';
+    else if (!rows.length && contactError) $('nlContactCount').textContent = 'Suche fehlgeschlagen';
+    $('nlContacts').innerHTML = rows.map((s,i) => `<div class="nl-contact" data-contact-id="${esc(s.contact_id)}"><span><button class="btn btn--row" type="button" data-open-contact="${i}" aria-label="Kontakt ${esc(s.name)} öffnen"><strong>${esc(s.name)}</strong></button><br><span class="nl-meta">${esc(s.email)}</span><br><span class="nl-meta">Firma: ${esc((s.companies || []).map(c => c.name).join(' · ') || 'Keine Zuordnung')}</span></span><span>${esc(labels[s.status] || s.status)}${s.source ? `<br><span class="nl-meta">${esc(s.source)}</span>` : ''}${s.confirmed_at ? `<br><span class="nl-meta">Bestätigt: ${esc(new Date(s.confirmed_at).toLocaleString(undefined, {dateStyle:'medium',timeStyle:'short'}))}</span>` : ''}</span><span class="nl-contact-actions">${['not_subscribed','unsubscribed','pending'].includes(s.status) ? `<button class="btn btn--row" data-invite="${i}">${s.status === 'pending' ? 'Erneut anfordern' : 'Einladen'} …</button>` : ''}${s.status === 'subscribed' || s.status === 'pending' ? `<button class="btn btn--row" data-optout="${i}">Abmelden …</button>` : ''}</span></div>`).join('') || (contactLoading || contactError ? '' : '<p>Keine passenden Kontakte.</p>');
     $('nlContacts').querySelectorAll('[data-open-contact]').forEach(button => button.onclick = async () => {
       if (!enabled || !customersEnabled || busy) return;
       const generation = epoch;

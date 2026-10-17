@@ -15,6 +15,7 @@ import (
 
 type config struct {
 	Workspace, JWTSecret, JWTIssuer, PublicURL, FromEmail, FromName, ReplyTo, EventSecret string
+	SearchURL                                                                             string
 	TemplateIDs                                                                           []string
 }
 type app struct {
@@ -41,6 +42,7 @@ func env(k, d string) string {
 }
 func main() {
 	cfg := config{Workspace: os.Getenv("NRC_WORKSPACE"), JWTSecret: os.Getenv("NRC_JWT_SECRET"), JWTIssuer: env("NRC_JWT_ISSUER", "nrc-tailscale-proxy"), PublicURL: strings.TrimRight(os.Getenv("NEWSLETTER_PUBLIC_URL"), "/"), FromEmail: os.Getenv("NEWSLETTER_FROM_EMAIL"), FromName: os.Getenv("NEWSLETTER_FROM_NAME"), ReplyTo: os.Getenv("NEWSLETTER_REPLY_TO"), EventSecret: os.Getenv("NEWSLETTER_EVENT_SECRET"), TemplateIDs: []string{}}
+	cfg.SearchURL = env("NEWSLETTER_SEARCH_URL", "http://search:8090/search")
 	for _, id := range strings.Split(os.Getenv("NEWSLETTER_TEMPLATE_IDS"), ",") {
 		id = strings.TrimSpace(id)
 		if id == "" {

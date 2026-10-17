@@ -95,7 +95,7 @@ func TestNewsletterServiceAndImportRoutes(t *testing.T) {
 	t.Setenv("NRC_NEWSLETTER_USERS", "alice@example.com")
 	t.Setenv("NRC_NEWSLETTER_BACKEND", backend.URL)
 	t.Setenv("NRC_NEWSLETTER_WORKSPACE", "alice-private")
-	for _, path := range []string{"/newsletter/api/consents/import", "/newsletter/api/campaigns/" + strings.Repeat("a", 64) + "/audience"} {
+	for _, path := range []string{"/newsletter/api/consents/import", "/newsletter/api/subscribers/search", "/newsletter/api/campaigns/" + strings.Repeat("a", 64) + "/audience"} {
 		for _, identity := range []string{"alice@example.com", "eve@example.com"} {
 			for _, method := range []string{"POST", "GET", "PUT"} {
 				r := httptest.NewRequest(method, "http://nrc"+path, nil)

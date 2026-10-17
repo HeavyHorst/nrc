@@ -13,7 +13,7 @@ const preview = (title, extra = {}) => JSON.stringify({ version: 1, title, ...ex
 const hit = (id, type, title, extra = {}) => ({ entity: { workspace: "customer-search-demo", conv_id: "0", type: "asset", id },
   metadata: { asset_type: type }, preview: preview(title, extra), payload: type === 10 ? "Discussed the rollout and training schedule." : "" });
 let response = { results: [hit("99", 8, "Nordwerk GmbH", { number: "C-099", city: "Herford", assignee: "Rene" })] };
-let fail = false, hold = false, release;
+let fail = false, hold = false, release, pagingFailure = true;
 const capture = async name => {
   if (!process.env.NRC_CUSTOMER_SEARCH_SCREENSHOTS) return;
   await fs.mkdir(process.env.NRC_CUSTOMER_SEARCH_SCREENSHOTS, { recursive: true });
@@ -29,7 +29,12 @@ try {
     if (url.pathname === "/api/features") return route.fulfill({ json: { customers: true } });
     if (url.pathname === "/search") {
       requests.push(route.request().postDataJSON());
-      const json = response, status = fail ? 503 : 200;
+      if (requests.at(-1).query === "paged") {
+        const offset = requests.at(-1).offset;
+        return route.fulfill({json:{mode:"text", total_count:3, next_offset:offset ? (pagingFailure ? 2 : 3) : 2, has_more:!offset,
+          results:offset ? [hit("62",8,"Page two")] : [hit("60",8,"Page one A"),hit("61",8,"Page one B")]},headers:{"X-NRC-Search-Version":"typed-v1"}});
+      }
+      const json = {...response, ...(route.request().postDataJSON().mode === "text" ? {mode:"text", total_count:response.results.length, next_offset:response.results.length, has_more:false} : {})}, status = fail ? 503 : 200;
       if (hold) await new Promise(resolve => { release = resolve; });
       await route.fulfill({ status, json, headers: { "X-NRC-Search-Version": "typed-v1" } });
       return;
@@ -79,7 +84,9 @@ try {
     await waitRegister();
   };
   await search("Anna");
-  assert.equal(requests.at(-1).top_n, 20);
+  assert.equal(requests.at(-1).top_n, 25);
+  assert.equal(requests.at(-1).mode, "text");
+  assert.equal(requests.at(-1).offset, 0);
   assert.deepEqual(requests.at(-1).filters, { entity_types: ["asset"], asset_types: [8, 9], customer: { include_archived: false } });
   assert.equal(requests.at(-1).conv_id, "0");
   assert.equal(requests.at(-1).workspace, "customer-search-demo");
@@ -103,6 +110,15 @@ try {
   await page.waitForFunction(() => document.getElementById("customersState").textContent.includes("RESULTS"));
   await page.waitForTimeout(300);
   assert.equal(requests.at(-1).filters.customer.include_archived, true);
+  const fallbackReads = (await page.evaluate(()=>window.registerReads)).length;
+  await query.fill("paged");
+  await page.locator('#customersPager').getByRole('button',{name:'RETRY'}).waitFor();
+  assert.equal(await page.locator('.customer-row').count(),2,'invalid next page is not merged');
+  assert.equal((await page.evaluate(()=>window.registerReads)).length,fallbackReads,'a failed Search continuation never falls back to an Odin cursor');
+  pagingFailure=false;
+  await page.locator('#customersPager button').click();
+  await page.waitForFunction(()=>document.querySelectorAll('.customer-row').length===3);
+  assert.equal(requests.at(-1).offset,2);
   const beforeClear = requests.length;
   await query.fill("   "); await waitRegister();
   await page.waitForFunction(() => document.getElementById("customersState").textContent.includes("CUSTOMERS"));

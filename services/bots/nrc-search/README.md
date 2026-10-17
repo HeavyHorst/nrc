@@ -50,13 +50,13 @@ answer. Use `--payload` to include content.
 For nonempty register queries, `POST /search` accepts:
 
 ```json
-{"workspace":"example","conv_id":"0","query":"alice@example.com","top_n":100,"include_payload":true,"filters":{"entity_types":["asset"],"asset_types":[8,9],"customer":{"include_archived":false}}}
+{"workspace":"example","mode":"text","conv_id":"0","query":"alice@example.com","offset":0,"top_n":25,"include_payload":true,"filters":{"entity_types":["asset"],"asset_types":[8,9],"customer":{"include_archived":false}}}
 ```
 
 The presence of `filters.customer` selects register projection: only company
 asset identities are returned. Contact matches project through asset-to-asset
 `MemberOf` edges in either direction, including multiple companies; `RelatedTo`
-is ignored. Matches aggregate by maximum fused score. Archived company targets
+is ignored. In hybrid mode matches aggregate by maximum fused score. Archived company targets
 are excluded and identities deduplicated before `top_n`. `entity.id` is a decimal
 string; `preview` is the authoritative encoded version-1 company preview and
 `metadata.customer` contains that same preview as a parsed JSON object. Payload
@@ -67,6 +67,22 @@ contact and activity results. Readable JSON values (names, numbers, email, phone
 descriptions and activity content) feed text and embedding search. Presence users
 are not indexed. Empty register queries should continue to use NRC's paged
 customer API, not Search.
+
+`mode:"text"` selects case-insensitive substring search with no query embedding or
+vector ranking. Omitted mode (or `"hybrid"`) retains existing hybrid behavior.
+Text customer/contact rows are read from the durable customer inventory, independent
+of embedding-job completion. Results are ordered by entity identity and deduplicated
+before paging; `offset` defaults to zero and `top_n` is at most 250 (default 10).
+The response confirms `mode:"text"` and includes `total_count`, `next_offset`,
+`has_more` and the existing `stale` flag. Empty text queries list matching records.
+Raw contact hits include `companies:[{customer_id,name}]` from MemberOf, and also
+match those company names. Archived records are excluded by default.
+Offsets are not snapshots: concurrent changes can move page boundaries; refresh
+to reconcile. Existing model loading and background embedding for hybrid search
+are unchanged. A text request itself neither embeds nor waits for embedding jobs.
+Deploy the updated search backend before the updated customer/newsletter consumers:
+older backends ignore `mode` and may execute hybrid search before their response is
+rejected. Text-only behavior is guaranteed by the new backend, not by old versions.
 
 Membership and company previews have a separate durable inventory, updated live
 and reconciled through paged edges. Archive changes are visible to register search

@@ -24,14 +24,19 @@ http.createServer(async (req,res) => {
   const json = (data,status=200) => {res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
   try {
     if (url.pathname === '/api/features') return json({customers:true,newsletter:true,newsletter_workspace:'demo'});
-    if (url.pathname === '/newsletter/api/state') {
+    if (url.pathname === '/newsletter/api/state' || url.pathname === '/newsletter/api/summary') {
       state.audience = {total:state.subscribers.length,eligible:state.subscribers.filter(s=>s.status==='subscribed').length,not_subscribed:state.subscribers.filter(s=>['pending','not_subscribed'].includes(s.status)).length,unsubscribed:state.subscribers.filter(s=>s.status==='unsubscribed').length,blocked:state.subscribers.filter(s=>s.status==='blocked').length};
-      return json(state);
+      return json(url.pathname.endsWith('/summary') ? {...state,subscribers:[]} : state);
     }
     if (url.pathname.startsWith('/newsletter/api/')) {
       let raw = ''; for await (const chunk of req) raw += chunk;
       const body = raw ? JSON.parse(raw) : {};
       const parts = url.pathname.split('/').slice(3);
+      if (parts[0] === 'subscribers' && parts[1] === 'search') {
+        const matches = state.subscribers.filter(s => `${s.name} ${s.email} ${(s.companies || []).map(c=>c.name).join(' ')}`.toLowerCase().includes((body.query || '').trim().toLowerCase()));
+        const offset = Math.min(body.offset || 0,matches.length), rows = matches.slice(offset,offset+(body.limit || 25));
+        return json({subscribers:rows,total_count:matches.length,next_offset:offset+rows.length,has_more:offset+rows.length<matches.length});
+      }
       if (parts[0] === 'subscribers') {
         const subscriber = state.subscribers.find(s => s.contact_id === parts[1]);
         if (!subscriber) return json({error:'Nicht gefunden'},404);
@@ -53,7 +58,7 @@ http.createServer(async (req,res) => {
       } else {Object.assign(campaign,body);campaign.revision++;campaign.tested_revision=0;}
       return json(campaign);
     }
-    if (url.pathname === '/') {res.setHeader('Content-Type','text/html; charset=utf-8');return res.end(shell);}
+    if (url.pathname === '/') {res.setHeader('Content-Type','text/html; charset=utf-8');return res.end(shell.replace('<script src="/newsletter.js">','<script src="/loading-indicator.js"></script><script src="/page-loader.js"></script><script src="/newsletter.js">'));}
     const filename = path.resolve(root,'.'+decodeURIComponent(url.pathname));
     if (!filename.startsWith(root) || !/\.(css|js|woff2)$/.test(filename)) {res.writeHead(404);return res.end();}
     res.setHeader('Content-Type',filename.endsWith('.css')?'text/css':filename.endsWith('.js')?'text/javascript':'font/woff2');res.end(await readFile(filename));
