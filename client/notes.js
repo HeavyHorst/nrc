@@ -1917,7 +1917,7 @@ function buildNoteHeaderMetadata(note) {
   ];
   const source = note.source || note.sourceUrl || note.sourceId;
   if (source) rows.push({ label: "SOURCE", value: String(source) });
-  return window.NRCDetailUI.renderHeaderMetadata(rows);
+  return window.NRCDetailUI.renderHeaderMetadata(rows, 2, note.assetId);
 }
 
 function addNoteSectionJumpLedger(previewBody, scrollContainer = previewBody) {

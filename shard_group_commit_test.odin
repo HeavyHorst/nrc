@@ -179,6 +179,12 @@ when NRC_SIMULATION {
 			}
 			empty_size, size_err := shard_transaction_size(&tx)
 			testing.expect_value(t, size_err, Shard_Transaction_Error.None)
+			// The atomic record also carries content-free change history. Its
+			// create field list does not depend on the padded asset contents.
+			history, history_ok := build_history_mutations(&tx)
+			testing.expect(t, history_ok)
+			for event in history do empty_size += 8 + len(event.payload)
+			destroy_history_mutations(history)
 			target_size := persistence.WRITE_BATCH_MAX_BYTES + (outcome == 0 ? -1 : outcome == 1 ? 0 : 1)
 			body_size := target_size - persistence.LOG_HEADER_SIZE - empty_size
 			asset.payload = make([]byte, min(body_size, int(max(u16))))

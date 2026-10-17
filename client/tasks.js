@@ -4093,7 +4093,7 @@ function buildTaskHeaderMetadata(task) {
   if (task.completedAt && task.completedAt !== 0n) {
     rows.push({ label: "COMPLETED", value: window.NRCDetailUI.formatHeaderDate(task.completedAt) });
   }
-  return window.NRCDetailUI.renderHeaderMetadata(rows);
+  return window.NRCDetailUI.renderHeaderMetadata(rows, 1, task.id);
 }
 
 function renderTaskDocumentProperties(task) {

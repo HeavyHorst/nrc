@@ -215,6 +215,7 @@ Edge_Entity_Key :: struct {
 
 // Workspace_State holds all per-workspace data
 Workspace_State :: struct {
+	history:                             [dynamic][]byte, // Immutable history-domain payloads, including deleted entities.
 	conversations:                       map[pr.ConversationID]^Conversation_State, // conversation-scoped data
 	room_mappings:                       map[string]Room_Mapping_State, // normalized room name -> room mapping registry entry
 	user_dms:                            map[string][dynamic]pr.ConversationID, // username -> list of DM conv_ids user is in
@@ -310,7 +311,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:0793220"
+BUILD_VERSION :: "dev-2026-10:8442d23"
 PROTOCOL_VERSION :: 9 // Slice rows carry an independent Ticket member counter.
 
 jwt_auth_secret: string

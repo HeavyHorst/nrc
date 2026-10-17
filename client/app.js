@@ -57,6 +57,8 @@ let pendingInitialization = null; // Store initialization function to call when 
 // PROTOCOL DEFINITIONS
 // =============================================================================
 const Opcode = {
+  C_ListHistory: 62,
+  S_HistoryPage: 168,
   C_SendMessage: 1,
   C_SubscribeConvs: 2,
   C_UnsubscribeConvs: 3,
@@ -1392,6 +1394,7 @@ async function connectWebSocket() {
     serverReady = false; // Reset server ready flag
     window.NRCCalendar?.disconnect();
     window.NRCOverview?.disconnect();
+    window.NRCHistory?.disconnect();
     window.NRCSlices?.disconnect();
     window.NRCAppointmentNotify?.disconnect();
     logSystem("CONNECTED; WAITING FOR SERVER READY", "websocket");
@@ -1437,6 +1440,7 @@ async function connectWebSocket() {
     serverReady = false; // Reset server ready flag
     window.NRCCalendar?.disconnect();
     window.NRCOverview?.disconnect();
+    window.NRCHistory?.disconnect();
     window.NRCSlices?.disconnect();
     window.NRCAppointmentNotify?.disconnect();
     window.NRCRecordActivity?.disconnect();
@@ -1583,6 +1587,7 @@ async function initializeSession() {
   window.NRCAttention?.onSessionStarted?.();
   window.NRCCalendar?.refresh();
   window.NRCOverview?.refresh();
+  window.NRCHistory?.refresh();
 }
 
 // --- Reconnection Logic ---
@@ -1893,6 +1898,9 @@ function handleBinaryMessage(arrayBuffer) {
         break;
       case Opcode.S_WorkspaceOverview:
         window.NRCOverview?.handlePage(dataView);
+        break;
+      case Opcode.S_HistoryPage:
+        window.NRCHistory?.handlePage(dataView);
         break;
       // Asset messages
       case Opcode.S_AssetCreated:
@@ -4746,6 +4754,7 @@ function saveUIState() {
       reminders: "reminders",
       attention: "attention",
       overview: "overview",
+      history: "history",
       calendar: "calendar",
       search: "search",
       notes: "notes",
@@ -6810,6 +6819,7 @@ function updateHeaderButtons() {
   const view = window.NRCViewManager ? window.NRCViewManager.getActiveView() : "chat";
   if (attentionBtn) attentionBtn.classList.toggle("active", view === "attention");
   document.getElementById("overviewBtn")?.classList.toggle("active", view === "overview");
+  document.getElementById("historyBtn")?.classList.toggle("active", view === "history");
   document.getElementById("calendarBtn")?.classList.toggle("active", view === "calendar");
   document.getElementById("searchBtn")?.classList.toggle("active", view === "search");
   document.getElementById("customersBtn")?.classList.toggle("active", view === "customers");
@@ -7377,6 +7387,7 @@ window.addEventListener("hashchange", handleShareHashChange);
   initKanban(); // Initialize kanban board
   window.NRCAttention?.init?.(); // Attention register
   window.NRCOverview?.init();
+  window.NRCHistory?.init();
   window.NRCCalendar?.init();
   window.NRCWorkspaceSearch?.init();
   window.NRCReminderNotify?.init?.(); // Reminder deadline timer and NOTIFY switch
@@ -7402,6 +7413,8 @@ window.addEventListener("hashchange", handleShareHashChange);
       window.NRCViewManager.setActiveView("attention");
     } else if (savedUIState.mode === "overview") {
       window.NRCViewManager.setActiveView("overview");
+    } else if (savedUIState.mode === "history") {
+      window.NRCViewManager.setActiveView("history");
     } else if (savedUIState.mode === "calendar") {
       window.NRCViewManager.setActiveView("calendar");
     } else if (savedUIState.mode === "search") {

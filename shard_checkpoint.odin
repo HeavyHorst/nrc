@@ -94,6 +94,11 @@ shard_checkpoint_state_digest :: proc(shard: int) -> (digest: [32]byte) {
 	}
 	slice.sort_by(workspaces[:], shard_checkpoint_workspace_less)
 	for workspace in workspaces {
+		for event in workspace.state.history {
+			shard_checkpoint_sha_u8(&ctx, u8(Shard_Mutation_Domain.History))
+			shard_checkpoint_sha_bytes(&ctx, transmute([]byte)workspace.id)
+			shard_checkpoint_sha_bytes(&ctx, event)
+		}
 		conv_ids := make([dynamic]pr.ConversationID, 0, len(workspace.state.conversations))
 		for conv_id in workspace.state.conversations do append(&conv_ids, conv_id)
 		slice.sort_by(conv_ids[:], proc(a, b: pr.ConversationID) -> bool {return a < b})
@@ -260,6 +265,10 @@ build_shard_checkpoint_from_replayed_state_with_storage :: proc(
 	witness := ""
 	for workspace in workspaces {
 		if witness == "" do witness = workspace.id
+		for event in workspace.state.history {
+			payload := make([]byte, len(event)); copy(payload, event)
+			if !shard_checkpoint_add(&emitter, workspace.id, floors, .History, 1, 1, payload) do return false
+		}
 		conv_ids := make([dynamic]pr.ConversationID, 0, len(workspace.state.conversations))
 		for conv_id in workspace.state.conversations do append(&conv_ids, conv_id)
 		slice.sort_by(conv_ids[:], proc(a, b: pr.ConversationID) -> bool {return a < b})

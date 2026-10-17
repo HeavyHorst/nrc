@@ -12,10 +12,11 @@ Shard_Log_Op :: enum u8 {
 }
 
 Shard_Mutation_Domain :: enum u8 {
-	Task  = 1,
-	Asset = 2,
-	Edge  = 3,
-	DM    = 4,
+	Task    = 1,
+	Asset   = 2,
+	Edge    = 3,
+	DM      = 4,
+	History = 5,
 }
 Shard_Transaction_Error :: enum {
 	None,
@@ -25,6 +26,8 @@ Shard_Transaction_Error :: enum {
 }
 
 Shard_Mutation :: struct {
+	system_actor:          bool, // Append-time attribution only; never serialized in entity mutations.
+	system_unblock:        bool, // Split an automatic blocked_by change from a user patch.
 	domain:                Shard_Mutation_Domain,
 	op:                    u8,
 	entity_record_version: u16,
@@ -61,6 +64,8 @@ shard_mutation_supported :: proc(domain: Shard_Mutation_Domain, op: u8, version:
 	case .Edge:
 		return version == 1 && (op == 1 || op == 2)
 	case .DM:
+		return version == 1 && op == 1
+	case .History:
 		return version == 1 && op == 1
 	}
 	return false

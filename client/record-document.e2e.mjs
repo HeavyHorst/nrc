@@ -80,6 +80,9 @@ try {
         const edit = type === "task" ? "#taskDetailToggleFocus" : "#noteDetailEdit";
         const cancel = type === "task" ? "#taskDetailToggleFocus" : "#noteDetailToggleView";
         await page.locator(title).waitFor();
+        const history = page.locator("#inspectorHeader [data-history-kind]");
+        assert.equal(await history.getAttribute("data-history-id"), type === "task" ? "259" : "4826");
+        await history.click({ trial: true }); // Visible and hit-testable without leaving this record.
         if (width > 768) {
           const listHeader = await geometry("#notesPanel .header-register-identity-row");
           const identity = await geometry("#inspectorHeader .inspector-identity-row");

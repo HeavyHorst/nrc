@@ -122,7 +122,7 @@ try {
   const popupPromise = page.context().waitForEvent("page");
   await taskLink.click({ button: "middle" });
   const popup = await popupPromise;
-  await popup.waitForFunction(() => window.NRCInspector && currentWorkspaceId === "note-panel");
+  await popup.waitForFunction(() => window.NRCInspector && typeof currentWorkspaceId !== "undefined" && currentWorkspaceId === "note-panel");
   assert.match(popup.url(), /#\/inspect\/note-panel\/task\/18446744073709551615$/);
   await popup.evaluate(() => {
     serverReady = true;

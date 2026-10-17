@@ -315,7 +315,16 @@ func TestOutsideInNonWritableShardDirectoryDefersRotationAndRecovers(t *testing.
 			break
 		}
 		title := fmt.Sprintf("rotation survivor %04d", update)
-		if err := sendProtocolMessage(conn, protocol.C_UpdateTask, protocol.EncodeTaskUpdateWithCorrelation(roomID, int64(expected.ID), title, longDescription, int32(protocol.TaskStatusInProgress), 2, 0, uint32(0xE0070100+update))); err != nil {
+		// Change the same fields on every iteration so metadata-only history
+		// has the same shape as well as the fixed-width task post-image.
+		churnDescription := fmt.Sprintf("%s%04d", longDescription, update)
+		status := int32(protocol.TaskStatusTodo)
+		priority := int32(3)
+		if update%2 == 1 {
+			status = int32(protocol.TaskStatusInProgress)
+			priority = 2
+		}
+		if err := sendProtocolMessage(conn, protocol.C_UpdateTask, protocol.EncodeTaskUpdateWithCorrelation(roomID, int64(expected.ID), title, churnDescription, status, priority, 0, uint32(0xE0070100+update))); err != nil {
 			t.Fatalf("send rotation churn %d: %v", update, err)
 		}
 		updatedPayload := mustReadUntilOpcode(t, conn, protocol.S_TaskUpdated, 12)

@@ -836,7 +836,7 @@
       { label: "CREATED BY", value: asset.owner, role: "actor" },
       { label: "CREATED", value: window.NRCDetailUI.formatHeaderDate(asset.createdAt) },
       { label: "UPDATED", value: window.NRCDetailUI.formatHeaderDate(asset.updatedAt) },
-    ]) : "";
+    ], 2, asset.assetId) : "";
     el("inspectorHeader").innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">${kind.toUpperCase()} ${asset ? "#" + asset.assetId : "/ NEW"}</span>${register}<span class="inspector-cell-label">STATE</span>${window.NRCDetailUI.renderSaveState(editing ? "SAVED" : "READ")}</div><div class="inspector-mode-row">
       ${asset ? window.NRCDetailUI.renderHeaderAction(editing ? { id: "customerView", label: "VIEW", command: "v", title: "Read record (V)" } : { id: "customerEdit", label: "EDIT", command: "e", title: "Edit record (E)" }) : ""}
       ${window.NRCDetailUI.renderCloseControl("customerClose")}</div>`;

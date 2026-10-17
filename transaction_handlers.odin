@@ -194,7 +194,9 @@ transaction_add_task_mutation :: proc(p: ^Transaction_Prepared, i: int, task: ^p
 	buf := make(
 		[]byte,
 		calculate_task_fields_size(task^),
-	); serialize_task_fields(task^, buf); ok := transaction_add_mutation(p, .Task, u8(op), 1, buf); delete(buf); return ok
+	); serialize_task_fields(task^, buf); ok := transaction_add_mutation(p, .Task, u8(op), 1, buf); delete(buf)
+	if ok do p.mutations[len(p.mutations) - 1].system_unblock = p.unblocked_operations[i]
+	return ok
 }
 transaction_add_asset_mutation :: proc(p: ^Transaction_Prepared, i: int, asset: ^pr.Asset, op: Asset_Log_Op) -> bool {
 	buf := make(
@@ -495,7 +497,10 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 				collect_task_unblocks(get_conversation(ws, next.conv_id), next, &p.unblocks, &p)
 			}
 		}
-		for &next in p.unblocks do if !transaction_add_task_mutation(&p, 0, &next, .Update) do break planning
+		for &next in p.unblocks {
+			if !transaction_add_task_mutation(&p, 0, &next, .Update) do break planning
+			p.mutations[len(p.mutations) - 1].system_actor = true
+		}
 		for op, i in req.operations {
 			switch op.op_type {
 			case .TaskCreate:

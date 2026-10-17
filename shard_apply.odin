@@ -6,6 +6,8 @@ apply_shard_mutation :: proc(workspace: []byte, mutation: Shard_Mutation) -> boo
 	if len(workspace) == 0 || len(workspace) > int(max(u16)) do return false
 	id: u64
 	switch mutation.domain {
+	case .History:
+		return apply_history_payload(string(workspace), mutation.payload)
 	case .Task:
 		id = apply_task_log_record_for_workspace(string(workspace), Task_Log_Op(mutation.op), mutation.entity_record_version, mutation.payload)
 	case .Asset:

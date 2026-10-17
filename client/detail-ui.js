@@ -31,8 +31,8 @@
     return `<span class="detail-save-state" role="status" aria-live="polite" data-save-state="${escapeHtml(state)}">${escapeHtml(state)}</span>`;
   }
 
-  function renderHeaderMetadata(rows) {
-    return `<div class="inspector-metadata" tabindex="0" role="region" aria-label="Record metadata">${renderMetadataLedger(rows, { compactDateLabels: true })}</div>`;
+  function renderHeaderMetadata(rows, historyKind, historyId) {
+    return `<div class="inspector-metadata" tabindex="0" role="region" aria-label="Record metadata">${renderMetadataLedger(rows, { compactDateLabels: true })}</div>${historyKind ? `<button class="btn header-operation" type="button" data-history-kind="${escapeHtml(historyKind)}" data-history-id="${escapeHtml(historyId)}">HISTORY</button>` : ""}`;
   }
 
   function formatHeaderDate(nanos) {

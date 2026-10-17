@@ -354,11 +354,13 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	}
 
 	opcode := pr.get_opcode(frame_data)
-	if is_workspace_data_opcode(opcode) && !workspace_data_scope_valid(frame_data[2:]) {
+	if opcode != .C_ListHistory && is_workspace_data_opcode(opcode) && !workspace_data_scope_valid(frame_data[2:]) {
 		send_error_response(c, opcode, "Workspace data requires scope 0; update your client")
 		return
 	}
 	#partial switch opcode {
+	case .C_ListHistory:
+		process_list_history(c, frame_data[2:])
 	case .C_SendMessage:
 		req, parse_err := pr.parseSendMessageRequest(frame_data[2:])
 		if parse_err == nil {

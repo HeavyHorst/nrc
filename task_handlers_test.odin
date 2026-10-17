@@ -723,6 +723,9 @@ when NRC_SIMULATION {
 		client := simulation_test_install_client(&ctx.sim, 1, workspace_id, "equivalence-user")
 		if client == nil do return {}, "install simulated client", false
 		ctx.conns[1] = client
+		previous_dispatch := shard_protocol_dispatch_context
+		shard_protocol_dispatch_context.connection = client
+		defer {shard_protocol_dispatch_context = previous_dispatch}
 		subscribe_to_conversation(client, req.conv_id)
 		nrc_sim_clear_inboxes(&ctx.sim)
 
@@ -844,6 +847,9 @@ when NRC_SIMULATION {
 		client := simulation_test_install_client(&ctx.sim, 1, workspace_id, "equivalence-user")
 		if client == nil do return {}, "install update-task simulated client", false
 		ctx.conns[1] = client
+		previous_dispatch := shard_protocol_dispatch_context
+		shard_protocol_dispatch_context.connection = client
+		defer {shard_protocol_dispatch_context = previous_dispatch}
 		subscribe_to_conversation(client, req.conv_id)
 		nrc_sim_clear_inboxes(&ctx.sim)
 		baseline_attachment := [1]pr.Attachment {
@@ -1099,6 +1105,9 @@ when NRC_SIMULATION {
 		client := simulation_test_install_client(&ctx.sim, 1, workspace_id, "equivalence-user")
 		if client == nil do return {}, "install final task mutation client", false
 		ctx.conns[1] = client
+		previous_dispatch := shard_protocol_dispatch_context
+		shard_protocol_dispatch_context.connection = client
+		defer {shard_protocol_dispatch_context = previous_dispatch}
 		conv_id := kind == .Move ? move_req.conv_id : delete_req.conv_id
 		subscribe_to_conversation(client, conv_id)
 		nrc_sim_clear_inboxes(&ctx.sim)

@@ -47,7 +47,10 @@ persist_task_with_unblocks :: proc(workspace_id: string, task: ^pr.Task, op: Tas
 	p: Transaction_Prepared
 	defer transaction_cleanup(&p)
 	if !transaction_add_task_mutation(&p, 0, task, op) do return false, false
-	for &next in updates do if !transaction_add_task_mutation(&p, 0, &next, .Update) do return false, false
+	for &next in updates {
+		if !transaction_add_task_mutation(&p, 0, &next, .Update) do return false, false
+		p.mutations[len(p.mutations) - 1].system_actor = true
+	}
 	tx := Shard_Transaction {
 		workspace        = transmute([]byte)workspace_id,
 		task_high_water  = max(writer.floors.task, u64(task.id), u64(task.blocked_by)),

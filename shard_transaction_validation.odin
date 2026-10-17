@@ -21,6 +21,10 @@ shard_merge_requirements :: proc(dst: ^Shard_High_Water_Requirements, src: Shard
 
 shard_mutation_entity_id :: proc(m: Shard_Mutation) -> (id: u64, ok: bool) {
 	switch m.domain {
+	case .History:
+		if len(m.payload) < HISTORY_HEADER_SIZE do return
+		id, _ = endian.get_u64(m.payload, .Big)
+		return id, id != 0
 	case .DM:
 		conv_id, _, _, _, valid := decode_dm_state(m.payload)
 		return u64(conv_id), valid
@@ -224,6 +228,8 @@ validate_shard_mutation :: proc(m: Shard_Mutation) -> (req: Shard_High_Water_Req
 	if len(m.payload) > SHARD_TRANSACTION_MAX_SIZE do return req, .Too_Large
 	if !shard_mutation_supported(m.domain, m.op, m.entity_record_version) do return req, .Unsupported
 	switch m.domain {
+	case .History:
+		return req, validate_history_payload(m.payload) ? .None : .Malformed
 	case .Task:
 		return validate_shard_task_body(m)
 	case .Asset:

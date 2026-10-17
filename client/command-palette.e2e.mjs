@@ -158,7 +158,7 @@ function buildProxyStyleJWT(username) {
   const now = Math.floor(Date.now() / 1000);
   const header = base64UrlJson({ alg: "HS256", typ: "JWT" });
   const payload = base64UrlJson({
-    sub: username,
+    sub: `subject:${username}`,
     username,
     iss: e2eJWTIssuer,
     aud: e2eJWTAudience,
@@ -477,6 +477,22 @@ async function main() {
     await executePaletteCommand("Delete task", createdTaskId);
     await waitForBrowserLogAfter(deleteLogStart, new RegExp(`TASK #${createdTaskId} DELETED`));
     await page.waitForFunction(id => !NRCTasks.roomTasks.get(0n)?.has(BigInt(id)), createdTaskId);
+
+    // Real server + authenticated upgrade + app decoder: deleted task history
+    // remains queryable, with the JWT subject and retained identifying title.
+    await page.evaluate(id => NRCHistory.open(1, id), createdTaskId);
+    await page.waitForFunction(() => document.getElementById("historyStatus").textContent.includes("3 EVENTS"));
+    const rows = await page.locator("#historyBody .history-event").allTextContents();
+    assert.equal(rows.length, 3);
+    assert.match(rows[0], /Deleted/);
+    assert.match(rows[1], /Changed Status/);
+    assert.match(rows[2], /Created/);
+    assert.ok(rows.every(row => row.includes(taskTitle)));
+    assert.equal(await page.locator("#historyBody button").count(), 0, "deleted task events have no dead links");
+    const actors = await page.locator("#historyBody .history-meta span[title]").evaluateAll(nodes => nodes.map(node => node.title));
+    assert.ok(actors.every(actor => actor.startsWith("subject:palette-e2e-")), "JWT subject, not display name, reaches persisted history");
+    await page.click("#historyClear");
+    await page.waitForFunction(title => document.getElementById("historyBody").textContent.includes(title), noteTitle);
 
     console.log("command palette E2E passed");
   } catch (err) {

@@ -147,6 +147,9 @@ when NRC_SIMULATION {
 		client := simulation_test_install_client(&ctx.sim, 1, workspace_id, "equivalence-user")
 		if client == nil do return {}, "install edge equivalence client", false
 		ctx.conns[1] = client
+		previous_dispatch := shard_protocol_dispatch_context
+		shard_protocol_dispatch_context.connection = client
+		defer {shard_protocol_dispatch_context = previous_dispatch}
 		conv_id := pr.WORKSPACE_DATA_ID
 		subscribe_to_conversation(client, conv_id)
 		nrc_sim_clear_inboxes(&ctx.sim)

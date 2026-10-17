@@ -87,6 +87,9 @@ The batch reads `C_GetTasksByIDs` and `C_GetAssetsByIDs` are exceptions to the
 request layout: their correlation ID follows the workspace scope, before the
 content flag and ID array. Their responses still use a trailing correlation ID.
 
+`S_HistoryPage` puts the correlation ID immediately after the opcode, before
+its UTF-8 JSON body. `C_ListHistory` uses the normal trailing correlation ID.
+
 A response that spans several frames repeats
 the same correlation ID on every frame; the client accumulates until the
 continuation flag is clear. Paged listings — the task query, the task page and
@@ -117,8 +120,8 @@ its own cursor and the client asks for the next one when it needs it.
 invalid before any payload parsing happens, so a new opcode must be added to both
 the enum and the range check in `protocol/protocol.odin`.
 
-- Client to server: `1-3`, `8`, `16-61`
-- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-167`
+- Client to server: `1-3`, `8`, `16-62`
+- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-168`
 
 ### Client to Server
 
@@ -163,6 +166,7 @@ the enum and the range check in `protocol/protocol.odin`.
 | 58 | `C_QueryCalendar` | Query dated work in a half-open time range |
 | 59 | `C_GetWorkspaceOverview` | Read one complete, unpaged workspace aggregate snapshot |
 | 60 | `C_GetTasksByIDs` | Read tasks by an exact set of IDs |
+| 62 | `C_ListHistory` | Page visible workspace or record change history |
 
 #### Assets
 
@@ -256,6 +260,7 @@ them.
 | 165 | `S_TaskAssignees` | Chunked distinct task assignees, same layout as S_TaskProjects |
 | 166 | `S_CalendarPage` | Compact calendar summaries with a time/kind/ID cursor |
 | 167 | `S_WorkspaceOverview` | Unique task totals and open-slice distributions |
+| 168 | `S_HistoryPage` | Correlated JSON change-history page |
 
 #### Assets
 
@@ -563,6 +568,36 @@ creates with `nrc slice create <name>` and addresses existing slices only by ID,
 including `nrc slice update <id> --name <label>`; there is no name fallback.
 Use `nrc slice list --fields slice_id,name` to discover IDs. List name queries
 remain case-insensitive substring searches, not identity lookups.
+
+#### C_ListHistory / S_HistoryPage
+
+Request (31 bytes after opcode):
+```
+[Scope: u64 = 0] [Kind: u8] [EntityID: u64] [Before: u64] [Limit: u16] [CorrelationID: u32]
+```
+
+Kind is 0 for workspace, 1 for task, 2 for asset, 3 for edge. EntityID is zero
+only for workspace queries. Before is an exclusive event ID, or zero for newest;
+Limit is 1–100. Task/asset queries include related edge events. The connection
+selects the authorized workspace; personal Reminder history remains creator-only,
+including after deletion, with visibility filtering before pagination.
+
+Response after opcode: `[CorrelationID: u32] [UTF-8 JSON: remaining bytes]`.
+JSON is `{events:[...],nextBefore:"0"}` with an optional `error` string.
+Events are newest first and contain decimal-string `id`, `timestamp` (Unix
+nanoseconds), `entityId`; string `actorId`, `actorName`, `entityType`
+(`task|asset|edge`), `action` (`created|updated|deleted`); and `fields`, an array
+of changed field names, never field values. Edge events also include
+`sourceType`, `sourceId`, `targetType`, `targetId`. Optional `entityLabel`,
+`sourceLabel`, `targetLabel` retain identifying names (at most 256 UTF-8 bytes),
+including after renames and deletions. Optional numeric `assetType`,
+`sourceAssetType`, `targetAssetType` identify asset subtypes for navigation.
+Read-time `entityAvailable`, `sourceAvailable`, `targetAvailable` are true only
+for records that still exist and are visible; omitted flags mean false.
+No document contents or before/after values are retained. IDs use strings to avoid
+JavaScript precision loss. A nonzero nextBefore is the last returned event ID;
+zero means no older visible entries. Reads may return fewer events than Limit
+to respect the frame-size budget. Pending durability returns a retryable error.
 
 #### C_GetWorkspaceOverview (Client → Server)
 ```

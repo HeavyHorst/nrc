@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261017ticketsmerge1">
+    <link rel="stylesheet" href="../css/main.css?v=20261017history5">
     <link rel="stylesheet" href="../css/custom-select.css?v=20260926nesting1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -1265,6 +1265,13 @@ status      ← Service Worker</code></pre>
             </section>
 
             <section class="catalog-section" id="inventory">
+                <div class="catalog-example">
+                    <header class="panel-header"><div class="header-control-scroll"><span>HISTORY</span><span>WORKSPACE</span></div></header>
+                    <p class="overview-note"><button class="btn">REFRESH / RETRY</button> <button class="btn">CLEAR SCOPE</button> · 1 EVENTS · NEWEST FIRST · INCLUDING DELETED RECORDS</p>
+                    <section class="history-day"><h2>Oct 17, 2026</h2><ol class="customer-history-timeline history-events"><li class="customer-event history-event"><div class="history-meta"><time datetime="2026-10-17T10:14:00Z">10:14:00 AM</time><span tabindex="0" title="subject:rene" aria-label="Rene (subject:rene)">Rene</span></div><svg class="history-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 15-1 5 5-1L20 8l-4-4Zm9-9 4 4"/></svg><div class="history-change">Changed Status, Assignee on<br><button type="button" class="inline-field-value">Prepare customer proposal</button><br><small>Task #184</small></div></li></ol></section>
+                    <p class="overview-note">NO HISTORY IN THIS SCOPE · LOADING HISTORY… · HISTORY READ FAILED · RETRY · OFFLINE · RECONNECT TO READ HISTORY</p>
+                    <p class="catalog-usage">HISTORY groups newest-first events by local calendar day, extending the customer activity timeline with aligned time/actor metadata, decorative action icons and quiet secondary IDs. Text always names the action. Existing records open in the inspector; deleted records keep their identifying name without a dead link. Both relationship endpoints are named. Record metadata links to the scoped register; clear scope returns to all events. Actor display names expose stable subjects. No document contents, before/after values or undo are retained. Explicit load more is bounded to 1,000 events; matching day groups merge across pages.</p>
+                </div>
                 <div class="catalog-example nl-panel" lang="de">
                     <header class="panel-header"><div><span>NEWSLETTER / MAILJET</span><span>ENTWURF · R3</span></div></header>
                     <div class="nl-toolbar"><nav class="tab-group" aria-label="Newsletter-Bereiche"><button class="btn nav-tab active" aria-pressed="true">Kampagnen<span class="tab-count">1</span></button><button class="btn nav-tab" aria-pressed="false">Kontakte<span class="tab-count">18</span></button></nav><div class="nl-actions"><button class="btn header-operation">Aktualisieren</button><button class="btn btn--primary header-operation header-create-action">+ Kampagne</button></div></div>
@@ -1322,6 +1329,7 @@ status      ← Service Worker</code></pre>
                     <table class="catalog-inventory-table">
                         <thead><tr><th>FAMILY</th><th>ELEMENTS</th><th>PRODUCTION HOOK</th><th>SOURCE</th><th>SCOPE</th></tr></thead>
                         <tbody id="inventoryBody">
+                            <tr><td>CHANGE HISTORY</td><td>Read-only workspace and record scope; local-day activity groups, newest-first cursor pages, deleted identities, actor subjects, field names; loading/empty/error/offline and bounded manual pagination</td><td><code>.history-day</code>, <code>.customer-history-timeline</code>, <code>.history-event</code>, <code>.panel-header</code></td><td>history.js / detail-ui.js / view-manager.js</td><td><b>FEATURE</b></td></tr>
                             <tr><td>SUBSYSTEM STATUS</td><td>Compact global footer disclosure; instance HTTP reachability, failures, unchecked optional services and last-check evidence; never chat presence or operations</td><td><code>.subsystems-toggle</code>, <code>.subsystems-panel</code></td><td>app.js / index.html / css/workspace.css / css/mobile.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>INTERNAL TICKETS</td><td>Workspace asset register; state/assignee/customer/search; company ID is authoritative. Direct inline metadata editors match tasks/notes; no EDIT TICKET disclosure. Company/contact open a coupled dialog with searchable custom selects using MemberOf membership; company scopes contacts, contact fixes company until cleared. Multi-company contacts name each company explicitly. Acknowledged create/edit; retained per-record drafts. Shared exclusive-open resource strips separate TASKS (status/assignee), SLICES (MemberOf only), and REFERENCES (notes/files/other links). Read-only original request appears once in the chronological public conversation, separated from internal notes; composer defaults internal. Related tasks/slices do not synchronize status. Customer-context entry point reuses these records.</td><td><code>#ticketsPanel</code>, <code>nrc-inline-field</code>, <code>nrc-select</code>, <code>.document-resources</code>, <code>.customers-layout</code>, <code>.customer-section</code>, <code>.detail-edit-field</code></td><td>tickets.js / customers.js / detail-ui.js / css/main.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>WORKSPACE OVERVIEW</td><td>Unique status and coverage totals; fixed-size distributions of slice size, blockages and oldest-open age; no personal task queue</td><td><code>.overview-*</code>, <code>.panel-header</code></td><td>overview.js / css/main.css</td><td><b>FEATURE</b></td></tr>

@@ -766,7 +766,7 @@
     recordHome = record.parentElement;
     inspectorRecord = record;
     host.replaceChildren(record);
-    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">SLICE #${ref.id}</span><span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">WORK STREAM</span></div><div class="inspector-mode-row">${window.NRCDetailUI.renderCloseControl("sliceInspectorClose")}</div>`;
+    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">SLICE #${ref.id}</span>${window.NRCDetailUI.renderHeaderMetadata([], 2, ref.id)}<span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">WORK STREAM</span></div><div class="inspector-mode-row">${window.NRCDetailUI.renderCloseControl("sliceInspectorClose")}</div>`;
     document.getElementById("sliceInspectorClose").onclick = () => window.NRCInspector.close();
     render();
     return true;

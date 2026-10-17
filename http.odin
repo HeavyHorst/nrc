@@ -65,6 +65,7 @@ HTTP_Upgrade_Connection :: struct {
 	state:               Connection_State,
 	workspace_id:        string,
 	verified_username:   string,
+	verified_subject:    string,
 	user_type:           pr.User_Type,
 	authenticated:       bool,
 
@@ -95,6 +96,7 @@ http_upgrade_close :: proc(c: ^HTTP_Upgrade_Connection) {
 	net.shutdown(c.sock, net.Shutdown_Manner.Send)
 	nbio.close(&td.io, c.sock, c, proc(c_hint: ^HTTP_Upgrade_Connection, ok: bool) {
 		allocator := http_upgrade_allocator(c_hint)
+		delete(c_hint.verified_subject, allocator)
 		if c_hint.workspace_id != "" {
 			delete(c_hint.workspace_id, allocator)
 			c_hint.workspace_id = ""
@@ -113,6 +115,7 @@ http_upgrade_close :: proc(c: ^HTTP_Upgrade_Connection) {
 
 http_temp_connection_free :: proc(c: ^HTTP_Upgrade_Connection) {
 	allocator := http_upgrade_allocator(c)
+	delete(c.verified_subject, allocator)
 	if c.workspace_id != "" {
 		delete(c.workspace_id, allocator)
 		c.workspace_id = ""
@@ -176,6 +179,7 @@ HTTP_Upgrade_Decision :: struct {
 	target_worker_index:     int,
 	verified_username:       string,
 	verified_username_owned: bool,
+	verified_subject:        string,
 	user_type:               pr.User_Type,
 	authenticated:           bool,
 	key_present:             bool,
@@ -342,6 +346,7 @@ parse_http_upgrade_decision :: proc(request_headers: string, service_secret: str
 	decision.kind = .Accept
 	decision.target_worker_index = http_upgrade_target_worker_index(workspace_id, worker_count)
 	decision.verified_username = verified_username
+	decision.verified_subject = jwt_identity.subject
 	decision.verified_username_owned = jwt_ok
 	decision.user_type = user_type
 	decision.authenticated = jwt_ok || user_type != .User
@@ -551,12 +556,14 @@ worker_process_http_upgrade :: proc(c: ^HTTP_Upgrade_Connection) {
 	if decision.target_worker_index != td.thread_index {
 		log.errorf("[T%d] HTTP upgrade for sock %v routed to worker %d", td.thread_index, c.sock, decision.target_worker_index)
 		if decision.verified_username_owned do delete(decision.verified_username, http_upgrade_allocator(c))
+		delete(decision.verified_subject, http_upgrade_allocator(c))
 		net.close(c.sock)
 		http_temp_connection_free(c)
 		return
 	}
 
 	c.workspace_id = strings.clone(decision.workspace_id, http_upgrade_allocator(c))
+	c.verified_subject = decision.verified_subject
 	if decision.verified_username_owned {
 		c.verified_username = decision.verified_username
 	} else {

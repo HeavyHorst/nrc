@@ -27,6 +27,7 @@ JWT_Claims :: struct {
 }
 
 JWT_Identity :: struct {
+	subject:   string,
 	username:  string,
 	user_type: pr.User_Type,
 }
@@ -179,7 +180,7 @@ validate_nrc_jwt :: proc(token: string, workspace: string = "", require_workspac
 		user_type = .System
 	}
 
-	return JWT_Identity{username = username, user_type = user_type}, true, ""
+	return JWT_Identity{subject = strings.clone(claims.sub), username = username, user_type = user_type}, true, ""
 }
 
 decode_base64url_segment :: proc(segment: string) -> (decoded: []u8, ok: bool) {

@@ -159,7 +159,7 @@
     const intent = window.NRCInspector?.beginExternalLoad?.();
     const stillCurrent = () => intent == null || window.NRCInspector?.isIntentCurrent?.(intent);
     const render = (state, message) => {
-      header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">FILE #${escape(ref.id)}</span><span class="inspector-cell-label">STATE</span>${window.NRCDetailUI.renderSaveState(state)}</div><div class="inspector-mode-row">${window.NRCDetailUI.renderCloseControl("fileInspectorClose")}</div>`;
+      header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">FILE #${escape(ref.id)}</span>${window.NRCDetailUI.renderHeaderMetadata([], 2, ref.id)}<span class="inspector-cell-label">STATE</span>${window.NRCDetailUI.renderSaveState(state)}</div><div class="inspector-mode-row">${window.NRCDetailUI.renderCloseControl("fileInspectorClose")}</div>`;
       const close = document.getElementById("fileInspectorClose");
       if (close) close.onclick = () => window.NRCInspector?.close?.();
       if (message) {

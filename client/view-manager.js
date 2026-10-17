@@ -22,6 +22,7 @@ const viewPageTitles = {
   reminders: "REMINDERS",
   attention: "ATTENTION",
   overview: "OVERVIEW",
+  history: "HISTORY",
   calendar: "CALENDAR",
   search: "SEARCH",
   notes: "NOTES",
@@ -104,6 +105,8 @@ function setActiveView(view) {
   if (searchPanel) searchPanel.style.display = "none";
   const overviewPanel = document.getElementById("overviewPanel");
   if (overviewPanel) overviewPanel.style.display = "none";
+  const historyPanel = document.getElementById("historyPanel");
+  if (historyPanel) historyPanel.style.display = view === "history" ? "flex" : "none";
 
   // Hide input panel for non-chat views. Sullivan share is still an interactive chat.
   if (inputPanel) inputPanel.style.display = view === "chat" || view === "sullivan" || view === "sullivanShare" ? "" : "none";
@@ -128,6 +131,7 @@ function setActiveView(view) {
   window.NRCAttention?.onViewChanged?.(view);
   window.NRCCalendar?.onViewChanged?.(view);
   window.NRCOverview?.onViewChanged(view);
+  window.NRCHistory?.onViewChanged(view);
 
   switch (view) {
     case "newsletter":

@@ -72,12 +72,14 @@ test_validate_nrc_jwt_accepts_valid_proxy_token :: proc(t: ^testing.T) {
 	defer delete(token)
 
 	identity, ok, reason := validate_nrc_jwt(token)
+	defer delete(identity.subject)
 	if len(identity.username) > 0 {
 		defer delete(identity.username)
 	}
 	testing.expect(t, ok, "valid token should pass validation")
 	testing.expect(t, reason == "", "valid token should not return failure reason")
 	testing.expect(t, identity.username == "alice", "username should come from claims.username")
+	testing.expect_value(t, identity.subject, "user-123")
 	testing.expect_value(t, identity.user_type, pr.User_Type.Admin)
 }
 
@@ -110,6 +112,7 @@ test_validate_nrc_jwt_reuses_scratch_without_borrowing_identity :: proc(t: ^test
 	testing.expect(t, alice_ok, "first token should validate")
 	testing.expect(t, alice_reason == "", "first token should not return failure reason")
 	defer delete(alice.username)
+	defer delete(alice.subject)
 	testing.expect(t, jwt_validation_scratch_initialized, "first validation should initialize reusable scratch")
 	first_block := jwt_validation_scratch.curr_block
 	testing.expect(t, first_block != nil, "reusable scratch should retain its first block")
@@ -122,8 +125,11 @@ test_validate_nrc_jwt_reuses_scratch_without_borrowing_identity :: proc(t: ^test
 	testing.expect(t, bob_ok, "second token should validate")
 	testing.expect(t, bob_reason == "", "second token should not return failure reason")
 	defer delete(bob.username)
+	defer delete(bob.subject)
 	testing.expect(t, jwt_validation_scratch.curr_block == first_block, "validations should reuse the first arena block")
 	testing.expect(t, alice.username == "alice", "returned identity must survive reuse of validation scratch")
+	testing.expect_value(t, alice.subject, "alice-id")
+	testing.expect_value(t, bob.subject, "bob-id")
 	testing.expect(t, bob.username == "bob", "second identity should come from second token")
 }
 
@@ -314,6 +320,7 @@ test_workspace_scoped_jwt_upgrade :: proc(t: ^testing.T) {
 		decision := parse_http_upgrade_decision(request, "internal-service-secret", 1)
 		delete(request)
 		testing.expect_value(t, decision.kind == .Accept, test_case.allowed)
+		delete(decision.verified_subject)
 		if decision.verified_username_owned do delete(decision.verified_username)
 	}
 	// Search and Sullivan's internal authenticated service connections remain

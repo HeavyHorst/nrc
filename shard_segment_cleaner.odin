@@ -33,6 +33,8 @@ shard_segment_mutation_conversation_id :: proc(mutation: Shard_Mutation) -> (con
 		return conversation_id, true
 	}
 	switch mutation.domain {
+	case .History:
+		return 0, true
 	case .DM:
 		return shard_mutation_entity_id(mutation)
 	case .Task:

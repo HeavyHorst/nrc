@@ -213,6 +213,7 @@ worker_adopt_upgraded_connection :: proc(upgrade: ^HTTP_Upgrade_Connection, boot
 		return
 	}
 	c.verified_username = intern_username(verified_username)
+	c.verified_subject = intern_username(upgrade.verified_subject)
 	upgrade.workspace_id = ""
 	delete(workspace_id, upgrade_allocator)
 	upgrade.verified_username = ""
@@ -522,6 +523,8 @@ start_worker_maintenance_timer :: proc() {
 // NOTE: Only use in tests. The OS cleans up when the program ends anyway.
 cleanup_workspaces :: proc() {
 	for _, ws in td.workspaces {
+		for event in ws.history do delete(event)
+		delete(ws.history)
 		// Clean up user_dms map (dynamic arrays inside)
 		for _, dms in ws.user_dms {
 			delete(dms)

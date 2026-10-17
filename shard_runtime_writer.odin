@@ -520,6 +520,7 @@ shutdown_shard_transaction_writer :: proc(writer: ^Shard_Transaction_Writer) -> 
 }
 
 append_shard_transaction :: proc(writer: ^Shard_Transaction_Writer, tx: ^Shard_Transaction) -> bool {
+	tx := tx
 	shard_append_failure = .None
 	if writer == nil || tx == nil || writer.poisoned || !writer.wal.enabled do return false
 	if writer.write_in_flight || writer.lifecycle_in_flight || writer.pending_publication != nil {
@@ -543,8 +544,21 @@ append_shard_transaction :: proc(writer: ^Shard_Transaction_Writer, tx: ^Shard_T
 	if !assignment_ok || owner != writer.owner_worker do return false
 	next, validation_err := validate_shard_transaction(tx, writer.floors)
 	if validation_err != .None do return false
+	history, history_ok := build_history_mutations(tx)
+	defer destroy_history_mutations(history)
+	if !history_ok {shard_append_failure = .Backpressure; return false}
+	// Generated metadata must be replayable before any bytes reach the WAL.
+	for mutation in history {
+		if !validate_history_payload(mutation.payload) {shard_append_failure = .Backpressure; return false}
+	}
+	augmented := tx^
+	all := make([dynamic]Shard_Mutation, 0, len(tx.mutations) + len(history))
+	defer delete(all)
+	append(&all, ..tx.mutations); append(&all, ..history[:])
+	augmented.mutations = all[:]
+	tx = &augmented
 	payload_size, size_err := shard_transaction_size(tx)
-	if size_err != .None do return false
+	if size_err != .None {shard_append_failure = .Backpressure; return false}
 	record_size := persistence.LOG_HEADER_SIZE + payload_size
 	if writer.batch_writes && writer.wal.write_offset > 0 && record_size > persistence.WRITE_BATCH_MAX_BYTES - writer.wal.write_offset {
 		submit_shard_writer_write(writer)
@@ -613,6 +627,12 @@ append_shard_transaction :: proc(writer: ^Shard_Transaction_Writer, tx: ^Shard_T
 	append_only := writer.active_wal_append_only && shard_transaction_is_append_only(tx, writer.floors)
 	writer.floors = next
 	writer.active_wal_append_only = append_only
+	for event in history {
+		if !apply_history_payload(string(tx.workspace), event.payload) {
+			writer.poisoned = true
+			return false
+		}
+	}
 	if writer.batch_writes && writer.wal.write_offset >= persistence.WRITE_BATCH_MAX_BYTES do submit_shard_writer_write(writer)
 	return true
 }
@@ -642,6 +662,8 @@ shard_mutation_advances_append_only_floor :: proc(mutation: Shard_Mutation, floo
 		floors.edge = id
 	case .DM:
 		return false
+	case .History:
+		return true // Unique immutable event keys are never superseded.
 	}
 	return true
 }
@@ -656,6 +678,8 @@ shard_mutation_is_create :: proc(mutation: Shard_Mutation) -> bool {
 		return mutation.op == u8(Edge_Log_Op.Create)
 	case .DM:
 		return false // Full membership post-images can replace earlier state.
+	case .History:
+		return true
 	}
 	return false
 }

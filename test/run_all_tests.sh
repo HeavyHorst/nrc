@@ -93,6 +93,7 @@ run node client/subsystems.e2e.mjs
 run node client/reminder-notify.e2e.mjs
 run node client/attention.e2e.mjs
 run node client/overview.e2e.mjs
+run node client/history.e2e.mjs
 run node client/newsletter.e2e.mjs
 
 printf '\nAll test suites passed.\n'

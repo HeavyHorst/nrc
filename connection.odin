@@ -1009,6 +1009,7 @@ NRC_Connection :: struct #align (64) {
 
 	// ============ WARM PATH - Message/Frame State ============
 	verified_username:         string, // Effective authenticated identity (JWT username or validated service nickname)
+	verified_subject:          string, // Interned stable JWT subject, independent of display nickname.
 	rooms:                     map[pr.ConversationID]bool, // 16 bytes - subscription checks
 	receive_accumulator:       Receive_Accumulator,
 	deferred_input:            []byte, // Owned raw suffix; never aliases an nbio provided buffer

@@ -2,6 +2,71 @@
 
 This is the current operational reference for NRC task, asset, and edge persistence.
 
+## Change history
+
+New successful workspace task, asset and edge mutations append immutable history
+events **inside the same checksummed shard transaction**, not in a second audit
+write. This includes transaction batches, dependency unblocking and deletion
+cascades. Reads refuse pending durability and poisoned writers; failed or rejected
+appends never publish history. Event IDs increase within each workspace and are
+independent of entity IDs. Replay does not manufacture events for older records.
+Standalone WAL construction tools preserve their supplied mutations verbatim.
+
+History stores the server timestamp (Unix nanoseconds), stable JWT `sub`, display
+name, entity ID, action, changed field names and a short identifying record label.
+Labels are complete UTF-8 prefixes of at most 256 bytes: task titles, selected
+asset preview title/name/filename fields, and both link endpoint names. Deletions
+retain the last name; earlier events retain their name at the time of the event.
+No descriptions, document bodies, teasers or before/after field values are copied.
+This is not content versioning and provides no restoration. Older events without
+labels remain valid and display their IDs. Timestamp-only/no-op updates produce no edit event. Creates
+name the fields initialized; deletions have an empty field list. Edge events
+retain typed endpoint IDs so a deleted record's history still includes its links.
+Automatic dependency unblocks use actor `system` / `System`; ordinary cascades
+retain the effective initiating request actor. Authenticated internal services
+without JWTs use `service:<validated nickname>` as their actor ID.
+
+History is persisted as shard mutation domain **5**, operation/version **1**.
+Its immutable payload has a 37-byte big-endian index prefix (event ID `u64`,
+entity kind `u8`/ID `u64`, source kind `u8`/ID `u64`, target kind `u8`/ID `u64`),
+plus private-owner length `u16`, followed by those owner bytes and then the
+public UTF-8 JSON event. Kinds are 1 task, 2 asset, 3 edge;
+absent endpoints have kind/ID zero. Both semantic checkpoints (including their
+state digests) and raw segment cleaning preserve all events, including events
+whose entities have been deleted. **Do not downgrade after writing domain 5**:
+older binaries cannot read it. Back up the stopped data directory before upgrade;
+rollback requires restoring that backup.
+
+History currently has **no expiry or pruning policy** and is not controlled by
+`NRC_MESSAGE_RETENTION`. Actor identities, timestamps, labels and relationship IDs remain
+after record deletion. Disk, replay memory, checkpoint size and query scan cost
+grow with event count; account for these retention/privacy implications before
+deployment. History follows workspace access, except personal Reminder events:
+these preserve their owner in private persisted metadata and are filtered by the
+existing creator-only username ACL before pagination, including after deletion.
+Private ACL metadata is not returned in event JSON. This is not a private DM API.
+
+Raw cleaning retains complete atomic WAL records when any immutable history key
+is live. Consequently it may also retain superseded entity bytes in those WAL
+records; semantic checkpoints re-emit current entity state plus metadata-only
+history and can discard those superseded bytes. History is not an erasure or
+secure-deletion mechanism. Audit metadata also shares the existing transaction
+size/mutation limits; an extreme cascade exceeding the augmented limit is refused
+with storage backpressure rather than partially persisted. Responses may contain
+fewer events than the requested limit to stay within the protocol frame budget.
+
+The read contract is `C_ListHistory=62`: exactly 33 bytes including opcode,
+scope `u64=0`, kind `u8` (0 all, 1 task, 2 asset, 3 edge), entity ID `u64`
+(zero only for all), exclusive `before:u64` (zero newest), `limit:u16` (1–100),
+and correlation `u32`, all integers big-endian. `S_HistoryPage=168` contains
+opcode, correlation and UTF-8 JSON `{events:[...],nextBefore:"0"}`, with an
+optional `error` string. Events are newest first; a nonzero `nextBefore` is the
+last returned event ID. Task/asset filters also match edge endpoints. The server
+uses only the authenticated connection's workspace; the request cannot select
+another workspace. Large integer JSON fields are decimal strings.
+Read-time availability flags enable opening records that still exist and are
+visible to the requester; availability is not persisted in historical events.
+
 ## Workspace data and chat rooms
 
 Protocol version 6 reserves `conv_id = 0` for workspace-owned tasks, assets and
@@ -9,7 +74,7 @@ edges, including Notes, customers, files, reminders, agendas and RoomMapping
 assets. All durable queries and transaction operations require this scope.
 The existing container and record codecs remain in use; scope 0 is a data
 collection, not a chat room. Subscribe with `C_SubscribeConvs` to receive its
-durable events. It has no chat, retained history, presence, or room-user limit.
+durable events. It has no chat, retained chat history, presence, or room-user limit.
 Chat room IDs and DM IDs are unchanged. Projects, tags and relationships organize
 data without splitting its identity or search scope.
 
