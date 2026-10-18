@@ -86,11 +86,11 @@
     };
   });
   el("mobileTaskSort").onchange = () => {
-    document.querySelector(`.task-table th[data-sort="${el("mobileTaskSort").value}"]`).click();
+    document.querySelector(`#taskListView .task-table th[data-sort="${el("mobileTaskSort").value}"]`).click();
     el("mobileTaskSortDirection").textContent = TaskViewState.sortDirection === "asc" ? "ASCENDING ↑" : "DESCENDING ↓";
   };
   el("mobileTaskSortDirection").onclick = () => {
-    document.querySelector(`.task-table th[data-sort="${TaskViewState.sortColumn}"]`).click();
+    document.querySelector(`#taskListView .task-table th[data-sort="${TaskViewState.sortColumn}"]`).click();
     el("mobileTaskSortDirection").textContent = TaskViewState.sortDirection === "asc" ? "ASCENDING ↑" : "DESCENDING ↓";
   };
   document.querySelectorAll("[data-mobile-target]").forEach(button => {

@@ -24,6 +24,9 @@ try {
     return Object.fromEntries(Object.entries({ a, b, ada, bea, shared }).map(([key, id]) => [key, String(id)]));
   });
   await page.click('#ticketsBtn');
+  assert.equal(await page.locator('#ticketEditor').count(), 0, 'register starts full-width without an embedded editor');
+  await page.click('#ticketNew');
+  await page.waitForSelector('#inspectorEntityHost #ticketFields');
   await page.waitForFunction(() => !document.querySelector('[name=contact_id]').disabled && !document.querySelector('#ticketCompanyStatus').textContent);
   const pick = async (name, search, label) => {
     await page.locator(`nrc-select:has(select[name="${name}"]) .custom-select__trigger`).click();
@@ -77,6 +80,8 @@ try {
   await page.evaluate(() => window.releaseTicketAck());
   await page.waitForFunction(() => NRCTickets.state.selected && !NRCTickets.state.pending);
   const id = await page.evaluate(() => NRCTickets.state.selected);
+  await page.waitForFunction(id => NRCInspector.current()?.type === 'ticket' && String(NRCInspector.current().id) === id, id);
+  assert.match(await page.textContent('#inspectorHeader'), new RegExp(`TICKET #${id}`));
   await page.fill('[name=message]', 'Private diagnosis');
   await attach('private.txt', 'private bytes');
   await page.click('#ticketReply button[data-save]');
@@ -291,8 +296,20 @@ try {
   await page.click('[data-slice-kind="ticket"]');
   await page.locator('.note-link-picker-item').filter({ hasText: 'Login regression' }).click();
   await page.waitForSelector(`#sliceRecord [data-member-ticket="${id}"]`);
+  await page.evaluate(() => NRCViewManager.setActiveView('kanban'));
   await page.click(`#sliceRecord [data-member-open="ticket:${id}"]`);
-  await page.waitForFunction(id => NRCViewManager.getActiveView() === 'tickets' && NRCTickets.state.selected === id, id);
+  await page.waitForFunction(id => NRCInspector.current()?.type === 'ticket' && NRCTickets.state.selected === id, id);
+  await page.waitForSelector('#inspectorEntityHost #ticketConversation');
+  assert.equal(await page.evaluate(() => NRCViewManager.getActiveView()), 'kanban', 'linked ticket leaves surrounding view intact');
+  await page.evaluate(() => {
+    const original = NRCAssets.sendCreateAsset;
+    NRCAssets.sendCreateAsset = (...args) => { NRCAssets.sendCreateAsset = original; queueMicrotask(() => args[7].onError({ message: 'Reply denied (fixture)' })); return 1; };
+  });
+  await page.locator('#ticketReply button[data-save]').click();
+  await page.waitForFunction(() => NRCTickets.state.error.includes('Reply denied'));
+  assert.equal(await page.locator('#inspectorEntityHost #ticketStatus').isVisible(), true);
+  assert.match(await page.textContent('#ticketStatus'), /Reply denied/);
+  assert.equal(await page.inputValue('[name=message]'), 'Keep this reply draft while changing resources.');
 
   // The company tab resolves the same ticket record, not a copy.
   const company = customer.b;
@@ -317,8 +334,136 @@ try {
   await page.waitForSelector('.file-assets-metadata');
   assert.match(await page.textContent('.file-assets-metadata'), /Login diagnostic file.*original.txt/s);
   assert.match(await page.textContent('#fileInspectorAttachments'), /original.txt/);
+
+  // Register navigation uses visible sort/filter order, not storage order.
+  const keyboardTickets = await page.evaluate(async () => {
+    const create = async title => String((await new Promise((resolve, reject) => NRCAssets.sendCreateAsset(0n, 13, 0, 0n, JSON.stringify({ version: 1, title, status: 'open', assignee: 'Sam', requester: 'keyboard@example.test', requester_name: title, company_id: '', contact_id: '' }), 'Keyboard original request', 0, { onSuccess: resolve, onError: reject }))).asset.assetId);
+    return { zulu: await create('Keyboard Zulu'), alpha: await create('Keyboard Alpha') };
+  });
+  await page.click('#ticketsBtn');
+  await page.evaluate(() => NRCInspector.close());
+  const search = page.locator('#ticketsPanel [data-filter="search"]');
+  await search.fill('Keyboard');
+  await page.waitForFunction(() => document.querySelectorAll('#ticketsList [data-ticket]').length === 2);
+  const taskSort = () => page.evaluate(() => JSON.stringify([TaskViewState.sortColumn, TaskViewState.sortDirection, localStorage.getItem('nrc_task_view_state')]));
+  const taskSortBefore = await taskSort();
+  await page.locator('#ticketsTable th[data-sort="contact_id"] button').click();
+  assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), [keyboardTickets.alpha, keyboardTickets.zulu]);
+  await page.locator('#ticketsTable th[data-sort="contact_id"] button').click();
+  assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), [keyboardTickets.zulu, keyboardTickets.alpha]);
+  await page.locator('#ticketsTable th[data-sort="company_id"] button').click();
+  await page.locator('#ticketsTable th[data-sort="title"] button').focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await taskSort(), taskSortBefore, 'ticket sorting never changes or persists task sorting');
+  assert.equal(await page.locator('#ticketsTable th[data-sort="title"]').getAttribute('aria-sort'), 'ascending');
+  assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), [keyboardTickets.alpha, keyboardTickets.zulu]);
+  await page.locator('#ticketsRegister').focus();
+  await page.keyboard.press('ArrowDown');
+  await page.waitForFunction(id => NRCTickets.state.selected === id, keyboardTickets.alpha);
+  assert.equal(await page.locator(`#ticketsList [data-ticket="${keyboardTickets.alpha}"]`).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#inspectorEntityHost #ticketEditor').count(), 1);
+  await page.keyboard.press('m');
+  assert.equal(await page.locator('[name=message]').evaluate(el => el === document.activeElement), true, 'M reaches the reply composer');
+  await page.locator('#ticketsRegister').focus();
+  await page.keyboard.press('ArrowDown');
+  await page.waitForFunction(id => NRCTickets.state.selected === id, keyboardTickets.zulu);
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(() => NRCTickets.state.selected), keyboardTickets.zulu, 'last row is a boundary, not wraparound');
+  await page.locator('[name=message]').fill('Retained keyboard reply');
+  await page.locator('[name=message]').press('ArrowUp');
+  assert.equal(await page.evaluate(() => NRCTickets.state.selected), keyboardTickets.zulu, 'composer owns arrow keys');
+  await page.locator('#ticketsRegister').focus();
+  await page.keyboard.press('ArrowUp');
+  await page.waitForFunction(id => NRCTickets.state.selected === id, keyboardTickets.alpha);
+  await page.keyboard.press('ArrowDown');
+  await page.waitForFunction(id => NRCTickets.state.selected === id, keyboardTickets.zulu);
+  assert.equal(await page.inputValue('[name=message]'), 'Retained keyboard reply');
+  await search.focus(); await page.keyboard.press('ArrowUp');
+  assert.equal(await page.evaluate(() => NRCTickets.state.selected), keyboardTickets.zulu, 'filter owns arrow keys');
+  await page.locator('#ticketsRegister').focus(); await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !NRCInspector.hasEntity());
+  const resize = page.locator('#ticketsTable th[data-sort="id"] [role="separator"]');
+  await resize.focus();
+  const width = Number(await resize.getAttribute('aria-valuenow'));
+  await page.keyboard.press('ArrowRight');
+  assert.equal(Number(await resize.getAttribute('aria-valuenow')), width + 8);
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(() => NRCTickets.state.selected), '', 'separator does not navigate rows');
+  await page.keyboard.press('Home');
+  await search.fill('no matching ticket');
+  await page.waitForFunction(() => document.querySelector('#ticketsList').textContent.includes('No matching tickets'));
+  assert.match(await page.textContent('#ticketsList'), /No matching tickets/);
+  await page.locator('#ticketsRegister').focus(); await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(() => NRCInspector.hasEntity()), false, 'empty list does not open a record');
+  await search.fill('');
+  // The search service owns text matching; hits in replies and semantic matches
+  // must not be discarded by a second title-only browser filter.
+  const searchRequests = [];
+  let searchOffline = false;
+  await page.route('**/search', async route => {
+    const request = route.request().postDataJSON();
+    searchRequests.push(request);
+    if (searchOffline) return route.fulfill({ status: 503, body: 'Search unavailable' });
+    const result = await page.evaluate(id => {
+      const asset = NRCTickets.state.tickets.find(a => String(a.assetId) === id);
+      return { entity: { type: 'asset', id, conv_id: '0' }, asset_type: 13, metadata: { ticket: NRCTickets.metadata(asset) }, preview: asset.preview, score: 1 };
+    }, id);
+    await route.fulfill({ headers: { 'Content-Type': 'application/json', 'X-NRC-Search-Version': 'typed-v1' }, body: JSON.stringify({ results: [result], stale: true }) });
+  });
+  await search.fill('  semantic synonym  ');
+  await page.waitForFunction(() => document.querySelector('#ticketsStatus').textContent.includes('INDEX STALE'));
+  assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), [id]);
+  const statusFilter = page.locator('#ticketsPanel [data-filter="status"]');
+  await statusFilter.selectOption('open');
+  await page.locator('#ticketsPanel [data-filter="owner"]').fill('Other staff member');
+  await page.locator('#ticketsPanel [data-filter="company"]').fill(customer.b);
+  await page.waitForFunction(() => document.querySelector('#ticketsStatus').textContent.includes('INDEX STALE'));
+  assert.equal(searchRequests.at(-1).query, 'semantic synonym');
+  assert.deepEqual(searchRequests.at(-1).filters, { entity_types: ['asset'], asset_types: [13], ticket: { status: 'open', assignee: 'Other staff member', company_id: customer.b } });
+  assert.equal(searchRequests.at(-1).top_n, 100);
+  await page.locator(`#ticketsList [data-ticket="${id}"] button`).click();
+  await page.waitForSelector('#inspectorEntityHost #ticketEditor');
+  assert.match(await page.textContent('#ticketConversation'), /Public answer/);
+  await page.evaluate(() => NRCInspector.close());
+  searchOffline = true;
+  await statusFilter.selectOption('');
+  await page.locator('#ticketsPanel [data-filter="owner"]').fill('');
+  await page.locator('#ticketsPanel [data-filter="company"]').fill('');
+  await search.fill('Private diagnosis');
+  await page.waitForFunction(() => document.querySelector('#ticketsStatus').textContent.includes('LOCAL FALLBACK'));
+  assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), [id], 'fallback also searches internal entry bodies');
+  if (process.env.NRC_TICKETS_SCREENSHOTS) await page.screenshot({ path: `${process.env.NRC_TICKETS_SCREENSHOTS}/ticket-search-fallback.png` });
+  await page.unroute('**/search');
+  await search.fill('');
+  if (process.env.NRC_TICKETS_SCREENSHOTS) {
+    await page.evaluate(() => setTheme('lupine', false));
+    await page.screenshot({ path: `${process.env.NRC_TICKETS_SCREENSHOTS}/ticket-register.png` });
+    await page.locator(`#ticketsList [data-ticket="${id}"] button`).click();
+    for (const theme of ['lupine', 'light', 'matte-black']) {
+      await page.evaluate(theme => setTheme(theme, false), theme);
+      await page.screenshot({ path: `${process.env.NRC_TICKETS_SCREENSHOTS}/ticket-inspector-${theme}.png` });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => setTheme('lupine', false));
+    await page.locator(`#ticketsList [data-ticket="${id}"] button`).click();
+    await page.waitForFunction(() => document.body.classList.contains('inspector-open'));
+    assert.equal(await page.locator('#inspector').getAttribute('aria-modal'), 'true');
+    await page.screenshot({ path: `${process.env.NRC_TICKETS_SCREENSHOTS}/ticket-inspector-narrow.png` });
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.body.classList.contains('inspector-open'));
+    await page.waitForFunction(id => document.activeElement?.closest('[data-ticket]')?.dataset.ticket === id, id);
+    await page.screenshot({ path: `${process.env.NRC_TICKETS_SCREENSHOTS}/ticket-register-narrow.png` });
+    assert.equal(await page.locator('#ticketsRegister').evaluate(el => el.scrollWidth <= el.clientWidth), true);
+    const ticketSortBefore = await page.evaluate(() => [NRCTickets.state.sort, NRCTickets.state.direction]);
+    await page.evaluate(() => NRCViewManager.setActiveView('kanban'));
+    await page.locator('#kanbanPanel [data-mobile-filters]').click();
+    await page.locator('[data-task-grouping="flat"]').click();
+    await page.selectOption('#mobileTaskSort', 'title');
+    assert.equal(await page.evaluate(() => TaskViewState.sortColumn), 'title');
+    assert.deepEqual(await page.evaluate(() => [NRCTickets.state.sort, NRCTickets.state.direction]), ticketSortBefore, 'mobile task sorting never touches ticket sorting');
+  }
   assert.deepEqual(errors, []);
-  console.log('PASS: company/contact picks, durable attachments/conversation, stale-write rejection, task links, ticket/slice MemberOf assignment, counts, removal, picker and navigation');
+  console.log('PASS: ticket register sorting/filtering, arrow navigation/boundaries, keyboard resizing, draft retention, shared Inspector; company/contact picks, attachments, stale-write rejection, task/slice links and navigation');
 } finally {
   await browser.close();
 }

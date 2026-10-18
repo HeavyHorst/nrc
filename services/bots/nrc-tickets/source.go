@@ -19,6 +19,7 @@ type source interface {
 	list(context.Context, uint16) ([]p.Asset, error)
 	get(context.Context, uint64) (p.Asset, error)
 	create(context.Context, p.Asset) (p.Asset, error)
+	edges(context.Context, uint64) ([]p.Edge, error)
 }
 type nrcSource struct{ server, workspace, secret string }
 
@@ -80,6 +81,37 @@ func (s nrcSource) get(ctx context.Context, id uint64) (p.Asset, error) {
 		return p.Asset{}, errors.New("invalid asset response")
 	}
 	return r.Asset, nil
+}
+func (s nrcSource) edges(ctx context.Context, company uint64) ([]p.Edge, error) {
+	var out []p.Edge
+	var after uint64
+	for pages := 0; pages < 1000; pages++ {
+		b, err := s.request(ctx, p.C_ListEdgesPaged, p.EncodeListEdgesPaged(0, p.TargetTypeAsset, company, 250, after, 1), p.S_EdgeListPage)
+		if err != nil {
+			return nil, err
+		}
+		page, err := p.DecodeEdgeListPage(b)
+		if err != nil {
+			return nil, err
+		}
+		if page.ConvID != 0 || page.TargetType != p.TargetTypeAsset || page.TargetID != company || page.CorrelationID != 1 {
+			return nil, errors.New("invalid company edge page")
+		}
+		for _, edge := range page.Edges {
+			if edge.ConvID != 0 || !(edge.SourceType == p.TargetTypeAsset && edge.SourceID == company || edge.TargetType == p.TargetTypeAsset && edge.TargetID == company) {
+				return nil, errors.New("invalid company edge")
+			}
+			out = append(out, edge)
+		}
+		if !page.HasMore {
+			return out, nil
+		}
+		if len(page.Edges) == 0 || page.NextEdgeID <= after {
+			return nil, errors.New("stalled company edge cursor")
+		}
+		after = page.NextEdgeID
+	}
+	return nil, errors.New("too many company edges")
 }
 func (s nrcSource) list(ctx context.Context, typ uint16) ([]p.Asset, error) {
 	var out []p.Asset

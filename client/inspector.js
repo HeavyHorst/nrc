@@ -34,6 +34,7 @@
     if (ref.type === "reminder") return await (window.NRCTasks?.confirmDiscardReminderEdits?.() ?? true);
     if (ref.type === "appointment") return await (window.NRCAppointments?.confirmDiscardEdits?.() ?? true);
     if (ref.type === "slice") return await (window.NRCSlices?.confirmDiscardRecordEdits?.() ?? true);
+    if (ref.type === "ticket") return await (window.NRCTickets?.confirmDiscardEdits?.() ?? true);
     if (["company", "contact", "activity"].includes(ref.type)) return await (window.NRCCustomers?.confirmDiscardEdits?.() ?? true);
     return true;
   }
@@ -58,8 +59,14 @@
       inspector.removeAttribute("aria-modal");
       inspector.removeAttribute("tabindex");
       const target = state.returnFocus;
+      const ticketId = target?.closest?.('[data-ticket]')?.dataset.ticket;
       // Let the mobile shell remove background inertness before restoring focus.
-      requestAnimationFrame(() => target?.focus?.());
+      requestAnimationFrame(() => {
+        const restored = target?.isConnected === false && ticketId
+          ? document.querySelector(`#ticketsList [data-ticket="${ticketId}"] button`) || document.getElementById('ticketsRegister')
+          : target;
+        restored?.focus?.();
+      });
       state.returnFocus = null;
     }
     document.body.classList.toggle("inspector-open", open && overlay);
@@ -241,6 +248,8 @@
       window.NRCAppointments?.showInspector?.(ref, stillCurrent);
     } else if (ref.type === "file") {
       window.NRCFiles?.showInspector?.(ref);
+    } else if (ref.type === "ticket") {
+      window.NRCTickets?.showInspector(ref, stillCurrent);
     } else if (ref.type === "slice") {
       window.NRCSlices?.clearInspector();
       renderStatus(ref, "LOADING", `Loading slice #${ref.id}…`);
@@ -316,6 +325,7 @@
     if (ref?.type === "reminder") window.NRCTasks?.clearReminderSelection?.({ fromInspector: true });
     if (ref?.type === "appointment") window.NRCAppointments?.clearSelection?.();
     if (ref?.type === "slice") window.NRCSlices?.clearInspector?.();
+    if (ref?.type === "ticket") window.NRCTickets?.clearSelection?.();
     if (["company", "contact", "activity"].includes(ref?.type)) window.NRCCustomers?.clearSelection();
   }
 
@@ -599,7 +609,7 @@
     // the block first when the panel is too narrow to show the column.
     const messagesArea = keyName === "m" ? entityHost()?.querySelector("[data-messages-area]") : null;
     const control = keyName === "m"
-      ? messagesArea?.querySelector("[data-composer-toggle]")
+      ? messagesArea?.querySelector("[data-composer-toggle]") || document.querySelector(`#inspectorHeader ${selector}`)
       : document.querySelector(`#inspectorHeader ${selector}`);
     if (!control || detailLoading || control.disabled || control.getAttribute("aria-disabled") === "true") return false;
     event.preventDefault();

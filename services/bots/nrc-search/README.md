@@ -105,6 +105,27 @@ fails, and dirty generations cannot be promoted. Only a successful subsequent
 reconciliation clears dirty state. Network page dispatch stays outside that
 boundary, so a reconciliation waiting on a page cannot block its response.
 
+## Ticket conversation search
+
+Staff consumers request `filters:{entity_types:["asset"],asset_types:[13],ticket:{}}`.
+`ticket` optionally takes exact string `status`, `assignee` and `company_id` filters.
+Search builds one candidate per eligible ticket from its original request and
+all child TicketEntry payloads, including internal notes. Reply vector chunks
+contribute independent semantic evidence. Parent facets and conversation folding
+apply **before** ranking/top-N; children never consume separate result slots.
+Orphaned entries, task/room parents and other scopes cannot contribute.
+Text mode uses the same parent candidates before pagination. Ticket IDs, with or
+without `#`, are searchable. `preview`, `metadata.ticket` and optional `payload`
+belong to the parent ticket; payload does not embed the conversation.
+
+The index and parent linkage persist through the existing embedding store and
+live/reconciliation pipeline. Index updates remain asynchronous; unlike customer
+inventory text mode, ticket text mode requires completed indexing. Deploy this
+backend before updated ticket search consumers and add `13,14` to custom
+`EMBED_ASSET_TYPES` settings. Defaults and Compose already include both types.
+This mode is **internal staff-only** and must never be used as an unfiltered
+customer-portal search API: internal notes are intentionally searchable.
+
 ## Limits and access
 
 Search reads workspace-wide data through its trusted bot connection. Keep its
@@ -251,7 +272,7 @@ These are standalone defaults. Compose sets container paths and the NRC server U
 | `MODEL_PATH` | `./models/model.onnx` | ONNX model path |
 | `TOKENIZER_PATH` | `./models/tokenizer.json` | Tokenizer path |
 | `DATA_DIR` | `./data` | Persistent index directory |
-| `EMBED_ASSET_TYPES` | `1,2,3,4,5,8,9,10` | Comments, documents, files, workspace memos, notes, companies, contacts and activities |
+| `EMBED_ASSET_TYPES` | `1,2,3,4,5,8,9,10,13,14` | Comments, documents, files, workspace memos, notes, companies, contacts, activities, tickets and ticket entries |
 | `EMBED_TASKS` | `true` | Index tasks, including Done history |
 | `FILES_URL` | Unset | Private proxy origin; unset disables attachment ingestion |
 | `MEDIA_MODEL_DIR` | Unset | Absolute local directory with processor configs and `onnx/` media encoders |

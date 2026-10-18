@@ -481,6 +481,10 @@ func matchesTaskFilters(key entityKey, entry *IndexEntry, filters *TaskFilters) 
 
 func (idx *Index) collectCandidates(workspace string, convID uint64, filters SearchFilters) []candidate {
 	idx.mu.RLock()
+	if filters.Ticket != nil {
+		defer idx.mu.RUnlock()
+		return idx.ticketCandidates(workspace, convID, filters.Ticket)
+	}
 	storage := idx.storage
 	var customerIDs []uint64
 	for key := range idx.byConvID[workspace][convID] {
@@ -822,8 +826,9 @@ func (idx *Index) SearchEntitiesParallel(workspace string, query string, embedde
 					metadata:   c.entry.Metadata,
 				})
 
-				exact := c.identity.EntityType == EntityTypeTask && ((hasExactTaskID && c.identity.EntityID == exactTaskID) ||
-					(c.entry.Metadata.Task != nil && strings.EqualFold(strings.TrimSpace(c.entry.Metadata.Task.ExternalRef), strings.TrimSpace(query))))
+				exact := (c.identity.EntityType == EntityTypeTask && ((hasExactTaskID && c.identity.EntityID == exactTaskID) ||
+					(c.entry.Metadata.Task != nil && strings.EqualFold(strings.TrimSpace(c.entry.Metadata.Task.ExternalRef), strings.TrimSpace(query))))) ||
+					(filters.Ticket != nil && hasExactTaskID && c.identity.EntityID == exactTaskID)
 				if exact || c.entry.Bloom&queryBloom == queryBloom {
 					if exact || strings.Contains(c.entry.PayloadLower, queryLower) || strings.Contains(c.entry.PreviewLower, queryLower) {
 						count := strings.Count(c.entry.PayloadLower, queryLower)

@@ -825,7 +825,7 @@ function navigateToTarget(convId, targetType, targetId, sourceType = 1) {
       return;
     }
     if (asset && asset.assetType === window.NRCAssets?.AssetType?.Ticket) {
-      window.NRCTickets?.open('', String(targetId));
+      window.NRCInspector?.openEntity({ roomId: convId, type: "ticket", id: targetId });
       return;
     }
     // Linked slices keep the current view, just like linked tasks and notes.

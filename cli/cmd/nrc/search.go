@@ -326,6 +326,15 @@ func runSearch(req searchRequest, roomFlag string) (*searchResponse, error) {
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("decode search response: %w", err)
 	}
+	if req.Filters != nil && req.Filters.Ticket != nil {
+		for _, result := range resp.Results {
+			if result.Entity.EntityType != protocol.SearchEntityAsset || result.Entity.EntityID == 0 || result.Entity.ConvID != protocol.WorkspaceDataConvID ||
+				(result.Entity.Workspace != "" && result.Entity.Workspace != req.Workspace) || result.AssetType != protocol.AssetTypeTicket ||
+				result.Metadata.Ticket == nil || strings.TrimSpace(result.Metadata.Ticket.Title) == "" {
+				return nil, fmt.Errorf("nrc-search returned an invalid parent-ticket result")
+			}
+		}
+	}
 
 	return &resp, nil
 }

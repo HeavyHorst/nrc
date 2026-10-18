@@ -493,7 +493,7 @@ function initTaskViewState() {
   }
 
   // Sort headers (for list view)
-  document.querySelectorAll(".task-table th[data-sort]").forEach((th) => {
+  document.querySelectorAll("#taskListView .task-table th[data-sort]").forEach((th) => {
     th.addEventListener("click", () => toggleSort(th.dataset.sort));
   });
 

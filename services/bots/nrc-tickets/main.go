@@ -23,6 +23,7 @@ type account struct {
 	Requester    string `json:"requester"`
 	Name         string `json:"name"`
 	CompanyID    string `json:"company_id"`
+	ContactID    string `json:"contact_id,omitempty"`
 }
 
 func decimal(s string) bool {
@@ -56,13 +57,20 @@ func loadAccounts(path string) ([]account, error) {
 	}
 	seen := map[string]bool{}
 	identities := map[string]bool{}
+	contacts := map[string]bool{}
 	for _, v := range a {
 		cost, e := bcrypt.Cost([]byte(v.PasswordHash))
 		if v.Login == "" || len(v.Login) > 320 || strings.Contains(v.Login, ":") || seen[v.Login] || identities[v.Requester] || v.Requester == "" || len(v.Requester) > 320 || strings.TrimSpace(v.Requester) != v.Requester || strings.ToLower(v.Requester) != v.Requester || v.Name == "" || len(v.Name) > 256 || !decimal(v.CompanyID) || e != nil || cost < 12 || cost > 16 {
 			return nil, errors.New("invalid or duplicate account")
 		}
+		if !decimal(v.ContactID) || v.ContactID != "" && (v.CompanyID == "" || contacts[v.ContactID]) {
+			return nil, errors.New("contact_id requires company_id and a unique canonical contact ID")
+		}
 		seen[v.Login] = true
 		identities[v.Requester] = true
+		if v.ContactID != "" {
+			contacts[v.ContactID] = true
+		}
 	}
 	return a, nil
 }
@@ -73,6 +81,7 @@ func provision(path string) error {
 	var in []struct {
 		Login, Password, Requester, Name string
 		CompanyID                        string `json:"company_id"`
+		ContactID                        string `json:"contact_id"`
 	}
 	d := json.NewDecoder(io.LimitReader(os.Stdin, 1<<20))
 	d.DisallowUnknownFields()
@@ -91,7 +100,7 @@ func provision(path string) error {
 		if e != nil {
 			return e
 		}
-		out = append(out, account{v.Login, string(h), v.Requester, v.Name, v.CompanyID})
+		out = append(out, account{v.Login, string(h), v.Requester, v.Name, v.CompanyID, v.ContactID})
 	}
 	f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if e != nil {

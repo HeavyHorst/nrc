@@ -2924,7 +2924,7 @@ function renderTaskList() {
   const sorted = ranked ? filtered : getSortedTasks(filtered);
 
   window.NRCColumnResize?.init({
-    root: ".task-table", headers: "thead th", storageKey: "nrc.task.columns.v1",
+    root: "#taskListView .task-table", headers: "thead th", storageKey: "nrc.task.columns.v1",
     defaults: [16, 48, 52, 280, 104, 110, 120, 86, 48, 64, 48, 48, 70, 72],
     minimums: [16, 48, 44, 160, 84, 72, 88, 72, 40, 48, 40, 40, 56, 56],
     locked: [0],
@@ -3320,7 +3320,7 @@ function closeStatusMenuFor(node) {
 }
 
 function updateSortHeaders() {
-  const headers = document.querySelectorAll(".task-table th[data-sort]");
+  const headers = document.querySelectorAll("#taskListView .task-table th[data-sort]");
   headers.forEach((th) => {
     th.classList.remove("sorted-asc", "sorted-desc");
     if (th.dataset.sort === TaskViewState.sortColumn) {

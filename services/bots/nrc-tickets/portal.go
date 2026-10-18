@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,12 +68,14 @@ func (v *entryPreview) UnmarshalJSON(data []byte) error {
 // Never serialize an asset or pass one to a template. Only validated public
 // attachments get ticket-scoped download URLs, not generic blob-service URLs.
 type publicTicket struct {
-	ID          uint64             `json:"id"`
-	Title       string             `json:"title"`
-	Status      string             `json:"status"`
-	Body        string             `json:"body,omitempty"`
-	Entries     []publicEntry      `json:"entries,omitempty"`
-	Attachments []publicAttachment `json:"attachments,omitempty"`
+	ID            uint64             `json:"id"`
+	Title         string             `json:"title"`
+	Status        string             `json:"status"`
+	Shared        bool               `json:"shared"`
+	SubmittedBy   string             `json:"submitted_by,omitempty"`
+	Body          string             `json:"body,omitempty"`
+	Entries       []publicEntry      `json:"entries,omitempty"`
+	Attachments   []publicAttachment `json:"attachments,omitempty"`
 }
 type publicEntry struct {
 	Author      string             `json:"author"`
@@ -93,16 +96,91 @@ type portal struct {
 	origin   string
 }
 
-func project(a p.Asset, who account) (publicTicket, bool) {
+func (s *portal) sharedContacts(ctx context.Context, who account) map[string]bool {
+	if who.ContactID == "" || who.CompanyID == "" {
+		return nil
+	}
+	id, _ := strconv.ParseUint(who.CompanyID, 10, 64)
+	company, err := s.source.get(ctx, id)
+	if err != nil || company.AssetID != id || company.ConvID != 0 || company.AssetType != p.AssetTypeCustomerCompany {
+		return nil
+	}
+	groups, err := p.DecodeTicketGroups(company.Preview)
+	if err != nil {
+		return nil
+	}
+	peers := map[string]bool{}
+	for _, group := range groups {
+		member := false
+		for _, contact := range group.ContactIDs {
+			member = member || contact == who.ContactID
+		}
+		if member {
+			for _, contact := range group.ContactIDs {
+				peers[contact] = true
+			}
+		}
+	}
+	if len(peers) == 0 {
+		return nil
+	}
+	edges, err := s.source.edges(ctx, id)
+	if err != nil {
+		return nil
+	}
+	linked := map[string]bool{}
+	for _, edge := range edges {
+		if edge.ConvID != 0 || edge.Relation != p.RelationMemberOf || edge.SourceType != p.TargetTypeAsset || edge.TargetType != p.TargetTypeAsset {
+			continue
+		}
+		if edge.TargetID == id {
+			linked[strconv.FormatUint(edge.SourceID, 10)] = true
+		} else if edge.SourceID == id {
+			linked[strconv.FormatUint(edge.TargetID, 10)] = true
+		}
+	}
+	// Re-read actual contacts: deleted contacts or removed company edges cannot
+	// leave a stale grant behind. This set lives for one HTTP request only.
+	for contact := range peers {
+		cid, _ := strconv.ParseUint(contact, 10, 64)
+		a, err := s.source.get(ctx, cid)
+		if !linked[contact] || err != nil || a.AssetID != cid || a.ConvID != 0 || a.AssetType != p.AssetTypeCustomerContact {
+			delete(peers, contact)
+		}
+	}
+	if !peers[who.ContactID] {
+		return nil
+	}
+	return peers
+}
+
+func (s *portal) project(a p.Asset, who account, peers map[string]bool) (publicTicket, bool) {
 	var v ticketPreview
-	if a.ConvID != 0 || a.AssetType != ticketType || a.ParentType != 0 || a.ParentID != 0 || json.Unmarshal([]byte(a.Preview), &v) != nil || v.Version != 1 || v.Requester != who.Requester {
+	if a.ConvID != 0 || a.AssetType != ticketType || a.ParentType != 0 || a.ParentID != 0 || json.Unmarshal([]byte(a.Preview), &v) != nil || v.Version != 1 {
 		return publicTicket{}, false
+	}
+	shared := v.Requester != who.Requester
+	if shared {
+		contact := v.ContactID
+		// Older tickets have no contact_id. Only explicit account bindings in the
+		// same company can resolve them; never infer membership from an email.
+		if contact == "" {
+			for _, a := range s.accounts {
+				if a.Requester == v.Requester && a.CompanyID == v.CompanyID {
+					contact = a.ContactID
+					break
+				}
+			}
+		}
+		if v.CompanyID == "" || v.CompanyID != who.CompanyID || !peers[contact] {
+			return publicTicket{}, false
+		}
 	}
 	status := map[string]string{"open": "Offen", "in_progress": "In Bearbeitung", "waiting_customer": "Ihre Antwort wird erwartet", "resolved": "Gelöst", "closed": "Geschlossen"}[v.Status]
 	if status == "" {
 		return publicTicket{}, false
 	}
-	return publicTicket{ID: a.AssetID, Title: v.Title, Status: status, Body: a.Payload}, true
+	return publicTicket{ID: a.AssetID, Title: v.Title, Status: status, Body: a.Payload, Shared: shared, SubmittedBy: v.RequesterName}, true
 }
 func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -173,7 +251,12 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		v, owned := project(a, who)
+		var peers map[string]bool
+		var preview ticketPreview
+		if json.Unmarshal([]byte(a.Preview), &preview) == nil && preview.Requester != who.Requester {
+			peers = s.sharedContacts(r.Context(), who)
+		}
+		v, owned := s.project(a, who, peers)
 		if !owned {
 			http.NotFound(w, r)
 			return
@@ -241,8 +324,9 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	list := []publicTicket{}
+	peers := s.sharedContacts(r.Context(), who)
 	for _, a := range assets {
-		if v, ok := project(a, who); ok {
+		if v, ok := s.project(a, who, peers); ok {
 			v.Body = ""
 			list = append(list, v)
 		}
@@ -349,9 +433,20 @@ func (s *portal) write(w http.ResponseWriter, r *http.Request, who account, pare
 	}
 	a := p.Asset{AssetType: ticketType, Payload: body, Attachments: attachments}
 	if parent == 0 {
-		b, _ := json.Marshal(ticketPreview{Version: 1, Title: title, CompanyID: who.CompanyID, Requester: who.Requester, RequesterName: who.Name, Status: "open"})
+		b, _ := json.Marshal(ticketPreview{Version: 1, Title: title, CompanyID: who.CompanyID, ContactID: who.ContactID, Requester: who.Requester, RequesterName: who.Name, Status: "open"})
 		a.Preview = string(b)
 	} else {
+		// File uploads can take minutes. Recheck a team grant immediately before
+		// storing the reply rather than retaining access from the initial GET.
+		current, err := s.source.get(r.Context(), parent)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if _, ok := s.project(current, who, s.sharedContacts(r.Context(), who)); !ok {
+			http.NotFound(w, r)
+			return
+		}
 		a.AssetType = entryType
 		a.ParentType = 2
 		a.ParentID = parent
@@ -404,7 +499,7 @@ var page = template.Must(template.New("portal").Parse(`<!doctype html>
 {{template "upload"}}<button>Anfrage senden</button></form>
 {{else if .Ticket}}
 <a href="/">← Alle Anfragen</a><h1>{{.Ticket.Title}}</h1><p class="muted">Anfrage #{{.Ticket.ID}} · {{.Ticket.Status}}</p>
-<article><h2>Ihre Anfrage</h2><div class="body">{{.Ticket.Body}}</div>{{template "attachments" .Ticket.Attachments}}</article>
+<article><h2>{{if .Ticket.Shared}}Teamanfrage{{if .Ticket.SubmittedBy}} von {{.Ticket.SubmittedBy}}{{end}}{{else}}Ihre Anfrage{{end}}</h2><div class="body">{{.Ticket.Body}}</div>{{template "attachments" .Ticket.Attachments}}</article>
 {{range .Ticket.Entries}}<article><strong>{{.Author}}</strong><div class="body">{{.Body}}</div>{{template "attachments" .Attachments}}</article>{{end}}
 <form method="post" action="/tickets/{{.Ticket.ID}}/reply" enctype="multipart/form-data">
 <label>Ihre Antwort<textarea name="body" rows="5" maxlength="32000" required></textarea></label>
@@ -412,8 +507,8 @@ var page = template.Must(template.New("portal").Parse(`<!doctype html>
 {{else}}
 <h1>Meine Anfragen</h1><p>Willkommen! Hier behalten Sie Ihre Anliegen und unsere Antworten im Blick.</p>
 <p><a class="button" href="/new">+ Neue Anfrage</a></p>
-<table><thead><tr><th>Anfrage</th><th>Status</th></tr></thead><tbody>{{range .Tickets}}<tr><td><a href="/tickets/{{.ID}}">{{.Title}}</a><br><small>#{{.ID}}</small></td><td>{{.Status}}</td></tr>{{else}}<tr><td colspan="2">Noch keine Anfragen. Wie können wir Ihnen helfen?</td></tr>{{end}}</tbody></table>
-{{end}}<p class="muted">Nur Ihre eigenen Anfragen und öffentliche Antworten sind hier sichtbar.</p></main>
+<table><thead><tr><th>Anfrage</th><th>Status</th></tr></thead><tbody>{{range .Tickets}}<tr><td><a href="/tickets/{{.ID}}">{{.Title}}</a><br><small>#{{.ID}} · {{if .Shared}}Team{{if .SubmittedBy}} · {{.SubmittedBy}}{{end}}{{else}}Meine Anfrage{{end}}</small></td><td>{{.Status}}</td></tr>{{else}}<tr><td colspan="2">Noch keine Anfragen. Wie können wir Ihnen helfen?</td></tr>{{end}}</tbody></table>
+{{end}}<p class="muted">Sie sehen eigene Anfragen und ausdrücklich freigegebene Teamanfragen mit öffentlichen Antworten und Anhängen. Auf Teamanfragen können Sie ebenfalls antworten. Interne Notizen sind nicht sichtbar.</p></main>
 {{with .Branding}}{{if or .FooterText .ImprintURL .PrivacyURL .TermsURL .ContactURL}}
 <footer>{{if .FooterText}}<span>{{.FooterText}}</span>{{end}}<nav aria-label="Rechtliches und Kontakt">
 {{if .ImprintURL}}<a href="{{.ImprintURL}}">Impressum</a>{{end}}{{if .PrivacyURL}}<a href="{{.PrivacyURL}}">Datenschutz</a>{{end}}

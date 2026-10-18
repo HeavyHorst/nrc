@@ -122,7 +122,7 @@ func loadConfig() Config {
 		cfg.NRCNickname = fmt.Sprintf("search-%s", hostname)
 	}
 
-	cfg.EmbedAssetTypes = parseAssetTypes(envOrDefault("EMBED_ASSET_TYPES", "1,2,3,4,5,8,9,10"))
+	cfg.EmbedAssetTypes = parseAssetTypes(envOrDefault("EMBED_ASSET_TYPES", "1,2,3,4,5,8,9,10,13,14"))
 	cfg.EmbedTasks = parseBool(envOrDefault("EMBED_TASKS", "true"), true)
 
 	intervalStr := envOrDefault("RECONCILE_INTERVAL", "15m")
@@ -268,6 +268,14 @@ func (req *searchRequest) normalize() error {
 		if !typ.Valid() {
 			return fmt.Errorf("unsupported entity type %q", typ)
 		}
+	}
+	if req.Filters.Ticket != nil {
+		if req.Filters.Customer != nil || req.Filters.Task != nil || req.SimilarEntity != nil ||
+			len(req.Filters.EntityTypes) != 1 || req.Filters.EntityTypes[0] != EntityTypeAsset ||
+			(len(req.Filters.AssetTypes) > 0 && !sameAssetTypeSet(req.Filters.AssetTypes, []uint16{protocol.AssetTypeTicket})) {
+			return fmt.Errorf("ticket search requires ticket assets only and does not support other register filters or similarity seeds")
+		}
+		req.Filters.AssetTypes = []uint16{protocol.AssetTypeTicket}
 	}
 	includesTask := false
 	for _, typ := range req.Filters.EntityTypes {

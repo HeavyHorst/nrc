@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20261013fold1">
     <link rel="icon" type="image/png" href="favicon.png?v=20261013fold1">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=20261013fold1">
-    <link rel="stylesheet" href="css/main.css?v=20261017history5">
+    <link rel="stylesheet" href="css/main.css?v=20261018ticketregister1">
     <link rel="stylesheet" href="css/custom-select.css?v=20260926nesting1">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 </head>
@@ -113,14 +113,27 @@
                             <div class="panel-header header-register filter-register">
                                 <div class="header-register-identity-row"><span class="header-register-title">TICKETS</span><span id="ticketsStatus" class="header-register-state" role="status">NOT LOADED</span></div>
                                 <div class="header-register-control-row">
-                                    <label class="header-filter-cell"><span class="filter-label">SEARCH</span><input class="filter-input" data-filter="search" type="search" placeholder="TITLE / REQUESTER / ID"></label>
+                                    <label class="header-filter-cell"><span class="filter-label">SEARCH</span><input class="filter-input" data-filter="search" type="search" placeholder="TICKETS / CONVERSATIONS / ID"></label>
                                     <label class="header-filter-cell"><span class="filter-label">STATE</span><select class="filter-select" data-filter="status"><option value="">ALL</option><option value="open">OPEN</option><option value="in_progress">IN PROGRESS</option><option value="waiting_customer">WAITING ON CUSTOMER</option><option value="resolved">RESOLVED</option><option value="closed">CLOSED</option></select></label>
                                     <label class="header-filter-cell"><span class="filter-label">ASSIGNEE</span><input class="filter-input" data-filter="owner" placeholder="ALL ASSIGNEES"></label>
                                     <label class="header-filter-cell"><span class="filter-label">CUSTOMER ID</span><input class="filter-input" data-filter="company" inputmode="numeric" placeholder="ALL CUSTOMERS"></label>
                                     <button id="ticketsRefresh" class="btn header-operation">REFRESH</button><button id="ticketNew" class="btn btn--primary header-operation">+ TICKET</button>
                                 </div>
                             </div>
-                            <div class="customers-layout"><aside class="customers-register" aria-label="Ticket register"><div id="ticketsList"></div></aside><article id="ticketEditor" class="customer-record" aria-label="Ticket detail"><p class="customer-empty">Select a ticket or create one.</p></article></div>
+                            <div id="ticketsRegister" class="task-list-view" tabindex="0" aria-label="Ticket register. Up and down arrows select tickets; Enter opens a ticket.">
+                                <table id="ticketsTable" class="task-table ticket-table" aria-label="Tickets">
+                                    <thead><tr>
+                                        <th class="col-id" data-sort="id" scope="col"><button class="task-row-open" type="button">ID</button></th>
+                                        <th class="col-title" data-sort="title" scope="col"><button class="task-row-open" type="button">TITLE</button></th>
+                                        <th class="col-status" data-sort="status" scope="col"><button class="task-row-open" type="button">STATUS</button></th>
+                                        <th class="col-assignee" data-sort="assignee" scope="col"><button class="task-row-open" type="button">ASSIGNEE</button></th>
+                                        <th class="col-project" data-sort="company_id" scope="col"><button class="task-row-open" type="button">COMPANY</button></th>
+                                        <th class="col-contact" data-sort="contact_id" scope="col"><button class="task-row-open" type="button">CONTACT</button></th>
+                                        <th class="col-unread" data-sort="unread" scope="col"><button class="task-row-open" type="button">UNREAD</button></th>
+                                        <th class="col-activity" data-sort="activity" scope="col"><button class="task-row-open" type="button">ACTIVITY</button></th>
+                                    </tr></thead><tbody id="ticketsList"></tbody>
+                                </table>
+                            </div>
                         </section>
                         <section id="customersPanel" class="customers-panel" style="display:none" aria-label="Customer workspace">
                             <div class="panel-header header-register filter-register">
@@ -640,28 +653,28 @@
     <script src="transactions.js?v=20260925inline1"></script>
     <script src="edges.js?v=20260924slicelive1"></script>
     <script src="files.js?v=20261017history1"></script>
-    <script src="links-ui.js?v=20261017ticketresources1"></script>
-    <script src="inspector.js?v=20261017history5"></script>
+    <script src="links-ui.js?v=20261018ticketregister1"></script>
+    <script src="inspector.js?v=20261018ticketregister1"></script>
     <script src="view-manager.js?v=20261017history5"></script>
     <script src="list-navigation.js?v=20260805b"></script>
     <script src="virtual-list.js?v=20260908a"></script>
     <script src="loading-indicator.js?v=20261013loading1"></script>
     <script src="page-loader.js?v=20261013loading1"></script>
-    <script src="task-state.js?v=20260926calendar7"></script>
+    <script src="task-state.js?v=20261018ticketregister1"></script>
     <script src="query-controller.js?v=20260914workspace1"></script>
     <script src="workspace-search.js?v=20261013searchsync1"></script>
     <script src="task-search.js?v=20260917taskscroll1"></script>
     <script src="detail-ui.js?v=20261017history5"></script>
     <script src="column-resize.js?v=20260913tables2"></script>
     <script src="record-activity.js?v=20261017attention1"></script>
-    <script src="tasks.js?v=20261017history5"></script>
+    <script src="tasks.js?v=20261018ticketregister1"></script>
     <script src="attention.js?v=20261017attention1"></script>
     <script src="calendar.js?v=20261013loading1"></script>
     <script src="appointments.js?v=20260928appointment8"></script>
     <script src="appointment-notify.js?v=20260927appointment2"></script>
     <script src="reminder-notify.js?v=20260923attention7"></script>
     <script src="task-query.js?v=20260927calendar8"></script>
-    <script src="slices.js?v=20261017history5"></script>
+    <script src="slices.js?v=20261018ticketregister1"></script>
     <script src="overview.js?v=20261013overviewactions2"></script>
     <script src="history.js?v=20261017history4"></script>
     <script src="note-html.js?v=20261007fragments1"></script>
@@ -672,9 +685,9 @@
     <script src="chat.js?v=20261015copy3"></script>
     <script src="app.js?v=20261017history5"></script>
     <script src="newsletter.js?v=20261017contacts2"></script>
-    <script src="customers.js?v=20261017history5"></script>
-    <script src="tickets.js?v=20261017ticketcleanup1"></script>
-    <script src="mobile-shell.js?v=20260914chats1"></script>
+    <script src="customers.js?v=20261018ticketgroups1"></script>
+    <script src="tickets.js?v=20261018ticketsearch1"></script>
+    <script src="mobile-shell.js?v=20261018ticketregister1"></script>
     <script>
         if ("serviceWorker" in navigator) {
             window.addEventListener("load", () => navigator.serviceWorker.register("service-worker.js"));

@@ -76,10 +76,13 @@ func resultIdentity(identity EntityIdentity, legacyAssetID uint64) EntityIdentit
 }
 
 type SearchMetadata struct {
-	AssetType   uint16             `json:"asset_type,omitempty"`
-	Task        *TaskMetadata      `json:"task,omitempty"`
-	Attachments []AttachmentSearch `json:"attachments,omitempty"`
-	Customer    json.RawMessage    `json:"customer,omitempty"`
+	AssetType   uint16                         `json:"asset_type,omitempty"`
+	Task        *TaskMetadata                  `json:"task,omitempty"`
+	Attachments []AttachmentSearch             `json:"attachments,omitempty"`
+	Customer    json.RawMessage                `json:"customer,omitempty"`
+	Ticket      *protocol.SearchTicketMetadata `json:"ticket,omitempty"`
+	ParentType  uint16                         `json:"parent_type,omitempty"`
+	ParentID    uint64                         `json:"parent_id,string,omitempty"`
 }
 
 type TaskMetadata = protocol.SearchTaskMetadata
@@ -116,6 +119,7 @@ type SearchFilters struct {
 	AssetTypes  []uint16                        `json:"asset_types,omitempty"`
 	Task        *TaskFilters                    `json:"task,omitempty"`
 	Customer    *protocol.SearchCustomerFilters `json:"customer,omitempty"`
+	Ticket      *protocol.SearchTicketFilters   `json:"ticket,omitempty"`
 }
 
 type TaskFilters = protocol.SearchTaskFilters

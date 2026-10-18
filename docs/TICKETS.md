@@ -7,7 +7,32 @@ tickets. Deploy a ticket-capable NRC server first (Ticket=13, TicketEntry=14).
 The staff client remains separate.
 
 In NRC, open **TICKETS** for the workspace register or **CUSTOMERS → TICKETS**
-for a company-scoped entry point. Ticket metadata uses the same directly visible
+for a company-scoped entry point. The full-width table shares task selection,
+focus, sort indicators and persisted column resizing. Its initial order is newest
+activity first; ↑/↓ navigates the current filtered/sorted rows, Enter opens the
+shared Inspector and Escape closes it. Input fields and pickers keep their own
+arrow keys. Reply and new-ticket drafts survive record switches until reload;
+pending writes block switching. Linked tickets open in the Inspector without
+changing the surrounding view. Save/errors are visible inside the Inspector,
+including on narrow screens; M focuses the reply composer.
+
+The internal search field uses the shared `/search` service (250 ms debounce,
+up to 100 ticket hits). It searches the original request, requester/title/ID,
+customer replies, public replies and **internal notes**. Each ticket appears once;
+conversation text and vector chunks contribute to that ticket before ranking.
+Status, assignee and company filters apply before ranking/top-N. Table sorting
+still uses the selected column. Loading, stale-index and local-fallback states
+are explicit; an unavailable service falls back to substring matching across
+loaded tickets and conversations. Empty queries use the normal NRC register.
+The index is asynchronous; search is ranked evidence, not a complete inventory.
+The register still loads tickets/entries for activity and Inspector state.
+Deploy the updated Search service before the client/CLI/AI consumers, and include
+asset types `13,14` in custom `EMBED_ASSET_TYPES` overrides (now enabled by default).
+CLI `nrc ticket search <query>` and Sullivan `search_tickets` use the same service.
+This is **staff-only** search, not a customer-portal endpoint; its results and
+internal-note evidence must not be exposed to public customers.
+
+Ticket metadata uses the same directly visible
 inline editors as tasks and notes, without a separate **EDIT TICKET** disclosure.
 The original request appears once, read-only in the conversation;
 staff metadata saves do not replace the request body or its attachments.
@@ -77,6 +102,54 @@ If browser storage is unavailable they last only for the current page session.
 
 ## CLI and Sullivan
 
+### Shared customer ticket visibility
+
+In **CUSTOMERS → CONTACTS → SHARED TICKET VISIBILITY**, create named groups
+such as Technik or Projektteam and select contacts of that company. Direct
+fellow-members can mutually **read and reply** to all existing and future tickets,
+including original-request and public-reply attachments and image previews.
+There is no per-ticket grant, automatic company-wide access, or transitive
+expansion across overlapping groups. Internal notes and their files stay private.
+The portal labels team requests separately and identifies the original submitter;
+replies use the actual signed-in person's name without changing that submitter.
+
+Groups are version-1 company metadata, `ticket_groups: [{id, name, contact_ids}]`.
+IDs are stable across renames; contact IDs are decimal strings. Members must be
+current `CustomerContact` assets linked to the company by `MemberOf`. Every
+portal request rechecks these records and edges, including direct URLs, replies
+and downloads. Removing membership/contact/company revokes the corresponding
+grant on subsequent requests; already downloaded data cannot be recalled.
+Own tickets and direct grants from other groups remain accessible. Malformed or
+unavailable sharing metadata fails closed, without taking away own-ticket access.
+Company/group edits use conditional preview patches, preserve body/attachments
+and other metadata, and reject stale versions instead of overwriting them.
+
+Portal accounts must explicitly bind `contact_id` to their NRC contact alongside
+`company_id`; no email/domain inference is used. Existing accounts without this
+optional mapping remain own-only. New tickets carry the contact ID. Older tickets
+without it resolve through an explicitly mapped requester account of the same
+company, so existing tickets participate without rewriting the original request.
+Configure accounts on the deployment and restart the portal after changing them;
+selecting a contact in NRC does not provision credentials.
+
+```sh
+nrc customer ticket-group list 123
+nrc customer ticket-group create 123 --name Technik --contacts 42,43
+nrc customer ticket-group update 123 <group-id> --name Projektteam --contacts 42,44
+nrc customer ticket-group update 123 <group-id> --contacts ''
+nrc customer ticket-group delete 123 <group-id>
+```
+
+Sullivan provides `read_ticket_groups` and `propose_ticket_group` for the same
+create/update/delete operations. Grants and revocations are explicitly disclosed
+and staged for human approval only; applying rechecks the company version and
+resulting members. Only one unapplied group mutation per company can be staged
+in a plan: apply it and re-read the company before proposing the next, so an
+approved batch cannot conflict with its own version checks. No generic customer
+mutation permission is introduced.
+
+### Ticket records
+
 The staff CLI uses the same workspace records, attachments and company/contact
 membership rules. Original request bodies remain read-only; updates are
 conditional metadata-only patches. `reply` defaults to an internal note:
@@ -137,6 +210,8 @@ arguments, logs, Git, or environment variables). Use a protected directory and
 * `requester`: canonical lower-case account identity, normally email
 * `name`: customer-facing display name
 * `company_id`: canonical positive decimal NRC company asset ID, or empty string
+* `contact_id` (optional): canonical positive decimal NRC contact ID; requires
+  `company_id` and must be unique across accounts. Enables explicit sharing groups.
 
 Provision the full account set in one operation, from the sidecar directory:
 
@@ -151,8 +226,9 @@ storage policy. Never publish the file. Provision to a new path and atomically
 replace the old file to rotate accounts, then restart the service. The loader
 rejects empty/invalid configs, duplicate logins/identities, invalid hashes and
 group/world-readable files. Accounts are explicitly provisioned by operators;
-requester and company cannot be chosen by the browser. Accounts with the same
-company still **cannot** access one another's tickets.
+requester, company and contact cannot be chosen by the browser. Accounts with the
+same company still **cannot** access one another's tickets unless their contacts
+are explicitly in a common ticket-sharing group.
 
 ## Deployment
 

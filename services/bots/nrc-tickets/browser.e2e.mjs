@@ -21,10 +21,11 @@ try {
   browser = await chromium.launch();
   const theme = join(scratch, 'theme.css');
   writeFileSync(theme, ':root { --accent:#744b88; --accent-hover:#573766; --header-background:#30223c; --background:#f6f3f8; --text:#282331; --border:#ded5e5; --radius:8px; }');
-  for (const branded of [false, true]) {
+  for (const branded of [false, true, 'team']) {
     let logs = '';
     server = spawn(binary, ['-test.run', '^TestBrowserFixture$', '-test.timeout', '0'], {
       cwd, env: { ...process.env, TMPDIR: scratch, TICKETS_TEST_ADDR: '127.0.0.1:18196', TICKETS_TEST_ORIGIN: base,
+        TICKETS_TEST_SHARING: branded === 'team' ? '1' : '',
         TICKETS_BRAND: branded ? 'Example & Co · Kundenservice' : '',
         TICKETS_THEME_FILE: branded ? theme : '', TICKETS_LOGO_FILE: branded ? resolve(cwd, '../../../logo/favicon.png') : '',
         TICKETS_FOOTER_TEXT: branded ? '© Example & Co · Wir helfen Ihnen weiter.' : '',
@@ -45,6 +46,34 @@ try {
     const page = await context.newPage();
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     const shot = async name => { if (artifacts) await page.screenshot({ path: resolve(artifacts, `${name}-images.png`), fullPage: true }); };
+    if (branded === 'team') {
+      await page.goto(base);
+      await page.getByRole('link', { name: 'Rechnungsexport unvollständig', exact: true }).waitFor();
+      assert.match(await page.locator('table').textContent(), /Team/);
+      assert.match(await page.locator('table').textContent(), /Meine Anfrage/);
+      assert.doesNotMatch(await page.locator('table').textContent(), /Ticket 3|Ticket 4|Ticket 5/);
+      await shot('tickets-team-list');
+      await page.getByRole('link', { name: 'Rechnungsexport unvollständig', exact: true }).click();
+      await page.getByRole('heading', { name: /Teamanfrage von/ }).waitFor();
+      assert.doesNotMatch(await page.locator('main').textContent(), /INTERNAL_ONLY_DIAGNOSIS/);
+      await page.getByLabel('Ihre Antwort', { exact: true }).fill('Ich ergänze die Diagnose für unser Technikteam.');
+      await page.getByLabel('Dateien hinzufügen', { exact: true }).setInputFiles({ name: 'Teamdiagnose.txt', mimeType: 'text/plain', buffer: Buffer.from('Team diagnosis') });
+      await page.getByRole('button', { name: 'Antwort senden' }).click();
+      await page.getByText('Ich ergänze die Diagnose für unser Technikteam.', { exact: true }).waitFor();
+      await page.reload();
+      const link = page.getByRole('link', { name: 'Teamdiagnose.txt', exact: true });
+      assert.equal(await (await context.request.get(base + await link.getAttribute('href'))).text(), 'Team diagnosis');
+      assert.match(await page.locator('article').last().textContent(), /Anna/);
+      await shot('tickets-team-detail');
+      await page.setViewportSize({ width: 390, height: 1000 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await shot('tickets-team-narrow');
+      assert.equal((await context.request.get(`${base}/tickets/3`)).status(), 404);
+      assert.deepEqual(errors, []);
+      await context.close();
+      const closed = new Promise(r => server.once('exit', r)); server.kill('SIGTERM'); await closed; server = null;
+      continue;
+    }
     await page.goto(`${base}/new`);
     assert.equal(await page.title(), branded ? 'Example & Co · Kundenservice' : 'Ihr Kundenportal');
     assert.equal(await page.locator('footer').count(), branded ? 1 : 0);
@@ -149,7 +178,7 @@ try {
     }
     const closed = new Promise(r => server.once('exit', r)); server.kill('SIGTERM'); await closed; server = null;
   }
-  console.log('PASS: custom file chooser and filenames, original/reply image previews and full-size opening, exact downloads, reload, privacy, default/custom branding and narrow layout');
+  console.log('PASS: custom file chooser, image previews, exact downloads, reload, privacy, branding, narrow layout; team list/detail/reply/file upload with real author and no indirect/private access');
 } finally {
   if (browser) await browser.close();
   if (server?.exitCode === null) { const closed = new Promise(r => server.once('exit', r)); server.kill('SIGTERM'); await closed; }

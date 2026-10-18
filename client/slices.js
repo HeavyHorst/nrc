@@ -1808,8 +1808,7 @@
     activateMemberRow(row);
     opener.focus({ preventScroll: true });
     row.scrollIntoView({ block: "nearest" });
-    if (kind === "ticket") window.NRCTickets?.open?.("", id);
-    else window.NRCInspector?.openEntity?.({ roomId: 0n, type: kind, id: BigInt(id) });
+    window.NRCInspector?.openEntity?.({ roomId: 0n, type: kind, id: BigInt(id) });
     return true;
   }
 
@@ -1929,7 +1928,7 @@
         if (task) window.NRCTasks?.openTaskStatusMenu?.(statusToken, task);
         return;
       }
-      const member = event.target.closest("[data-member-task], [data-member-note], [data-member-file]");
+      const member = event.target.closest("[data-member-task], [data-member-note], [data-member-file], [data-member-ticket]");
       if (member) {
         // A member is a reference to an entity that lives in its own view, so it
         // opens in the inspector like every other reference in the client. The

@@ -513,6 +513,20 @@ func (s *Storage) UpdateEntityEmbeddingMetadataAndCancelQueue(identity EntityIde
 				return err
 			}
 		}
+		if identity.EntityType == EntityTypeAsset {
+			legacy, err := s.workspaceBucket(tx, bucketEmbeddings, identity.Workspace)
+			if err != nil {
+				return err
+			}
+			if err := legacy.Put(uint64ToKey(identity.EntityID), updated); err != nil {
+				return err
+			}
+			if queue := s.workspaceBucketRead(tx, bucketQueue, identity.Workspace); queue != nil {
+				if err := queue.Delete(uint64ToKey(identity.EntityID)); err != nil {
+					return err
+				}
+			}
+		}
 		found = true
 		return nil
 	})

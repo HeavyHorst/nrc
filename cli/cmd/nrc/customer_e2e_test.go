@@ -77,6 +77,34 @@ func TestCustomerCLIEndToEnd(t *testing.T) {
 	contact := id(run(true, "contact", "create", "--company", company, "--title", "Alice", "--email", "rare@example.test", "--service-for", company))
 	activity := id(run(true, "activity", "create", "--company", company, "--title", "Decision", "--kind", "Decision", "--body", "Keep the existing API."))
 	contact2 := id(run(true, "contact", "create", "--company", other, "--title", "Bob"))
+	// Company membership is asymmetric: Alice belongs here, Bob belongs elsewhere.
+	run(true, "customer", "ticket-group", "create", company, "--id", "support", "--name", " Support ", "--contacts", contact)
+	run(false, "customer", "ticket-group", "update", company, "support", "--contacts", contact2)
+	run(false, "customer", "ticket-group", "create", company, "--id", "support", "--name", "Duplicate")
+	run(false, "customer", "ticket-group", "update", company, "support", "--contacts", "0"+contact)
+	run(true, "customer", "update", company, "--phone", "123")
+	assertGroups := func(name string, contacts []string) {
+		t.Helper()
+		var groups []protocol.TicketGroup
+		if err := json.Unmarshal(run(true, "customer", "ticket-group", "list", company)["ticket_groups"], &groups); err != nil {
+			t.Fatal(err)
+		}
+		if len(groups) != 1 || groups[0].ID != "support" || groups[0].Name != name || strings.Join(groups[0].ContactIDs, ",") != strings.Join(contacts, ",") {
+			t.Fatalf("unexpected groups: %+v", groups)
+		}
+	}
+	assertGroups("Support", []string{contact}) // Ordinary company edits preserve groups.
+	run(true, "customer", "ticket-group", "update", company, "support", "--name", "Renamed", "--contacts", "")
+	assertGroups("Renamed", nil)
+	var companyMeta map[string]json.RawMessage
+	_ = json.Unmarshal(run(true, "customer", "get", company)["metadata"], &companyMeta)
+	if string(companyMeta["city"]) != `"Berlin"` || string(companyMeta["phone"]) != `"123"` {
+		t.Fatalf("group edit lost metadata: %s", companyMeta)
+	}
+	run(true, "customer", "ticket-group", "delete", company, "support")
+	if got := string(run(true, "customer", "ticket-group", "list", company)["ticket_groups"]); got != "[]" {
+		t.Fatalf("deleted group retained: %s", got)
+	}
 	assertService := func(contactID string, companies ...string) {
 		t.Helper()
 		var meta struct {

@@ -715,7 +715,7 @@ func init() {
 	customer := &cobra.Command{Use: "customer", Short: "Manage customer companies and linked work", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
-	customer.AddCommand(customerLinks(), customerLink(), customerUnlink(), customerSearchCommand())
+	customer.AddCommand(customerLinks(), customerLink(), customerUnlink(), customerSearchCommand(), customerTicketGroups())
 	for _, kind := range []uint16{protocol.AssetTypeCustomerCompany, protocol.AssetTypeCustomerContact, protocol.AssetTypeCustomerActivity} {
 		group := customer
 		if kind != protocol.AssetTypeCustomerCompany {

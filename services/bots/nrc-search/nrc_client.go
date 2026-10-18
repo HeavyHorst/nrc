@@ -481,13 +481,23 @@ func (c *NRCClient) ingestAsset(asset protocol.Asset, live bool, cutoff uint64) 
 	}
 	hash := document_content_hash(asset.Preview, asset.Payload, asset.Attachments...)
 	c.expectedHashes[identity.key()] = hash
-	if existing, ok := c.index.GetEntity(identity); ok && c.reusableEmbedding(existing, hash) {
-		// A newer mutation can return to the already-indexed content while an
-		// intermediate attachment job is pending. Cancel that stale work too.
-		_ = c.storage.DeleteQueueEntry(c.workspace, asset.AssetID)
-		return nil
+	metadata := SearchMetadata{}
+	if asset.AssetType == protocol.AssetTypeTicket || asset.AssetType == protocol.AssetTypeTicketEntry {
+		metadata = ticketMetadata(asset)
 	}
-	entry := QueueEntry{ConvID: asset.ConvID, AssetType: asset.AssetType, Content: asset.Payload, Preview: asset.Preview, Attachments: append([]protocol.Attachment(nil), asset.Attachments...), Version: c.nextVersion.Add(1)}
+	if existing, ok := c.index.GetEntity(identity); ok && c.reusableEmbedding(existing, hash) {
+		if asset.AssetType == protocol.AssetTypeTicket || asset.AssetType == protocol.AssetTypeTicketEntry {
+			if c.persistEntityMetadata(identity, metadata) {
+				return nil
+			}
+		} else {
+			// A newer mutation can return to the already-indexed content while an
+			// intermediate attachment job is pending. Cancel that stale work too.
+			_ = c.storage.DeleteQueueEntry(c.workspace, asset.AssetID)
+			return nil
+		}
+	}
+	entry := QueueEntry{ConvID: asset.ConvID, AssetType: asset.AssetType, Content: asset.Payload, Preview: asset.Preview, Metadata: metadata, Attachments: append([]protocol.Attachment(nil), asset.Attachments...), Version: c.nextVersion.Add(1)}
 	if asset.AssetType == protocol.AssetTypeCustomerCompany {
 		entry.Metadata.Customer = customerPreview(asset.Preview)
 	}
@@ -542,13 +552,13 @@ func storedEmbeddingFromEntry(entry *IndexEntry) StoredEmbedding {
 	}
 }
 
-func (c *NRCClient) persistTaskMetadata(identity EntityIdentity, metadata SearchMetadata) bool {
+func (c *NRCClient) persistEntityMetadata(identity EntityIdentity, metadata SearchMetadata) bool {
 	if existing, ok := c.index.GetEntity(identity); ok {
 		metadata.Attachments = existing.Metadata.Attachments
 	}
 	_, found, err := c.storage.UpdateEntityEmbeddingMetadataAndCancelQueue(identity, metadata)
 	if err != nil {
-		slog.Error("failed to persist task metadata", "identity", identity, "error", err)
+		slog.Error("failed to persist entity metadata", "identity", identity, "error", err)
 		return false
 	}
 	if !found {
@@ -592,7 +602,7 @@ func (c *NRCClient) ingestTaskLocked(task *protocol.Task, identity EntityIdentit
 	hash := document_content_hash(preview, content, task.Attachments...)
 	c.expectedHashes[identity.key()] = hash
 	if existing, ok := c.index.GetEntity(identity); ok && c.reusableEmbedding(existing, hash) {
-		if c.persistTaskMetadata(identity, metadata) {
+		if c.persistEntityMetadata(identity, metadata) {
 			delete(c.unresolvedTasks, identity.key())
 			return nil, nil
 		}
@@ -660,7 +670,7 @@ func (c *NRCClient) handleTaskMoved(ctx context.Context, payload []byte) {
 		copy.CompletedAt = response.CompletedAt
 		copy.CompletedBy = response.CompletedBy
 		metadata.Task = &copy
-		if c.persistTaskMetadata(identity, metadata) {
+		if c.persistEntityMetadata(identity, metadata) {
 			delete(c.unresolvedTasks, identity.key())
 			c.taskMutationMu.Unlock()
 			return
@@ -1309,7 +1319,7 @@ func (c *NRCClient) processEmbedJob(job EmbedJob) bool {
 	// not change the text sent to the embedder.
 	hash := document_content_hash(job.Entry.Preview, job.Entry.Content, job.Entry.Attachments...)
 
-	if identity.EntityType == EntityTypeTask {
+	if identity.EntityType == EntityTypeTask || job.Entry.AssetType == protocol.AssetTypeTicket || job.Entry.AssetType == protocol.AssetTypeTicketEntry {
 		c.taskMutationMu.Lock()
 		if existing, ok := c.index.GetEntity(identity); ok && c.reusableEmbedding(existing, hash) {
 			embedding := storedEmbeddingFromEntry(existing)

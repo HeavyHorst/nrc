@@ -195,7 +195,7 @@ func handleAskApply(wm *WorkspaceManager, store *AgentSessionStore) http.Handler
 
 		for _, pending := range toApply {
 			switch pending.Action.Type {
-			case "ticket_create", "ticket_update_metadata", "ticket_entry", "ticket_delete":
+			case "ticket_create", "ticket_update_metadata", "ticket_entry", "ticket_delete", "ticket_group":
 				applyTicketAction(ctx, client, store, pending, &result)
 			case actionTypeCreateTask:
 				applyCreateTaskAction(ctx, client, store, sessionSnapshot.ContextConvID, pending, &result)

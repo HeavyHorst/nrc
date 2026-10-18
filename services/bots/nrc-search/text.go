@@ -18,7 +18,7 @@ func (idx *Index) SearchText(workspace, query string, convID uint64, filters Sea
 	query = strings.ToLower(strings.TrimSpace(query))
 	results := map[entityKey]SearchResult{}
 	wantsAssets := len(filters.EntityTypes) == 0 || slices.Contains(filters.EntityTypes, EntityTypeAsset)
-	wantsCustomer := wantsAssets && (filters.Customer != nil || len(filters.AssetTypes) == 0 || slices.Contains(filters.AssetTypes, uint16(protocol.AssetTypeCustomerCompany)) || slices.Contains(filters.AssetTypes, uint16(protocol.AssetTypeCustomerContact)))
+	wantsCustomer := wantsAssets && filters.Ticket == nil && (filters.Customer != nil || len(filters.AssetTypes) == 0 || slices.Contains(filters.AssetTypes, uint16(protocol.AssetTypeCustomerCompany)) || slices.Contains(filters.AssetTypes, uint16(protocol.AssetTypeCustomerContact)))
 	if wantsCustomer {
 		idx.mu.RLock()
 		storage := idx.storage

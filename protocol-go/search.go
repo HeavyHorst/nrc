@@ -45,9 +45,27 @@ type SearchTaskMetadata struct {
 }
 
 type SearchMetadata struct {
-	AssetType uint16              `json:"asset_type,omitempty"`
-	Task      *SearchTaskMetadata `json:"task,omitempty"`
-	Customer  json.RawMessage     `json:"customer,omitempty"`
+	AssetType uint16                `json:"asset_type,omitempty"`
+	Task      *SearchTaskMetadata   `json:"task,omitempty"`
+	Customer  json.RawMessage       `json:"customer,omitempty"`
+	Ticket    *SearchTicketMetadata `json:"ticket,omitempty"`
+}
+
+type SearchTicketMetadata struct {
+	Title         string `json:"title"`
+	Status        string `json:"status"`
+	Assignee      string `json:"assignee"`
+	CompanyID     string `json:"company_id"`
+	ContactID     string `json:"contact_id"`
+	Requester     string `json:"requester"`
+	RequesterName string `json:"requester_name"`
+}
+
+// Ticket filters apply to the parent ticket before conversation ranking/limiting.
+type SearchTicketFilters struct {
+	Status    string `json:"status,omitempty"`
+	Assignee  string `json:"assignee,omitempty"`
+	CompanyID string `json:"company_id,omitempty"`
 }
 
 // SearchIDs encodes uint64 entity IDs as decimal JSON strings (and accepts
@@ -115,6 +133,7 @@ type SearchFilters struct {
 	AssetTypes  []uint16               `json:"asset_types,omitempty"`
 	Task        *SearchTaskFilters     `json:"task,omitempty"`
 	Customer    *SearchCustomerFilters `json:"customer,omitempty"`
+	Ticket      *SearchTicketFilters   `json:"ticket,omitempty"`
 }
 
 type SearchCustomerFilters struct {

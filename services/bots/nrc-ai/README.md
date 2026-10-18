@@ -34,6 +34,14 @@ Health alone does not prove that your provider can complete requests.
 
 ## Use
 
+`search_tickets(query, limit, status, assignee, company_id)` provides internal
+staff-only conversation search through Search. Query is required; limit defaults
+to 6 and caps at 12. Exact parent filters apply before ranking; original requests,
+customer/public replies and internal notes contribute to one Ticket result.
+Results include structured `ticket` metadata and stale/limit warnings. Use
+`read_tickets` for the authoritative conversation before proposing changes.
+Never expose this internal evidence to portal customers.
+
 Ask exposes read-only `search_customers(query, limit, include_archived)` for the
 company register. Query must be nonblank; limit defaults to 6 and caps at 12.
 It sends typed-v1 asset filters `[8,9]` plus `customer.include_archived` (false

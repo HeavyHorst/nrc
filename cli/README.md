@@ -37,12 +37,36 @@ Use `--room` only for chat commands, not for data or graph commands.
 
 ## Staff tickets
 
-Tickets use direct NRC workspace assets, entries and graph edges; no ticket portal
-or search service is required. All IDs below are stable positive numeric IDs,
+Company ticket-sharing groups are managed separately from individual tickets:
+
+```sh
+nrc customer ticket-group list 41
+nrc customer ticket-group create 41 --id support --name 'Support team' --contacts 42,43
+nrc customer ticket-group create 41 --name 'Billing' # generates a stable random ID
+nrc customer ticket-group update 41 support --name 'Customer support' --contacts 42,44
+nrc customer ticket-group update 41 support --contacts '' # empty membership
+nrc customer ticket-group delete 41 support
+```
+
+Groups share tickets only between direct fellow members within this company;
+sharing is not transitive across overlapping groups. Names are trimmed, and
+renaming never changes the group ID. Contact IDs must be unique canonical positive
+decimal strings and must identify workspace contacts currently linked to the company
+by `MemberOf` (either direction). Updates replace the entire supplied member list;
+omitted flags preserve existing values. Removing stale/deleted members is allowed,
+and deleting a group does not resolve its old contacts. These conditional preview-only
+transactions preserve unknown company metadata, body and attachments. Ordinary
+company updates also preserve groups. JSON list output has `company_id` and
+`ticket_groups`; mutations report the company `id` and stable `group_id`.
+
+Tickets use direct NRC workspace assets, entries and graph edges; except for
+`ticket search`, no ticket portal or search service is required. All IDs below are stable positive numeric IDs,
 never display names. Use the normal authenticated staff proxy configuration.
 
 ```sh
 nrc ticket list --status open --assignee alice --company 41 --search invoice
+nrc ticket search 'invoice conversation' --status open --assignee alice --company 41 --top 100
+nrc ticket search 'invoice conversation' --payload --human
 nrc ticket create --requester customer@example.com --title 'Invoice question' \
   --body 'Original customer request' --contact 42 --attach /tmp/invoice.pdf
 nrc ticket get 100
@@ -69,6 +93,17 @@ original body. Status is `open`, `in_progress`, `waiting_customer`, `resolved` o
 `closed`. Create requires explicit requester, title and nonempty body, with optional
 company, contact, requester-name, assignee, status (default open), and attachments.
 Use either `--body` or `--body-file`; bodies are limited to 32,000 bytes.
+
+`ticket search <query>` instead calls the configured proxy's `POST /search`
+(nrc-search required), without opening a WebSocket. It searches workspace scope 0
+and returns ranked Ticket assets, not entry hits: the service aggregates the
+original body and all replies/internal notes into one conversation before ranking
+and limiting. `--status`, `--assignee` and `--company` are exact parent-ticket
+filters. The trimmed query must be nonempty; `--top` defaults to 100 and accepts
+1–100. `--payload` includes only the original ticket body, never concatenated
+replies/internal notes. Normal JSON (default) and `--human` output are supported.
+Unlike this indexed conversation search, `ticket list --search` remains a local
+substring filter over title, requester and original body only.
 
 Contact validation uses actual `MemberOf` edges in either direction, not legacy
 metadata hints. Contact-only creation infers its company only when exactly one

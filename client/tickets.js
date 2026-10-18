@@ -4,15 +4,46 @@
   const statusLabels = { open: 'OPEN', in_progress: 'IN PROGRESS', waiting_customer: 'WAITING ON CUSTOMER', resolved: 'RESOLVED', closed: 'CLOSED' };
   const kinds = ['internal_note', 'public_reply'];
   const kindLabels = { public_reply: 'PUBLIC REPLY', customer_reply: 'CUSTOMER REPLY', internal_note: 'INTERNAL NOTE' };
-  const state = { tickets: [], entries: [], selected: '', drafts: new Map(), filters: {}, pending: false, error: '', loading: false, notice: '' };
+  const state = { tickets: [], entries: [], selected: '', drafts: new Map(), filters: {}, pending: false, error: '', loading: false, notice: '', sort: 'activity', direction: 'desc' };
   let generation = 0, session = '';
   let workLoading = false, workAgain = false;
+  let searchController;
+  let searchState = { mode: 'idle', ids: new Set(), stale: false };
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   function metadata(asset) { try { const value = JSON.parse(asset.preview); return value && typeof value === 'object' ? value : {}; } catch { return {}; } }
   function matches(asset, filters) {
     const m = metadata(asset);
+    const query = String(filters.search || '').trim().toLowerCase();
+    const text = query ? [m.title, m.requester, m.requester_name, `#${asset.assetId}`, asset.payload,
+      ...state.entries.filter(entry => entry.parentType === 2 && entry.parentId === asset.assetId).map(entry => entry.payload)].join('\n').toLowerCase() : '';
     return (!filters.status || m.status === filters.status) && (!filters.owner || m.assignee === filters.owner) &&
-      (!filters.company || m.company_id === filters.company) && (!filters.search || `${m.title} ${m.requester} ${asset.assetId}`.toLowerCase().includes(filters.search.toLowerCase()));
+      (!filters.company || m.company_id === filters.company) && (!query || text.includes(query));
+  }
+  function updateSearch({ debounce = false } = {}) {
+    searchController?.cancel();
+    const query = String(state.filters.search || '').trim();
+    const { status = '', owner = '', company = '' } = state.filters;
+    const key = JSON.stringify([query, status, owner, company]);
+    if (!query || key !== searchState.key) searchState = { mode: query ? 'loading' : 'idle', ids: new Set(), stale: false, key };
+    renderList(); renderStatus();
+    if (!query) return;
+    searchController ||= window.NRCSearch.createController();
+    searchController.search({ query, top_n: 100,
+      filters: { entity_types: ['asset'], asset_types: [13], ticket: { status, assignee: owner, company_id: company } },
+    }, {
+      debounce: debounce ? 250 : 0,
+      onResult: data => {
+        const ids = new Set();
+        for (const result of data.results) {
+          if (result.entity?.type !== 'asset' || result.entity.conv_id !== '0' || result.asset_type !== 13 ||
+            !result.metadata?.ticket || !/^[1-9]\d*$/.test(result.entity.id)) throw new Error('Invalid ticket search result');
+          ids.add(result.entity.id);
+        }
+        searchState = { mode: 'results', ids, stale: data.stale === true, key };
+        renderList(); renderStatus();
+      },
+      onError: () => { searchState = { mode: 'fallback', ids: new Set(), stale: false, key }; renderList(); renderStatus(); },
+    });
   }
   function conversation(id, internal) {
     return state.entries.filter(a => String(a.parentId) === String(id) && a.parentType === 2 &&
@@ -79,8 +110,9 @@
       d.uploads.push(upload);
       Promise.resolve().then(() => uploadFile(file)).then(attachment => { upload.attachment = attachment; }, error => { upload.error = error.message || 'Upload failed'; })
         .finally(() => {
-          const current = host?.ticketDraft;
-          if (current?.uploads.includes(upload)) renderUploads(current, host);
+          const activeHost = document.getElementById('ticketEditor');
+          const current = activeHost?.ticketDraft;
+          if (current?.uploads.includes(upload)) renderUploads(current, activeHost);
           renderStatus();
         });
     }
@@ -94,7 +126,7 @@
       const [tickets, entries] = await Promise.all([13, 14].map(type => window.NRCAssets.requestAllAssets(0n, type, { fullContent: true })));
       if (token !== generation) return;
       state.tickets = tickets.assets; state.entries = entries.assets;
-      renderList(); renderConversation(); renderSavedAttachments(); // Never replace a live editor on refresh.
+      updateSearch(); renderConversation(); renderSavedAttachments(); // Never replace a live editor on refresh.
       renderMetadata();
       publishActivity();
       if (state.selected && !state.drafts.has(state.selected)) editor();
@@ -153,11 +185,25 @@
         renderUploads(d, document.getElementById('ticketEditor'));
       }
     } catch (error) { state.error = error.message; }
-    finally { state.pending = false; renderStatus(); }
+    finally {
+      state.pending = false; renderStatus();
+      if (!entry && window.NRCInspector?.current()?.type === 'ticket' && window.NRCInspector.current().id === 0n && state.selected) selectTicket(state.selected);
+    }
   }
   function renderStatus() {
     const el = document.getElementById('ticketsStatus');
-    if (el) el.textContent = state.error || (state.pending ? 'SAVING · awaiting NRC acknowledgement' : state.loading ? 'LOADING ALL PAGES' : state.notice || `${state.tickets.length} TICKETS · NRC SOURCE`);
+    const searchStatus = searchState.mode === 'loading' ? 'SEARCHING' : searchState.mode === 'results'
+      ? `${searchState.ids.size} RESULTS · TOP 100${searchState.stale ? ' · INDEX STALE' : ''}`
+      : searchState.mode === 'fallback' ? 'LOCAL FALLBACK · LOADED CONTENT' : '';
+    if (el) {
+      el.textContent = state.error || (state.pending ? 'SAVING · awaiting NRC acknowledgement' : state.loading ? 'LOADING ALL PAGES' : searchStatus || state.notice || `${state.tickets.length} TICKETS · NRC SOURCE`);
+      el.title = searchState.mode === 'fallback' ? 'Search service unavailable. Searching loaded ticket metadata, original requests and conversations.' : searchState.mode === 'results' ? 'Search service: up to 100 ticket results. Index updates are asynchronous.' : '';
+    }
+    const detailStatus = document.getElementById('ticketStatus');
+    if (detailStatus) {
+      detailStatus.textContent = state.error || (state.pending ? 'SAVING · awaiting NRC acknowledgement' : state.notice);
+      detailStatus.hidden = !detailStatus.textContent;
+    }
     const blocked = state.drafts.get(state.selected)?.uploads?.some(u => !u.attachment);
     document.querySelectorAll('#ticketEditor button[data-save]').forEach(b => b.disabled = state.pending || (!state.selected && blocked));
     document.querySelectorAll('#ticketEditor [data-ticket-files], #ticketEditor [data-ticket-add-files], #ticketEditor [data-remove-upload]').forEach(el => el.disabled = state.pending);
@@ -184,11 +230,46 @@
       reply.dataset.visibility = isPublic ? 'public' : 'internal';
     }
   }
+  function contactName(m) {
+    return customerName(m.contact_id) || m.requester_name || m.requester || '';
+  }
   function renderList() {
     const el = document.getElementById('ticketsList'); if (!el) return;
-    const rows = state.tickets.filter(a => matches(a, state.filters)).map(asset => ({ asset, ...activity(asset) }))
-      .sort((a, b) => a.timestamp > b.timestamp ? -1 : a.timestamp < b.timestamp ? 1 : a.asset.assetId > b.asset.assetId ? -1 : 1);
-    el.innerHTML = rows.map(({ asset: a, unread, waiting }) => { const m = metadata(a); return `<button class="customer-contact" data-ticket="${a.assetId}" aria-pressed="${state.selected === String(a.assetId)}"><span><strong>#${a.assetId} ${esc(m.title)}</strong><span class="customer-meta">${esc(m.requester)}${unread ? ` · ${unread} UNREAD` : ''}${waiting ? ' · CUSTOMER WAITING' : ''}</span></span><span>${esc(statusLabels[m.status] || m.status)} / ${esc(m.assignee || 'UNASSIGNED')}</span></button>`; }).join('') || '<p class="customer-empty">No matching tickets.</p>';
+    const rows = state.tickets.filter(a => searchState.mode === 'loading' ? false : searchState.mode === 'results'
+      ? searchState.ids.has(String(a.assetId)) : matches(a, state.filters)).map(asset => ({ asset, ...activity(asset) }))
+      .sort((a, b) => {
+        const value = item => state.sort === 'activity' ? item.timestamp : state.sort === 'id' ? item.asset.assetId : state.sort === 'unread' ? item.unread :
+          state.sort === 'contact_id' ? contactName(metadata(item.asset)) : state.sort === 'company_id' ? customerName(metadata(item.asset).company_id) : metadata(item.asset)[state.sort] || '';
+        const left = value(a), right = value(b);
+        const order = typeof left === 'string' ? left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' }) : left > right ? 1 : left < right ? -1 : 0;
+        return (state.direction === 'asc' ? order : -order) || (a.asset.assetId > b.asset.assetId ? -1 : 1);
+      });
+    const focused = el.contains?.(document.activeElement) ? document.activeElement.closest('[data-ticket]')?.dataset.ticket : null;
+    el.innerHTML = rows.map(({ asset: a, unread, waiting, timestamp }) => {
+      const m = metadata(a), selected = state.selected === String(a.assetId), contact = contactName(m);
+      return `<tr data-ticket="${a.assetId}" class="${selected ? 'task-row-selected' : ''}" aria-selected="${selected}"><td class="col-id">#${a.assetId}</td><td class="col-title"><button class="task-row-open" type="button">${esc(m.title)}</button>${waiting ? '<span class="customer-meta">CUSTOMER WAITING</span>' : ''}</td><td class="col-status">${esc(statusLabels[m.status] || m.status)}</td><td class="col-assignee">${esc(m.assignee || 'UNASSIGNED')}</td><td class="col-project" title="${esc(customerName(m.company_id))}">${esc(customerName(m.company_id))}</td><td class="col-contact" title="${esc(contact)}">${esc(contact || '—')}</td><td class="col-unread">${unread ? `${unread} UNREAD` : '—'}</td><td class="col-activity" title="${esc(window.NRCDetailUI.formatHeaderDate(timestamp))}">${timestamp ? esc(typeof formatRelativeAge === 'function' ? formatRelativeAge(timestamp) : window.NRCDetailUI.formatHeaderDate(timestamp)) : '—'}</td></tr>`;
+    }).join('') || `<tr><td colspan="8" class="customer-empty">${searchState.mode === 'loading' ? 'Searching tickets…' : 'No matching tickets.'}</td></tr>`;
+    document.querySelectorAll('#ticketsTable th[data-sort]').forEach(th => {
+      const active = th.dataset.sort === state.sort;
+      th.classList.toggle('sorted-asc', active && state.direction === 'asc');
+      th.classList.toggle('sorted-desc', active && state.direction === 'desc');
+      th.setAttribute('aria-sort', active ? state.direction === 'asc' ? 'ascending' : 'descending' : 'none');
+    });
+    if (focused) el.querySelector(`[data-ticket="${focused}"] .task-row-open`)?.focus({ preventScroll: true });
+    window.NRCColumnResize?.init({
+      root: '#ticketsTable', headers: 'thead th', storageKey: 'nrc.ticket.columns.v1',
+      defaults: [56, 280, 160, 110, 150, 150, 88, 110], minimums: [48, 160, 110, 80, 88, 88, 72, 88],
+      apply: (table, widths) => {
+        table.style.tableLayout = 'fixed';
+        const fixed = widths.reduce((sum, width, i) => sum + (i === 1 ? 0 : width), 0);
+        table.querySelectorAll('thead th').forEach((th, i) => th.style.width = i === 1 ? `max(${widths[i]}px, calc(100% - ${fixed}px))` : `${widths[i]}px`);
+      },
+    });
+  }
+  function customerName(id) {
+    if (!id) return '';
+    const linked = window.NRCAssets.roomAssets?.get(0n)?.get(BigInt(id));
+    return metadata(linked || {}).title || `#${id}`;
   }
   function renderConversation() {
     const el = document.getElementById('ticketConversation'); if (!el) return;
@@ -276,8 +357,7 @@
       resource, label, open: resourceOpen[resource] === true, actionHtml,
       bodyHtml: '<p class="customer-empty">Loading links…</p>',
     })).join('') + '</div><nrc-link-picker id="ticketLinkPicker"></nrc-link-picker>' : '';
-    host.innerHTML = `<div class="panel-header"><div><span>${state.selected ? `TICKET #${state.selected}` : 'NEW TICKET'} · RELOAD LOSES DRAFTS</span></div></div>
-      ${state.selected ? '<div id="ticketMetadata" class="record-document ticket-metadata"></div>' : `<h2>New ticket</h2>
+    host.innerHTML = `<p id="ticketStatus" class="customer-status" role="status" aria-live="polite" hidden></p>${state.selected ? '<div id="ticketMetadata" class="record-document ticket-metadata"></div>' : `<h2>New ticket</h2>
         <form id="ticketFields">${field('title', 'TITLE')}${field('company_id', 'COMPANY ID')}${field('contact_id', 'CONTACT ID')}${field('requester', 'REQUESTER · PORTAL ACCOUNT IDENTITY')}${field('requester_name', 'REQUESTER NAME')}${field('assignee', 'ASSIGNEE')}
           <label class="task-detail-row">STATUS <select name="status" class="filter-select">${statuses.map(s => `<option value="${s}" ${d.status === s ? 'selected' : ''}>${statusLabels[s]}</option>`).join('')}</select></label>
           <label class="detail-edit-field ticket-original-request"><span class="detail-edit-label">ORIGINAL REQUEST</span><textarea name="body" class="task-detail-textarea" rows="5" maxlength="32000">${esc(d.body)}</textarea></label>
@@ -511,10 +591,42 @@
     };
   }
   function open(company = '', id = '') {
-    state.filters.company = String(company); state.selected = String(id);
+    state.filters.company = String(company);
     window.NRCViewManager.setActiveView('tickets');
     const filter = document.querySelector('#ticketsPanel [data-filter=company]'); if (filter) filter.value = state.filters.company;
-    editor(); renderList(); reload();
+    if (id) selectTicket(String(id));
+    else if (!window.NRCInspector) { state.selected = ''; editor(); }
+    updateSearch(); reload();
+    Promise.all([8, 9].map(type => window.NRCAssets.requestAllAssets(0n, type))).then(renderList).catch(() => {}); // Missing labels retain stable IDs.
+  }
+  function selectTicket(id) {
+    if (window.NRCInspector) return window.NRCInspector.openEntity({ type: 'ticket', id: BigInt(id || '0') }, { replaceCurrent: window.NRCInspector.current()?.type === 'ticket' });
+    state.selected = String(id); editor(); renderList();
+  }
+  async function showInspector(ref, stillCurrent) {
+    if (state.selected !== (ref.id ? String(ref.id) : '')) { state.error = ''; state.notice = ''; }
+    state.selected = ref.id ? String(ref.id) : '';
+    const host = document.getElementById('inspectorEntityHost');
+    const header = document.getElementById('inspectorHeader');
+    if (!host || !header) return;
+    const record = document.createElement('article'); record.id = 'ticketEditor'; record.className = 'customer-record'; record.setAttribute('aria-label', 'Ticket detail');
+    host.replaceChildren(record);
+    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">${ref.id ? `TICKET #${ref.id}` : 'NEW TICKET'}</span><span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">${ref.id ? 'DETAIL' : 'CREATE'}</span></div><div class="inspector-mode-row">${window.NRCDetailUI.renderHeaderAction({ id: 'ticketReplyFocus', label: 'REPLY', command: 'm', title: 'Focus reply composer (M)' })}${window.NRCDetailUI.renderCloseControl('ticketInspectorClose')}</div>`;
+    document.getElementById('ticketInspectorClose').onclick = () => window.NRCInspector.close();
+    document.getElementById('ticketReplyFocus').onclick = () => record.querySelector('[name=message], [name=title]')?.focus();
+    editor(); renderList();
+    await reload();
+    if (!stillCurrent()) return;
+    if (ref.id && !record.ticketDraft) editor();
+  }
+  async function confirmDiscardEdits() {
+    // Reply/new-ticket drafts are record-owned, not Inspector-owned. Field-local
+    // edits use the same outside-click / Escape cancellation as tasks and notes.
+    return !state.pending;
+  }
+  function clearSelection() {
+    state.selected = '';
+    renderList();
   }
   async function mountCustomer(container, companyId) {
     if (!container) return;
@@ -533,13 +645,37 @@
   function init() {
     const nav = document.getElementById('ticketsBtn'); if (!nav) return;
     nav.onclick = () => open();
-    document.getElementById('ticketNew').onclick = () => { state.selected = ''; editor(); renderList(); };
+    document.getElementById('ticketNew').onclick = () => selectTicket('');
     document.getElementById('ticketsRefresh').onclick = () => { state.error = ''; reload(); };
-    document.getElementById('ticketsList').onclick = e => { const row = e.target.closest('[data-ticket]'); if (row) { state.selected = row.dataset.ticket; editor(); renderList(); } };
-    document.querySelectorAll('#ticketsPanel [data-filter]').forEach(el => el.oninput = () => { state.filters[el.dataset.filter] = el.value; renderList(); });
+    document.getElementById('ticketsList').onclick = e => { const row = e.target.closest('[data-ticket]'); if (row) selectTicket(row.dataset.ticket); };
+    document.querySelectorAll('#ticketsTable th[data-sort]').forEach(th => th.onclick = e => {
+      if (e.target.closest('.column-resize-handle')) return;
+      state.direction = state.sort === th.dataset.sort && state.direction === 'asc' ? 'desc' : 'asc';
+      state.sort = th.dataset.sort; renderList();
+    });
+    document.addEventListener('keydown', e => {
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || window.NRCViewManager?.getActiveView?.() !== 'tickets') return;
+      if (e.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.closest?.('#inspector, dialog, nrc-select, nrc-link-picker, [role="menu"], .column-resize-handle')) return;
+      if (!['ArrowDown', 'ArrowUp', 'Enter'].includes(e.key)) return;
+      const rows = document.querySelectorAll('#ticketsList [data-ticket]');
+      const adjacent = e.key === 'Enter' ? null : window.NRCListNavigation.resolveAdjacent(rows, state.selected || null, e.key === 'ArrowDown' ? 1 : -1, row => row.dataset.ticket);
+      if (adjacent?.status === 'boundary') { e.preventDefault(); return; }
+      const next = e.key === 'Enter' ? Array.from(rows).find(row => row.dataset.ticket === state.selected) : adjacent.row;
+      if (!next || e.key === 'Enter' && e.target.closest('button')) return;
+      e.preventDefault();
+      Promise.resolve(selectTicket(next.dataset.ticket)).then(opened => {
+        if (opened === false) return;
+        const row = document.querySelector(`#ticketsList [data-ticket="${next.dataset.ticket}"]`);
+        row?.scrollIntoView({ block: 'nearest' });
+        if (!document.body.classList.contains('inspector-open')) row?.querySelector('button')?.focus({ preventScroll: true });
+      });
+    });
+    document.querySelectorAll('#ticketsPanel [data-filter]').forEach(el => el.oninput = () => { state.filters[el.dataset.filter] = el.value; updateSearch({ debounce: el.dataset.filter === 'search' }); });
     for (const type of ['nrc:asset-created', 'nrc:asset-updated', 'nrc:asset-deleted']) document.addEventListener(type, e => {
-      if ([13, 14].includes(e.detail?.asset?.assetType)) reload();
-      else renderWork();
+      const asset = e.detail?.asset;
+      if (type === 'nrc:asset-deleted' && asset?.assetType === 13) window.NRCInspector?.entityDeleted({ type: 'ticket', id: asset.assetId });
+      if ([13, 14].includes(asset?.assetType)) reload();
+      else { renderWork(); renderList(); }
     });
     document.addEventListener('nrc:task-changed', e => {
       renderWork();
@@ -556,6 +692,7 @@
   }
   function disconnect() {
     generation++; state.loading = false; state.reloadAgain = false;
+    searchController?.cancel(); searchState = { mode: 'idle', ids: new Set(), stale: false };
     state.tickets = []; state.entries = [];
     renderList(); publishActivity();
   }
@@ -567,6 +704,6 @@
     }
     session = identity; reload();
   }
-  window.NRCTickets = { open, reload, metadata, matches, conversation, mountCustomer, state, activity, snapshot, disconnect, sessionStarted };
+  window.NRCTickets = { open, reload, metadata, matches, conversation, mountCustomer, state, activity, snapshot, disconnect, sessionStarted, showInspector, clearSelection, confirmDiscardEdits };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

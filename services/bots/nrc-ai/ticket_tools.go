@@ -80,6 +80,7 @@ type ticketAttachmentSource struct {
 	FileID     string `json:"file_id"`
 }
 type ticketAction struct {
+	Group           *ticketGroupAction       `json:"group,omitempty"`
 	GeneratedFiles  []ticketGeneratedFile    `json:"generated_files,omitempty"`
 	Operation       string                   `json:"operation"`
 	TicketID        string                   `json:"ticket_id,omitempty"`
@@ -129,6 +130,12 @@ func ticketRecord(a protocol.Asset, payload bool) map[string]any {
 	return r
 }
 func validateTicketAction(a *ticketAction) error {
+	if a.Operation == "group" {
+		return validateTicketGroupAction(a.Group)
+	}
+	if a.Group != nil {
+		return fmt.Errorf("group input requires group operation")
+	}
 	switch a.Operation {
 	case "create", "update_metadata", "entry", "delete":
 	default:
@@ -300,11 +307,17 @@ func (s *AgentSessionStore) addTicketAction(sessionID, planID string, a ticketAc
 			if string(prior) == string(b) {
 				return cloneActionPlan(*plan).Actions[i], nil
 			}
+			if a.Group != nil && existing.Ticket.Group != nil && existing.Ticket.Group.CompanyID == a.Group.CompanyID && existing.Status != actionStatusApplied {
+				return ProposedAction{}, fmt.Errorf("a ticket group change for company #%s is already staged; apply it and read the company again before proposing another", a.Group.CompanyID)
+			}
 		}
 	}
 	var owned ticketAction
 	json.Unmarshal(b, &owned)
 	title := fmt.Sprintf("%s ticket %s: %s", a.Operation, a.TicketID, a.Metadata["title"])
+	if a.Group != nil {
+		title = ticketGroupSummary(a.Group)
+	}
 	if a.Kind == "public_reply" {
 		title = fmt.Sprintf("PUBLIC REPLY · visible in customer portal · recipient %s · files: %s", a.Recipient, strings.Join(a.Filenames, ", "))
 	} else if a.Operation == "entry" {
@@ -410,6 +423,9 @@ func newTicketTools(wm *WorkspaceManager, store *AgentSessionStore) []fantasy.Ag
 		if normalizeAgentMode(toolContextString(tc, agentModeContextKey{}, "mode")) != agentModePlan {
 			return fantasy.ToolResponse{}, fmt.Errorf("propose_ticket requires plan mode")
 		}
+		if in.Operation == "group" || in.Group != nil {
+			return fantasy.ToolResponse{}, fmt.Errorf("use propose_ticket_group")
+		}
 		if err = validateTicketAction(&in); err != nil {
 			return fantasy.ToolResponse{}, err
 		}
@@ -447,6 +463,9 @@ func newTicketTools(wm *WorkspaceManager, store *AgentSessionStore) []fantasy.Ag
 func (c *NRCClient) applyTicket(ctx context.Context, a ticketAction) (uint64, error) {
 	if err := validateTicketAction(&a); err != nil {
 		return 0, err
+	}
+	if a.Operation == "group" {
+		return c.applyTicketGroup(ctx, *a.Group)
 	}
 	var current protocol.Asset
 	var err error

@@ -155,12 +155,13 @@ test("file links open the file inspector rather than a note", () => {
   assert.equal(opened[0].id, 93n);
 });
 
-test("ticket backlinks open the ticket register instead of a note inspector", () => {
+test("ticket backlinks open the typed Inspector without changing views", () => {
   const { linksUI, opened, customerOpened, roomAssets } = loadLinksUI();
   roomAssets.set(0n, new Map([[92n, { assetType: 13 }]]));
   linksUI.navigateToTarget(0n, 1, 92n, 2);
-  assert.deepEqual(customerOpened, [["ticket", "92"]]);
-  assert.deepEqual(opened, []);
+  assert.deepEqual(customerOpened, []);
+  assert.equal(opened[0].type, "ticket");
+  assert.equal(opened[0].id, 92n);
 });
 
 test("uncached task link targets delegate coalescing to the task loader and re-render with their title", () => {

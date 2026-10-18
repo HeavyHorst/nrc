@@ -20,9 +20,25 @@ import (
 type fakeSource struct {
 	mu     sync.Mutex
 	assets map[uint64]p.Asset
+	links  []p.Edge
 	next   uint64
 	writes int
 	fail   bool
+}
+
+func (f *fakeSource) edges(_ context.Context, company uint64) ([]p.Edge, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fail {
+		return nil, errors.New("unavailable")
+	}
+	var out []p.Edge
+	for _, e := range f.links {
+		if e.SourceID == company || e.TargetID == company {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeSource) list(_ context.Context, typ uint16) ([]p.Asset, error) {
@@ -231,7 +247,7 @@ func TestAccountsFailClosed(t *testing.T) {
 		}
 	}
 	h, _ := bcrypt.GenerateFromPassword([]byte("long-random-test-password"), 12)
-	a := []account{{"anna", string(h), "anna@example.test", "Anna", "123"}}
+	a := []account{{"anna", string(h), "anna@example.test", "Anna", "123", ""}}
 	b, _ := json.Marshal(a)
 	path := filepath.Join(t.TempDir(), "accounts.json")
 	os.WriteFile(path, b, 0600)
@@ -289,6 +305,9 @@ func TestBrowserFixture(t *testing.T) {
 		t.Skip("opt-in rendering fixture")
 	}
 	s, _ := fixture(t)
+	if os.Getenv("TICKETS_TEST_SHARING") == "1" {
+		s, _ = sharingFixture(t)
+	}
 	s.files = testFiles(t)
 	var err error
 	s.brand, err = loadBranding()

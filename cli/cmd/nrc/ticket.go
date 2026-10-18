@@ -460,12 +460,50 @@ func ticketCreate(cmd *cobra.Command, s *conn.Session, kind uint16, parent uint6
 	output.Mutation("created", assetTypeName(kind), created.Asset.AssetID, "Ticket record created", nil, map[string]any{"parent_id": parent})
 	return nil
 }
+func ticketSearchCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use: "search <query>", Short: "Search ticket conversations through nrc-search",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			query := strings.TrimSpace(args[0])
+			top, _ := cmd.Flags().GetInt("top")
+			if query == "" || top < 1 || top > 100 {
+				return &conn.InvalidArgumentError{Err: fmt.Errorf("ticket search requires a nonblank query and --top between 1 and 100")}
+			}
+			status, _ := cmd.Flags().GetString("status")
+			assignee, _ := cmd.Flags().GetString("assignee")
+			company, _ := cmd.Flags().GetString("company")
+			payload, _ := cmd.Flags().GetBool("payload")
+			room, _ := cmd.Flags().GetString("room")
+			resp, err := runSearch(p.SearchRequest{
+				Query: query, TopN: top, IncludePayload: payload,
+				Filters: &p.SearchFilters{
+					EntityTypes: []p.SearchEntityType{p.SearchEntityAsset},
+					AssetTypes:  []uint16{p.AssetTypeTicket},
+					Ticket:      &p.SearchTicketFilters{Status: status, Assignee: assignee, CompanyID: company},
+				},
+			}, room)
+			if err != nil {
+				return err
+			}
+			outputSearchResults(resp, useJSONOutput(cmd), payload, false)
+			return nil
+		},
+	}
+	for _, flag := range []string{"status", "assignee", "company"} {
+		c.Flags().String(flag, "", "Exact ticket "+flag+" filter")
+	}
+	c.Flags().Int("top", 100, "Maximum number of results (1-100)")
+	c.Flags().Bool("payload", false, "Include original ticket body (not replies or internal notes)")
+	return c
+}
+
 func init() {
 	c := &cobra.Command{Use: "ticket", Short: "Staff tickets: original bodies are read-only; replies default internal"}
 	for _, action := range []string{"list", "get", "create", "update", "reply", "internal-note", "attachments", "delete"} {
 		c.AddCommand(ticketCommand(action))
 	}
-	c.AddCommand(ticketDownload(), ticketLinks("links"), ticketLinks("link"), ticketLinks("unlink"), ticketLinks("create-task"))
+	c.AddCommand(ticketSearchCommand(), ticketDownload(), ticketLinks("links"), ticketLinks("link"), ticketLinks("unlink"), ticketLinks("create-task"))
 	rootCmd.AddCommand(c)
 }
 

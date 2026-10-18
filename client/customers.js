@@ -54,6 +54,20 @@
     } catch { return null; }
   }
 
+  function ticketGroups(d) {
+    const groups = d.ticket_groups === undefined ? [] : d.ticket_groups;
+    if (!Array.isArray(groups) || groups.some(g => !g || typeof g.id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(g.id) || typeof g.name !== "string" || !Array.isArray(g.contact_ids) || g.contact_ids.some(id => typeof id !== "string" || !/^[1-9][0-9]*$/.test(id)))) return null;
+    return groups;
+  }
+
+  function renderTicketGroups(d, people, disabled) {
+    const groups = ticketGroups(d);
+    return `<section class="customer-section" aria-label="Shared ticket visibility"><div class="panel-header"><div><span>SHARED TICKET VISIBILITY</span><button class="btn" id="customerTicketGroupNew" ${groups ? disabled : "disabled"}>+ GROUP</button></div></div>
+      <p class="customer-meta">Group members can read and reply to each other's existing and future tickets, including public attachments. Internal notes stay private. No automatic company-wide or transitive access.</p>
+      ${groups === null ? '<p class="customer-status" role="alert">Invalid ticket group metadata. No shared access is granted; repair through the CLI.</p>' : groups.length ? groups.map(group => `<div class="file-assets-picker-row"><span><strong>${escape(group.name)}</strong><br><span class="customer-meta">${escape(group.contact_ids.map(id => metadata(people.find(a => String(a.assetId) === id))?.title || `Contact #${id}`).join(", ") || "NO MEMBERS")}</span></span><button type="button" class="btn" data-ticket-group="${escape(group.id)}" ${disabled}>EDIT</button></div>`).join("") : '<p class="customer-empty">No sharing groups. Contacts see only their own tickets.</p>'}
+      <p class="customer-meta">Portal accounts need an explicit contact ID. Group membership alone does not create a login.</p></section>`;
+  }
+
   function date(nanos) {
     return new Date(Number(BigInt(nanos) / 1000000n)).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   }
@@ -477,7 +491,7 @@
       <section class="customer-section" ${sectionHidden("contacts")}><div class="panel-header"><div><span>CONTACTS / ${count(people.length)}</span><button class="btn" id="customerContactNew" ${archived}>+ CONTACT</button></div></div><div class="customer-contacts">${contacts.length ? '<div class="customer-contact-head" aria-hidden="true"><span>NAME / ROLE</span><span>EMAIL</span><span>PHONE</span></div>' : ""}${pageItems(contacts, "contacts").map(a => {
         const p = metadata(a);
         return `<button type="button" class="customer-contact" data-contact="${a.assetId}" aria-pressed="${inspection?.type === "contact" && inspection.id === a.assetId}"><span><strong>${escape(p.title)}</strong>${p.role ? `<span class="customer-meta">${escape(p.role)}</span>` : ""}</span><span>${escape(p.email || "—")}</span><span>${escape(p.phone || "—")}</span></button>`;
-      }).join("") || '<p class="customer-empty">No contacts in this selection.</p>'}</div>${recordPager("contacts", contacts.length)}</section>
+      }).join("") || '<p class="customer-empty">No contacts in this selection.</p>'}</div>${recordPager("contacts", contacts.length)}${recordTab === "contacts" ? renderTicketGroups(d, people, archived) : ""}</section>
       <section class="customer-section" ${sectionHidden("activities")}><div class="panel-header"><div><span>${overview ? "LATEST RECORDED ACTIVITIES" : "ACTIVITY HISTORY"} / ${count(activities.length)}</span><button class="btn" id="customerActivityNew" ${archived}>+ ACTIVITY</button></div></div><label class="customer-history-filter" ${overview ? "hidden" : ""}><span class="filter-label">TYPE</span><nrc-select><select class="filter-select" id="customerHistoryFilter" data-custom-select-portal>${["all", "Call", "Meeting", "Email", "Decision"].map(value => `<option value="${value}" ${historyFilter === value ? "selected" : ""}>${value.toUpperCase()}</option>`).join("")}</select></nrc-select></label><div id="customerHistory" class="${overview && history.length > 1 ? "customer-history-timeline" : ""}">${pageItems(history, "activities").map(a => {
         const m = metadata(a);
         return `<button class="customer-event" data-activity="${a.assetId}" data-kind="${escape(m.kind)}"><span class="customer-meta">${escape(date(a.createdAt))} / ${escape(a.owner)} / ${escape(m.kind)}</span><strong>${escape(m.title)}</strong><span>${escape(m.excerpt || "")}</span></button>`;
@@ -493,6 +507,10 @@
     };
     if (el("customerRelationshipsMore")) el("customerRelationshipsMore").onclick = () => loadRelationships(!!error);
     el("customerContactNew").onclick = () => edit("contact");
+    if (el("customerTicketGroupNew")) el("customerTicketGroupNew").onclick = () => editTicketGroup(company.assetId);
+    el("customerRecord").querySelectorAll("[data-ticket-group]").forEach(button => {
+      button.onclick = () => editTicketGroup(company.assetId, button.dataset.ticketGroup);
+    });
     el("customerActivityNew").onclick = () => edit("activity");
     el("customerTickets").onclick = () => window.NRCTickets.open(String(selected));
     window.NRCTickets?.mountCustomer(el("customerTicketRecords"), selected);
@@ -948,6 +966,84 @@
     }
   }
 
+  async function editTicketGroup(companyId, groupId = null) {
+    const view = window.NRCModal.create({ title: "SHARED TICKET VISIBILITY", className: "file-assets-dialog", closeButton: true });
+    const form = document.createElement("form");
+    form.className = "file-assets-dialog-body detail-edit-form";
+    form.innerHTML = '<p class="customer-meta" role="status">Loading current company and contacts…</p>';
+    view.actions.before(form);
+    view.show();
+    const cancelled = () => !view.root.isConnected || !enabled;
+    let busy = false;
+    let dirty = false;
+    view.canClose = () => !busy && (!dirty || window.confirm("Discard ticket group changes?"));
+    try {
+      await window.NRCAssets.requestAssetsByIds(0n, [companyId], { force: true });
+      const base = window.NRCAssets.roomAssets.get(0n)?.get(companyId);
+      const d = metadata(base);
+      if (!base || base.assetType !== TYPES.company || !d || d.archived) throw new Error("Active customer company required.");
+      const groups = structuredClone(ticketGroups(d));
+      if (groups === null) throw new Error("Invalid ticket group metadata. Refresh or repair through the CLI.");
+      const group = groupId === null ? { id: crypto.randomUUID(), name: "", contact_ids: [] } : groups.find(g => g.id === groupId);
+      if (!group || !Array.isArray(group.contact_ids)) throw new Error("Group changed. Close and reopen this dialog.");
+      let page;
+      do {
+        page = await window.NRCEdges.requestEdgePage(0n, 1, companyId, { session: page?.session, isCancelled: cancelled });
+      } while (page.hasMore && !cancelled());
+      if (cancelled()) return;
+      const ids = new Set();
+      for (const edge of window.NRCEdges.getEdgesForEntity(0n, 1, companyId)) {
+        const id = edge.sourceId === companyId ? edge.targetId : edge.sourceId;
+        if (isCompanyLink(edge, companyId, id)) ids.add(id);
+      }
+      await window.NRCAssets.requestAssetsByIds(0n, [...ids], { force: true });
+      if (cancelled()) return;
+      const people = [...ids].map(id => window.NRCAssets.roomAssets.get(0n)?.get(id)).filter(a => a?.assetType === TYPES.contact && metadata(a));
+      people.sort((a, b) => metadata(a).title.localeCompare(metadata(b).title));
+      const members = new Set(group.contact_ids);
+      const choices = new Map(people.map(a => [String(a.assetId), `${metadata(a).title} · #${a.assetId}`]));
+      for (const id of members) if (!choices.has(id)) choices.set(id, `Contact #${id} — no longer linked; remove to save`);
+      form.innerHTML = `<p class="customer-meta">${escape(d.title)} · Members can mutually READ AND REPLY to all existing and future tickets and public attachments. Internal notes remain staff-only. Overlapping groups do not extend access transitively.</p><label class="task-detail-row detail-edit-field"><span class="detail-edit-label">GROUP NAME</span><input class="task-detail-input" name="group_name" aria-label="Group name" required maxlength="256" value="${escape(group.name)}"></label><section class="customer-section"><div class="panel-header"><div><span>CONTACTS / ${choices.size}</span></div></div>${[...choices].map(([id, name]) => `<label class="filter-checkbox-label"><input class="filter-checkbox" type="checkbox" data-group-contact="${escape(id)}" ${members.has(id) ? "checked" : ""}><span>${escape(name)}</span></label>`).join("") || '<p class="customer-empty">No contacts linked to this company. Empty groups grant no access.</p>'}</section><p class="customer-meta">Removing a member revokes this group's access to others' tickets. Own tickets and grants from other groups remain available. Portal accounts must be mapped to contact IDs.</p><p class="customer-status" role="alert"></p><div class="customer-actions"><button class="btn btn--primary" type="submit">SAVE GROUP</button>${groupId === null ? "" : '<button class="btn btn--danger" type="button" data-delete-group>DELETE GROUP</button>'}</div>`;
+      form.oninput = () => { dirty = true; };
+      const save = async deleting => {
+        if (busy || cancelled() || !connected()) return;
+        const status = form.querySelector('[role="alert"]');
+        status.textContent = "";
+        if (deleting && !await window.NRCDialog.confirm(`Delete “${group.name}” and revoke its shared ticket access? Other groups and own tickets remain unchanged.`, { title: "DELETE SHARING GROUP" })) return;
+        const next = groups.filter(g => g.id !== group.id);
+        if (!deleting) {
+          const name = form.elements.group_name.value.trim();
+          const contact_ids = [...form.querySelectorAll("[data-group-contact]:checked")].map(input => input.dataset.groupContact);
+          if (!name || new TextEncoder().encode(name).length > 256 || /[\r\n\0]/.test(name)) { status.textContent = "Group name must be 1–256 bytes without line breaks."; return; }
+          if (contact_ids.some(id => !people.some(a => String(a.assetId) === id))) { status.textContent = "Remove contacts that no longer belong to this company."; return; }
+          next.push({ id: group.id, name, contact_ids });
+        }
+        busy = true;
+        form.inert = true;
+        try {
+          // A preview-only conditional patch cannot erase attachments or a
+          // simultaneous change to company details / another sharing group.
+          await new Promise((resolve, reject) => {
+            if (!window.NRCTransactions.sendAssetMetadataPatch(base, JSON.stringify({ ...d, ticket_groups: next }), null, { onSuccess: resolve, onError: detail => reject(new Error(detail.message || "Save unconfirmed")) })) reject(new Error("Not connected. Nothing sent."));
+          });
+          dirty = false;
+          view.close();
+          await window.NRCAssets.requestAssetsByIds(0n, [companyId], { force: true });
+          const current = window.NRCAssets.roomAssets.get(0n)?.get(companyId);
+          if (current) onAssetChanged(current);
+          scheduleRender();
+        } catch (failure) {
+          status.textContent = `${failure.message} · Reload and reopen after a conflict; check saved state before retrying an unconfirmed write.`;
+        } finally { busy = false; form.inert = false; }
+      };
+      form.onsubmit = event => { event.preventDefault(); save(false); };
+      form.querySelector("[data-delete-group]")?.addEventListener("click", () => save(true));
+      form.elements.group_name.focus();
+    } catch (failure) {
+      if (!cancelled()) form.textContent = failure.message;
+    }
+  }
+
   function write(asset, type, meta, body, convId, companyId = null) {
     return new Promise((resolve, reject) => {
       const preview = JSON.stringify(meta);
@@ -969,7 +1065,10 @@
         if (!id) reject(new Error("Not connected. Nothing was sent."));
         return;
       }
-      const id = asset ? window.NRCAssets.sendUpdateAsset(convId, asset.assetId, preview, body, type, 0, options) :
+      const id = asset ? window.NRCTransactions.sendAssetMetadataPatch(asset, preview, type === TYPES.activity ? body : null, {
+        ...options,
+        onSuccess: () => window.NRCAssets.requestAsset(convId, asset.assetId, { ...options, force: true }),
+      }) :
         window.NRCAssets.sendCreateAsset(convId, type, 0, 0n, preview, body, 0, options);
       if (!id) reject(new Error("Not connected. Nothing was sent."));
     });
