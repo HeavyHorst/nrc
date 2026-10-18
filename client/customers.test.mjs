@@ -4,19 +4,44 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const source = fs.readFileSync(new URL("./customers.js", import.meta.url), "utf8");
+test("review queue discovers pending contacts without company membership and leaves legacy contacts alone", () => {
+  const { api } = load();
+  const asset = (assetType, data) => ({ assetType, preview: JSON.stringify({ version: 1, title: "Imported", ...data }) });
+  assert.equal(api.needsReview(asset(9, { source: "email", review_status: "pending" })), true);
+  assert.equal(api.needsReview(asset(9, { review_status: "reviewed" })), false);
+  assert.equal(api.needsReview(asset(9, {})), false);
+  assert.equal(api.needsReview(asset(8, { review_status: "pending" })), false);
+});
 function load(fetch) {
   const elements = new Map();
   const document = {
     getElementById(id) {
-      if (!elements.has(id)) elements.set(id, { hidden: true, open: false });
+      if (!elements.has(id)) elements.set(id, { hidden: true, open: false, value: '', innerHTML: '', setAttribute() {}, setState() {}, contains() { return false; }, remove() {} });
       return elements.get(id);
     },
     addEventListener() {},
   };
-  const window = { NRCViewManager: { getActiveView: () => "chat" }, NRCEdges: { RelationType: { RelatedTo: 2, MemberOf: 7 } } };
+  const window = { NRCViewManager: { getActiveView: () => "chat" }, NRCLinksUI: { isPickerVisible: () => false }, createLoadingIndicator: () => ({ update: () => false }), NRCEdges: { RelationType: { RelatedTo: 2, MemberOf: 7 } } };
   vm.runInNewContext(source, { window, document, fetch, console, queueMicrotask, TextEncoder, setTimeout, clearTimeout });
-  return { api: window.NRCCustomers, elements };
+  return { api: window.NRCCustomers, elements, window };
 }
+
+test("live pending contacts enter review without reload, deduplicate and leave after review or deletion", async () => {
+  const { api, elements, window } = load(async () => ({ ok: true, json: async () => ({ customers: true }) }));
+  await api.refreshAccess();
+  window.NRCViewManager.getActiveView = () => "customers";
+  const contact = { convId: 0n, assetId: 88n, assetType: 9, preview: JSON.stringify({ version: 1, title: "Email arrival", source: "email", review_status: "pending" }) };
+  api.onAssetChanged(contact); api.onAssetChanged(contact);
+  await Promise.resolve();
+  assert.match(elements.get("customersList").innerHTML, /NEW CONTACTS \/ 1/);
+  assert.match(elements.get("customersList").innerHTML, /data-review-contact="88"/);
+  api.onAssetChanged({ ...contact, preview: JSON.stringify({ version: 1, title: "Email arrival", review_status: "reviewed" }) });
+  await Promise.resolve();
+  assert.doesNotMatch(elements.get("customersList").innerHTML, /data-review-contact="88"/);
+  api.onAssetChanged(contact); await Promise.resolve();
+  api.onAssetDeleted(0n, 88n); await Promise.resolve();
+  assert.match(elements.get("customersList").innerHTML, /NEW CONTACTS \/ 0/);
+});
 
 test("customer view defaults denied and only accepts a literal true capability", async () => {
   for (const result of [false, "true", 1, undefined, true]) {

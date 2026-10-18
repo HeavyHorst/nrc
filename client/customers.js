@@ -17,6 +17,12 @@
   let editorGeneration = 0;
   let renderQueued = false;
   let companyIds = new Set();
+  let reviewContacts = [];
+  let reviewError = "";
+  let reviewGeneration = 0;
+  let reviewCursor = null;
+  let reviewMore = false;
+  let reviewLoading = false;
   let companyCursor = 0n;
   let companySearchOffset = 0;
   let companyHasMore = false;
@@ -92,6 +98,8 @@
   function onAssetChanged(asset, reason) {
     if (!enabled || asset.convId !== room || !Object.values(TYPES).includes(asset.assetType)) return;
     records.set(asset.assetId, asset);
+    reviewContacts = reviewContacts.filter(a => a.assetId !== asset.assetId);
+    if (needsReview(asset)) reviewContacts.push(asset);
     if (reason === "mutation" && inspection?.id === asset.assetId && !editorBusy) {
       if (editorDirty) {
         editorStale = true;
@@ -109,6 +117,7 @@
     const type = inspection?.id === assetId ? inspection.type : Object.keys(TYPES).find(kind => TYPES[kind] === records.get(assetId)?.assetType);
     if (type) window.NRCInspector?.entityDeleted({ roomId: convId, type, id: assetId });
     records.delete(assetId);
+    reviewContacts = reviewContacts.filter(a => a.assetId !== assetId);
     companyIds.delete(assetId);
     if (inspection?.type === "contact") loadContactCompanies(inspection);
     queueSearch();
@@ -166,6 +175,7 @@
 
   async function loadCompanies(reset = false) {
     if (!enabled || !active() || !connected()) return;
+    if (reset) loadReviewContacts(true);
     if (!reset && (loading || !companyHasMore)) return;
     const request = ++generation;
     const expectedRoom = room;
@@ -386,6 +396,12 @@
   }
 
   function onRoomSwitch() {
+    ++reviewGeneration;
+    reviewContacts = [];
+    reviewCursor = null;
+    reviewMore = false;
+    reviewLoading = false;
+    reviewError = "";
     ++generation;
     ++detailGeneration;
     companySearch?.cancel();
@@ -424,6 +440,36 @@
     return [...records.values()].filter(a => a.assetType === type && metadata(a));
   }
 
+  function needsReview(asset) {
+    return asset.assetType === TYPES.contact && metadata(asset)?.review_status === "pending";
+  }
+
+  async function loadReviewContacts(reset = false) {
+    if (!reset && (reviewLoading || !reviewMore)) return;
+    const request = ++reviewGeneration;
+    const expectedRoom = room;
+    if (reset) { reviewContacts = []; reviewCursor = null; }
+    reviewLoading = true;
+    reviewError = "Loading contact review queue…";
+    const cancelled = () => request !== reviewGeneration || expectedRoom !== room || !enabled || !active() || !connected();
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const id = window.NRCAssets.sendListAssetsPaged(room, TYPES.contact, false, 100,
+          reviewCursor?.updatedAt ?? null, reviewCursor?.assetId ?? null,
+          { onSuccess: resolve, onError: failure => reject(new Error(failure.message || "Contact queue unavailable.")) });
+        if (!id) reject(new Error("Contact queue unavailable."));
+      });
+      if (cancelled()) return;
+      const merged = new Map(reviewContacts.map(a => [a.assetId, a]));
+      for (const asset of result.assets) merged.set(asset.assetId, asset);
+      reviewContacts = [...merged.values()];
+      reviewMore = result.hasMore;
+      reviewCursor = { updatedAt: result.nextCursorUpdatedAt, assetId: result.nextCursorAssetId };
+      reviewError = "";
+    } catch (failure) { if (!cancelled()) reviewError = failure.message; }
+    if (!cancelled()) { reviewLoading = false; scheduleRender(); }
+  }
+
   function render() {
     const query = el("customersSearch").value.trim().toLocaleLowerCase();
     const companies = [...companyIds].map(id => companySearchResults.get(id) || records.get(id)).filter(asset => asset && metadata(asset));
@@ -444,10 +490,22 @@
     el("customersStatus").textContent = [(error !== companyPageError ? error : "") || (!connected() ? "OFFLINE — connect to load customers." : ""), searchNotice].filter(Boolean).join(" ");
     el("customersStatus").hidden = !el("customersStatus").textContent;
     el("customerNew").disabled = !connected() || loading || !!error;
-    updateHtml(el("customersList"), companies.map(a => {
+    const pending = reviewContacts.map(a => records.get(a.assetId) || a).filter(needsReview);
+    const queue = `<section class="customer-section" aria-label="Contact review"><div class="panel-header"><div><span>NEW CONTACTS / ${pending.length}</span></div></div>${pending.map(a => `<button type="button" class="customer-row" data-review-contact="${a.assetId}"><span class="customer-row-copy"><strong class="customer-row-title">${escape(metadata(a).title)}</strong><span class="customer-meta">NEW · REVIEW / ASSIGN COMPANY · ${escape(metadata(a).email || "—")}</span></span></button>`).join("") || `<p class="customer-empty">${escape(reviewError || "No contacts awaiting review.")}</p>`}</section>`;
+    updateHtml(el("customersList"), queue + companies.map(a => {
       const d = metadata(a);
       return `<button type="button" class="customer-row" data-company="${a.assetId}" aria-pressed="${selected === a.assetId}" title="${escape(d.title)}"><span class="customer-row-copy"><strong class="customer-row-title">${escape(d.title)}</strong><span class="customer-meta customer-row-meta">${escape(d.city || "—")} · ${escape(d.assignee || "UNASSIGNED")}${d.archived ? ' · <span class="customer-row-state">ARCHIVED</span>' : ""}</span></span></button>`;
     }).join("") || (companyPageError || (loading && !showLoading) ? "" : `<p class="customer-empty">${loading ? "Loading customer register…" : query ? "No matching customers." : "No customers. Create the first company in this room."}</p>`));
+    el("customerReviewMore")?.remove();
+    if (reviewMore || reviewError) {
+      const more = document.createElement("button");
+      more.id = "customerReviewMore";
+      more.className = "btn";
+      more.textContent = reviewLoading ? "LOADING CONTACTS…" : "CHECK MORE CONTACTS";
+      more.disabled = reviewLoading || !connected();
+      more.onclick = () => loadReviewContacts(!reviewMore);
+      el("customersList").append(more);
+    }
     // Keep the previous detail DOM intact until every endpoint in the page is
     // hydrated. Its actions must not operate on the newly selected company.
     el("customerRecord").inert = !detailReady;
@@ -860,6 +918,7 @@
       ${window.NRCDetailUI.renderCloseControl("customerClose")}</div>`;
     const actions = `${editing ? '<button id="customerSave" class="btn btn--primary task-modal-btn save" type="submit">SAVE</button><button id="customerCancel" class="btn btn--ghost task-modal-btn" type="button">CANCEL</button>' : ""}${asset && kind !== "company" ? '<button id="customerDelete" class="btn btn--danger task-modal-btn danger" type="button">DELETE</button>' : ""}`;
     el("inspectorEntityHost").innerHTML = `<form id="customerForm" class="customer-inspector">
+      ${contact ? `<p class="customer-meta">SOURCE / ${escape(d.source || "—")} · REVIEW / ${escape(d.review_status || "—")}</p>${editing ? '<label class="detail-edit-field"><span class="detail-edit-label">REVIEW STATUS — EXPLICIT CONFIRMATION</span><select class="task-detail-input" name="review_status"><option value="">UNCHANGED</option><option value="reviewed">REVIEWED</option><option value="pending">PENDING</option></select></label>' : ""}` : ""}
       <div class="customer-inspector-body detail-edit-form">${editing ? `<div id="customerFields" class="customer-fields detail-edit-form">${renderCustomerEditFields(kind, d, fields, asset)}</div>` :
         `<h2 class="note-preview-title">${escape(d.title)}</h2>${contact ? renderContactFacts(d) : companyFacts ? renderCompanyFacts(d, fields) : window.NRCDetailUI.renderMetadataLedger(fields.map(([name, label]) => ({ label, value: d[name] })))}${kind === "activity" ? `<p id="customerActivityBody" class="customer-activity-body">${escape(asset.payload)}</p>` : ""}`}
       ${contact ? '<section id="contactCompanies" class="customer-section" aria-label="Linked companies"></section>' : unlink ? `<p class="customer-meta">LINKED COMPANY / ${escape(metadata(company).title)}</p><button id="customerUnlink" class="btn" type="button">REMOVE FROM THIS COMPANY</button>` : ""}
@@ -883,7 +942,7 @@
     if (!editing) return;
     const form = el("customerForm");
     const editor = editorGeneration;
-    form.oninput = event => { if (event.target.closest("#customerFields")) { editorDirty = true; updateEditorState(); } };
+    form.oninput = event => { if (event.target.closest("#customerFields") || event.target.name === "review_status") { editorDirty = true; updateEditorState(); } };
     form.onkeydown = event => {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); form.requestSubmit(); }
     };
@@ -898,6 +957,7 @@
       }
       const body = values.body || "";
       delete values.body;
+      if (values.review_status === "") delete values.review_status;
       const meta = { ...d, ...values, version: 1 };
       delete meta.companyId;
       if (kind === "contact") meta.service_for = [...form.serviceFor];
@@ -1094,6 +1154,8 @@
     document.addEventListener("keydown", handleKeyboardNavigation);
     document.addEventListener("nrc:link-picker-closed", scheduleRender);
     el("customersList").onclick = event => {
+      const contact = event.target.closest("[data-review-contact]");
+      if (contact) { openRecord("contact", contact.dataset.reviewContact); return; }
       const button = event.target.closest("[data-company]");
       if (button) selectCompany(button.dataset.company);
     };
@@ -1129,7 +1191,7 @@
 
   window.NRCCustomers = {
     isEnabled: () => enabled, reload, refreshAccess, onRoomSwitch, onDisconnect,
-    onAssetChanged, onAssetDeleted, metadata, isCompanyLink,
+    onAssetChanged, onAssetDeleted, metadata, isCompanyLink, needsReview,
     openRecord, showInspector, clearSelection, confirmDiscardEdits,
     openCompany(asset) {
       if (!enabled) return;

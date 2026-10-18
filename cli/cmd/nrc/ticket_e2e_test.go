@@ -92,6 +92,13 @@ func TestTicketCLIEndToEnd(t *testing.T) {
 		if ticketString(entries[i].Metadata, "kind") != kind {
 			t.Fatalf("wrong entry kind: %+v", entries)
 		}
+		wantRecipient := ""
+		if kind == "public_reply" {
+			wantRecipient = "user@example.test"
+		}
+		if ticketString(entries[i].Metadata, "recipient") != wantRecipient {
+			t.Fatalf("wrong recipient snapshot: %+v", entries[i])
+		}
 	}
 	destination := filepath.Join(dir, "download.txt")
 	run(true, "ticket", "download-attachment", ticket, "0", destination)

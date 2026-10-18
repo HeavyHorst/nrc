@@ -1,0 +1,16 @@
+# Optional on top of docker-compose.yml AND compose.tickets.yml.
+# Optional direct IMAP plus private administration/gateway endpoint.
+# Never route 8097 through the public customer hostname.
+# Config: address=0.0.0.0:8097, journal=/mail-data/mail.db.
+services:
+  tickets:
+    environment:
+      TICKETS_MAIL_CONFIG_FILE: /run/secrets/ticket-mail.json
+    volumes:
+      - ${TICKETS_MAIL_CONFIG_FILE:?set absolute private mail configuration path}:/run/secrets/ticket-mail.json:ro
+      - ticket-mail-data:/mail-data
+    ports:
+      - "127.0.0.1:8097:8097"
+
+volumes:
+  ticket-mail-data:

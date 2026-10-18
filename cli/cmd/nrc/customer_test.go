@@ -20,6 +20,26 @@ import (
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
 
+func TestCustomerContactReviewPreservesMetadata(t *testing.T) {
+	for _, status := range []string{"pending", "reviewed"} {
+		m, err := customerMetadata(`{"version":1,"title":"Imported","source":"email","review_status":"pending","extension":9007199254740993}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		preview, err := customerPreview(m, map[string]string{"review_status": status}, protocol.AssetTypeCustomerContact, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := customerMetadata(string(preview))
+		if err != nil || string(got["source"]) != `"email"` || string(got["extension"]) != "9007199254740993" || string(got["review_status"]) != `"`+status+`"` {
+			t.Fatalf("metadata lost: %s / %v", preview, err)
+		}
+	}
+	if _, err := customerPreview(map[string]json.RawMessage{}, map[string]string{"review_status": "yes"}, protocol.AssetTypeCustomerContact, nil); err == nil {
+		t.Fatal("invalid review status accepted")
+	}
+}
+
 func TestCustomerHybridSearchAndBlankListing(t *testing.T) {
 	var searchCalls, reads, lists atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

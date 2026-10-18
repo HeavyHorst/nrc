@@ -30,7 +30,7 @@ function fixture(uploadFile = async () => { throw new Error('upload unavailable'
   window.NRCTransactions = { sendAssetMetadataPatch(asset, preview, payload, options) {
     return window.NRCAssets.sendUpdateAsset(0n, asset.assetId, preview, payload, 13, 0, options, asset.attachments);
   } };
-  const records = [1n, 2n].map(assetId => ({ assetId, convId: 0n, assetType: 13, payload: 'Original request', attachments: [{ fileId: 7n }], preview: JSON.stringify({ version: 1, title: `Ticket ${assetId}`, company_id: '42', contact_id: '', requester: 'ada@example.test', status: 'open', assignee: 'Sam' }) }));
+  const records = [1n, 2n].map(assetId => ({ assetId, updatedAt: 123456789n, convId: 0n, assetType: 13, payload: 'Original request', attachments: [{ fileId: 7n }], preview: JSON.stringify({ version: 1, title: `Ticket ${assetId}`, company_id: '42', contact_id: '', requester: 'ada@example.test', status: 'open', assignee: 'Sam' }) }));
   const entries = [];
   const document = { readyState: 'complete', getElementById: id => elements.get(id) || null, querySelector: () => null, querySelectorAll: () => [], addEventListener() {}, createElement: element };
   vm.runInNewContext(readFileSync(new URL('./detail-ui.js', import.meta.url), 'utf8'), { window, TextEncoder });
@@ -56,6 +56,20 @@ test('company ID is authoritative and public conversation excludes internal and 
   const html = f.elements.get('ticketConversation').innerHTML;
   for (const label of ['PUBLIC REPLY', 'CUSTOMER REPLY', 'INTERNAL NOTE']) assert.ok(html.includes(`${label} /`));
   assert.doesNotMatch(html, /public_reply|customer_reply|internal_note|unknown/);
+});
+
+test('staff conversation displays email provenance and precise mail status as escaped metadata', async () => {
+  const f = fixture();
+  const original = JSON.parse(f.records[0].preview);
+  f.records[0].preview = JSON.stringify({ ...original, channel: 'email' });
+  for (const [i, status] of ['queued', 'sent', 'failed', 'unknown'].entries()) {
+    f.entries.push({ assetId: BigInt(10 + i), parentType: 2, parentId: 1n, createdAt: 1n, payload: 'Reply', preview: JSON.stringify({ kind: 'public_reply', channel: 'email', recipient: 'ada@example.test', mail_delivery: status }) });
+  }
+  await f.api.reload(); f.api.open('', '1');
+  const html = f.elements.get('ticketConversation').innerHTML;
+  assert.match(html, /ORIGINAL REQUEST[^<]*EMAIL/);
+  for (const label of ['TO ada@example.test', 'MAIL QUEUED', 'MAIL SERVER ACCEPTED', 'MAIL FAILED', 'MAIL STATUS UNKNOWN']) assert.ok(html.includes(label));
+  assert.doesNotMatch(html, /DELIVERED|FORWARDED BY/);
 });
 
 test('failed and pending saves preserve per-record drafts and never report dispatch as success', async () => {
@@ -87,6 +101,14 @@ test('entry defaults internal; public reply requires explicit mode and keeps dra
   assert.equal(f.api.state.drafts.get('1').message, 'Private triage');
   f.input('kind', 'public_reply'); await f.submit('#ticketReply');
   assert.equal(JSON.parse(f.sent[1][4]).kind, 'public_reply');
+  assert.equal(JSON.parse(f.sent[1][4]).recipient, 'ada@example.test');
+  assert.equal(f.sent[1][7].ifParentUpdatedAt, 123456789n);
+  assert.equal(f.sent[0][7].ifParentUpdatedAt, undefined);
+  f.fail('Asset parent version conflict'); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.api.state.drafts.get('1').message, 'Private triage');
+  assert.equal(f.api.state.drafts.get('1').kind, 'public_reply');
+  assert.match(f.elements.get('ticketsStatus').textContent, /Asset parent version conflict/);
+  await f.submit('#ticketReply');
   f.ack({ asset: { assetId: 10n } }); await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.api.state.drafts.get('1').message, '');
   assert.equal(f.api.state.drafts.get('1').kind, 'internal_note');

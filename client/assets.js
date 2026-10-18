@@ -447,6 +447,11 @@ function sendCreateAsset(
   convId = 0n;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
+  const parentVersion = requestOptions?.ifParentUpdatedAt == null ? null : BigInt(requestOptions.ifParentUpdatedAt);
+  if (parentVersion !== null && (parentType !== ParentType.Asset || BigInt(parentId) <= 0n || parentVersion <= 0n || parentVersion > 0x7fffffffffffffffn)) {
+    throw new Error("Positive asset parent ID and version required");
+  }
+
   if (correlationId === 0) {
     correlationId = generateCorrelationId();
   }
@@ -471,7 +476,7 @@ function sendCreateAsset(
   //       + preview_len(2) + preview + payload_len(2) + payload + attachments + correlation_id(4)
   const attachmentsSize = getAssetAttachmentsWireSize(attachments);
   const bufferSize =
-    2 + 8 + 2 + 2 + 8 + 1 + 4 + 2 + previewBytes.length + 2 + payloadBytes.length + attachmentsSize + 4;
+    2 + 8 + 2 + 2 + 8 + 1 + 4 + 2 + previewBytes.length + 2 + payloadBytes.length + attachmentsSize + 4 + (parentVersion === null ? 0 : 8);
 
   const buffer = new ArrayBuffer(bufferSize);
   const view = new DataView(buffer);
@@ -511,6 +516,7 @@ function sendCreateAsset(
   offset = writeAssetAttachments(view, buffer, offset, attachments);
 
   view.setUint32(offset, correlationId, false);
+  if (parentVersion !== null) view.setBigInt64(offset + 4, parentVersion, false);
 
   const opts = normalizeAssetRequestOptions(requestOptions);
   registerPendingAssetRpc(correlationId, {

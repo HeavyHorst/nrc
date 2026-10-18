@@ -114,11 +114,14 @@ func customerTransaction(s *conn.Session, ops []protocol.TransactionOperation) (
 
 var customerFields = map[uint16][]string{
 	protocol.AssetTypeCustomerCompany:  {"title", "number", "sector", "account_type", "city", "address", "website", "assignee", "phone"},
-	protocol.AssetTypeCustomerContact:  {"title", "role", "email", "phone"},
+	protocol.AssetTypeCustomerContact:  {"title", "role", "email", "phone", "review_status"},
 	protocol.AssetTypeCustomerActivity: {"title", "kind"},
 }
 
 func customerPreview(m map[string]json.RawMessage, changes map[string]string, kind uint16, body *string) ([]byte, error) {
+	if value, ok := changes["review_status"]; ok && value != "pending" && value != "reviewed" {
+		return nil, fmt.Errorf("review-status must be pending or reviewed")
+	}
 	for key, value := range changes {
 		m[key], _ = json.Marshal(strings.TrimSpace(value))
 	}
@@ -358,6 +361,9 @@ func customerList(kind uint16) *cobra.Command {
 	c.Flags().Int("page-size", 50, "Page size or hybrid search result limit, 1–250")
 	c.Flags().Bool("all", false, "Follow all pages")
 	c.Flags().String("cursor", "", "Resume from next_cursor with identical filters")
+	if kind == protocol.AssetTypeCustomerContact {
+		c.Flags().String("review-status", "", "Filter pending or reviewed contacts globally, including unassigned contacts; counts refer to unfiltered pages")
+	}
 	if kind == protocol.AssetTypeCustomerCompany {
 		c.Flags().String("search", "", "Hybrid company/linked-contact search; blank uses NRC listing; incompatible with --all/--cursor")
 		c.Flags().Bool("archived", false, "Include archived companies")
@@ -371,6 +377,10 @@ func customerList(kind uint16) *cobra.Command {
 		cursor, _ := cmd.Flags().GetString("cursor")
 		query, _ := cmd.Flags().GetString("search")
 		archived, _ := cmd.Flags().GetBool("archived")
+		reviewStatus, _ := cmd.Flags().GetString("review-status")
+		if reviewStatus != "" && reviewStatus != "pending" && reviewStatus != "reviewed" {
+			return &conn.InvalidArgumentError{Err: fmt.Errorf("review-status must be pending or reviewed")}
+		}
 		query = strings.TrimSpace(query)
 		if kind == protocol.AssetTypeCustomerCompany && query != "" {
 			if all || cursor != "" {
@@ -436,7 +446,11 @@ func customerList(kind uint16) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				entries = append(entries, entry)
+				var status string
+				_ = json.Unmarshal(entry.Metadata["review_status"], &status)
+				if reviewStatus == "" || status == reviewStatus {
+					entries = append(entries, entry)
+				}
 			}
 			if more && (len(assets) == 0 || next == cursor) {
 				return fmt.Errorf("customer page cursor did not advance")
@@ -457,7 +471,7 @@ func customerList(kind uint16) *cobra.Command {
 		}{entries, total, more, cursor}
 		if output.Human() {
 			for _, r := range entries {
-				fmt.Printf("%d\t%s\t%s\n", r.ID, r.Type, r.Metadata["title"])
+				fmt.Printf("%d\t%s\t%s\tsource=%s\treview=%s\n", r.ID, r.Type, r.Metadata["title"], r.Metadata["source"], r.Metadata["review_status"])
 			}
 			fmt.Printf("Loaded %d / %d; next cursor: %s\n", len(entries), total, cursor)
 		} else {

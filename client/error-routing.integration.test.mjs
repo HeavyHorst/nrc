@@ -69,6 +69,23 @@ function loadAssetsModule() {
   };
 }
 
+test("asset create optionally appends a positive big-endian parent version after correlation", () => {
+  const { assets, packets } = loadAssetsModule();
+  assets.sendCreateAsset(0n, 14, 2, 42n, "{}", "reply", 123);
+  const version = 0x0102030405060708n;
+  assets.sendCreateAsset(0n, 14, 2, 42n, "{}", "reply", 123, { ifParentUpdatedAt: version });
+  assert.equal(packets[1].byteLength, packets[0].byteLength + 8);
+  assert.deepEqual(new Uint8Array(packets[1], 0, packets[0].byteLength), new Uint8Array(packets[0]));
+  const view = new DataView(packets[1]);
+  assert.equal(view.getUint32(view.byteLength - 12, false), 123);
+  assert.equal(view.getBigInt64(view.byteLength - 8, false), version);
+  for (const invalid of [0n, -1n, 1n << 63n]) {
+    assert.throws(() => assets.sendCreateAsset(0n, 14, 2, 42n, "", "", 124, { ifParentUpdatedAt: invalid }), /Positive asset parent/);
+  }
+  assert.throws(() => assets.sendCreateAsset(0n, 14, 0, 0n, "", "", 124, { ifParentUpdatedAt: version }), /Positive asset parent/);
+  assert.equal(packets.length, 2);
+});
+
 function fullAssetPacket(correlationId, payload = "content", invalid = false, assetType = 5) {
   const bytes = new TextEncoder().encode(payload);
   const view = new DataView(new ArrayBuffer(63 + bytes.length));

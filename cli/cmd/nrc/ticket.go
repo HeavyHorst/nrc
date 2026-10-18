@@ -401,12 +401,22 @@ func ticketCommand(action string) *cobra.Command {
 		if public {
 			kind = "public_reply"
 		}
-		preview, _ := json.Marshal(map[string]any{"version": 1, "kind": kind, "author": ""})
-		return ticketCreate(cmd, s, p.AssetTypeTicketEntry, id, string(preview))
+		metadata := map[string]any{"version": 1, "kind": kind, "author": ""}
+		var guard []int64
+		if public {
+			v, err := ticketView(a)
+			if err != nil {
+				return err
+			}
+			metadata["recipient"] = ticketString(v.Metadata, "requester")
+			guard = []int64{a.UpdatedAt}
+		}
+		preview, _ := json.Marshal(metadata)
+		return ticketCreate(cmd, s, p.AssetTypeTicketEntry, id, string(preview), guard...)
 	})
 	return c
 }
-func ticketCreate(cmd *cobra.Command, s *conn.Session, kind uint16, parent uint64, preview string) error {
+func ticketCreate(cmd *cobra.Command, s *conn.Session, kind uint16, parent uint64, preview string, guard ...int64) error {
 	body, _ := cmd.Flags().GetString("body")
 	file, _ := cmd.Flags().GetString("body-file")
 	if cmd.Flags().Changed("body") && cmd.Flags().Changed("body-file") {
@@ -439,6 +449,9 @@ func ticketCreate(cmd *cobra.Command, s *conn.Session, kind uint16, parent uint6
 		parentType = p.ParentTypeAsset
 	}
 	data, e := p.EncodeCreateAssetWithAttachments(0, kind, parentType, parent, preview, body, atts)
+	if len(guard) > 0 {
+		data, e = p.EncodeCreateAssetWithParentVersionAndCorrelation(0, kind, parentType, parent, preview, body, atts, guard[0], 0)
+	}
 	if e != nil {
 		return e
 	}
@@ -503,7 +516,7 @@ func init() {
 	for _, action := range []string{"list", "get", "create", "update", "reply", "internal-note", "attachments", "delete"} {
 		c.AddCommand(ticketCommand(action))
 	}
-	c.AddCommand(ticketSearchCommand(), ticketDownload(), ticketLinks("links"), ticketLinks("link"), ticketLinks("unlink"), ticketLinks("create-task"))
+	c.AddCommand(ticketMailCommand(), ticketSearchCommand(), ticketDownload(), ticketLinks("links"), ticketLinks("link"), ticketLinks("unlink"), ticketLinks("create-task"))
 	rootCmd.AddCommand(c)
 }
 

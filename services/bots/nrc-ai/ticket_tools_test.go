@@ -395,7 +395,7 @@ func TestPublicTicketProposalDisclosesValidatedAttachments(t *testing.T) {
 		t.Fatal(m.Opcode)
 	}
 	id := binary.BigEndian.Uint32(m.Data[len(m.Data)-12:])
-	want, e := protocol.EncodeCreateAssetWithParentVersionAndCorrelation(0, 14, 2, 7, `{"author":"Sullivan","kind":"public_reply","version":1}`, "hello", []protocol.Attachment{{FileId: "att_0123456789abcdef0123456789abcdef", Filename: "invoice.pdf"}}, 456, id)
+	want, e := protocol.EncodeCreateAssetWithParentVersionAndCorrelation(0, 14, 2, 7, `{"author":"Sullivan","kind":"public_reply","recipient":"customer","version":1}`, "hello", []protocol.Attachment{{FileId: "att_0123456789abcdef0123456789abcdef", Filename: "invoice.pdf"}}, 456, id)
 	if e != nil || !bytes.Equal(m.Data, want) {
 		t.Fatal("wrong public entry contract", e)
 	}

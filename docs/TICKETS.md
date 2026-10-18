@@ -382,13 +382,205 @@ generic NRC file proxy or shared attachment directory exposed to customers.
 Every create waits for a validated correlated `S_AssetCreated` ACK. No automatic
 mutation retries occur. Network loss after send can mean the write persisted but
 the ACK was lost: the portal says to check the overview before submitting again.
-There are no idempotency keys, notification emails, password reset, ticket edits,
-customer status changes, or offline mode. NRC unavailability fails requests.
+Portal form submissions have no idempotency keys. Password reset, ticket edits,
+customer status changes and offline mode are not available. NRC unavailability fails requests.
+The optional email channel below has its own durable deduplication and delivery journal.
 Current reads scan paged ticket/entry metadata on demand (up to 1000 pages/type),
 not a customer DB; very large workspaces need a future server-side scoped query.
 NRC staff/bots are trusted to label public replies correctly and not reassign
 requester identities during a concurrent read. Do not reuse requester identities
 for different people. Back up NRC and account config using their normal policies.
+
+## Optional email channel
+
+Set `TICKETS_MAIL_CONFIG_FILE` to a private (0600/0400) JSON file. When unset,
+the existing portal remains unchanged and sends no mail. Configuration contains
+`journal` (persistent bbolt file path), `address` (private listener, default
+`127.0.0.1:8097`), `gateway_secret` (at least 32 random bytes),
+optional `imap`, and `smtp` with
+`address` (host:port), `username`, `password` or `oauth2`, `from` (canonical
+lower-case mailbox) and `implicit_tls`.
+SMTP always verifies TLS: STARTTLS is mandatory unless implicit TLS is selected.
+Do not put credentials in Git, command arguments, logs or browser configuration.
+
+### Direct IMAP reception
+
+The tickets module can read an existing support mailbox directly; no additional
+mail gateway service is required. Configure `imap.address`, `username`, and
+either `password` or app-only `oauth2` credentials. Implicit verified TLS is the
+default (normally port 993); `start_tls:true` requires STARTTLS instead. `mailbox`
+defaults to `INBOX`. It polls immediately at startup, then 30 seconds after each
+pass. Polls have a two-minute deadline and process at most 200 messages per pass.
+
+The private journal binds the server, login and folder and durably checkpoints
+UIDVALIDITY/UID only after reception or quarantine is saved. Unread flags are
+not used: the reader uses EXAMINE and BODY.PEEK and neither marks mail read nor
+deletes it. First connection skips existing mail by default. Set
+`import_existing:true` explicitly to import the current folder history. A later
+UIDVALIDITY change **pauses reception** by default; inspect the mailbox and enable
+`import_existing` deliberately to rescan the new namespace. Known identical
+messages deduplicate, but historical mail skipped at activation may now import.
+Use a separate journal when changing mailbox identity; do not delete a production
+journal to reset the cursor. Oversized messages are quarantined by UID without
+downloading the body; the original stays in the mailbox. Other rejected messages
+retain their raw bytes in the journal for inspection.
+
+**IMAP login authenticates NRC, not the message sender.** Normal new mail is
+accepted openly, subject to MIME/content limits and automatic-message filtering;
+the sender/requester is always the top-level `From`. There is no verified-marker
+policy or privileged staff forwarding. Keep spam, sender-authentication and
+malware protection upstream at the mail provider/gateway; NRC has no scanner.
+
+The provider must deliver `smtp.from` plus addresses (for example,
+`helpdesk+<random-ticket-token>@firma.example`) to the same existing support
+mailbox. The configured mailbox local part is limited to 31 bytes to leave room
+for the plus separator and 32-character token. No additional mailboxes are needed.
+Preserve the original `To`/`Cc`
+headers unchanged through delivery and any gateway: NRC reads the reply token
+from those headers, not the SMTP envelope. BCC-only ticket replies are not
+supported. Validate plus delivery and header preservation before activation.
+
+Microsoft 365 example (placeholders only; store the real file privately):
+
+```json
+{
+  "journal": "/mail-data/mail.db",
+  "address": "127.0.0.1:8097",
+  "gateway_secret": "REPLACE_WITH_RANDOM_PRIVATE_ADMIN_TOKEN",
+  "imap": {
+    "address": "outlook.office365.com:993",
+    "username": "helpdesk@firma.example",
+    "mailbox": "INBOX",
+    "import_existing": false,
+    "oauth2": {
+      "token_url": "https://login.microsoftonline.com/TENANT_ID/oauth2/v2.0/token",
+      "client_id": "APPLICATION_ID",
+      "client_secret": "APPLICATION_SECRET",
+      "scopes": ["https://outlook.office365.com/.default"]
+    }
+  },
+  "smtp": {
+    "address": "smtp.office365.com:587",
+    "username": "helpdesk@firma.example",
+    "from": "helpdesk@firma.example",
+    "oauth2": {
+      "token_url": "https://login.microsoftonline.com/TENANT_ID/oauth2/v2.0/token",
+      "client_id": "APPLICATION_ID",
+      "client_secret": "APPLICATION_SECRET",
+      "scopes": ["https://outlook.office365.com/.default"]
+    }
+  }
+}
+```
+
+Follow Microsoft's [app-only IMAP/SMTP OAuth setup](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth):
+grant the Office 365 Exchange Online **application** permissions
+`IMAP.AccessAsApp` and `SMTP.SendAsApp` with administrator consent; register the
+service principal in Exchange using the Enterprise Application object ID (not
+the App Registration object ID), and grant access/SendAs for the support mailbox.
+Enable mailbox IMAP and authenticated SMTP where tenant policy permits them.
+OAuth tokens are cached and renewed before expiry; token errors fail closed,
+without password fallback. Authentication and plus-delivery policies need validation in
+your tenant; the local TLS fixtures do not establish a working tenant setup.
+
+For another provider, replace each `oauth2` object with `"password":"..."` and
+use its IMAP/SMTP hosts. Never configure both authentication methods together.
+SMTP relays that authorize by network rather than credentials can omit both
+username and password; transport encryption remains mandatory.
+
+### Optional gateway and private administration
+
+The listener is **not the public customer API**. Bind privately; use TLS between
+untrusted networks. `gateway_secret` remains required for private CLI
+administration even when IMAP is used. Alternatively, an operator-owned mail
+gateway posts the original RFC822
+bytes to `POST /inbound`, with `Authorization: Bearer <gateway_secret>`.
+No verified-sender header is required or used; the token authenticates the
+gateway, not the top-level From identity. Sender checks and spam/malware filtering
+belong upstream; Authentication-Results does not grant ticket access in NRC.
+No direct SMTP receiver or provider-specific webhook signature adapter is
+included; use direct IMAP or connect your own gateway to the support mailbox.
+HTTP 202 means durably queued/quarantined/ignored, not that NRC or SMTP succeeded;
+the gateway must treat 4xx as rejection and retry transport/5xx failures safely.
+Raw message limit is 32 MiB including MIME overhead; request text is at most
+32,000 UTF-8 bytes and subject 200 bytes. Oversized input is rejected, not truncated.
+
+Normal new mail creates a Ticket and reuses a unique matching contact.
+Unknown senders create a CustomerContact with `source:email` and
+`review_status:pending`, without a company edge or login. **CUSTOMERS → NEW
+CONTACTS** discovers these even without a company. Use the existing company
+picker to assign membership, and explicitly mark the contact reviewed. The queue
+is paged independently; CHECK MORE CONTACTS searches subsequent contact pages.
+No domain or CC creates company membership or ticket-sharing rights. Existing
+explicit portal account/company/contact bindings may be reused, but new contact
+assignment does not retrospectively change ticket company fields. Staff can
+assign those through the normal ticket editor.
+
+Forwarding never impersonates the original customer: attached `message/rfc822`
+messages remain opaque files, and inline forwarded headers/content remain text.
+Covering text is the top-level sender's request, not an automatic internal note.
+There are no internal-domain privileges or manual approval/requester overrides.
+No customer access rights, portal account, invitation or password are automatically
+created; a pending contact is not a login or a sharing grant.
+
+Activation records a durable server-time cutoff and a baseline of observed
+entries: historical public replies are **not** emailed, even when concurrent
+edits move them past a pagination cursor. Entries created during the initial
+baseline scan can also be conservatively excluded. Thereafter the worker discovers new public
+TicketEntry records, including browser, CLI and approved Sullivan writes, every
+five seconds. New clients snapshot the confirmed requester in `recipient` and
+guard the parent version. A missing/changed recipient fails closed; upgrade all
+writers before activation. Internal/customer notes are never outbound mail.
+An initial email ticket receives an acknowledgement. Replies include attachments
+and stable Message-ID/References, with a durable random ticket-specific plus
+address as `Reply-To`. An incoming message joins an existing ticket only when
+`To`/`Cc` contains that address **and** its top-level From currently has requester
+or explicit portal sharing access. Access is rechecked after attachment upload,
+and the reply write guards the current ticket version. Invalid, unknown or
+conflicting reply tokens and unauthorized senders are quarantined. Without a
+reply token, normal mail is a new request: References, In-Reply-To and subject
+numbers alone never associate or authorize a reply. Automatic replies, delivery
+reports and mail from the support mailbox itself are ignored instead of
+generating new conversations.
+After attachment preparation, an atomic conditional transaction checks both
+ticket and public-entry versions and claims the prepared mail for SMTP. The
+ticket's unchanged preview is patched as a version guard, advancing its updated
+timestamp. This claim is the authorization cutoff: subsequent edits cannot
+retract mail already authorized for transport. Pre-mutation transient inbound
+read/upload failures stay queued; partially applied or uncertain writes do not
+automatically restart.
+
+`mail_delivery` on the original acknowledgement/public reply is queued, sent,
+failed or unknown. **sent means accepted by the SMTP relay, not delivered**.
+Definite failures need an explicit retry; lost SMTP/NRC acknowledgements are
+unknown and never replayed automatically. Restarted inflight work is likewise
+unknown. Inspect journal/NRC/relay evidence before resolving such cases manually;
+there is deliberately no force-retry command for uncertain operations. After a
+lost metadata patch the journal remains authoritative and repairs the status
+without resending. Confirmed repairs are not repeatedly read from NRC; outstanding
+repairs rotate after queued work, at most one per pass. Keep the private journal
+on a persistent volume and back it up: it also holds the private reply tokens;
+losing it breaks existing reply addresses. Treat those addresses like private links,
+not portal credentials. Keep their tokens out of public logs. Back up the journal
+and apply a retention policy appropriate for personal data: it retains original
+emails including quarantined messages. This version has no automatic journal
+purge, virus scanner, CC subscriptions or delivery-provider bounce reconciliation.
+
+Private administration through the CLI uses `NRC_TICKET_MAIL_URL` (HTTPS, or
+loopback HTTP) and `NRC_TICKET_MAIL_SECRET_FILE` (private file containing only
+the gateway token). Never give this credential to customers or Sullivan.
+
+```sh
+nrc ticket mail list
+nrc ticket mail raw <job-id> > /secure/review.eml
+nrc ticket mail retry <failed-outbound-job-id>
+nrc customer contact list --review-status pending --all
+nrc customer contact update <contact-id> --review-status reviewed
+```
+
+Optional Docker overlay `docker/compose.ticket-mail.yml` mounts the private
+configuration and durable journal on the existing tickets service. It requires
+the tickets overlay too; keep the optional gateway/private administration port private.
 
 ## Verification and rendering workflow
 
@@ -429,12 +621,20 @@ NRC_TEST_SERVER=/tmp/nrc-ticket-server node test/customer-workspace-dev.mjs
 # In another shell, using that fixture's configured HTTP port:
 NRC_TICKETS_TEST_URL=http://127.0.0.1:8091 node client/tickets.e2e.mjs
 NRC_TICKETS_TEST_URL=http://127.0.0.1:8091 node client/record-activity.e2e.mjs
+# From services/bots/nrc-tickets, against this disposable fixture only:
+NRC_MAIL_TEST_URL=http://127.0.0.1:8091 go test -run TestMailNRCIntegration -v -count=1
 ```
 
 It exercises acknowledged ticket/entry writes, private/public composition,
 competing-edit rejection, task linkage without status synchronization, page
 reload and company-context navigation. The fixture bypasses staff identity;
 never deploy it as an actual NRC endpoint.
+
+The mail integration checks direct sender identity, binary attachment persistence,
+outgoing public replies and token-addressed followups without message references.
+Local TLS IMAP/SMTP and OAuth fixtures separately cover wire
+authentication, reordered FETCH attributes, interrupted/oversized downloads,
+UID checkpoint/replay behavior and token renewal; no real tenant is contacted.
 
 The activity regression selects two fake, server-verified users through the
 fixture-only `x-nrc-test-user` header. It covers ticket/task badges, own-comment

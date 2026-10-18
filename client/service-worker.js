@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261018ticketsearch1";
+const CACHE_NAME = "nrc-terminal-20261018ticketmail2";
 
 const APP_SHELL = [
   "./",
@@ -24,7 +24,7 @@ const APP_SHELL = [
   "./custom-picker.js?v=20260927appointment2",
   "./custom-select.js?v=20260924select1",
   "./attachments.js?v=20261008files1",
-  "./assets.js?v=20261016tickets1",
+  "./assets.js?v=20261018mailguard2",
   "./transactions.js?v=20260925inline1",
   "./edges.js?v=20260924slicelive1",
   "./files.js?v=20261017history1",
@@ -60,8 +60,8 @@ const APP_SHELL = [
   "./chat.js?v=20261015copy3",
   "./app.js?v=20261017history5",
   "./newsletter.js?v=20261017contacts2",
-  "./customers.js?v=20261018ticketgroups1",
-  "./tickets.js?v=20261018ticketsearch1",
+  "./customers.js?v=20261018contactreview2",
+  "./tickets.js?v=20261018ticketmail2",
   "./mobile-shell.js?v=20261018ticketregister1",
   "./latency-worker.js",
 ];

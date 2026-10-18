@@ -161,7 +161,13 @@
           throw new Error('Requester changed. Use current recipient before sending a public reply.');
         }
         const author = typeof myNickname === 'string' ? myNickname : '';
-        await write(options => api.sendCreateAsset(0n, 14, 2, BigInt(selected), JSON.stringify({ version: 1, kind: snapshot.kind, author }), snapshot.message, 0, options, snapshot.uploads.map(u => u.attachment)));
+        const preview = { version: 1, kind: snapshot.kind, author };
+        if (snapshot.kind === 'public_reply') preview.recipient = snapshot.requester;
+        const parentOptions = snapshot.kind === 'public_reply'
+          ? { ifParentUpdatedAt: state.tickets.find(a => String(a.assetId) === selected).updatedAt }
+          : {};
+        if (snapshot.kind === 'public_reply' && !parentOptions.ifParentUpdatedAt) throw new Error('Ticket version unavailable. Refresh before sending. Draft retained.');
+        await write(options => api.sendCreateAsset(0n, 14, 2, BigInt(selected), JSON.stringify(preview), snapshot.message, 0, { ...options, ...parentOptions }, snapshot.uploads.map(u => u.attachment)));
         d.uploads = d.uploads.filter(u => !snapshot.uploads.includes(u));
         if (d.message === snapshot.message) d.message = '';
         if (d.kind === snapshot.kind) { d.kind = 'internal_note'; snapshot.kind = d.kind; }
@@ -274,7 +280,14 @@
   function renderConversation() {
     const el = document.getElementById('ticketConversation'); if (!el) return;
     const selected = state.tickets.find(a => String(a.assetId) === state.selected);
-    el.innerHTML = [false, true].map(internal => `<section class="customer-section${internal ? ' ticket-internal' : ''}"><div class="panel-header"><div><span>${internal ? 'INTERNAL NOTES · NEVER PUBLIC' : 'PUBLIC CONVERSATION'}</span></div></div>${!internal && selected ? `<article class="customer-event" data-ticket-entry="${selected.assetId}"><span class="customer-meta">ORIGINAL REQUEST / ${esc(metadata(selected).requester_name || metadata(selected).requester)}</span><p class="customer-activity-body">${esc(selected.payload)}</p></article>` : ''}${conversation(state.selected, internal).map(a => `<article class="customer-event" data-ticket-entry="${a.assetId}"><span class="customer-meta">${esc(kindLabels[metadata(a).kind])} / ${esc(metadata(a).author)} / ${esc(new Date(Number(a.createdAt / 1000000n)).toLocaleString())}</span><p class="customer-activity-body">${esc(a.payload)}</p></article>`).join('') || '<p class="customer-empty">No entries.</p>'}</section>`).join('');
+    const mailMeta = asset => {
+      const m = metadata(asset), labels = [];
+      if (m.channel === 'email') labels.push('EMAIL');
+      if (m.recipient) labels.push(`TO ${m.recipient}`);
+      if (m.mail_delivery) labels.push(({ queued: 'MAIL QUEUED', sent: 'MAIL SERVER ACCEPTED', failed: 'MAIL FAILED', unknown: 'MAIL STATUS UNKNOWN' })[m.mail_delivery] || 'MAIL STATUS UNKNOWN');
+      return labels.length ? ` / ${esc(labels.join(' · '))}` : '';
+    };
+    el.innerHTML = [false, true].map(internal => `<section class="customer-section${internal ? ' ticket-internal' : ''}"><div class="panel-header"><div><span>${internal ? 'INTERNAL NOTES · NEVER PUBLIC' : 'PUBLIC CONVERSATION'}</span></div></div>${!internal && selected ? `<article class="customer-event" data-ticket-entry="${selected.assetId}"><span class="customer-meta">ORIGINAL REQUEST / ${esc(metadata(selected).requester_name || metadata(selected).requester)}${mailMeta(selected)}</span><p class="customer-activity-body">${esc(selected.payload)}</p></article>` : ''}${conversation(state.selected, internal).map(a => `<article class="customer-event" data-ticket-entry="${a.assetId}"><span class="customer-meta">${esc(kindLabels[metadata(a).kind])} / ${esc(metadata(a).author)} / ${esc(new Date(Number(a.createdAt / 1000000n)).toLocaleString())}${mailMeta(a)}</span><p class="customer-activity-body">${esc(a.payload)}</p></article>`).join('') || '<p class="customer-empty">No entries.</p>'}</section>`).join('');
     if (selected && el.querySelector) {
       const { latest } = activity(selected);
       window.NRCRecordActivity?.observe('ticket', el.querySelector(`[data-ticket-entry="${latest.assetId}"]`), 'ticket', selected.assetId, latest.assetId);

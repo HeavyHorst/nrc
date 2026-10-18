@@ -147,7 +147,16 @@ func (s nrcSource) list(ctx context.Context, typ uint16) ([]p.Asset, error) {
 	return nil, errors.New("workspace too large")
 }
 func (s nrcSource) create(ctx context.Context, a p.Asset) (p.Asset, error) {
+	return s.createAt(ctx, a, 0)
+}
+func (s nrcSource) createReply(ctx context.Context, a p.Asset, parentVersion int64) (p.Asset, error) {
+	return s.createAt(ctx, a, parentVersion)
+}
+func (s nrcSource) createAt(ctx context.Context, a p.Asset, parentVersion int64) (p.Asset, error) {
 	body, e := p.EncodeCreateAssetWithAttachmentsAndCorrelation(0, a.AssetType, a.ParentType, a.ParentID, a.Preview, a.Payload, a.Attachments, 1)
+	if parentVersion != 0 {
+		body, e = p.EncodeCreateAssetWithParentVersionAndCorrelation(0, a.AssetType, a.ParentType, a.ParentID, a.Preview, a.Payload, a.Attachments, parentVersion, 1)
+	}
 	if e != nil {
 		return p.Asset{}, e
 	}
@@ -164,4 +173,45 @@ func (s nrcSource) create(ctx context.Context, a p.Asset) (p.Asset, error) {
 		return p.Asset{}, errors.New("invalid create acknowledgement")
 	}
 	return v, nil
+}
+
+// Preview-only conditional patches leave original text and attachments intact.
+func (s nrcSource) patchPreview(ctx context.Context, a p.Asset, preview string, guards ...p.Asset) error {
+	assets := append([]p.Asset{a}, guards...)
+	ops := make([]p.TransactionOperation, 0, len(assets))
+	for i, asset := range assets {
+		value := asset.Preview
+		if i == 0 {
+			value = preview
+		}
+		body, err := p.EncodeTransactionAssetPatch(p.TransactionAssetPatch{
+			Asset: p.Existing(p.TransactionEntityAsset, asset.AssetID), IfUpdatedAt: asset.UpdatedAt,
+			Present: p.TransactionAssetPatchPreview, Preview: []byte(value),
+		})
+		if err != nil {
+			return err
+		}
+		ops = append(ops, p.TransactionOperation{Type: p.TransactionOpAssetPatch, Body: body})
+	}
+	wire, err := p.EncodeApplyTransaction(1, ops)
+	if err != nil {
+		return err
+	}
+	response, err := s.request(ctx, p.C_ApplyTransaction, wire, p.S_TransactionResult)
+	if err != nil {
+		return err
+	}
+	r, err := p.DecodeTransactionResult(response)
+	if err != nil {
+		return err
+	}
+	if r.CorrelationID != 1 || r.Status != p.TransactionStatusCommitted || len(r.Results) != len(assets) {
+		return errors.New("metadata patch unconfirmed or rejected")
+	}
+	for i, result := range r.Results {
+		if result.EntityID != assets[i].AssetID || result.Type != p.TransactionOpAssetPatch {
+			return errors.New("metadata patch acknowledgement mismatch")
+		}
+	}
+	return nil
 }

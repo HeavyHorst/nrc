@@ -45,6 +45,9 @@ func ticketPreview(a ticketAction, current protocol.Asset) ([]byte, error) {
 	m := map[string]any{"version": 1, "title": "", "company_id": "", "contact_id": "", "requester": "", "requester_name": "", "status": "open", "assignee": ""}
 	if a.Operation == "entry" {
 		m = map[string]any{"version": 1, "kind": a.Kind, "author": "Sullivan"}
+		if a.Kind == "public_reply" {
+			m["recipient"] = a.Recipient
+		}
 	} else if a.Operation == "update_metadata" {
 		var err error
 		m, err = ticketMetadata(current)

@@ -156,6 +156,9 @@ func main() {
 		log.Fatal(e)
 	}
 	app := &portal{source: nrcSource{strings.TrimRight(server, "/"), workspace, secret}, files: httpFiles{strings.TrimRight(filesURL, "/"), workspace, secret}, brand: brand, accounts: accounts, origin: origin}
+	if err := startMail(os.Getenv("TICKETS_MAIL_CONFIG_FILE"), workspace, app); err != nil {
+		log.Fatal(err)
+	}
 	addr := os.Getenv("TICKETS_ADDR")
 	if addr == "" {
 		addr = ":8096"
