@@ -376,7 +376,7 @@ body.sullivan-workbench #chatAttach {
     .customers-panel .header-filter-cell > .filter-input { width: 100%; }
     .customers-layout { display: block; overflow: visible; }
     .customers-register { border-right: 0; border-bottom: var(--frame-border); overflow: visible; }
-    #customersList { display: flex; overflow-x: auto; }
+    #customersList { display: block; }
     .customer-row { min-width: 13rem; }
     .customer-record { overflow: visible; padding: 0.625rem; }
     .customer-record-header { top: -0.625rem; }

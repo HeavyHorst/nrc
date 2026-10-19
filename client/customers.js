@@ -491,11 +491,12 @@
     el("customersStatus").hidden = !el("customersStatus").textContent;
     el("customerNew").disabled = !connected() || loading || !!error;
     const pending = reviewContacts.map(a => records.get(a.assetId) || a).filter(needsReview);
-    const queue = `<section class="customer-section" aria-label="Contact review"><div class="panel-header"><div><span>NEW CONTACTS / ${pending.length}</span></div></div>${pending.map(a => `<button type="button" class="customer-row" data-review-contact="${a.assetId}"><span class="customer-row-copy"><strong class="customer-row-title">${escape(metadata(a).title)}</strong><span class="customer-meta">NEW · REVIEW / ASSIGN COMPANY · ${escape(metadata(a).email || "—")}</span></span></button>`).join("") || `<p class="customer-empty">${escape(reviewError || "No contacts awaiting review.")}</p>`}</section>`;
-    updateHtml(el("customersList"), queue + companies.map(a => {
+    const queue = pending.length || reviewError ? `<section class="customer-section" aria-label="Contact review"><div class="panel-header"><div><span>CONTACTS TO REVIEW / ${pending.length}</span></div></div>${pending.map(a => `<button type="button" class="customer-row" data-review-contact="${a.assetId}"><span class="customer-row-copy"><strong class="customer-row-title">${escape(metadata(a).title)}</strong><span class="customer-meta">NEW · REVIEW / ASSIGN COMPANY · ${escape(metadata(a).email || "—")}</span></span></button>`).join("")}${reviewError ? `<p class="customer-empty">${escape(reviewError)}</p>` : ""}</section>` : "";
+    const companyHeader = `<div class="panel-header"><div><span>CUSTOMERS / ${companies.length}</span></div></div>`;
+    updateHtml(el("customersList"), queue + companyHeader + (companies.map(a => {
       const d = metadata(a);
       return `<button type="button" class="customer-row" data-company="${a.assetId}" aria-pressed="${selected === a.assetId}" title="${escape(d.title)}"><span class="customer-row-copy"><strong class="customer-row-title">${escape(d.title)}</strong><span class="customer-meta customer-row-meta">${escape(d.city || "—")} · ${escape(d.assignee || "UNASSIGNED")}${d.archived ? ' · <span class="customer-row-state">ARCHIVED</span>' : ""}</span></span></button>`;
-    }).join("") || (companyPageError || (loading && !showLoading) ? "" : `<p class="customer-empty">${loading ? "Loading customer register…" : query ? "No matching customers." : "No customers. Create the first company in this room."}</p>`));
+    }).join("") || (companyPageError || (loading && !showLoading) ? "" : `<p class="customer-empty">${loading ? "Loading customer register…" : query ? "No matching customers." : "No customers. Create the first company in this room."}</p>`)));
     el("customerReviewMore")?.remove();
     if (reviewMore || reviewError) {
       const more = document.createElement("button");

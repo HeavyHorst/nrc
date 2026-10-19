@@ -33,14 +33,16 @@ test("live pending contacts enter review without reload, deduplicate and leave a
   const contact = { convId: 0n, assetId: 88n, assetType: 9, preview: JSON.stringify({ version: 1, title: "Email arrival", source: "email", review_status: "pending" }) };
   api.onAssetChanged(contact); api.onAssetChanged(contact);
   await Promise.resolve();
-  assert.match(elements.get("customersList").innerHTML, /NEW CONTACTS \/ 1/);
+  assert.match(elements.get("customersList").innerHTML, /CONTACTS TO REVIEW \/ 1/);
+  assert.match(elements.get("customersList").innerHTML, /<\/section><div class="panel-header"><div><span>CUSTOMERS \/ 0/);
   assert.match(elements.get("customersList").innerHTML, /data-review-contact="88"/);
   api.onAssetChanged({ ...contact, preview: JSON.stringify({ version: 1, title: "Email arrival", review_status: "reviewed" }) });
   await Promise.resolve();
   assert.doesNotMatch(elements.get("customersList").innerHTML, /data-review-contact="88"/);
   api.onAssetChanged(contact); await Promise.resolve();
   api.onAssetDeleted(0n, 88n); await Promise.resolve();
-  assert.match(elements.get("customersList").innerHTML, /NEW CONTACTS \/ 0/);
+  assert.doesNotMatch(elements.get("customersList").innerHTML, /Contact review|CONTACTS TO REVIEW|No contacts awaiting review/);
+  assert.match(elements.get("customersList").innerHTML, /CUSTOMERS \/ 0/);
 });
 
 test("customer view defaults denied and only accepts a literal true capability", async () => {
