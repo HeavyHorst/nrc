@@ -448,6 +448,10 @@ button.overview-segment { cursor: pointer; }
 .nl-panel [hidden], #newsletterBtn[hidden] { display: none !important; }
 .nl-panel > .panel-header { height: auto; min-height: 1.6rem; flex-shrink: 0; }
 .nl-panel .panel-header:not(.header-register) > div { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.nl-tabs { flex-shrink: 0; }
+.nl-tab-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; border: 1px solid var(--border-primary); border-top: 0; background: var(--surface-content); }
+.nl-tab-content > .panel-header { flex-shrink: 0; background: var(--surface-content); }
+.nl-tab-content > .panel-header > .header-register-control-row { border-top: 0; }
 #nlStatus { font-size: var(--font-xs); min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nl-actions { display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.5rem; }
 .nl-layout { display: grid; grid-template-columns: 12rem minmax(0, 1fr) 17rem; flex: 1; min-height: 0; }
@@ -503,6 +507,7 @@ button.overview-segment { cursor: pointer; }
 }
 @media (max-width: 1100px) { .nl-layout { grid-template-columns: 10rem minmax(0, 1fr); overflow: auto; } .nl-review { grid-column: 2; border-top: var(--content-border); } .nl-editor, .nl-review { overflow: visible; } }
 @media (max-width: 768px) {
+    .nl-tab-content { flex: 1 0 auto; }
     .nl-layout { display: block; }
     .nl-register, .nl-editor, .nl-review { overflow: visible; border-right: 0; border-bottom: var(--content-border); }
     #nlList { display: flex; overflow-x: auto; } .nl-row { min-width: 12rem; }

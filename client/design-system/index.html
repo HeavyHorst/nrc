@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261019newslettertabs1">
+    <link rel="stylesheet" href="../css/main.css?v=20261019newslettertabs2">
     <link rel="stylesheet" href="../css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -1314,7 +1314,9 @@ status      ← Service Worker</code></pre>
                 <div class="catalog-example nl-panel" lang="de">
                     <header class="panel-header header-register filter-register">
                         <div class="header-register-identity-row"><span class="header-register-title">NEWSLETTER / MAILJET</span><span class="header-register-state">ENTWURF · R3</span></div>
-                        <nav class="tab-group nl-tabs" aria-label="Newsletter-Bereiche"><button class="btn nav-tab active" aria-pressed="true">Kampagnen<span class="tab-count">1</span></button><button class="btn nav-tab" aria-pressed="false">Kontakte<span class="tab-count">18</span></button></nav>
+                    </header>
+                    <nav class="tab-group nl-tabs" aria-label="Newsletter-Bereiche"><button class="btn nav-tab active" aria-pressed="true">Kampagnen<span class="tab-count">1</span></button><button class="btn nav-tab" aria-pressed="false">Kontakte<span class="tab-count">18</span></button></nav>
+                    <div class="nl-tab-content"><header class="panel-header header-register filter-register">
                         <div class="header-register-control-row"><div class="header-control-scroll"><div class="header-filter-cell header-filter-toggle"><label class="filter-checkbox-label"><input class="filter-checkbox" type="checkbox"><span>Archivierte anzeigen</span></label></div><button class="btn header-operation header-register-control">Aktualisieren</button></div><button class="btn btn--primary header-operation header-register-control header-create-action">+ Kampagne</button></div>
                     </header>
                     <div class="nl-actions"><button class="btn btn--danger">Entwurf löschen …</button><button class="btn">Archivieren …</button><button class="btn">Wiederherstellen …</button></div>
@@ -1327,6 +1329,7 @@ status      ← Service Worker</code></pre>
                     <section id="nlSubscribers">
                         <div class="nl-contact nl-contact-head" aria-hidden="true"><span>Name / E-Mail</span><span>Einwilligung / Nachweis</span><span>Aktionen</span></div><div class="nl-contact"><span><button class="btn btn--row" type="button" aria-label="Kontakt Anna Beispiel öffnen"><strong>Anna Beispiel</strong></button><br><span class="nl-meta">anna@example.invalid</span><br><span class="nl-meta">Firma: Beispiel GmbH</span></span><span>Nicht angemeldet</span><span class="nl-contact-actions"><button class="btn btn--row">Einladen …</button></span></div>
                     </section>
+                    </div>
                     <p class="catalog-usage">NEWSLETTER INVENTORY: shared panel-header, tab-group/nav-tab with active aria-pressed and counts, detail-edit-label/task-detail controls, btn and btn--row, shared register selection, NRCModal shell and cancellation guard. nl-layout/compose keeps content, inert preview and recipient/test approval separate; responsive panes stack with 16px inputs. Human-readable variable labels do not change Mailjet keys. Local preview substitutes simple {{var:key}} placeholders from saved campaign values as escaped text in HTML and literal text in the text version; missing keys and other Mailjet expressions remain unchanged. This is not a Mailjet render or test send. Subscriber columns show consent evidence and locale-formatted confirmation time; search shows matching/total counts. Initial feature gate hidden; loading/unavailable/empty/denied and revision conflict are explicit. No bulk enrollment. Source-required individual DOI invitation; typed-subject send only after saved/tested revision. Both themes use production tokens.</p>
                 </div>
                 <div class="catalog-example" id="tickets">
