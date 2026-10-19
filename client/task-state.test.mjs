@@ -39,6 +39,29 @@ test("task sorting has a deterministic compound-identity tie-break", () => {
   assert.deepEqual(Array.from(sort(tasks), (task) => `${task.convId}:${task.id}`), ["1:1", "1:2", "2:1"]);
 });
 
+test("WorkOrder is never sorted or reversed locally", () => {
+  const { __getSortedTasks: sort, __state: state } = loadTaskState();
+  const tasks = [{ id: 9n, priority: 0, blockedBy: 2n }, { id: 2n, priority: 5 }, { id: 1n, status: 3 }];
+  state.sortColumn = "workOrder";
+  for (const direction of ["asc", "desc"]) {
+    state.sortDirection = direction;
+    assert.deepEqual(Array.from(sort(tasks), task => task.id), [9n, 2n, 1n]);
+    assert.equal(sort(tasks)[0].blockedBy, 2n);
+  }
+});
+
+test("reselecting WorkOrder cannot reverse the dependency sequence", () => {
+  const context = {
+    window: { NRCTaskQuery: { update() {} } },
+    localStorage: { getItem: () => null, setItem() {} },
+    document: { getElementById: () => null },
+    renderTaskList() {},
+  };
+  vm.runInNewContext(`${source}\nrenderCurrentTaskView = () => {}; toggleSort('workOrder'); toggleSort('workOrder'); window.sort = { column: TaskViewState.sortColumn, direction: TaskViewState.sortDirection };`, context);
+  assert.equal(context.window.sort.column, "workOrder");
+  assert.equal(context.window.sort.direction, "asc");
+});
+
 test("filter changes invalidate active remote search results and rerender reminders", () => {
   let updates = 0;
   let reminderRenders = 0;

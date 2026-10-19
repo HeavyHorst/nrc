@@ -14,8 +14,8 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20261013fold1">
     <link rel="icon" type="image/png" href="favicon.png?v=20261013fold1">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=20261013fold1">
-    <link rel="stylesheet" href="css/main.css?v=20261018ticketregister1">
-    <link rel="stylesheet" href="css/custom-select.css?v=20260926nesting1">
+    <link rel="stylesheet" href="css/main.css?v=20261019workorder1">
+    <link rel="stylesheet" href="css/custom-select.css?v=20261019selectors1">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 </head>
 <body class="mobile-chat-view">
@@ -320,7 +320,7 @@
                                         <span>INCLUDE CLOSED</span>
                                     </label>
                                 </div>
-                                <label class="header-filter-cell task-flat-only mobile-only"><span class="filter-label">SORT</span><select id="mobileTaskSort" aria-label="Sort tasks"><option value="priority">PRIORITY</option><option value="title">TITLE</option><option value="status">STATUS</option><option value="assignee">ASSIGNEE</option><option value="project">PROJECT</option><option value="dueAt">DUE</option><option value="createdAt">AGE</option><option value="color">CATEGORY</option></select></label>
+                                <label class="header-filter-cell task-flat-only"><span class="filter-label">SORT</span><select id="mobileTaskSort" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area" aria-label="Sort tasks" aria-describedby="taskWorkOrderHelp"><option value="priority">PRIORITY</option><option value="title">TITLE</option><option value="status">STATUS</option><option value="assignee">ASSIGNEE</option><option value="project">PROJECT</option><option value="dueAt">DUE</option><option value="createdAt">AGE</option><option value="color">CATEGORY</option><option value="workOrder">WORK ORDER</option></select></label>
                                 <button id="mobileTaskSortDirection" class="btn header-operation task-flat-only mobile-only" type="button">DESCENDING ↓</button>
                                 <div class="filter-group filter-group-search header-filter-cell task-flat-only">
                                     <label class="filter-label" for="taskSearch">QUERY</label>
@@ -398,6 +398,7 @@
                     </div>
                     <!-- Task List View -->
                     <div id="taskListView" class="task-list-view" style="display: none;">
+                        <p id="taskWorkOrderHelp" class="slice-note" hidden>DEPENDENCIES FIRST; AVAILABLE: PRIORITY ↓, DUE ↑ (NO DUE LAST), ID ↑. UNRESOLVED THEN DONE LAST. NOT ALL ROWS ARE RUNNABLE.</p>
                         <table class="task-table">
                             <thead>
                                 <tr>
@@ -643,7 +644,7 @@
     <script src="dialog.js?v=20260925document17"></script>
     <script src="portal.js?v=20260803a"></script>
     <script src="custom-picker.js?v=20260927appointment2"></script>
-    <script src="custom-select.js?v=20260924select1"></script>
+    <script src="custom-select.js?v=20261019selectors1"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@16.1.1/lib/marked.umd.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
@@ -653,42 +654,42 @@
     <script src="assets.js?v=20261019ticketpages1"></script>
     <script src="transactions.js?v=20260925inline1"></script>
     <script src="edges.js?v=20260924slicelive1"></script>
-    <script src="files.js?v=20261017history1"></script>
+    <script src="files.js?v=20261018visuals1"></script>
     <script src="links-ui.js?v=20261018ticketregister1"></script>
-    <script src="inspector.js?v=20261018ticketregister1"></script>
+    <script src="inspector.js?v=20261018inspectors3"></script>
     <script src="view-manager.js?v=20261017history5"></script>
     <script src="list-navigation.js?v=20260805b"></script>
     <script src="virtual-list.js?v=20260908a"></script>
     <script src="loading-indicator.js?v=20261013loading1"></script>
     <script src="page-loader.js?v=20261013loading1"></script>
-    <script src="task-state.js?v=20261018ticketregister1"></script>
+    <script src="task-state.js?v=20261019workorder1"></script>
     <script src="query-controller.js?v=20260914workspace1"></script>
-    <script src="workspace-search.js?v=20261013searchsync1"></script>
+    <script src="workspace-search.js?v=20261018inspectors5"></script>
     <script src="task-search.js?v=20260917taskscroll1"></script>
-    <script src="detail-ui.js?v=20261017history5"></script>
+    <script src="detail-ui.js?v=20261018inspectors5"></script>
     <script src="column-resize.js?v=20260913tables2"></script>
     <script src="record-activity.js?v=20261019ticketpages1"></script>
-    <script src="tasks.js?v=20261018ticketregister1"></script>
+    <script src="tasks.js?v=20261019workorder1"></script>
     <script src="attention.js?v=20261017attention1"></script>
     <script src="calendar.js?v=20261013loading1"></script>
-    <script src="appointments.js?v=20260928appointment8"></script>
+    <script src="appointments.js?v=20261018inspectors5"></script>
     <script src="appointment-notify.js?v=20260927appointment2"></script>
     <script src="reminder-notify.js?v=20260923attention7"></script>
-    <script src="task-query.js?v=20260927calendar8"></script>
-    <script src="slices.js?v=20261018ticketregister1"></script>
+    <script src="task-query.js?v=20261019workorder1"></script>
+    <script src="slices.js?v=20261019workorder1"></script>
     <script src="overview.js?v=20261013overviewactions2"></script>
     <script src="history.js?v=20261017history4"></script>
     <script src="note-html.js?v=20261007fragments1"></script>
-    <script src="notes.js?v=20261017history1"></script>
+    <script src="notes.js?v=20261018inspectors5"></script>
     <script src="task-references.js?v=20260914workspace1"></script>
-    <script src="ai.js?v=20261016sullivannav1"></script>
+    <script src="ai.js?v=20261018visuals1"></script>
     <script src="retained-messages.js?v=20260902a"></script>
     <script src="chat.js?v=20261015copy3"></script>
-    <script src="app.js?v=20261019ticketpages1"></script>
+    <script src="app.js?v=20261019workorder2"></script>
     <script src="newsletter.js?v=20261017contacts2"></script>
-    <script src="customers.js?v=20261018contactreview2"></script>
-    <script src="tickets.js?v=20261019ticketpages1"></script>
-    <script src="mobile-shell.js?v=20261018ticketregister1"></script>
+    <script src="customers.js?v=20261019inspectors7"></script>
+    <script src="tickets.js?v=20261019selectors2"></script>
+    <script src="mobile-shell.js?v=20261019workorder1"></script>
     <script>
         if ("serviceWorker" in navigator) {
             window.addEventListener("load", () => navigator.serviceWorker.register("service-worker.js"));

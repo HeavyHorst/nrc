@@ -3394,6 +3394,21 @@ function closeStatusMenuFor(node) {
 }
 
 function updateSortHeaders() {
+  const workOrder = TaskViewState.sortColumn === "workOrder";
+  const select = document.getElementById("mobileTaskSort");
+  if (select) select.value = TaskViewState.sortColumn;
+  const help = document.getElementById("taskWorkOrderHelp");
+  if (help) {
+    help.hidden = !workOrder;
+    help.textContent = TaskViewState.filters.search
+      ? "WORK ORDER PAUSED DURING TEXT SEARCH. CLEAR QUERY TO RESTORE DEPENDENCY ORDER."
+      : "DEPENDENCIES FIRST · AVAILABLE: PRIORITY, DUE, ID. UNRESOLVED THEN DONE LAST; NOT ALL ROWS ARE RUNNABLE.";
+  }
+  const direction = document.getElementById("mobileTaskSortDirection");
+  if (direction) {
+    direction.disabled = workOrder;
+    direction.textContent = workOrder ? "DEPENDENCY ORDER" : TaskViewState.sortDirection === "asc" ? "ASCENDING ↑" : "DESCENDING ↓";
+  }
   const headers = document.querySelectorAll("#taskListView .task-table th[data-sort]");
   headers.forEach((th) => {
     th.classList.remove("sorted-asc", "sorted-desc");

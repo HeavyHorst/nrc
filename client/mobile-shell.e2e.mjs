@@ -166,11 +166,16 @@ try {
   await page.locator("#taskFilterBar [data-mobile-filters]").tap();
   assert.equal((await page.locator("#taskSearch").boundingBox()).height, 32, "expanded task query remains compact");
   assert.equal(await page.locator("#taskSearch").evaluate(el => getComputedStyle(el).fontSize), "16px");
-  assert.equal((await page.locator("#mobileTaskSort").boundingBox()).height, 44);
-  await page.locator("#mobileTaskSort").selectOption("title");
+  assert.equal((await page.locator("#mobileTaskSort-trigger").boundingBox()).height, 44);
+  await page.locator("#mobileTaskSort-trigger").tap();
+  await page.locator('.custom-select__dropdown:visible').getByRole('option', { name: 'TITLE', exact: true }).tap();
   assert.equal(await page.evaluate(() => TaskViewState.sortColumn), "title");
   await page.locator("#mobileTaskSortDirection").tap();
   assert.equal(await page.evaluate(() => TaskViewState.sortDirection), "desc");
+  await page.locator("#mobileTaskSort-trigger").tap();
+  await page.locator('.custom-select__dropdown:visible').getByRole('option', { name: 'WORK ORDER', exact: true }).tap();
+  assert.equal(await page.evaluate(() => TaskViewState.sortColumn), "workOrder");
+  assert.equal(await page.locator("#mobileTaskSortDirection").isDisabled(), true);
   await capture("task-filters");
   await page.locator("#taskFilterBar [data-mobile-filters]").tap();
   await page.locator('[data-mobile-view="notes"]').tap();

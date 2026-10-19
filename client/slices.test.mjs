@@ -348,6 +348,43 @@ test("a slice deleted elsewhere closes its record and refreshes the register", (
 
 const settleMicrotasks = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+test("slice WorkOrder requests only one scoped page and loads subsequent pages on demand", async () => {
+  const calls = [];
+  let exactReads = 0;
+  const slices = loadSlices({ window: {
+    NRCTasks: { requestTasksByIds: async () => { exactReads++; return [{ id: 4n, createdAt: 20n }, { id: 3n, createdAt: 10n }]; } },
+    NRCTaskQuery: { requestPage: async (query, cursor) => {
+      calls.push({ query, cursor });
+      return cursor ? { tasks: [{ id: 1n, blockedBy: 999n }], cursor: null, hasMore: false, total: 101 }
+        : { tasks: [{ id: 9n }, { id: 2n, blockedBy: 9n }], cursor: { number: 100n, taskId: 2n, text: "" }, hasMore: true, total: 101 };
+    } },
+  } });
+  slices.requestList({ force: true });
+  slices.handleSliceList(encodeSliceList({ slices: [{ name: "Alpha", sliceId: 5n }] }));
+  await settleMicrotasks();
+  assert.deepEqual(Array.from(slices.getState().members.tasks, task => task.id), [3n, 4n], "normal slice keeps created order");
+  slices.setTaskSort("workOrder");
+  assert.equal(slices.getState().members.mode, "loading");
+  await settleMicrotasks();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].query.sliceId, 5n);
+  assert.equal(calls[0].query.sort, "workOrder");
+  assert.equal(exactReads, 1, "WorkOrder does not fetch all member task records");
+  assert.deepEqual(Array.from(slices.getState().members.tasks, task => task.id), [9n, 2n]);
+  assert.equal(slices.getState().members.hasMore, true);
+  await slices.loadMoreTasks();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].cursor.number, 100n);
+  assert.deepEqual(Array.from(slices.getState().members.tasks, task => task.id), [9n, 2n, 1n]);
+  assert.equal(slices.getState().members.tasks[2].blockedBy, 999n);
+  await slices.loadMoreTasks();
+  assert.equal(calls.length, 2, "no request after the final page");
+  slices.setTaskSort("createdAt");
+  await settleMicrotasks();
+  assert.deepEqual(Array.from(slices.getState().members.tasks, task => task.id), [3n, 4n]);
+  slices.disconnect();
+});
+
 test("a completed note mutation refreshes the member snapshot without reloading the slice register", () => {
   const slices = loadSlices();
   const old = { convId: 0n, assetId: 12n, assetType: 5, preview: '{"title":"Old"}' };

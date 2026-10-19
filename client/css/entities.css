@@ -1609,6 +1609,11 @@ body.sullivan-share-focused .chat-header {
     container: task-register / inline-size;
 }
 
+#taskWorkOrderHelp {
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+}
+
 .task-table {
     width: 100%;
     border-collapse: collapse;

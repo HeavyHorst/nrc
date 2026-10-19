@@ -27,6 +27,56 @@ function harness(t, onAssignees) {
     setRoom: (value) => { room = value; }, setReady: (value) => { ready = value; } };
 }
 const correlation = (view) => view.getUint32(view.byteLength - 4, false);
+test("WorkOrder keeps legacy unscoped bytes and appends only nonzero slice identity after correlation", (t) => {
+  const h = harness(t);
+  const query = { statusMask: 15, sort: "workOrder", descending: true, assignee: null,
+    project: null, blocked: null, overdueBefore: 0n };
+  const plain = new DataView(h.encode(query, null, 42));
+  const zero = new DataView(h.encode({ ...query, sliceId: 0n }, null, 42));
+  const scoped = new DataView(h.encode({ ...query, sliceId: 9007199254740999n }, null, 42));
+  assert.equal(plain.byteLength, 54);
+  assert.deepEqual(new Uint8Array(zero.buffer), new Uint8Array(plain.buffer));
+  assert.deepEqual(new Uint8Array(scoped.buffer, 0, 54), new Uint8Array(plain.buffer));
+  assert.equal(scoped.byteLength, 62);
+  assert.equal(scoped.getUint8(13), 8);
+  assert.equal(scoped.getUint8(14), 0);
+  assert.equal(scoped.getUint16(11), 100);
+  assert.equal(scoped.getUint32(50), 42);
+  assert.equal(scoped.getBigUint64(54), 9007199254740999n);
+});
+
+test("promise pages coexist with flat paging, preserve cursor and server order, and reject on reset", async (t) => {
+  const h = harness(t);
+  h.controller.update();
+  const flat = h.sent.at(-1);
+  const firstPromise = h.controller.requestPage({ sort: "workOrder", sliceId: 77n });
+  const request = h.sent.at(-1);
+  // Responses have no optional trailer: the correlation stays the final field.
+  const responseRequest = new DataView(request.buffer.slice(0, -8));
+  h.controller.handlePage(page(responseRequest, [9n, 2n], { more: true, number: 100n, total: 103 }));
+  const first = await firstPromise;
+  assert.deepEqual(Array.from(first.tasks, task => task.id), [9n, 2n]);
+  assert.equal(first.hasMore, true);
+  assert.equal(h.controller.getState().tasks.size, 0);
+  assert.equal(h.sent.length, 3, "no automatic page draining");
+  h.controller.handlePage(page(flat, [1n]));
+  assert.equal(h.controller.getState().tasks.size, 1);
+  const nextPromise = h.controller.requestPage({ sort: "workOrder", sliceId: 77n }, first.cursor);
+  const next = h.sent.at(-1);
+  assert.equal(next.getUint8(31), 1);
+  assert.equal(next.getBigInt64(32), 100n);
+  assert.equal(next.getBigUint64(42), 2n);
+  h.controller.handlePage(page(new DataView(next.buffer.slice(0, -8)), [3n]));
+  assert.equal((await nextPromise).hasMore, false);
+  const abandoned = h.controller.requestPage({ sort: "workOrder", sliceId: 77n });
+  const stale = h.sent.at(-1);
+  h.controller.disconnect();
+  await assert.rejects(abandoned, /reset/);
+  const cached = h.cached.length;
+  h.controller.handlePage(page(new DataView(stale.buffer.slice(0, -8)), [999n]));
+  assert.equal(h.cached.length, cached);
+});
+
 test("assignee metadata is unfiltered, chunked, invalidated by mutations and cleared on disconnect", (t) => {
   let changed = 0;
   const h = harness(t, () => changed++);

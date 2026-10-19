@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261018ticketregister1">
-    <link rel="stylesheet" href="../css/custom-select.css?v=20260926nesting1">
+    <link rel="stylesheet" href="../css/main.css?v=20261019workorder1">
+    <link rel="stylesheet" href="../css/custom-select.css?v=20261019selectors1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
 <body>
@@ -229,11 +229,13 @@
                         <div class="catalog-form-grid">
                             <label><span class="filter-label">SEARCH</span><input class="filter-input" type="search" placeholder="SEARCH TASKS..."></label>
                             <label><span class="filter-label">STATUS</span><nrc-select><select class="filter-select"><option>ALL</option><option>IN PROGRESS</option><option>DONE</option></select></nrc-select></label>
+                            <label><span class="filter-label">TASK SORT</span><nrc-select><select class="filter-select" aria-label="Sort tasks"><option value="createdAt">CREATED</option><option value="workOrder">WORK ORDER</option></select></nrc-select></label>
                             <label><span class="filter-label">FLAGS</span><nrc-select><select class="filter-select"><option>ALL</option><option>BLOCKED</option><option>OVERDUE</option><option>BLOCKED + OVERDUE</option></select></nrc-select></label>
                             <label><span class="filter-label">CUSTOMER · FULL OPTION NAMES</span><nrc-select><select class="filter-select" data-custom-select-wrap><option>ALL CUSTOMERS</option><option>Nordlicht Bildungsverbund – Standort Nord · #42</option><option>Nordlicht Bildungsverbund – Standort Süd · #43</option></select></nrc-select></label>
                             <span class="filter-result-count">18 / 401 RESULTS</span>
                         </div>
                         <p class="catalog-usage"><b>SELECT LIFECYCLE</b> <code>&lt;nrc-select&gt;&lt;select&gt;…&lt;/select&gt;&lt;/nrc-select&gt;</code> owns the existing picker and portal in Light DOM, with no extra wrapper. The native select keeps its id, name, options, value and change events. Value, selectedIndex, disabled, option mutations and form reset synchronize the trigger. Removing the host releases listeners, observers and portals; reinserting it mounts once with the current native value. Dynamic editors need no init/refresh/destroy calls. Existing static <code>data-custom-select</code> fields are wrapped on startup.</p>
+                        <p class="catalog-usage"><b>WORK ORDER</b> The shared task sort select offers server-owned dependency order in desktop, phone and slice task lists. It cannot be reversed. Available nodes use priority descending, due ascending (missing last), then ID ascending; unresolved rows precede the final Done rows. Blocked indicators remain visible: the list does not claim every row is runnable. Slice pages are membership-scoped and LOAD MORE requests only the next 100 rows.</p>
                         <fieldset class="choice-field">
                             <legend class="task-detail-label detail-edit-label">VISIBILITY · FIXED AT CREATION</legend>
                             <label class="radio-choice"><input type="radio" name="catalogReminderVisibility" value="personal" checked><span>PERSONAL — ONLY YOU</span></label>

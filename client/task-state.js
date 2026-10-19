@@ -90,6 +90,8 @@ function getFilteredTasks(tasksMap, { applyTextSearch = true } = {}) {
 
 function getSortedTasks(tasks) {
   if (!tasks || tasks.length === 0) return [];
+  // Dependency order belongs to the server, including unresolved rows.
+  if (TaskViewState.sortColumn === "workOrder") return [...tasks];
 
   const col = TaskViewState.sortColumn;
   const dir = TaskViewState.sortDirection === "asc" ? 1 : -1;
@@ -140,7 +142,10 @@ function getSortedTasks(tasks) {
 }
 
 function toggleSort(column) {
-  if (TaskViewState.sortColumn === column) {
+  if (column === "workOrder") {
+    TaskViewState.sortColumn = column;
+    TaskViewState.sortDirection = "asc";
+  } else if (TaskViewState.sortColumn === column) {
     TaskViewState.sortDirection =
       TaskViewState.sortDirection === "asc" ? "desc" : "asc";
   } else {
@@ -423,6 +428,7 @@ function loadViewState() {
       if (state.sortColumn) TaskViewState.sortColumn = state.sortColumn;
       if (state.sortDirection)
         TaskViewState.sortDirection = state.sortDirection;
+      if (TaskViewState.sortColumn === "workOrder") TaskViewState.sortDirection = "asc";
       if (state.grouping === "flat" || state.grouping === "slices")
         TaskViewState.grouping = state.grouping;
     }
@@ -493,6 +499,11 @@ function initTaskViewState() {
   }
 
   // Sort headers (for list view)
+  const taskSort = document.getElementById("mobileTaskSort");
+  if (taskSort) {
+    taskSort.value = TaskViewState.sortColumn;
+    taskSort.addEventListener("change", () => toggleSort(taskSort.value));
+  }
   document.querySelectorAll("#taskListView .task-table th[data-sort]").forEach((th) => {
     th.addEventListener("click", () => toggleSort(th.dataset.sort));
   });

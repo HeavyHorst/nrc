@@ -93,6 +93,7 @@
   // change or it would have that view ask again, forever.
   let listSignature = null;
   let detailGeneration = 0;
+  let taskSort = "createdAt";
   let detailLoading = false;
   let recordRefreshRequired = false;
   let selectionGeneration = 0;
@@ -960,7 +961,7 @@
       .then(([, resolved]) => {
         if (generation !== detailGeneration) return;
         state.detailSliceId = slice.sliceId;
-        state.members = { mode: "ready", tasks: resolved.tasks };
+        state.members = { mode: "ready", tasks: resolved.tasks, ...resolved.page };
         state.notes = { mode: "ready", assets: resolved.notes };
         state.files = { mode: "ready", assets: resolved.files };
         state.tickets = { mode: "ready", assets: resolved.tickets };
@@ -991,17 +992,50 @@
 
   async function resolveMembers(slice) {
     const refs = memberRefs(slice.sliceId);
-    const [tasks, assets] = await Promise.all([
-      window.NRCTasks.requestTasksByIds(0n, refs.filter(ref => ref.type === edgeTargets().Task).map(ref => ref.id)),
+    const workOrder = taskSort === "workOrder";
+    const [result, assets] = await Promise.all([
+      workOrder ? window.NRCTaskQuery.requestPage({ sort: "workOrder", sliceId: slice.sliceId })
+        : window.NRCTasks.requestTasksByIds(0n, refs.filter(ref => ref.type === edgeTargets().Task).map(ref => ref.id)),
       window.NRCAssets.requestAssetsByIds(0n, refs.filter(ref => ref.type !== edgeTargets().Task).map(ref => ref.id)),
     ]);
-    tasks.sort((a, b) => Number((a.createdAt ?? 0n) - (b.createdAt ?? 0n)));
+    const tasks = workOrder ? result.tasks : result;
+    if (!workOrder) tasks.sort((a, b) => Number((a.createdAt ?? 0n) - (b.createdAt ?? 0n)));
     return {
       tasks,
+      page: workOrder ? { hasMore: result.hasMore, cursor: result.cursor, total: result.total } : {},
       notes: assets.filter(asset => asset.assetType === NOTE_ASSET_TYPE),
       files: assets.filter(asset => asset.assetType === FILE_ASSET_TYPE),
       tickets: assets.filter(asset => asset.assetType === TICKET_ASSET_TYPE),
     };
+  }
+
+  function setTaskSort(value) {
+    const next = value === "workOrder" ? "workOrder" : "createdAt";
+    if (taskSort === next) return;
+    taskSort = next;
+    state.members = { mode: "loading", tasks: [] };
+    loadDetail();
+  }
+
+  async function loadMoreTasks() {
+    const slice = selectedSlice();
+    const members = state.members;
+    if (!slice || taskSort !== "workOrder" || !members.hasMore || members.loadingMore || detailLoading) return;
+    const generation = detailGeneration;
+    members.loadingMore = true;
+    members.error = "";
+    render();
+    try {
+      const page = await window.NRCTaskQuery.requestPage({ sort: "workOrder", sliceId: slice.sliceId }, members.cursor);
+      if (generation !== detailGeneration) return;
+      const ids = new Set(members.tasks.map(task => task.id));
+      members.tasks.push(...page.tasks.filter(task => !ids.has(task.id)));
+      Object.assign(members, { hasMore: page.hasMore, cursor: page.cursor, total: page.total });
+    } catch (error) {
+      if (generation === detailGeneration) members.error = error.message || "Task page could not be loaded.";
+    } finally {
+      if (generation === detailGeneration) { members.loadingMore = false; render(); }
+    }
   }
 
   // assignMembers links entities to the slice. The picker and the edge RPC are
@@ -1622,7 +1656,11 @@
       </div>
       <section class="slice-section">
         <div class="panel-header"><div><span>TASKS / ${taskCount(slice)}</span><button class="btn" data-slice-action="assign" data-slice-kind="task" ${state.writePending ? "disabled" : ""}>+ ASSIGN TASK</button></div></div>
+        <label class="slice-note">SORT <nrc-select><select class="filter-select" data-slice-task-sort aria-label="Sort slice tasks"><option value="createdAt" ${taskSort === "createdAt" ? "selected" : ""}>CREATED</option><option value="workOrder" ${taskSort === "workOrder" ? "selected" : ""}>WORK ORDER</option></select></nrc-select></label>
+        ${taskSort === "workOrder" ? '<p class="slice-note">DEPENDENCIES FIRST · THEN PRIORITY / DUE / ID. EXTERNAL BLOCKERS AND CYCLES REMAIN UNRESOLVED; UNRESOLVED AND DONE LAST.</p>' : ""}
         ${renderMembers(members)}
+        ${members.error ? `<p class="slice-status-line" data-state="error">${escape(members.error)}</p>` : ""}
+        ${taskSort === "workOrder" && members.hasMore ? `<button class="btn" data-slice-action="load-more-tasks" ${members.loadingMore || detailLoading ? "disabled" : ""}>${members.loadingMore ? "LOADING…" : "LOAD MORE"}</button>` : ""}
       </section>
       <section class="slice-section">
         <div class="panel-header"><div><span>NOTES / ${slice.notes}</span><button class="btn" data-slice-action="assign" data-slice-kind="note" ${state.writePending ? "disabled" : ""}>+ ASSIGN NOTE</button></div></div>
@@ -1907,6 +1945,9 @@
       if (action) {
         const slice = selectedSlice();
         switch (action.dataset.sliceAction) {
+          case "load-more-tasks":
+            loadMoreTasks();
+            return;
           case "new":
             state.createOpen = !state.createOpen;
             state.writeError = "";
@@ -1965,6 +2006,14 @@
         return;
       }
     };
+    const handleSort = (event) => {
+      if (!event.target.matches?.("[data-slice-task-sort]")) return;
+      setTaskSort(event.target.value);
+    };
+    view.addEventListener("change", handleSort);
+    document.getElementById("sliceRecord")?.addEventListener?.("change", event => {
+      if (!view.contains(event.target)) handleSort(event);
+    });
     view.addEventListener("click", handleClick);
     document.getElementById("sliceRecord")?.addEventListener?.("click", event => {
       if (inspectorRecord) handleClick(event);
@@ -2025,6 +2074,7 @@
   }
 
   function onRoomSwitch() {
+    taskSort = "createdAt";
     ++selectionGeneration;
     ++detailGeneration;
     explicitSelection = false;
@@ -2112,6 +2162,9 @@
     // without touching the register's window: `readAll` walks its pages.
     readAll,
     getState: () => state,
+    setTaskSort,
+    loadMoreTasks,
+    getTaskSort: () => taskSort,
     selectedSlice,
     render,
     renderShape,
