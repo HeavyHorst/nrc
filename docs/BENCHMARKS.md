@@ -19,6 +19,60 @@ This document lists the benchmarks currently in this repository, what they measu
 7. Disk, network, and concurrent workloads use explicit stopwatches because their multi-phase boundaries do not fit a single microbenchmark callback. Their output must state warm/cold cache and durability semantics.
 8. Allocation counts are separate runs with explicit tracking allocators. Do not compare allocator-instrumented timing with normal timing.
 
+## Priority-aware task work order
+
+`work_order/benchmark` measures the standalone dependency sorter; its
+[README](../work_order/README.md) lists shapes, sizes, allocation mode and the
+ten-process campaign. `main.benchmark_task_work_order_page` measures the server
+collection path through the first 100 rows (scope filtering, ordering, row
+collection and byte-budget calculation), excluding WebSocket transport and
+serialization. Both include result checksum traversal and result disposal.
+Fixtures are constructed before timing, warmed once, then calibrated to roughly
+0.75 seconds per sample. Allocation runs are separate. Server fixtures use
+default allocator, TODO tasks and no payload text; this is CPU cost, not network
+latency or a production TLSF memory measurement.
+
+```sh
+odin build . -build-mode:test -o:speed -out:/tmp/nrc-work-order-page-bench \
+  -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false \
+  -define:ODIN_TEST_NAMES=main.benchmark_task_work_order_page
+BENCH_WORK_ORDER=1 BENCH_WORK_ORDER_ALLOC=1 /tmp/nrc-work-order-page-bench
+for sample in $(seq 1 10); do
+  BENCH_WORK_ORDER=1 /tmp/nrc-work-order-page-bench
+done
+```
+
+Measured 2026-10-19 in an E2B orb: Intel Xeon 2.60 GHz, 2 vCPUs (one
+reported core/two threads), Linux x64, Odin `dev-2026-10-nightly:84bc3fc`.
+Base [e4f6e00](https://github.com/HeavyHorst/nrc/commit/e4f6e00fc51b6a996fb2bb7d46a3ca1c86d90fa4)
+plus uncommitted WorkOrder changes. Optimized builds as above, default allocator,
+warm cache, no concurrent builds/browser runs, ten independent processes per
+layer, no persistence or durability operations. Host power policy was not
+exposed to the guest. The 400 timed samples lasted 0.43–0.92 seconds each.
+These shared-orb numbers are not regression thresholds.
+
+Mixed workload, milliseconds per call, median (min–max):
+
+| Tasks | Package | Server first 100 rows |
+| ---: | ---: | ---: |
+| 100 | 0.0048 (0.0045–0.0051) | 0.0079 (0.0073–0.0081) |
+| 1,000 | 0.1099 (0.1070–0.1181) | 0.1546 (0.1480–0.1652) |
+| 10,000 | 2.0195 (1.9444–2.4306) | 2.4128 (2.3247–2.5743) |
+| 100,000 | 31.3684 (27.5728–32.5682) | 37.8799 (35.1777–42.6861) |
+
+Across the five graph shapes, the server's median ranges were 0.0065–0.0080,
+0.0460–0.1701, 0.8917–2.6632 and 16.3407–44.9686 ms respectively.
+At 100,000 nodes the separate allocation run recorded 13,537,440 bytes in
+8 allocations for the package, and 21,945,792 bytes in 24 allocations for the
+server collection path. These are cumulative allocated bytes, not peak RSS;
+all tracked allocations were released. Each requested page currently rebuilds
+its order, so this cost is paid again for later pages.
+
+Real-server browser regression (only against the disposable development fixture):
+`NRC_WORK_ORDER_TEST_URL=http://127.0.0.1:8102 node client/work-order.e2e.mjs`.
+It covers priority-aware unlocking, external blockers, 106-member pagination,
+LOAD MORE stability, both themes and 1440/390 CSS-pixel layouts.
+
 ## Asynchronous Storage Lifecycle: Owner Costs
 
 `storage_owner_benchmark.odin` contains two opt-in workloads for lifecycle
