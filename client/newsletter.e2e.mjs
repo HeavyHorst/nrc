@@ -22,7 +22,9 @@ try {
   assert.equal(await page.locator('#nlSend').isDisabled(),true,'untested campaign cannot send');
   await page.locator('#nlPreview').click();
   await page.locator('#nlFrame').waitFor({state:'visible'});
-  assert.match(await page.frameLocator('#nlFrame').locator('body').innerText(),/\{\{var:einleitung\}\}/);
+  assert.match(await page.frameLocator('#nlFrame').locator('body').innerText(),/Guten Tag!/);
+  assert.equal(await page.locator('#nlText').textContent(),'Guten Tag!\nDies ist ausschließlich eine lokale Demo.');
+  assert.match(await page.locator('#nlPreviewStatus').textContent(),/Lokale Vorschau mit gespeicherten Werten/);
   assert.equal(await page.locator('#nlFrame').getAttribute('sandbox'),'');
   assert.equal(mutations.filter(url => /\/(send|test|invite)$/.test(url)).length,0,'opening and preview never mail');
 
@@ -39,12 +41,25 @@ try {
 
   await page.locator('#nlSubject').fill('Freigabe Oktober');
   await page.getByLabel('Einleitung', {exact:true}).fill('Liebe Kunden,\nwillkommen!');
-  await page.getByLabel('Inhalt', {exact:true}).fill('Zwei Neuigkeiten für Oktober.');
+  const message = '<img src="https://tracker.invalid/value" onerror="parent.previewPwned=true"> & {{var:einleitung}}';
+  await page.getByLabel('Inhalt', {exact:true}).fill(message);
   assert.equal(await page.locator('#nlTest').isDisabled(),true,'unsaved changes cannot be tested');
   const savedRequest = page.waitForRequest(request => request.method() === 'PUT' && request.url().endsWith('/campaigns/1'));
   await page.locator('#nlSave').click();
-  assert.deepEqual((await savedRequest).postDataJSON().variables, {einleitung:'Liebe Kunden,\nwillkommen!',inhalt:'Zwei Neuigkeiten für Oktober.'},'readable labels and multiline editing preserve exact Mailjet keys');
+  assert.deepEqual((await savedRequest).postDataJSON().variables, {einleitung:'Liebe Kunden,\nwillkommen!',inhalt:message},'readable labels and multiline editing preserve exact Mailjet keys');
   await page.locator('#nlTest:enabled').waitFor();
+  assert.equal(await page.locator('#nlFrame').isHidden(),true,'saving invalidates the previous personalized preview');
+  assert.equal(await page.locator('#nlFrame').getAttribute('srcdoc'),null);
+  assert.equal(await page.locator('#nlText').textContent(),'');
+  await page.route('**/campaigns/1/preview', route => route.fulfill({json:{html:'<p>{{ var:inhalt }}</p><p>{{var:missing}}</p><p>{{var:einleitung:"Default"}}</p>',text:'{{var:inhalt}}'}}));
+  await page.locator('#nlPreview').click();
+  await page.frameLocator('#nlFrame').getByText(message,{exact:true}).waitFor();
+  assert.equal(await page.frameLocator('#nlFrame').locator('img').count(),0,'variable HTML remains literal text');
+  assert.match(await page.frameLocator('#nlFrame').locator('body').innerText(),/\{\{var:missing\}\}/);
+  assert.match(await page.frameLocator('#nlFrame').locator('body').innerText(),/\{\{var:einleitung:"Default"\}\}/);
+  assert.equal(await page.locator('#nlText').textContent(),message,'text preview preserves literal values without recursive expansion');
+  assert.deepEqual(external,[]);
+  await page.unroute('**/campaigns/1/preview');
   await page.locator('#nlRefresh').click();
   await page.waitForFunction(() => !document.querySelector('#nlRefresh').disabled);
   assert.equal(await page.locator('#nlSubject').inputValue(),'Freigabe Oktober','refresh preserves the form');
@@ -67,6 +82,8 @@ try {
   releaseTest();
   await page.locator('#newsletterDialog').waitFor({state:'detached'});
   await page.unroute('**/campaigns/1/test');
+  assert.equal(await page.locator('#nlFrame').isHidden(),true,'successful test invalidates the pre-test template preview');
+  assert.equal(await page.locator('#nlText').textContent(),'');
   assert.equal(await page.locator('#nlTest').evaluate(node => node === document.activeElement),true,'successful test restores focus after enabling controls');
   assert.equal(await page.locator('#nlSend').isEnabled(),true);
   await page.locator('#nlSend').click();
@@ -81,6 +98,31 @@ try {
   assert.equal(await page.locator('#nlSave').isDisabled(),true);
   assert.equal(await page.getByLabel('Inhalt', {exact:true}).isDisabled(),true);
   assert.equal(await page.locator('#nlSend').isDisabled(),true,'finished campaigns cannot resend');
+
+  assert.equal(await page.locator('#nlDelete').isHidden(),true);
+  const history = await page.locator('#nlRecipients').innerText();
+  await page.locator('#nlArchive').click();
+  await page.route('**/newsletter/api/summary', route => route.fulfill({status:503,json:{error:'Summary unavailable'}}));
+  await page.locator('#newsletterDialog [type=submit]').click();
+  await page.locator('#newsletterDialog').waitFor({state:'detached'});
+  assert.match(await page.locator('#nlStatus').textContent(),/Kampagne archiviert\. Aktualisierung fehlgeschlagen/);
+  assert.equal(await page.locator('#nlPreview').evaluate(node=>node===document.activeElement),true,'hidden archive opener falls back to visible focus');
+  await page.unroute('**/newsletter/api/summary');
+  assert.equal(await page.locator('.nl-row').count(),0,'archived campaigns hidden by default');
+  await page.locator('#nlArchived').check();
+  await page.locator('.nl-row').click();
+  assert.match(await page.locator('#nlCampaignState').innerText(),/Archiviert/);
+  assert.equal(await page.locator('#nlRecipients').innerText(),history);
+  await page.locator('#nlRestore').click();
+  await page.route('**/newsletter/api/summary', route => route.fulfill({status:503,json:{error:'Summary unavailable'}}));
+  await page.locator('#newsletterDialog [type=submit]').click();
+  await page.locator('#newsletterDialog').waitFor({state:'detached'});
+  assert.match(await page.locator('#nlStatus').textContent(),/Kampagne wiederhergestellt\. Aktualisierung fehlgeschlagen/);
+  assert.equal(await page.locator('#nlPreview').evaluate(node=>node===document.activeElement),true);
+  await page.unroute('**/newsletter/api/summary');
+  await page.locator('#nlArchived').uncheck();
+  assert.equal(await page.locator('.nl-row').count(),1);
+  assert.equal(await page.locator('#nlSend').isDisabled(),true,'restoring history does not enable resend');
 
   await page.locator('#nlSubscriberTab').click();
   assert.equal(await page.getByRole('button', {name:'Kontakte 5',pressed:true}).isVisible(),true);
@@ -303,6 +345,26 @@ try {
   await page.locator('#nlContactPager button').click();
   await page.getByText('Keine passenden Kontakte.',{exact:true}).waitFor();
   await page.unroute('**/newsletter/api/subscribers/search');
+
+  await page.locator('#nlNew').click();
+  await page.locator('#nlTitle').fill('Entwurf zum Löschen');
+  await page.locator('#nlSubject').fill('Kein Versand');
+  await page.locator('#nlSave').click();
+  await page.locator('#nlDelete:enabled').waitFor();
+  await page.locator('#nlDelete').click();
+  await page.getByRole('button',{name:'Abbrechen',exact:true}).click();
+  assert.equal(mutations.filter(url=>url.endsWith('/delete')).length,0,'cancel does not delete');
+  await page.locator('#nlDelete').click();
+  await page.route('**/newsletter/api/summary', route => route.fulfill({status:503,json:{error:'Summary unavailable'}}));
+  await page.locator('#newsletterDialog [type=submit]').click();
+  await page.locator('#newsletterDialog').waitFor({state:'detached'});
+  assert.match(await page.locator('#nlStatus').textContent(),/Entwurf gelöscht\. Aktualisierung fehlgeschlagen/);
+  assert.equal(await page.locator('#nlRefresh').evaluate(node=>node===document.activeElement),true);
+  assert.equal(mutations.filter(url=>url.endsWith('/delete')).length,1,'acknowledged deletion is not retried');
+  await page.unroute('**/newsletter/api/summary');
+  assert.equal(await page.locator('#nlTitle').inputValue(),'','deleted selection clears editor');
+  assert.equal(await page.getByRole('button',{name:/Entwurf zum Löschen/}).count(),0);
+  assert.equal(await page.locator('#nlDelete').isHidden(),true);
 
   await page.route('**/api/features', route => route.fulfill({status:403,json:{error:'denied'}}));
   await page.evaluate(() => window.NRCNewsletter.refreshAccess());

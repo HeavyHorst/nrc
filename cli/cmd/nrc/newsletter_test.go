@@ -114,7 +114,7 @@ func TestNewsletterCLICampaignWorkflow(t *testing.T) {
 		}
 		w.WriteHeader(status)
 		if method == "GET" {
-			io.WriteString(w, `{"campaigns":[{"id":"`+id+`","revision":3}],"subscribers":[{"contact_id":"9007199254740993"}],"templates":[{"id":"12"}],"customers":[{"customer_id":"17"}]}`)
+			io.WriteString(w, `{"campaigns":[{"id":"`+id+`","revision":3},{"id":"archived-record","archived":true,"status":"sent","revision":4}],"subscribers":[{"contact_id":"9007199254740993"}],"templates":[{"id":"12"}],"customers":[{"customer_id":"17"}]}`)
 		} else if status == 409 {
 			io.WriteString(w, `{"error":"audience changed; review recipients again"}`)
 		} else {
@@ -135,6 +135,13 @@ func TestNewsletterCLICampaignWorkflow(t *testing.T) {
 		if (args[0] == "customers" || args[0] == "state") && !strings.Contains(data, `"customer_id":"17"`) {
 			t.Fatalf("customer ID lost: %s", data)
 		}
+		if args[0] == "campaign" && strings.Contains(data, "archived-record") {
+			t.Fatal("default list includes archived campaigns")
+		}
+	}
+	archivedData, archivedErr := executeNewsletter(t, "", "campaign", "list", "--include-archived", "--fields", "id,archived")
+	if archivedErr != nil || !strings.Contains(archivedData, `"id":"archived-record"`) || !strings.Contains(archivedData, `"archived":true`) {
+		t.Fatalf("archive list: %s %v", archivedData, archivedErr)
 	}
 	decoder := json.NewDecoder(strings.NewReader(draft))
 	method, path, status = "POST", "/subscribers/search", 200
@@ -158,7 +165,7 @@ func TestNewsletterCLICampaignWorkflow(t *testing.T) {
 	if _, err := executeNewsletter(t, aliasedDraft, "campaign", "update", id, "--revision", "2"); err != nil {
 		t.Fatal(err)
 	}
-	for _, action := range []string{"audience", "preview", "test", "send"} {
+	for _, action := range []string{"delete", "archive", "restore", "audience", "preview", "test", "send"} {
 		method, path, status = "POST", "/campaigns/"+id+"/"+action, 200
 		payload = map[string]any{"revision": json.Number("3")}
 		args := []string{"campaign", action, id, "--revision", "3"}

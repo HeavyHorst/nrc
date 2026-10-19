@@ -30,6 +30,7 @@ type campaign struct {
 	Subject        string         `json:"subject"`
 	Variables      map[string]any `json:"variables"`
 	Status         string         `json:"status"`
+	Archived       bool           `json:"archived"`
 	Revision       int            `json:"revision"`
 	TestedRevision int            `json:"tested_revision"`
 	CreatedAt      string         `json:"created_at"`

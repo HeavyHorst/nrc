@@ -127,6 +127,85 @@ func (f *fixture) create(t *testing.T) campaign {
 	json.Unmarshal(w.Body.Bytes(), &c)
 	return c
 }
+func TestCampaignDeleteArchiveLifecycle(t *testing.T) {
+	for _, status := range []string{"draft", "queued", "sending", "sent", "completed_with_errors"} {
+		t.Run(status, func(t *testing.T) {
+			f := setup(t)
+			c := f.create(t)
+			stored := f.a.s.Campaigns[c.ID]
+			stored.Status = status
+			stored.TemplateHTML = "<p>Saved delivery snapshot</p>"
+			if status != "draft" {
+				stored.Recipients = []recipient{{contact: contact{"1", "One", "one@example.com"}, Status: "unknown"}}
+			}
+			f.a.s.Known["one@example.com"] = true
+			f.a.s.Consent["one@example.com"] = &consent{Status: "blocked"}
+			f.a.s.mustSave()
+			// Lifecycle operations must work even if the provider/template was removed.
+			f.a.cfg.TemplateIDs = nil
+			f.a.provider.key = ""
+			path := "/api/campaigns/" + c.ID
+			for _, action := range []string{"delete", "archive", "restore"} {
+				expect(t, f.req("POST", path+"/"+action, `{"revision":99}`), 409)
+			}
+			wantDelete, wantArchive := 409, 409
+			if status == "draft" {
+				wantDelete = 200
+			}
+			if status == "sent" || status == "completed_with_errors" {
+				wantArchive = 200
+			}
+			expect(t, f.req("POST", path+"/restore", `{"revision":1}`), 409)
+			expect(t, f.req("POST", path+"/archive", `{"revision":1}`), wantArchive)
+			revision := `{"revision":1}`
+			if wantArchive == 200 {
+				revision = `{"revision":2}`
+			}
+			expect(t, f.req("POST", path+"/delete", revision), wantDelete)
+			f.a.s.db.Close()
+			var err error
+			f.a.s, err = openStore(f.path, "w")
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := f.req("GET", "/api/summary", "")
+			expect(t, w, 200)
+			var state struct {
+				Campaigns []campaign `json:"campaigns"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &state); err != nil {
+				t.Fatal(err)
+			}
+			if status == "draft" {
+				if len(state.Campaigns) != 0 {
+					t.Fatal("deleted draft survived restart")
+				}
+				expect(t, f.req("POST", path+"/delete", revision), 404)
+			} else if len(state.Campaigns) != 1 || state.Campaigns[0].Archived != (wantArchive == 200) || state.Campaigns[0].Status != status || state.Campaigns[0].Recipients[0].Status != "unknown" {
+				t.Fatalf("delivery history changed: %s", w.Body.String())
+			}
+			if wantArchive == 200 {
+				expect(t, f.req("POST", path+"/restore", `{"revision":1}`), 409)
+				restored := f.req("POST", path+"/restore", `{"revision":2}`)
+				expect(t, restored, 200)
+				var result campaign
+				if json.Unmarshal(restored.Body.Bytes(), &result) != nil || result.Archived || result.Status != status || result.Revision != 3 {
+					t.Fatalf("restore changed delivery state: %s", restored.Body.String())
+				}
+				f.a.cfg.TemplateIDs = []string{"42"}
+				f.a.provider.key = "key"
+				preview := f.req("POST", path+"/preview", `{"revision":3}`)
+				expect(t, preview, 200)
+				if !strings.Contains(preview.Body.String(), "Saved delivery snapshot") {
+					t.Fatal("lost archived snapshot")
+				}
+			}
+			if !f.a.s.Known["one@example.com"] || f.a.status("one@example.com") != "blocked" || len(f.calls) != 0 {
+				t.Fatal("lifecycle changed consent or sent mail")
+			}
+		})
+	}
+}
 func TestAuthAndValidation(t *testing.T) {
 	f := setup(t)
 	r := httptest.NewRequest("GET", "/api/state", nil)

@@ -48,6 +48,17 @@ http.createServer(async (req,res) => {
       if (!parts[1]) {campaign = {...body,id:String(state.campaigns.length+1),status:'draft',revision:1,tested_revision:0,recipients:[]};state.campaigns.unshift(campaign);return json(campaign);}
       if (!campaign) return json({error:'Nicht gefunden'},404);
       if (body.revision !== campaign.revision) return json({error:'Versionskonflikt'},409);
+      if (parts[2] === 'delete') {
+        if (campaign.status !== 'draft') return json({error:'Nur Entwürfe löschen'},409);
+        state.campaigns = state.campaigns.filter(c=>c.id!==campaign.id);
+        return json({id:campaign.id,deleted:true});
+      }
+      if (parts[2] === 'archive' || parts[2] === 'restore') {
+        const archived = parts[2] === 'archive';
+        if (!['sent','completed_with_errors'].includes(campaign.status) || !!campaign.archived === archived) return json({error:'Statuskonflikt'},409);
+        campaign.archived = archived; campaign.revision++;
+        return json(campaign);
+      }
       if (parts[2] === 'audience') return json({audience:audience(campaign),token:'fake-audience-token'});
       if (parts[2] === 'preview') return json({html:'<div style="font:16px sans-serif;padding:28px"><h2>NRC · Monatsbrief</h2><p>{{var:einleitung}}</p><p>{{var:inhalt}}</p><hr><p>FAKE MAILJET · Vorlagenansicht, kein Versand.</p></div>',text:'{{var:einleitung}}\n{{var:inhalt}}',exact:false,notice:'FAKE MAILJET · Vorlagenansicht. Platzhalter bleiben unverändert; die fertige Mail prüfen Sie per Testmail.'});
       if (parts[2] === 'test') campaign.tested_revision = campaign.revision;

@@ -180,6 +180,13 @@ nrc newsletter customers
 nrc newsletter subscriber list
 nrc newsletter subscriber search --query example.com --limit 25 --offset 0
 nrc newsletter campaign list
+nrc newsletter campaign list --include-archived --fields id,title,status,archived,revision
+
+# Delete only drafts; archive/restore only completed campaigns. No mail is sent.
+# Use the current revision from campaign list; stale revisions are rejected.
+nrc newsletter campaign delete <id> --revision 1
+nrc newsletter campaign archive <id> --revision 3
+nrc newsletter campaign restore <id> --revision 4
 
 # Preview first; only the second command imports existing consent. Neither sends mail.
 nrc newsletter consent import --input consents.json

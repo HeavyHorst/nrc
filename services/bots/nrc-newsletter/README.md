@@ -106,10 +106,22 @@ Routes follow the agreed frontend contract:
   current `revision`. Both take `title,template_id,subject,variables` (object).
   Unknown keys, invalid subjects, nonallowlisted templates and missing variables
   objects are rejected. Updates invalidate testing.
+* `POST .../delete {revision}` permanently deletes only a draft. `POST .../archive`
+  and `POST .../restore` take `{revision}` and operate only on `sent` or
+  `completed_with_errors` campaigns. They set `archived`, increment revision and
+  preserve delivery status, recipients and tested content. Stale revisions or
+  invalid transitions return 409; missing campaigns return 404. These operations
+  do not require Mailjet configuration or an approved template and send no mail.
+  Consent, suppression and known webhook recipients remain untouched. State and
+  summary include archived records; UI and CLI list hide them by default with
+  an explicit include-archived option. Queued/sending campaigns cannot be deleted
+  or archived. Restoring never queues delivery.
 * `POST .../preview {revision,contact_id?}` returns `{html,text,exact:false,notice}`:
   the raw approved template content, or its tested snapshot. The browser shows
-  it in a no-script/no-network sandbox. Placeholders remain visible, not locally
-  interpreted. No verified exact-render read-only Mailjet endpoint is assumed;
+  it in a no-script/no-network sandbox. The browser substitutes simple `{{var:key}}`
+  placeholders with saved campaign values as escaped text; missing variables and
+  other expressions remain visible. This is labeled a local preview, not Mailjet's
+  rendered output. No verified exact-render read-only Mailjet endpoint is assumed;
   the required test mail is the final rendering check. Preview never sends mail.
 * `POST .../test {revision,email}` sends an explicitly requested test; only
   confirmed Mailjet success marks `tested_revision`. Provider acceptance is not

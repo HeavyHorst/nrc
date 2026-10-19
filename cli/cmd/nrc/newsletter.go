@@ -29,6 +29,7 @@ type newsletterCampaign struct {
 	Subject        string          `json:"subject"`
 	Variables      json.RawMessage `json:"variables"`
 	Status         string          `json:"status"`
+	Archived       bool            `json:"archived"`
 	Revision       int             `json:"revision"`
 	TestedRevision int             `json:"tested_revision"`
 	CreatedAt      string          `json:"created_at"`
@@ -197,12 +198,22 @@ func newNewsletterCommand() *cobra.Command {
 				return err
 			}
 			if resource.field == "campaigns" {
-				newsletterOutput(cmd, result.Campaigns)
+				includeArchived, _ := cmd.Flags().GetBool("include-archived")
+				rows := []newsletterCampaign{}
+				for _, row := range result.Campaigns {
+					if includeArchived || !row.Archived {
+						rows = append(rows, row)
+					}
+				}
+				newsletterOutput(cmd, rows)
 			} else {
 				newsletterOutput(cmd, result.Subscribers)
 			}
 			return nil
 		}}
+		if resource.field == "campaigns" {
+			list.Flags().Bool("include-archived", false, "Include archived campaigns and their delivery history")
+		}
 		resource.command.AddCommand(list)
 	}
 	searchContacts := &cobra.Command{Use: "search", Short: "Search a bounded contact page by name, email or company (no embeddings)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -223,7 +234,7 @@ func newNewsletterCommand() *cobra.Command {
 	searchContacts.Flags().Int("offset", 0, "Offset from the preceding page's next_offset")
 	searchContacts.Flags().Int("limit", 25, "Maximum contacts per page (1–250)")
 	subscriber.AddCommand(searchContacts)
-	for _, action := range []string{"create", "update", "audience", "preview", "test", "send"} {
+	for _, action := range []string{"create", "update", "audience", "preview", "test", "send", "delete", "archive", "restore"} {
 		use, args := action+" <campaign-id>", cobra.ExactArgs(1)
 		if action == "create" {
 			use, args = action, cobra.NoArgs

@@ -82,6 +82,27 @@
       <section id="nlSubscribers" hidden><div class="nl-subscriber-filter"><label class="nl-search"><span class="filter-label">Kontakte suchen</span><input class="filter-input" id="nlSearch" type="search" placeholder="Name oder E-Mail …"></label><span class="nl-meta" id="nlContactCount" role="status"></span></div><p class="nl-meta">Kontakte werden nicht automatisch angemeldet. Jede Einladung fordert eine Double-Opt-in-Bestätigung an.</p><div class="nl-contact nl-contact-head" aria-hidden="true"><span>Name / E-Mail</span><span>Einwilligung / Nachweis</span><span>Aktionen</span></div><div id="nlContacts"></div></section>`;
     $('nlForm').insertAdjacentHTML('afterbegin', `<label class="detail-edit-field"><span class="detail-edit-label">Versandart</span><nrc-select><select class="task-detail-select" id="nlKind"><option value="newsletter">Newsletter · mit Einwilligung</option><option value="service">Serviceinformation · ohne Werbung</option></select></nrc-select></label><section id="nlService" class="nl-fields" hidden><p class="nl-meta">Nur notwendige, nicht werbliche Kundeninformationen. Keine Umgehung der Newsletter-Einwilligung. Zustellsperren bleiben wirksam.</p>${field('nlServiceReason','Sachlicher Anlass / betroffene Änderung')}<label class="detail-edit-field"><span class="detail-edit-label">Kundenkreis</span><nrc-select><select class="task-detail-select" id="nlScope"><option value="selected_customers">Ausgewählte Kunden</option><option value="all_customers">Alle nicht archivierten Kunden</option></select></nrc-select></label><div id="nlCustomers" class="nl-fields"></div></section>`);
     $('nlAudience').insertAdjacentHTML('afterend', '<button class="btn" id="nlReviewAudience" type="button">Empfängerkreis prüfen</button><p class="nl-meta" id="nlAudienceNotice"></p>');
+    $('nlList').insertAdjacentHTML('beforebegin', '<label class="filter-checkbox-label"><input type="checkbox" id="nlArchived">Archivierte anzeigen</label>');
+    $('nlCampaignState').insertAdjacentHTML('afterend', '<div class="nl-actions"><button class="btn btn--danger" id="nlDelete" hidden>Entwurf löschen …</button><button class="btn" id="nlArchive" hidden>Archivieren …</button><button class="btn" id="nlRestore" hidden>Wiederherstellen …</button></div>');
+    $('nlArchived').onchange = register;
+    for (const [id, action, title] of [['nlDelete','delete','Entwurf löschen'],['nlArchive','archive','Archivieren'],['nlRestore','restore','Wiederherstellen']]) {
+      $(id).onclick = () => {
+        const selected = campaign;
+        dialog(title, action === 'delete' ? `„${selected.title}“ endgültig löschen? Auch ungespeicherte Eingaben werden verworfen. Kontakte und Einwilligungen bleiben erhalten.` : `„${selected.title}“ ${action === 'archive' ? 'archivieren' : 'wiederherstellen'}? Versandstatus und Empfängerhistorie bleiben erhalten. Es werden keine E-Mails verschickt.`, '', async () => {
+          const result = await api(`/campaigns/${encodeURIComponent(selected.id)}/${action}`, {revision:selected.revision});
+          state.campaigns = action === 'delete' ? state.campaigns.filter(c => c.id !== selected.id) : state.campaigns.map(c => c.id === selected.id ? result : c);
+          dirty = false;
+          campaign = action === 'delete' ? null : result;
+          choose(campaign, true);
+          const success = action === 'delete' ? 'Entwurf gelöscht.' : action === 'archive' ? 'Kampagne archiviert.' : 'Kampagne wiederhergestellt.';
+          try { await loadState(); notice(success); }
+          catch (error) {
+            // The mutation was acknowledged. Never offer to repeat it just because a read failed.
+            if (enabled && error.name !== 'AbortError') notice(`${success} Aktualisierung fehlgeschlagen. Bitte „Aktualisieren“ verwenden.`);
+          }
+        });
+      };
+    }
     $('nlKind').onchange = $('nlScope').onchange = () => { dirty = true; reviewedAudience = null; serviceFields(); };
     $('nlReviewAudience').onclick = () => run(async () => {
       reviewedAudience = await api(`/campaigns/${encodeURIComponent(campaign.id)}/audience`, {revision:campaign.revision});
@@ -92,24 +113,28 @@
     $('nlCampaignTab').onclick = () => tab(false); $('nlSubscriberTab').onclick = () => tab(true);
     $('nlRefresh').onclick = () => enabled ? run(async () => { notice('Aktualisiert. Eingaben bleiben erhalten.'); await loadState(); }) : refreshAccess();
     $('nlNew').onclick = () => choose(null);
-    $('nlForm').oninput = () => { dirty = true; reviewedAudience = null; controls(); };
-    $('nlTemplate').onchange = () => { variables({}); dirty = true; controls(); };
+    $('nlForm').oninput = () => { dirty = true; reviewedAudience = null; clearPreview(); controls(); };
+    $('nlTemplate').onchange = () => { variables({}); dirty = true; clearPreview(); controls(); };
     $('nlForm').onsubmit = event => { event.preventDefault(); run(save); };
     $('nlPreview').onclick = () => run(async () => {
+      const values = {...campaign.variables};
       const result = await api(`/campaigns/${encodeURIComponent(campaign.id)}/preview`, {revision:campaign.revision});
+      // Only simple variables, not a local implementation of Mailjet's template language.
+      const substitute = (source, html) => (source || '').replace(/\{\{\s*var:([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g, (match, key) =>
+        Object.hasOwn(values, key) ? (html ? esc(values[key]) : String(values[key] ?? '')) : match);
       // CSP precedes provider markup. Sandbox forbids scripts, forms, popups and same-origin access.
       // Template contents are inert even during parsing (no image/iframe fetch).
-      const template = document.createElement('template'); template.innerHTML = result.html || '';
+      const template = document.createElement('template'); template.innerHTML = substitute(result.html, true);
       template.content.querySelectorAll('script,meta,base,link,iframe,object,embed,form,template,svg,math').forEach(node => node.remove());
       template.content.querySelectorAll('*').forEach(node => { for (const attribute of [...node.attributes]) if (/^on/i.test(attribute.name) || /href$/i.test(attribute.name) || ['target','action','formaction'].includes(attribute.name)) node.removeAttribute(attribute.name); });
       $('nlFrame').srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; form-action 'none'; base-uri 'none'"><style>:root{color-scheme:only light;background:Canvas;color:CanvasText}</style>${template.innerHTML}`;
       $('nlFrame').hidden = false; $('nlPreviewEmpty').hidden = true; $('nlTextDetails').hidden = !result.text;
-      $('nlText').textContent = result.text || ''; $('nlPreviewStatus').textContent = result.notice || 'Mailjet-Vorlagenansicht · Platzhalter bleiben unverändert. Die fertige Darstellung prüfen Sie per Testmail.';
+      $('nlText').textContent = substitute(result.text, false); $('nlPreviewStatus').textContent = 'Lokale Vorschau mit gespeicherten Werten · Nur einfache {{var:…}}-Platzhalter werden als Text ersetzt; andere Mailjet-Ausdrücke bleiben unverändert. Externe Inhalte sind blockiert. Die verbindliche Darstellung prüfen Sie per Testmail.';
     });
     $('nlTest').onclick = () => {
       if (!$('nlTestEmail').value || !$('nlTestEmail').checkValidity()) { $('nlTestEmail').reportValidity(); return; }
       const email = $('nlTestEmail').value;
-      dialog('Testmail senden', `Eine echte Testmail wird an ${email} gesendet.`, null, async () => { await api(`/campaigns/${encodeURIComponent(campaign.id)}/test`, {revision:campaign.revision,email}); await reloadCampaign(); });
+      dialog('Testmail senden', `Eine echte Testmail wird an ${email} gesendet.`, null, async () => { await api(`/campaigns/${encodeURIComponent(campaign.id)}/test`, {revision:campaign.revision,email}); clearPreview(); await reloadCampaign(); });
     };
     $('nlSend').onclick = () => dialog(campaign.kind === 'service' ? 'Serviceinformation versenden' : 'Newsletter versenden', `${campaign.kind === 'service' ? `Nicht werbliche Serviceinformation: ${campaign.service_reason}. ${$('nlAudienceNotice').textContent}` : 'Unwiderruflicher Versand an berechtigte Abonnenten.'} Betreff exakt eingeben: ${campaign.subject}`, 'Betreff zur Bestätigung', async confirmation => {
       if (confirmation !== campaign.subject) throw new Error('Betreff stimmt nicht überein. Kein Versand.');
@@ -151,8 +176,11 @@
       input.dataset.variable = key; input.value = values[key] ?? ''; label.append(title, input); $('nlVariables').append(label);
     }
   }
-  function choose(next) {
-    if (busy || (dirty && !window.confirm('Ungespeicherte Änderungen verwerfen?'))) return;
+  function clearPreview() {
+    $('nlFrame').removeAttribute('srcdoc'); $('nlFrame').hidden = true; $('nlPreviewEmpty').hidden = false; $('nlTextDetails').hidden = true; $('nlTextDetails').open = false; $('nlText').textContent = ''; $('nlPreviewStatus').textContent = 'Lokale Vorschau nicht geladen. Einfache Platzhalter werden mit gespeicherten Werten angezeigt; die fertige Mail prüfen Sie per Testmail.';
+  }
+  function choose(next, confirmed = false) {
+    if (!confirmed && (busy || (dirty && !window.confirm('Ungespeicherte Änderungen verwerfen?')))) return;
     campaign = next; dirty = false;
     reviewedAudience = null;
     $('nlKind').value = next?.kind || 'newsletter'; $('nlScope').value = next?.audience || 'selected_customers';
@@ -163,7 +191,7 @@
     tab(false);
     $('nlTitle').value = next?.title || ''; $('nlSubject').value = next?.subject || '';
     $('nlTemplate').value = next?.template_id || state?.templates?.[0]?.id || ''; variables(next?.variables || {});
-    $('nlFrame').removeAttribute('srcdoc'); $('nlFrame').hidden = true; $('nlPreviewEmpty').hidden = false; $('nlTextDetails').hidden = true; $('nlTextDetails').open = false; $('nlText').textContent = ''; $('nlPreviewStatus').textContent = 'Vorlagenansicht nicht geladen. Platzhalter werden erst von Mailjet beim Versand ausgewertet.';
+    clearPreview();
     controls(); register();
   }
   async function save() {
@@ -182,6 +210,7 @@
     const saved = result.campaign || result;
     if (!saved.id) throw new Error('Speicherantwort ohne Kampagnen-ID. Bitte aktualisieren und gespeicherten Stand prüfen.');
     campaign = saved; dirty = false;
+    clearPreview();
     reviewedAudience = null;
     notice('Gespeichert. Vor Versand diesen Stand testen.');
     await loadState();
@@ -199,6 +228,7 @@
     if (templateId) $('nlTemplate').value = templateId;
     if (needsVariables) variables({});
     const latest = campaign && state.campaigns.find(c => c.id === campaign.id);
+    if (campaign && (latest?.revision !== campaign.revision || latest?.updated_at !== campaign.updated_at || latest?.tested_revision !== campaign.tested_revision)) clearPreview();
     if (campaign && latest?.revision !== campaign.revision) {
       dirty = true; notice('Kampagne extern geändert. Eingaben kopieren und gespeicherten Stand neu öffnen.');
     } else if (latest) campaign = latest;
@@ -210,12 +240,19 @@
     register(); await loadContacts(true);
   }
   function register() {
-    $('nlList').innerHTML = (state?.campaigns || []).map((c,i) => `<button class="nl-row" data-campaign="${i}" aria-pressed="${c.id === campaign?.id}"><strong>${esc(c.title)}</strong><span>${esc(campaignLabels[c.status] || c.status)} · R${esc(c.revision)}</span></button>`).join('') || '<p>Noch keine Kampagnen.</p>';
+    const includeArchived = $('nlArchived').checked;
+    $('nlCampaignCount').textContent = (state?.campaigns || []).filter(c => includeArchived || !c.archived).length;
+    $('nlList').innerHTML = (state?.campaigns || []).map((c,i) => !includeArchived && c.archived ? '' : `<button class="nl-row" data-campaign="${i}" aria-pressed="${c.id === campaign?.id}"><strong>${esc(c.title)}</strong><span>${c.archived ? 'Archiviert · ' : ''}${esc(campaignLabels[c.status] || c.status)} · R${esc(c.revision)}</span></button>`).join('') || '<p>Keine Kampagnen in dieser Ansicht.</p>';
     $('nlList').querySelectorAll('button').forEach(button => button.onclick = () => choose(state.campaigns[Number(button.dataset.campaign)]));
   }
   function controls() {
     if (!$('nlSave')) return;
     const available = enabled && state?.configured && !busy;
+    const completed = ['sent','completed_with_errors'].includes(campaign?.status);
+    $('nlDelete').hidden = !campaign || campaign.status !== 'draft';
+    $('nlArchive').hidden = !completed || !!campaign?.archived;
+    $('nlRestore').hidden = !completed || !campaign?.archived;
+    for (const id of ['nlDelete','nlArchive','nlRestore']) $(id).disabled = !enabled || busy;
     $('nlSave').disabled = !available || !editable(); $('nlNew').disabled = !available;
     $('nlForm').querySelectorAll('input,select,textarea').forEach(input => input.disabled = !available || !editable());
     const saved = available && campaign && !dirty;
@@ -231,7 +268,7 @@
     else if (!service) $('nlEligible').textContent = state?.audience?.eligible ?? 0;
     $('nlRevision').textContent = campaign ? `R${campaign.revision} ${dirty ? '· UNGESPEICHERT' : ''}` : 'NEU';
     $('nlHeading').textContent = campaign?.title || 'Neue Kampagne';
-    $('nlCampaignState').textContent = campaign ? `${campaignLabels[campaign.status] || campaign.status} · getesteter Stand: ${campaign.tested_revision || '—'} ${campaign.error || ''}` : 'Noch nicht gespeichert';
+    $('nlCampaignState').textContent = campaign ? `${campaign.archived ? 'Archiviert · ' : ''}${campaignLabels[campaign.status] || campaign.status} · getesteter Stand: ${campaign.tested_revision || '—'} ${campaign.error || ''}` : 'Noch nicht gespeichert';
     $('nlRecipients').innerHTML = (campaign?.recipients || []).map(r => `<p>${esc(r.name)} · ${esc(r.email)}<br><span class="nl-meta">${esc(recipientLabels[r.status] || r.status)} ${esc(r.error)}</span></p>`).join('');
     $('nlRefresh').disabled = busy;
     $('nlContacts').querySelectorAll('button').forEach(button => button.disabled = button.hasAttribute('data-open-contact') ? !enabled || !customersEnabled || busy : !available);
@@ -315,7 +352,7 @@
         view.close(); activeDialog = null;
         // Controls are enabled again before native focus return. A refreshed
         // subscriber row needs its replacement action, not the detached opener.
-        if (!opener?.isConnected || opener.disabled) {
+        if (!opener?.isConnected || opener.disabled || !opener.checkVisibility({visibilityProperty:true})) {
           const row = contactId ? document.querySelector(`[data-contact-id="${CSS.escape(contactId)}"]`) : null;
           [row?.querySelector('button:not(:disabled)'), contactId ? $('nlSearch') : null, $('nlPreview'), $('nlRefresh')]
             .find(node => node && !node.disabled && node.checkVisibility())?.focus();

@@ -176,6 +176,33 @@ func (a *app) admin(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "campaign not found")
 		return
 	}
+	if parts[3] == "delete" || parts[3] == "archive" || parts[3] == "restore" {
+		if input.Revision != c.Revision {
+			fail(w, 409, "revision conflict")
+			return
+		}
+		if parts[3] == "delete" {
+			if c.Status != "draft" {
+				fail(w, 409, "only drafts can be deleted")
+				return
+			}
+			delete(a.s.Campaigns, c.ID)
+			a.s.mustSave()
+			reply(w, 200, map[string]any{"id": c.ID, "deleted": true})
+			return
+		}
+		archive := parts[3] == "archive"
+		if (c.Status != "sent" && c.Status != "completed_with_errors") || c.Archived == archive {
+			fail(w, 409, "only completed campaigns can be archived or restored")
+			return
+		}
+		c.Archived = archive
+		c.Revision++
+		c.UpdatedAt = now()
+		a.s.mustSave()
+		reply(w, 200, c)
+		return
+	}
 	if input.Revision != c.Revision || (c.Status != "draft" && parts[3] != "preview") || !a.approved(c.TemplateID) {
 		fail(w, 409, "revision or status conflict")
 		return
@@ -194,7 +221,7 @@ func (a *app) admin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		t := templateInfo{HTML: c.TemplateHTML, Text: c.TemplateText}
-		if c.TestedRevision != c.Revision {
+		if c.Status == "draft" && c.TestedRevision != c.Revision {
 			var err error
 			t, err = a.provider.template(r.Context(), c.TemplateID)
 			if err != nil {
