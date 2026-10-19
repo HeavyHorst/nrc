@@ -21,6 +21,11 @@ COMPOSE_ARGS=(--env-file .env -f "$COMPOSE_FILE")
 if [[ -f publish.env ]]; then
   COMPOSE_ARGS=(--env-file .env --env-file publish.env -f "$COMPOSE_FILE" -f docker/compose.publish.yml)
 fi
+if [[ -n $(docker ps --filter label=com.docker.compose.project=docker --filter label=com.docker.compose.service=newsletter --format '{{.ID}}') ]]; then
+  COMPOSE_ARGS+=(-f docker/compose.newsletter.yml)
+fi
+# Model every running profiled service, but restart only the captured set below.
+COMPOSE_ARGS+=(--profile '*')
 docker compose "${COMPOSE_ARGS[@]}" config -q
 mapfile -t RUNNING_SERVICES < <(docker compose "${COMPOSE_ARGS[@]}" ps --services --filter status=running)
 mapfile -t VOLUMES < <(docker volume ls \

@@ -116,6 +116,7 @@ nginx=false
 compose=false
 protocol_go=false
 publish=false
+newsletter=false
 
 if $full; then
     server=true
@@ -128,6 +129,7 @@ if $full; then
     compose=true
     protocol_go=true
     publish=$publish_enabled
+    [[ -z $newsletter_enabled ]] || newsletter=true
 else
     for path in "${changed_files[@]}"; do
         case "$path" in
@@ -145,10 +147,18 @@ else
                 tailscale=true
                 nginx=true
                 publish=$publish_enabled
+                [[ -z $newsletter_enabled ]] || newsletter=true
                 ;;
             docker/compose.publish.yml)
                 if $publish_enabled; then
                     publish=true
+                    tailscale=true
+                    compose=true
+                fi
+                ;;
+            docker/compose.newsletter.yml)
+                if [[ -n $newsletter_enabled ]]; then
+                    newsletter=true
                     tailscale=true
                     compose=true
                 fi
@@ -163,7 +173,9 @@ else
                 ai=true
                 metrics=true
                 publish=$publish_enabled
+                [[ -z $newsletter_enabled ]] || newsletter=true
                 ;;
+            services/bots/nrc-newsletter/*) [[ -z $newsletter_enabled ]] || newsletter=true ;;
             services/bots/nrc-publish/*) publish=$publish_enabled ;;
             services/bots/nrc-search/*) search=true ;;
             services/bots/nrc-ai/*) ai=true ;;
@@ -181,6 +193,7 @@ $metrics && services+=(metrics-bot)
 $tailscale && services+=(tailscale-proxy)
 $nginx && services+=(nginx)
 $publish && services+=(publish)
+$newsletter && services+=(newsletter)
 
 # Source parity does not imply that containers use the latest built images.
 stale_services=$(ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && bash -s" <<'REMOTE'
@@ -263,11 +276,16 @@ if ! $skip_tests; then
     if $publish; then
         (cd services/bots/nrc-publish && go test -race ./... && go vet ./...)
     fi
+    if $newsletter; then
+        (cd services/bots/nrc-newsletter && go test -race ./... && go vet ./...)
+    fi
 else
     echo "WARNING: local tests were explicitly skipped." >&2
 fi
 
-if $server || $publish; then
+if $server || $publish || $newsletter; then
+    # The backup must understand newly enabled overlays before stopping services.
+    ssh "$DEPLOY_HOST" 'set -eu; tmp=$(mktemp); trap '\''rm -f "$tmp"'\'' EXIT; cat > "$tmp"; bash -n "$tmp"; install -m 0750 "$tmp" /usr/local/sbin/nrc-backup' < docker/backup.sh
     echo "Taking a quiesced backup of production volumes..."
     ssh "$DEPLOY_HOST" 'systemctl start nrc-backup.service'
     backup_result=$(ssh "$DEPLOY_HOST" 'systemctl show nrc-backup.service --property=Result --value')
@@ -330,6 +348,9 @@ ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && \
 
 if $publish_enabled; then
     ssh "$DEPLOY_HOST" 'curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8093/health'
+fi
+if [[ -n $newsletter_enabled ]]; then
+    ssh "$DEPLOY_HOST" 'curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8097/health'
 fi
 
 git ls-files -z | rsync -anrc --from0 --files-from=- \
