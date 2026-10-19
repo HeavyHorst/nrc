@@ -85,9 +85,6 @@
       updateSortHeaders();
     };
   });
-  el("mobileTaskSort").onchange = () => {
-    updateSortHeaders();
-  };
   el("mobileTaskSortDirection").onclick = () => {
     if (TaskViewState.sortColumn === "workOrder") return;
     document.querySelector(`#taskListView .task-table th[data-sort="${TaskViewState.sortColumn}"]`).click();

@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261019subsystems2";
+const CACHE_NAME = "nrc-terminal-20261019sortfix1";
 
 const APP_SHELL = [
   "./",
@@ -62,7 +62,7 @@ const APP_SHELL = [
   "./newsletter.js?v=20261017contacts2",
   "./customers.js?v=20261019inspectors7",
   "./tickets.js?v=20261019selectors2",
-  "./mobile-shell.js?v=20261019workorder1",
+  "./mobile-shell.js?v=20261019sortfix1",
   "./latency-worker.js",
 ];
 

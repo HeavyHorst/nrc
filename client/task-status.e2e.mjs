@@ -16,11 +16,19 @@ try {
   await page.routeWebSocket("**/*", socket => socket.onMessage(() => {}));
   await page.route("http://nrc.test/**", async route => {
     const path = new URL(route.request().url()).pathname;
+    if (path === '/app.js') {
+      const source = await fs.readFile(new URL('./app.js', import.meta.url), 'utf8');
+      // Model slow startup storage: task initialization runs after all shell scripts.
+      return route.fulfill({ contentType: 'text/javascript', body: source.replace(
+        'initKanban(); // Initialize kanban board',
+        'if (document.readyState !== "complete") await new Promise(resolve => window.addEventListener("load", resolve, { once: true })); initKanban(); window.__taskControlsReady = true;',
+      ) });
+    }
     try { await route.fulfill({ path: fileURLToPath(new URL(`.${path === "/" ? "/index.html" : path}`, import.meta.url)) }); }
     catch { await route.fulfill({ status: 404, body: "Not found" }); }
   });
   await page.goto("http://nrc.test");
-  await page.waitForFunction(() => window.NRCAssets && window.NRCViewManager && window.NRCSlices);
+  await page.waitForFunction(() => window.__taskControlsReady);
 
   // The fixture is browser-local: two tasks, one slice that carries both, and a
   // socket that records every frame the client writes and answers the slice
@@ -187,10 +195,29 @@ try {
     // The flat register draws the task cache while the server-side query is
     // idle, which is the fixture's whole listing.
     showKanban();
-    TaskViewState.grouping = "flat";
+    setTaskGrouping("flat");
     renderCurrentTaskView();
   });
   await page.waitForSelector('#taskListBody tr[data-task-id="1"]');
+
+  // A preceding change handler must not restore the old sort before the task
+  // state handler reads the user's selection.
+  for (const theme of ["lupine", "matte-black"]) for (const width of [1600, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.evaluate(theme => {
+      document.documentElement.dataset.theme = theme;
+      document.getElementById('mobileTaskSort').closest('.panel-header').classList.add('mobile-filters-open');
+    }, theme);
+    for (const [label, column, ids] of [["TITLE", "title", ["2", "1"]], ["PRIORITY", "priority", ["1", "2"]]]) {
+      await page.locator('#mobileTaskSort-trigger').click();
+      await page.locator('.custom-select__dropdown:visible').getByRole('option', { name: label, exact: true }).click();
+      assert.equal(await page.locator('#mobileTaskSort-trigger .custom-select__value').textContent(), label);
+      assert.equal(await page.evaluate(() => TaskViewState.sortColumn), column);
+      assert.deepEqual(await page.locator('#taskListBody tr[data-task-id]').evaluateAll(rows => rows.map(row => row.dataset.taskId)), ids);
+    }
+  }
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'lupine'; });
 
   // The client debounces its own refreshes — the register's invalidation, the
   // query — so a case waits for the fixture to go quiet before it drives the
