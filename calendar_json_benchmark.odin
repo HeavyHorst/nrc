@@ -86,6 +86,13 @@ benchmark_calendar_json :: proc(t: ^testing.T) {
 				arena = &arena,
 				reader = reader,
 			}
+			// Verify full output outside timing, not just its length checksum.
+			{
+				at, title := reader(&s.asset, virtual.arena_allocator(&arena))
+				testing.expect_value(t, at, i64(123))
+				testing.expect_value(t, string(title), "Call Alex")
+			}
+			virtual.arena_free_all(&arena)
 			if allocations {
 				tracker: mem.Tracking_Allocator
 				mem.tracking_allocator_init(&tracker, virtual.arena_allocator(&arena))
@@ -108,9 +115,11 @@ benchmark_calendar_json :: proc(t: ^testing.T) {
 				user_data = &s,
 			}
 			testing.expect_value(t, time.benchmark(&warm), time.Benchmark_Error.Okay)
+			// Calibrate each reader/fixture on this machine to about 0.75 s.
+			warm.rounds = 10000
+			testing.expect_value(t, time.benchmark(&warm), time.Benchmark_Error.Okay)
+			rounds := max(1, int(0.75 / time.duration_seconds(warm.duration) * f64(warm.rounds)))
 			s.checksum = 0
-			rounds := implementation == 0 ? 250000 : 500000
-			if fixture == 2 do rounds = implementation == 0 ? 5000 : 15000
 			options := time.Benchmark_Options {
 				bench     = calendar_bench_callback,
 				rounds    = rounds,

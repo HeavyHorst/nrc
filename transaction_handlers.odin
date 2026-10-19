@@ -2,6 +2,7 @@ package main
 
 import "core:encoding/endian"
 import "core:log"
+import "core:mem/virtual"
 import "core:net"
 import "core:slice"
 import "core:strings"
@@ -350,6 +351,13 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 			case .AssetCreate:
 				r, e := pr.parseTransactionAssetCreate(op.body)
 				if e != nil || r.asset_type == .RoomMapping || r.asset_type == .Agenda {failed = u16(i); break planning}
+				if r.asset_type == .Slice {
+					arena: virtual.Arena
+					if virtual.arena_init_growing(&arena) != nil {failed = u16(i); break planning}
+					defer virtual.arena_destroy(&arena)
+					_, ok := slice_preview_name(r.preview, virtual.arena_allocator(&arena))
+					if !ok {failed = u16(i); break planning}
+				}
 				if !validate_appointment_asset(r.asset_type, r.payload_encoding, r.payload_raw_len, r.preview, r.payload) {failed = u16(i); break planning}
 				p.conv_ids[i] = r.conv_id
 				parent: u64
@@ -456,6 +464,13 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 				encoding := old.payload_encoding
 				raw_len := old.payload_raw_len
 				if r.present & pr.TRANSACTION_ASSET_PATCH_PREVIEW != 0 do preview = r.preview
+				if old.asset_type == .Slice {
+					arena: virtual.Arena
+					if virtual.arena_init_growing(&arena) != nil {failed = u16(i); break planning}
+					defer virtual.arena_destroy(&arena)
+					_, ok := slice_preview_name(preview, virtual.arena_allocator(&arena))
+					if !ok {failed = u16(i); break planning}
+				}
 				if r.present & pr.TRANSACTION_ASSET_PATCH_PAYLOAD != 0 {payload = r.payload; encoding = r.payload_encoding; raw_len = r.payload_raw_len
 					if encoding < min(pr.PayloadEncoding) ||
 					   encoding > max(pr.PayloadEncoding) ||

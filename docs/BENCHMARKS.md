@@ -298,31 +298,105 @@ BENCH_SPSC=1 ./test/run_odin_tests.sh spsc -o:speed \
   -define:SPSC_BENCH_ITEMS=100003 -define:SPSC_BENCH_CAPACITY=3
 ```
 
-## Calendar JSON Field Reader
+## Asset metadata and calendar JSON readers
 
 `calendar_json_benchmark.odin` compares the selective token reader (`reader=1`)
 with JSON-tree extraction (`reader=0`). The baseline omits the former separate
 safety preflight, so it is a conservative comparison, not an exact replay of the
 old handler. Fixtures are an ordinary reminder, an escaped title, and a reminder
 with 64 irrelevant nested records. Both readers receive identical bytes and use
-a warmed reusable arena, reset after each read. The checksum validates deadline
-and title length; allocation runs additionally compare the title text.
+a warmed reusable arena, reset after each read. Full decoded values are checked
+before timing; the timed loop consumes a result checksum. Each case warms up,
+calibrates its iteration count to about 0.75 seconds, then measures.
+Timing includes the parser, checksum and arena reset. In this Odin version the
+reset zeroes used arena bytes, so allocation-heavy readers also pay more cleanup
+cost. This is not isolated parser time or a full production arena lifecycle.
+
+`asset_metadata_benchmark.odin` measures the production Ticket and TicketEntry
+preview parsers in historical read and strict write/replay modes, plus the shared
+Slice decoder. Each has ordinary, Unicode-escaped and 64-ignored-nested-record
+fixtures (`fixture=0/1/2`), within the 4096-byte preview limit. Ticket fixtures
+return identical fields in both modes; Entry reads only return `kind`, whereas
+strict mode also decodes/validates `author`. Strict mode additionally enforces
+version, required fields, types, lengths, enum values and (for tickets) IDs.
+These are different contracts, **not interchangeable decoder implementations**.
+Neither the complete asset validator (parent/body/decompression) nor handlers
+are timed. Slice retains its existing struct-decoder semantics.
+The escaped fixture changes two returned Ticket strings, one returned Slice
+string, and the Entry author. `Entry_Read` ignores author, so its escaped case
+does not measure unescaping a returned field.
 
 ```bash
-odin build . -build-mode:test -o:speed -out:/tmp/calendar-json-bench \
+export HEGEL_LIBHEGEL_PATH="$(./test/fetch_libhegel.sh)"
+odin build . -build-mode:test -o:speed -out:/tmp/nrc-json-bench \
   -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false \
-  -define:ODIN_TEST_NAMES=benchmark_calendar_json
-for run in $(seq 1 10); do BENCH_CALENDAR_JSON=1 /tmp/calendar-json-bench; done
-BENCH_CALENDAR_JSON=1 BENCH_CALENDAR_JSON_ALLOC=1 /tmp/calendar-json-bench
-rm /tmp/calendar-json-bench
+  -define:ODIN_TEST_NAMES=main.benchmark_calendar_json,main.benchmark_asset_metadata
+for run in $(seq 1 10); do
+  BENCH_CALENDAR_JSON=1 BENCH_ASSET_METADATA=1 /tmp/nrc-json-bench
+done
+BENCH_CALENDAR_JSON=1 BENCH_CALENDAR_JSON_ALLOC=1 \
+  BENCH_ASSET_METADATA=1 BENCH_ASSET_METADATA_ALLOC=1 /tmp/nrc-json-bench
+rm /tmp/nrc-json-bench
 ```
 
 The last run measures allocator calls/bytes separately, not timing. These
 are warm in-memory parser measurements: no Zstd, network, disk, index building
 or durability work is included. Do not extrapolate them to end-to-end latency.
 
-2026-09-27 orb measurement: 10 independent invocations, median (min–max),
-with the command above. Base commit
+### Current measurement (2026-10-19)
+
+Ten independent process invocations of the command above, plus one separate
+allocation run. Every invocation passed both benchmark tests. All 210 timed
+samples lasted 0.510–0.921 seconds. Warm caches, one test thread, `-o:speed`,
+memory tracking disabled for timing; default CPU scheduling, no affinity pinning.
+E2B orb, Linux `6.1.158+`, Intel Xeon 2.60 GHz, 2 KVM vCPUs; host power policy
+unavailable and host scheduling shared. Odin `dev-2026-10-nightly:84bc3fc`.
+Base [91d94ec](https://github.com/HeavyHorst/nrc/commit/91d94ec328bc51cf67a72ae2e10ac5fbc7843fe5)
+plus this thread's uncommitted parser cleanup and benchmarks. No durability
+mode applies to these in-memory measurements.
+
+Times below are **µs/operation, median (min–max)**, including checksum/reset:
+
+| Reader | Ordinary | Escaped | 64 ignored nested records |
+|---|---:|---:|---:|
+| Calendar JSON tree | 1.921 (1.565–2.001) | 1.871 (1.745–2.128) | 81.197 (68.850–90.066) |
+| Calendar current token reader | 0.834 (0.700–0.907) | 0.939 (0.810–1.084) | 30.331 (26.912–34.124) |
+| Ticket read | 3.864 (3.228–4.178) | 4.059 (3.569–4.396) | 52.402 (43.812–54.759) |
+| Ticket strict | 1.303 (1.111–1.409) | 1.382 (1.199–1.598) | 20.802 (18.456–25.494) |
+| Entry read | 1.124 (0.971–1.246) | 1.204 (1.019–1.340) | 47.983 (42.751–55.654) |
+| Entry strict | 0.446 (0.382–0.513) | 0.523 (0.451–0.626) | 21.953 (18.802–24.518) |
+| Slice | 2.369 (2.039–2.672) | 2.394 (2.088–2.640) | 49.897 (42.575–55.648) |
+
+Separate allocator instrumentation, **calls / requested bytes per operation**
+(not peak resident memory or backing-arena reservations):
+
+| Reader | Ordinary | Escaped | 64 ignored nested records |
+|---|---:|---:|---:|
+| Calendar JSON tree | 10 / 975 | 10 / 987 | 394 / 91,046 |
+| Calendar current token reader | 0 / 0 | 1 / 22 | 0 / 0 |
+| Ticket read | 15 / 123 | 15 / 147 | 16 / 129 |
+| Ticket strict | 0 / 0 | 2 / 39 | 0 / 0 |
+| Entry read | 4 / 35 | 4 / 35 | 5 / 41 |
+| Entry strict | 0 / 0 | 1 / 17 | 0 / 0 |
+| Slice | 11 / 79 | 11 / 91 | 12 / 85 |
+
+The current selective calendar reader is faster than the tree baseline on these
+fixtures. Strict Ticket/Entry projections also cost less than historical struct
+reads here despite enforcing more rules, but their acceptance contracts differ:
+these results do not authorize replacing historical reads with strict validation.
+No binary format, before/after cleanup comparison, Note indexing, or end-to-end
+handler performance was measured. Do not infer a speedup versus the September
+numbers: compiler, implementation and measurement conditions have changed.
+
+Raw samples, allocator output, source/binary SHA256 hashes, measured source diff,
+new benchmark source and machine metadata are in
+`.amp/in/artifacts/json-parser-benchmarks/`; `results.json` contains every sample
+and the aggregates above.
+
+### Historical calendar measurement (2026-09-27)
+
+10 independent invocations, median (min–max), using the then-current benchmark
+with fixed iteration counts. Base commit
 [`692cdb2`](https://github.com/HeavyHorst/nrc/commit/692cdb26645b190474ede4ce518080b11515ab00)
 plus the uncommitted Calendar implementation; Odin
 `dev-2026-09-nightly:a2fb372`, Linux x86-64, 2 KVM vCPUs,

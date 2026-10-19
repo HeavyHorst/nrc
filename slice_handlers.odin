@@ -41,7 +41,13 @@ Slice_Preview :: struct {
 // carries no name, is not a slice: it is skipped rather than repaired, so a
 // corrupt record cannot invent a slice identity.
 slice_preview :: proc(asset: ^pr.Asset, allocator: mem.Allocator) -> (m: Slice_Preview, ok: bool) {
-	if asset == nil || json.unmarshal(asset.preview, &m, allocator = allocator) != nil do return
+	if asset == nil do return
+	return decode_slice_preview(asset.preview, allocator)
+}
+
+// Keep the JSON decoder and its default semantics identical for reads and writes.
+decode_slice_preview :: proc(preview: []byte, allocator: mem.Allocator) -> (m: Slice_Preview, ok: bool) {
+	if json.unmarshal(preview, &m, allocator = allocator) != nil do return
 	ok = m.version == 1 && len(m.name) > 0 && len(m.name) <= pr.MAX_PROJECT_LENGTH
 	return
 }
@@ -53,9 +59,8 @@ slice_has_flag :: proc(slice: pr.TaskSlice, flag: pr.TaskSliceFlags) -> bool {
 // slice_preview_name validates the display record that the register can decode.
 // Names need not be unique; the asset ID is the slice's identity.
 slice_preview_name :: proc(preview: []byte, allocator: mem.Allocator) -> (name: string, ok: bool) {
-	m: Slice_Preview
-	if json.unmarshal(preview, &m, allocator = allocator) != nil do return
-	if m.version != 1 || len(m.name) == 0 || len(m.name) > pr.MAX_PROJECT_LENGTH do return
+	m, valid := decode_slice_preview(preview, allocator)
+	if !valid do return
 	return m.name, true
 }
 

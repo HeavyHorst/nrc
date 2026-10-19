@@ -24,9 +24,6 @@ Ticket_Query :: struct {
 	read_snapshot:                                         u32,
 	read_start, read_end:                                  bool,
 }
-Ticket_Metadata :: struct {
-	title, status, assignee, company_id, contact_id, requester, requester_name, kind: string,
-}
 Ticket_Activity :: struct {
 	unread:            int,
 	waiting:           bool,
@@ -40,7 +37,7 @@ Ticket_Page_Metadata :: struct {
 }
 Ticket_Candidate :: struct {
 	asset:             ^pr.Asset,
-	metadata:          Ticket_Metadata,
+	metadata:          Ticket_Preview,
 	activity:          Ticket_Activity,
 	latest, reply:     pr.AssetID,
 	timestamp, number: i64,
@@ -95,8 +92,8 @@ collect_ticket_page :: proc(
 			continue
 		}
 		if asset.asset_type != .Ticket do continue
-		m: Ticket_Metadata
-		if json.unmarshal(asset.preview, &m) != nil do continue
+		m, valid := parse_ticket_preview(asset.preview, allocator)
+		if !valid do continue
 		if q.status != "" && m.status != q.status || q.assignee != "" && m.assignee != q.assignee || q.company != "" && m.company_id != q.company do continue
 		if q.mode == "attention" && m.assignee != "" && m.assignee != username do continue
 		if q.search_results {
@@ -126,8 +123,8 @@ collect_ticket_page :: proc(
 			row := &candidates[index]
 			if !row.matches_search do row.matches_search = ticket_body_matches(entry, query)
 			row.timestamp = max(row.timestamp, entry.created_at)
-			m: Ticket_Metadata
-			if json.unmarshal(entry.preview, &m) != nil do continue
+			m, valid := parse_ticket_entry_preview(entry.preview, allocator)
+			if !valid do continue
 			if m.kind == "public_reply" do row.reply = max(row.reply, entry.asset_id)
 			if m.kind == "customer_reply" {
 				row.latest = max(row.latest, entry.asset_id)
@@ -158,7 +155,9 @@ collect_ticket_page :: proc(
 				value := q.sort == "company_id" ? m.company_id : m.contact_id
 				id, _ := strconv.parse_u64(value)
 				linked := conv.assets[pr.AssetID(id)]
-				name: Ticket_Metadata
+				name: struct {
+					title: string,
+				}
 				if linked != nil && asset_visible_to(linked, username) {_ = json.unmarshal(linked.preview, &name)}
 				row.text = name.title
 				if row.text == "" && value != "" do row.text = fmt.aprint("#", value)

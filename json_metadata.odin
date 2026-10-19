@@ -52,6 +52,8 @@ json_metadata_string :: proc(token: json.Token, allocator: mem.Allocator) -> str
 // Validate the complete document without recursion or a JSON tree. Retain only
 // selected top-level fields; container tokens include the entire validated span.
 // Duplicate selected fields are rejected, ignored-field duplicates have no effect.
+// This is the existing metadata contract, not a general JSON decoder: nesting
+// is capped at 64 and every integer token (even ignored ones) must fit i64.
 json_metadata_fields :: proc(data: []byte, names: [$N]string, allocator: mem.Allocator) -> (fields: [N]json.Token, object: bool, valid: bool) {
 	tok := json.make_tokenizer(string(data), .JSON, true)
 	stack: [65]JSON_Metadata_State
@@ -188,6 +190,79 @@ validate_appointment_asset :: proc(asset_type: pr.AssetType, encoding: pr.Payloa
 	return ok
 }
 
+Ticket_Preview :: struct {
+	// Explicit tags prevent the decoder from binding an empty extension key
+	// to the first untagged field.
+	title:          string `json:"title"`,
+	status:         string `json:"status"`,
+	assignee:       string `json:"assignee"`,
+	company_id:     string `json:"company_id"`,
+	contact_id:     string `json:"contact_id"`,
+	requester:      string `json:"requester"`,
+	requester_name: string `json:"requester_name"`,
+}
+
+Ticket_Entry_Preview :: struct {
+	kind, author: string,
+}
+
+// Read compatibility deliberately retains the historical struct decoder. Only
+// fields belonging to this asset type participate; unrelated extension fields
+// must not hide a ticket or its replies. Strict mode preserves the write/replay
+// contract. Strings may borrow data in strict mode or use allocator; callers
+// must retain both input and allocator until they finish using the projection.
+parse_ticket_preview :: proc(data: []byte, allocator: mem.Allocator, strict := false) -> (m: Ticket_Preview, ok: bool) {
+	if !strict {
+		ok = json.unmarshal(data, &m, allocator = allocator) == nil
+		return
+	}
+	f, object, valid := json_metadata_fields(
+		data,
+		[?]string{"version", "title", "company_id", "contact_id", "requester", "requester_name", "status", "assignee"},
+		allocator,
+	)
+	if !valid || !object || f[0].kind != .Integer || f[0].text != "1" do return
+	limits := [?]int{256, 20, 20, 320, 256, 32, 64}
+	outs := [?]^string{&m.title, &m.company_id, &m.contact_id, &m.requester, &m.requester_name, &m.status, &m.assignee}
+	for token, i in f[1:] {
+		if token.kind != .String do return
+		outs[i]^ = json_metadata_string(token, allocator)
+		if len(outs[i]^) > limits[i] do return
+	}
+	if len(strings.trim_space(m.title)) == 0 do return
+	for id in ([?]string{m.company_id, m.contact_id}) {
+		if id == "" do continue
+		if id[0] == '0' do return
+		n: u64
+		for c in id {
+			if c < '0' || c > '9' do return
+			digit := u64(c - '0')
+			if n > (max(u64) - digit) / 10 do return
+			n = n * 10 + digit
+		}
+	}
+	ok = m.status == "open" || m.status == "in_progress" || m.status == "waiting_customer" || m.status == "resolved" || m.status == "closed"
+	return
+}
+
+parse_ticket_entry_preview :: proc(data: []byte, allocator: mem.Allocator, strict := false) -> (m: Ticket_Entry_Preview, ok: bool) {
+	if strict {
+		f, object, valid := json_metadata_fields(data, [?]string{"version", "kind", "author"}, allocator)
+		if !valid || !object || f[0].kind != .Integer || f[0].text != "1" || f[1].kind != .String || f[2].kind != .String do return
+		m.kind = json_metadata_string(f[1], allocator)
+		m.author = json_metadata_string(f[2], allocator)
+		ok = (m.kind == "customer_reply" || m.kind == "public_reply" || m.kind == "internal_note") && len(m.author) <= 256
+		return
+	}
+	// Historical activity reads only interpreted kind, not author.
+	legacy: struct {
+		kind: string `json:"kind"`,
+	}
+	ok = json.unmarshal(data, &legacy, allocator = allocator) == nil
+	m.kind = legacy.kind
+	return
+}
+
 // Tickets keep their public/private classification in validated metadata, not
 // in their body text. Use the same contract for live writes and WAL replay.
 validate_ticket_asset :: proc(
@@ -218,37 +293,10 @@ validate_ticket_asset :: proc(
 	a := virtual.arena_allocator(&arena)
 	if asset_type == .TicketEntry {
 		if parent_type != .Asset || parent_id == 0 || len(strings.trim_space(string(body))) == 0 do return false
-		f, object, valid := json_metadata_fields(preview, [?]string{"version", "kind", "author"}, a)
-		if !valid || !object || f[0].kind != .Integer || f[0].text != "1" || f[1].kind != .String || f[2].kind != .String do return false
-		kind := json_metadata_string(f[1], a)
-		return (kind == "customer_reply" || kind == "public_reply" || kind == "internal_note") && len(json_metadata_string(f[2], a)) <= 256
+		_, ok := parse_ticket_entry_preview(preview, a, strict = true)
+		return ok
 	}
 	if parent_type != .None || parent_id != 0 do return false
-	f, object, valid := json_metadata_fields(
-		preview,
-		[?]string{"version", "title", "company_id", "contact_id", "requester", "requester_name", "status", "assignee"},
-		a,
-	)
-	if !valid || !object || f[0].kind != .Integer || f[0].text != "1" do return false
-	limits := [?]int{256, 20, 20, 320, 256, 32, 64}
-	values: [7]string
-	for token, i in f[1:] {
-		if token.kind != .String do return false
-		values[i] = json_metadata_string(token, a)
-		if len(values[i]) > limits[i] do return false
-	}
-	if len(strings.trim_space(values[0])) == 0 do return false
-	for id in values[1:3] {
-		if id == "" do continue
-		if id[0] == '0' do return false
-		n: u64
-		for c in id {
-			if c < '0' || c > '9' do return false
-			digit := u64(c - '0')
-			if n > (max(u64) - digit) / 10 do return false
-			n = n * 10 + digit
-		}
-	}
-	status := values[5]
-	return status == "open" || status == "in_progress" || status == "waiting_customer" || status == "resolved" || status == "closed"
+	_, ok := parse_ticket_preview(preview, a, strict = true)
+	return ok
 }

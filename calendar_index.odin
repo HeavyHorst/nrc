@@ -49,6 +49,9 @@ calendar_key_compare :: proc(a, b: pr.CalendarKey) -> int {
 
 // Payload wins over preview, including legacy camelCase fields. Parse real JSON
 // so nested fields or quoted field names in a title cannot invent deadlines.
+// Compatibility: only metadata-parser rejection falls back. A parsed payload
+// with a missing/unusable deadline suppresses the preview. This projection
+// is independent of the preview visibility contract in reminder_visibility.
 calendar_reminder :: proc(asset: ^pr.Asset, allocator: mem.Allocator) -> (at: i64, title: []byte) {
 	if asset == nil || asset.asset_type != .Reminder do return
 	payload := asset.payload

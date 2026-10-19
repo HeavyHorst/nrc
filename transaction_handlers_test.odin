@@ -1,10 +1,129 @@
 package main
 
 import "core:encoding/endian"
+import "core:strings"
 import "core:testing"
 
 import pr "protocol"
 import ws "websocket"
+
+@(test)
+test_slice_handler_and_transaction_preview_validation :: proc(t: ^testing.T) {
+	workspace := "slice-preview-validation"
+	if !init_room_mapping_test_state("slice_preview_validation.log", workspace) {
+		testing.expect(t, false, "initialize slice fixture")
+		return
+	}
+	defer cleanup_room_mapping_test_state()
+	c := make_room_mapping_test_connection(workspace)
+	defer send_queue_destroy(&c)
+	state := get_or_create_connection_workspace(&c)
+	conv := get_or_create_conversation(state, 71)
+	long_name := strings.repeat("x", pr.MAX_PROJECT_LENGTH + 1)
+	defer delete(long_name)
+	too_long := strings.concatenate({`{"version":1,"name":"`, long_name, `"}`})
+	defer delete(too_long)
+	cases := []struct {
+		preview: string,
+		valid:   bool,
+	} {
+		{`{"version":1,"name":"Alpha"}`, true},
+		{`{"version":1,"name":"\u0042eta","closed":true}`, true},
+		{`{"version":1,"name":" "}`, true},
+		{"not json", false},
+		{`{"name":"Alpha"}`, false},
+		{`{"version":2,"name":"Alpha"}`, false},
+		{`{"version":1,"name":""}`, false},
+		{`{"version":1,"name":12}`, false},
+		{`{"version":1,"name":"Alpha","closed":"yes"}`, false},
+		{too_long, false},
+	}
+	// A stable patch target; all rejected requests must preserve it exactly.
+	asset_handler_test_create(&c, 71, .Slice, .None, 0, `{"version":1,"name":"Original"}`, "")
+	target_id := pr.AssetID(td.asset_seq)
+	if conv.assets[target_id] == nil {testing.expect(t, false, "create initial slice"); return}
+	for test_case in cases {
+		preview := transmute([]byte)test_case.preview
+		for mode in 0 ..< 4 {
+			before_count := len(conv.assets)
+			before_seq := td.asset_seq
+			before_task_seq := td.task_seq
+			before_tasks := len(conv.tasks)
+			before_asset := conv.assets[target_id]
+			before_wal := td.shard_writers.writers[0].wal.record_count
+			if mode == 0 {
+				asset_handler_test_create(&c, 71, .Slice, .None, 0, test_case.preview, "")
+			} else if mode == 1 {
+				handle_update_asset(&c, {conv_id = 71, asset_id = target_id, preview = preview})
+			} else {
+				body := make([]byte, (mode == 2 ? 21 : 31) + len(preview))
+				defer delete(body)
+				endian.put_u64(body, .Big, 71)
+				if mode == 2 {
+					endian.put_u16(body[8:], .Big, u16(pr.AssetType.Slice))
+					endian.put_u16(body[17:], .Big, u16(len(preview)))
+					copy(body[19:], preview)
+				} else {
+					transaction_test_ref(body[8:], .Existing, .Asset, u64(target_id))
+					body[28] = pr.TRANSACTION_ASSET_PATCH_PREVIEW
+					endian.put_u16(body[29:], .Big, u16(len(preview)))
+					copy(body[31:], preview)
+				}
+				// The first operation must also disappear when the slice is invalid.
+				create := transaction_test_task_create_body(71, .Existing, 0, 'x')
+				ops := [2]pr.TransactionOperation{{op_type = .TaskCreate, body = create[:]}, {op_type = mode == 2 ? .AssetCreate : .AssetPatch, body = body}}
+				process_apply_transaction(&c, {operations = ops[:]})
+				testing.expect_value(t, len(conv.tasks), before_tasks + (test_case.valid ? 1 : 0))
+			}
+			if test_case.valid {
+				if mode == 0 || mode == 2 {
+					testing.expect_value(t, len(conv.assets), before_count + 1)
+					testing.expect_value(t, string(conv.assets[pr.AssetID(td.asset_seq)].preview), test_case.preview)
+				} else {
+					testing.expect_value(t, string(conv.assets[target_id].preview), test_case.preview)
+				}
+			} else {
+				testing.expect_value(t, len(conv.assets), before_count)
+				testing.expect_value(t, td.asset_seq, before_seq)
+				testing.expect_value(t, td.task_seq, before_task_seq)
+				testing.expect(t, conv.assets[target_id] == before_asset, "invalid slice preserves existing asset")
+				testing.expect_value(t, td.shard_writers.writers[0].wal.record_count, before_wal)
+			}
+			send_queue_drain(&c)
+		}
+	}
+	// Payload-only patches validate the retained preview, while the WAL reader
+	// must still accept historically stored slices with an invalid preview.
+	for valid in ([?]bool{true, false}) {
+		preview := valid ? `{"version":1,"name":"Retained"}` : `{"version":1,"name":""}`
+		asset := alloc_asset(nil, transmute([]byte)preview, nil, nil)
+		asset.asset_id = pr.AssetID(td.asset_seq + 1)
+		td.asset_seq += 1
+		asset.asset_type = .Slice
+		asset.conv_id = 71
+		asset_store_put(state, workspace, conv, asset)
+		serialized := make([]byte, calculate_asset_fields_size(asset))
+		defer delete(serialized)
+		_ = serialize_asset_fields(serialized, asset)
+		_, replay_err := validate_shard_mutation({domain = .Asset, op = 1, entity_record_version = 3, payload = serialized})
+		testing.expect_value(t, replay_err, Shard_Transaction_Error.None)
+		body: [37]byte
+		endian.put_u64(body[:], .Big, 71)
+		transaction_test_ref(body[8:], .Existing, .Asset, u64(asset.asset_id))
+		body[28] = pr.TRANSACTION_ASSET_PATCH_PAYLOAD
+		endian.put_u32(body[30:], .Big, 1)
+		endian.put_u16(body[34:], .Big, 1)
+		body[36] = 'x'
+		ops := [1]pr.TransactionOperation{{op_type = .AssetPatch, body = body[:]}}
+		id := asset.asset_id
+		before_wal := td.shard_writers.writers[0].wal.record_count
+		process_apply_transaction(&c, {operations = ops[:]})
+		testing.expect_value(t, string(conv.assets[id].preview), preview)
+		testing.expect_value(t, string(conv.assets[id].payload), valid ? "x" : "")
+		testing.expect_value(t, td.shard_writers.writers[0].wal.record_count, before_wal + (valid ? 1 : 0))
+		send_queue_drain(&c)
+	}
+}
 
 @(test)
 test_oversized_cascade_deletes_reject_without_storage_failure :: proc(t: ^testing.T) {

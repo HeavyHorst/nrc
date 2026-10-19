@@ -3,6 +3,7 @@ package main
 import "core:encoding/endian"
 import "core:encoding/json"
 import "core:mem/virtual"
+import "core:strings"
 import "core:testing"
 import hgl "hegel"
 import pr "protocol"
@@ -54,7 +55,7 @@ when NRC_SIMULATION {
 			company := choices[9 + i * 5] % 2
 			activity := choices[10 + i * 5] + 1
 			metadata, err := json.marshal(
-				Ticket_Metadata{title = titles[title], status = statuses[status], assignee = owners[owner], company_id = companies[company]},
+				Ticket_Preview{title = titles[title], status = statuses[status], assignee = owners[owner], company_id = companies[company]},
 				allocator = a,
 			)
 			if err != nil do return hgl.interesting("encode fixture")
@@ -301,4 +302,65 @@ test_ticket_entry_byte_pages :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(rows), 1)
 	testing.expect_value(t, rows[0].asset_id, pr.AssetID(5))
 	testing.expect(t, !page.has_more)
+}
+
+// Accepted extension fields must not make a ticket disappear or suppress reply
+// activity. Generate values that conflict with the other asset type's schema.
+prop_ticket_metadata_extensions :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.Body_Result {
+	value, err := hgl.draw_i64(tc, 0, 5)
+	if err == .Stop_Test do return hgl.abort()
+	if err != nil do return hgl.interesting("extension draw")
+	kind_index, kind_err := hgl.draw_i64(tc, 0, 2)
+	if kind_err == .Stop_Test do return hgl.abort()
+	if kind_err != nil do return hgl.interesting("kind draw")
+	empty_key, key_err := hgl.draw_i64(tc, 0, 1)
+	if key_err == .Stop_Test do return hgl.abort()
+	if key_err != nil do return hgl.interesting("key draw")
+	arena: virtual.Arena
+	if virtual.arena_init_growing(&arena) != nil do return hgl.interesting("arena")
+	defer virtual.arena_destroy(&arena)
+	a := virtual.arena_allocator(&arena)
+	values := [?]string{"42", "false", "[]", `{"nested":1}`, `"extension"`, "null"}
+	kinds := [?]string{"customer_reply", "public_reply", "internal_note"}
+	ticket := strings.concatenate(
+		{
+			`{"version":1,"title":"T","status":"open","assignee":"","company_id":"","contact_id":"","requester":"","requester_name":"","`,
+			empty_key == 1 ? "" : "kind",
+			`":`,
+			values[value],
+			`}`,
+		},
+		allocator = a,
+	)
+	entry := strings.concatenate(
+		{`{"version":1,"kind":"`, kinds[kind_index], `","author":"bob","`, empty_key == 1 ? "" : "title", `":`, values[value], `}`},
+		allocator = a,
+	)
+	preview := transmute([]byte)ticket
+	reply := transmute([]byte)entry
+	body := transmute([]byte)string("reply")
+	if !validate_ticket_asset(.Ticket, .None, 0, .Plain, 0, preview, nil) || !validate_ticket_asset(.TicketEntry, .Asset, 1, .Plain, 5, reply, body) do return hgl.interesting("valid extension rejected")
+	m, valid := parse_ticket_preview(preview, a)
+	if !valid || m.title != "T" do return hgl.interesting("extension changed title")
+	conv: Conversation_State
+	conv.assets = make(map[pr.AssetID]^pr.Asset, a)
+	items := [?]pr.Asset {
+		{asset_id = 1, asset_type = .Ticket, owner = transmute([]byte)string("alice"), preview = preview},
+		{asset_id = 2, asset_type = .TicketEntry, parent_type = .Asset, parent_id = 1, preview = reply, payload = body, created_at = 7},
+	}
+	for &item in items do conv.assets[item.asset_id] = &item
+	page, rows := collect_ticket_page(&conv, {limit = 10}, "alice", a)
+	if page.total_count != 1 || len(rows) != 1 || rows[0].asset_id != 1 do return hgl.interesting("accepted ticket disappeared")
+	if len(page.activity) != 1 do return hgl.interesting("missing activity")
+	activity := page.activity[0]
+	if activity.unread != (kind_index == 0 ? 1 : 0) || activity.waiting != (kind_index != 1) || activity.latest != (kind_index == 0 ? "2" : "1") do return hgl.interesting("extension changed reply activity")
+	if string(rows[0].preview) != ticket do return hgl.interesting("original bytes changed")
+	return hgl.valid()
+}
+
+@(test)
+test_hegel_ticket_metadata_extensions :: proc(t: ^testing.T) {
+	if !hgl.can_run() do return
+	result, err := hgl.run(prop_ticket_metadata_extensions, nil, {test_cases = 64})
+	testing.expectf(t, err == nil, "metadata extensions: err=%v interesting=%v", err, result.interesting_test_cases)
 }
