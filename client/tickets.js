@@ -211,8 +211,33 @@
     finally { if (!cancelled()) renderStatus(); }
   }
   async function reload({ preserve = false } = {}) {
+    const scope = generation;
     const list = String(state.filters.search || '').trim() ? updateSearch({ preserve }) : loadPage(true, preserve);
     await Promise.all([list, refreshAttention(), loadDetail()]);
+    if (scope !== generation) return;
+    const assigneeSelect = document.getElementById('ticketAssigneeFilter');
+    if (assigneeSelect) {
+      const cachedTickets = [...(window.NRCAssets.roomAssets?.get(0n)?.values() || [])].filter(a => a.assetType === 13);
+      const names = [...new Set([...(typeof userDirectory === 'function' ? userDirectory() : []), ...cachedTickets.map(a => metadata(a).assignee), ...state.tickets.map(a => metadata(a).assignee), state.filters.owner].filter(Boolean))].sort();
+      const options = '<option value="">ALL ASSIGNEES</option>' + names.map(name => `<option value="${esc(name)}">${esc(name)}</option>`).join('');
+      if (assigneeSelect.innerHTML !== options) assigneeSelect.innerHTML = options;
+      assigneeSelect.value = state.filters.owner || '';
+    }
+    const customerSelect = document.getElementById('ticketCustomerFilter');
+    if (customerSelect) {
+      customerSelect.disabled = true;
+      try {
+        const { assets } = await window.NRCAssets.requestAllAssets(0n, 8, { isCancelled: () => scope !== generation });
+        if (scope !== generation) return;
+        const companies = assets.filter(a => typeof metadata(a).title === 'string').sort((a, b) => metadata(a).title.localeCompare(metadata(b).title));
+        const selected = state.filters.company || '';
+        customerSelect.innerHTML = '<option value="">ALL CUSTOMERS</option>' + companies.map(a => `<option value="${a.assetId}">${esc(metadata(a).title)} · #${a.assetId}${metadata(a).archived ? ' · ARCHIVED' : ''}</option>`).join('') +
+          (selected && !companies.some(a => String(a.assetId) === selected) ? `<option value="${esc(selected)}">CUSTOMER #${esc(selected)} · UNAVAILABLE</option>` : '');
+        customerSelect.value = selected;
+        customerSelect.disabled = false;
+        renderList();
+      } catch (error) { if (scope === generation) { state.error = error.message; renderStatus(); } }
+    }
   }
   let refreshQueued = false;
   function scheduleRefresh() {
@@ -267,7 +292,8 @@
       await reload({ preserve: true });
       // Acknowledgement, not dispatch, is the save boundary. Keep the selected draft.
       if (entry && state.selected === selected) {
-        for (const name of ['message', 'kind']) { const input = document.querySelector(`#ticketEditor [name=${name}]`); if (input) input.value = d[name]; }
+        const input = document.querySelector('#ticketEditor [name=message]');
+        if (input) input.value = d.message;
         renderConversation();
         renderSavedAttachments();
         renderUploads(d, document.getElementById('ticketEditor'));
@@ -291,7 +317,7 @@
       active: window.NRCViewManager?.getActiveView?.() === 'tickets', root: document.getElementById('ticketsRegister'), label: 'LOAD MORE TICKETS' });
     const detailStatus = document.getElementById('ticketStatus');
     if (detailStatus) {
-      detailStatus.textContent = state.error || (state.pending ? 'SAVING · awaiting NRC acknowledgement' : state.notice);
+      detailStatus.textContent = state.error || (state.pending ? 'SAVING · awaiting NRC acknowledgement' : state.selected && state.notice === 'UNSAVED DRAFT' ? '' : state.notice);
       detailStatus.hidden = !detailStatus.textContent;
     }
     const blocked = state.drafts.get(state.selected)?.uploads?.some(u => !u.attachment);
@@ -303,6 +329,9 @@
     const reply = document.getElementById('ticketReply');
     if (reply && (!state.selected || state.tickets.some(a => String(a.assetId) === state.selected))) {
       const d = draft(), isPublic = d.kind === 'public_reply';
+      reply.querySelectorAll('[name=kind]').forEach(input => { input.checked = input.value === d.kind; });
+      const draftState = document.getElementById('ticketDraftState');
+      if (draftState) draftState.textContent = state.pending ? 'SAVING' : d.message.trim() || d.uploads.length ? 'UNSAVED DRAFT' : 'NEW MESSAGE';
       const requester = metadata(state.tickets.find(a => String(a.assetId) === state.selected) || {}).requester;
       const visibility = document.getElementById('ticketVisibility');
       if (visibility) visibility.textContent = isPublic ? `PUBLIC REPLY TO ${requester || 'REQUESTER'} · VISIBLE IN CUSTOMER PORTAL${d.requester !== requester ? ' · REQUESTER CHANGED — CONFIRM CURRENT RECIPIENT FIRST' : ''}` : 'INTERNAL NOTE · ONLY NRC STAFF CAN SEE THIS';
@@ -364,7 +393,7 @@
       if (m.mail_delivery) labels.push(({ queued: 'MAIL QUEUED', sent: 'MAIL SERVER ACCEPTED', failed: 'MAIL FAILED', unknown: 'MAIL STATUS UNKNOWN' })[m.mail_delivery] || 'MAIL STATUS UNKNOWN');
       return labels.length ? ` / ${esc(labels.join(' · '))}` : '';
     };
-    el.innerHTML = [false, true].map(internal => `<section class="customer-section${internal ? ' ticket-internal' : ''}"><div class="panel-header"><div><span>${internal ? 'INTERNAL NOTES · NEVER PUBLIC' : 'PUBLIC CONVERSATION'}</span></div></div>${!internal && selected ? `<article class="customer-event" data-ticket-entry="${selected.assetId}"><span class="customer-meta">ORIGINAL REQUEST / ${esc(metadata(selected).requester_name || metadata(selected).requester)}${mailMeta(selected)}</span><p class="customer-activity-body">${esc(selected.payload)}</p></article>` : ''}${conversation(state.selected, internal).map(a => `<article class="customer-event" data-ticket-entry="${a.assetId}"><span class="customer-meta">${esc(kindLabels[metadata(a).kind])} / ${esc(metadata(a).author)} / ${esc(new Date(Number(a.createdAt / 1000000n)).toLocaleString())}${mailMeta(a)}</span><p class="customer-activity-body">${esc(a.payload)}</p></article>`).join('') || '<p class="customer-empty">No entries.</p>'}</section>`).join('');
+    el.innerHTML = [false, true].map(internal => `<section class="customer-section${internal ? ' ticket-internal' : ''}"><div class="panel-header"><div><span>${internal ? 'INTERNAL NOTES · NEVER PUBLIC' : 'PUBLIC CONVERSATION'}</span></div></div>${!internal && selected ? `<article class="customer-event" data-ticket-entry="${selected.assetId}"><span class="customer-meta">ORIGINAL REQUEST / ${esc(metadata(selected).requester_name || metadata(selected).requester)}${mailMeta(selected)}</span><p class="customer-activity-body">${esc(selected.payload)}</p></article>` : ''}${conversation(state.selected, internal).map(a => `<article class="customer-event" data-ticket-entry="${a.assetId}"><span class="customer-meta">${esc(kindLabels[metadata(a).kind])} / ${esc(metadata(a).author)} / ${esc(window.NRCDetailUI.formatHeaderDate(a.createdAt))}${mailMeta(a)}</span><p class="customer-activity-body">${esc(a.payload)}</p></article>`).join('') || (internal || !selected ? '<p class="customer-empty">No entries.</p>' : '')}</section>`).join('');
     if (selected && el.querySelector) {
       const { latest } = activity(selected);
       window.NRCRecordActivity?.observe('ticket', el.querySelector(`[data-ticket-entry="${latest.assetId}"]`), 'ticket', selected.assetId, latest.assetId);
@@ -407,6 +436,7 @@
     const asset = state.tickets.find(a => String(a.assetId) === state.selected); if (!asset) return;
     if (asset.payload == null) { root.textContent = 'Loading ticket…'; return; }
     const m = metadata(asset);
+    const customerOpen = root.querySelector('.ticket-customer-details')?.open;
     const identity = session;
     const control = (name, label, extra = {}) => window.NRCDetailUI.inlineField({
       key: `ticket-${asset.assetId}-${name}`, name: label, label, value: m[name] || '',
@@ -418,9 +448,10 @@
     };
     root.innerHTML = `<div class="task-detail-doc-title">${esc(m.title)} ${control('title', 'TITLE', { label: '', display: 'RENAME', required: true, maxBytes: 256 })}</div>
       <div class="detail-read-register task-detail-read-register">${control('status', 'STATUS', { display: statusLabels[m.status], options: statuses.map(value => ({ value, label: statusLabels[value] })) })}
-      ${control('assignee', 'ASSIGNEE', { maxBytes: 64, suggestions: () => [...new Set([...(typeof userDirectory === 'function' ? userDirectory() : []), ...state.tickets.map(a => metadata(a).assignee)].filter(Boolean))] })}
+      ${control('assignee', 'ASSIGNEE', { maxBytes: 64, suggestions: () => [...new Set([...(typeof userDirectory === 'function' ? userDirectory() : []), ...state.tickets.map(a => metadata(a).assignee)].filter(Boolean))] })}</div>
+      <details class="ticket-customer-details"${customerOpen ? ' open' : ''}><summary>CUSTOMER DETAILS <span>${esc(customerName(m.company_id) || m.requester_name || m.requester || 'NOT ASSIGNED')}</span></summary><div class="record-document"><div class="detail-read-register task-detail-read-register">
       ${customer('company_id', 'COMPANY')}${customer('contact_id', 'CONTACT')}
-      ${control('requester', 'REQUESTER', { maxBytes: 320 })}${control('requester_name', 'REQUESTER NAME', { maxBytes: 256 })}</div>`;
+      ${control('requester', 'REQUESTER', { maxBytes: 320 })}${control('requester_name', 'REQUESTER NAME', { maxBytes: 256 })}</div></div></details>`;
   }
   function editor() {
     const host = document.getElementById('ticketEditor'); if (!host) return;
@@ -453,8 +484,8 @@
           <label class="task-detail-row">STATUS <select name="status" class="filter-select">${statuses.map(s => `<option value="${s}" ${d.status === s ? 'selected' : ''}>${statusLabels[s]}</option>`).join('')}</select></label>
           <label class="detail-edit-field ticket-original-request"><span class="detail-edit-label">ORIGINAL REQUEST</span><textarea name="body" class="task-detail-textarea" rows="5" maxlength="32000">${esc(d.body)}</textarea></label>
           <button class="btn btn--primary" data-save>SAVE TICKET</button>
-        </form>`}${resources}<div id="ticketConversation"></div>
-      ${state.selected ? `<form id="ticketReply"><label class="detail-edit-field">COMPOSER MODE<select name="kind" class="filter-select">${kinds.map(k => `<option value="${k}" ${d.kind === k ? 'selected' : ''}>${k === 'internal_note' ? 'INTERNAL NOTE' : 'CUSTOMER REPLY'}</option>`).join('')}</select></label><p id="ticketVisibility" class="customer-meta" role="status"></p><button type="button" class="btn" data-ticket-recipient hidden>USE CURRENT RECIPIENT</button><textarea name="message" class="task-detail-textarea" rows="4" maxlength="32000" aria-label="Ticket message"></textarea><button class="btn" data-save>SAVE INTERNAL NOTE</button></form>` : ''}`;
+        </form>`}<div id="ticketConversation" class="ticket-conversation"></div>
+      ${state.selected ? `<form id="ticketReply"><fieldset class="choice-field ticket-audience"><legend>AUDIENCE</legend>${kinds.map(k => `<label class="radio-choice"><input type="radio" name="kind" value="${k}" ${d.kind === k ? 'checked' : ''}><span>${k === 'internal_note' ? 'INTERNAL NOTE' : 'PUBLIC REPLY'}</span></label>`).join('')}</fieldset><p id="ticketVisibility" class="customer-meta" role="status"></p><button type="button" class="btn" data-ticket-recipient hidden>USE CURRENT RECIPIENT</button><span id="ticketDraftState" class="customer-meta" role="status"></span><textarea name="message" class="task-detail-textarea" rows="4" maxlength="32000" aria-label="Ticket message"></textarea><button class="btn" data-save>SAVE INTERNAL NOTE</button></form>` : ''}${resources}`;
     window.NRCDetailUI.bindResourceBlocks({ root: host });
     const composer = host.querySelector(state.selected ? '#ticketReply' : '#ticketFields');
     composer.querySelector('button[data-save]')?.insertAdjacentHTML('beforebegin', attachmentComposer());
@@ -701,7 +732,7 @@
     if (!host || !header) return;
     const record = document.createElement('article'); record.id = 'ticketEditor'; record.className = 'customer-record'; record.setAttribute('aria-label', 'Ticket detail');
     host.replaceChildren(record);
-    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">${ref.id ? `TICKET #${ref.id}` : 'NEW TICKET'}</span><span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">${ref.id ? 'DETAIL' : 'CREATE'}</span></div><div class="inspector-mode-row">${window.NRCDetailUI.renderHeaderAction({ id: 'ticketReplyFocus', label: 'REPLY', command: 'm', title: 'Focus reply composer (M)' })}${window.NRCDetailUI.renderCloseControl('ticketInspectorClose')}</div>`;
+    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">${ref.id ? `TICKET #${ref.id}` : 'NEW TICKET'}</span><span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">${ref.id ? 'READ' : 'EDITING'}</span></div><div class="inspector-mode-row">${window.NRCDetailUI.renderHeaderAction({ id: 'ticketReplyFocus', label: 'MESSAGE', command: 'm', title: 'Focus message composer (M)' })}${window.NRCDetailUI.renderCloseControl('ticketInspectorClose')}</div>`;
     document.getElementById('ticketInspectorClose').onclick = () => window.NRCInspector.close();
     document.getElementById('ticketReplyFocus').onclick = () => record.querySelector('[name=message], [name=title]')?.focus();
     state.entries = []; state.detailLoading = !!ref.id; editor(); renderList();
@@ -763,7 +794,9 @@
         if (!document.body.classList.contains('inspector-open')) row?.querySelector('button')?.focus({ preventScroll: true });
       });
     });
-    document.querySelectorAll('#ticketsPanel [data-filter]').forEach(el => el.oninput = () => { state.filters[el.dataset.filter] = el.value; updateSearch({ debounce: el.dataset.filter === 'search' }); });
+    document.querySelectorAll('#ticketsPanel [data-filter]').forEach(el => {
+      el[el.tagName === 'SELECT' ? 'onchange' : 'oninput'] = () => { state.filters[el.dataset.filter] = el.value; updateSearch({ debounce: el.dataset.filter === 'search' }); };
+    });
     for (const type of ['nrc:asset-created', 'nrc:asset-updated', 'nrc:asset-deleted']) document.addEventListener(type, e => {
       const asset = e.detail?.asset;
       if (type === 'nrc:asset-deleted' && asset?.assetType === 13) window.NRCInspector?.entityDeleted({ type: 'ticket', id: asset.assetId });

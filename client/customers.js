@@ -75,7 +75,7 @@
   }
 
   function date(nanos) {
-    return new Date(Number(BigInt(nanos) / 1000000n)).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    return window.NRCDetailUI.formatHeaderDate(nanos);
   }
 
   function scheduleRender() {
@@ -653,7 +653,7 @@
     if (name === "assignee") {
       return `<div class="task-detail-row detail-edit-field"><span class="detail-edit-label">${label}</span><div><input name="assignee" type="hidden" value="${escape(value)}" maxlength="200"></div></div>`;
     }
-    return `<label class="task-detail-row detail-edit-field"><span class="detail-edit-label">${label}</span><input class="task-detail-input" name="${name}" type="${type}" value="${escape(value)}" maxlength="200" ${required ? "required" : ""}></label>`;
+    return `<label class="task-detail-row detail-edit-field"><span class="detail-edit-label">${label}</span><input class="task-detail-input" name="${name}" type="${type}" value="${escape(value)}" maxlength="200" ${required ? "required" : 'placeholder="Optional"'}></label>`;
   }
 
   function clearSelection() {
@@ -690,7 +690,7 @@
       name: "RESPONSIBLE",
       suggestions: () => window.NRCTasks?.getFieldChoices?.("assignee", 0n) || [],
     });
-    window.NRCDetailUI.setSaveState(editorBusy ? "SAVING…" : editorStale ? "STALE" : editorDirty ? "UNSAVED" : inspection?.subview === "edit" ? "SAVED" : "READ", el("inspectorHeader"));
+    window.NRCDetailUI.setSaveState(editorBusy ? "SAVING" : editorStale ? "STALE" : editorDirty ? "UNSAVED" : inspection?.subview === "edit" || !inspection?.id ? "EDITING" : "READ", el("inspectorHeader"));
   }
 
   function edit(kind, asset = null) {
@@ -752,22 +752,19 @@
       return `<div><dt>${label}</dt><dd>${href ? `<a href="${escape(href)}" title="${text}"${name === "website" ? ' target="_blank" rel="noopener noreferrer"' : ""}>${text}</a>` : text}</dd>${present && ["address", "website", "phone"].includes(name) ? `<button class="btn" type="button" data-copy-company="${name}" aria-label="Copy ${name}">COPY</button>` : ""}</div>`;
     };
     const groups = [
-      ["IDENTITY", ["number"]],
-      ["CLASSIFICATION", ["account_type", "sector"]],
-      ["LOCATION", ["city", "address"]],
-      ["CONTACT", ["website", "phone"]],
-      ["OWNERSHIP", ["assignee"]],
+      ["LOCATION & CONTACT", ["city", "address", "website", "phone"]],
+      ["COMPANY", ["number", "account_type", "sector", "assignee"]],
     ];
     const byName = new Map(fields.map(item => [item[0], item]));
     return `<div class="customer-fact-sections">${groups.map(([label, names]) => `<section class="customer-field-section"><div class="detail-edit-section-title">${label}</div><dl class="contact-facts company-facts">${names.map(name => fact(byName.get(name))).join("")}</dl></section>`).join("")}</div>`;
   }
 
   function renderContactFacts(d) {
-    return `<dl class="contact-facts">${["role", "email", "phone"].map(name => {
+    return `${d.role ? `<p class="contact-role">${escape(d.role)}</p>` : ""}<dl class="contact-facts contact-methods">${["email", "phone"].map(name => {
       const value = d[name];
       const href = name === "email" ? `mailto:${encodeURIComponent(value || "")}` : `tel:${String(value || "").replace(/[^+0-9*#]/g, "")}`;
       const text = name === "email" ? escape(value).replace(/([@.])/g, "$1<wbr>") : escape(value);
-      return `<div><dt>${name.toUpperCase()}</dt><dd>${value ? name === "role" ? text : `<a href="${escape(href)}">${text}</a>` : "—"}</dd>${value && name !== "role" ? `<button class="btn" type="button" data-copy-contact="${name}" aria-label="Copy ${name}">COPY</button>` : ""}</div>`;
+      return `<div><dt>${name.toUpperCase()}</dt><dd>${value ? `<a href="${escape(href)}">${text}</a>` : "—"}</dd>${value ? `<button class="btn btn--ghost" type="button" data-copy-contact="${name}" aria-label="Copy ${name}">COPY</button>` : ""}</div>`;
     }).join("")}</dl>`;
   }
 
@@ -821,9 +818,10 @@
       host.querySelectorAll("[data-unlink-company]").forEach(button => { button.onclick = () => removeRecord({ ...ref, companyId: BigInt(button.dataset.unlinkCompany) }, true); });
       const form = el("customerForm");
       const serviceSection = document.createElement("section");
-      serviceSection.className = "customer-section";
+      serviceSection.className = "customer-section contact-service";
       const editing = ref.subview === "edit";
       serviceSection.innerHTML = `<header class="panel-header"><div><span>SERVICE INFORMATION</span></div></header><p class="customer-meta">Receive necessary, non-promotional service information for these companies. Independent of newsletter consent.</p>${companies.filter(a => !metadata(a).archived).map(a => `<label class="filter-checkbox-label"><input class="filter-checkbox" type="checkbox" data-service-company="${a.assetId}" ${form.serviceFor.has(String(a.assetId)) ? "checked" : ""} ${editing ? "" : "disabled"}><span>${escape(metadata(a).title)}</span></label>`).join("") || '<p class="customer-empty">Link an active company first.</p>'}`;
+      if (!companies.some(a => !metadata(a).archived)) serviceSection.classList.add("contact-service--empty");
       host.append(serviceSection);
       serviceSection.querySelectorAll("input").forEach(input => {
         input.onchange = () => {
@@ -913,14 +911,14 @@
       { label: "CREATED", value: window.NRCDetailUI.formatHeaderDate(asset.createdAt) },
       { label: "UPDATED", value: window.NRCDetailUI.formatHeaderDate(asset.updatedAt) },
     ], 2, asset.assetId) : "";
-    el("inspectorHeader").innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">${kind.toUpperCase()} ${asset ? "#" + asset.assetId : "/ NEW"}</span>${register}<span class="inspector-cell-label">STATE</span>${window.NRCDetailUI.renderSaveState(editing ? "SAVED" : "READ")}</div><div class="inspector-mode-row">
-      ${asset ? window.NRCDetailUI.renderHeaderAction(editing ? { id: "customerView", label: "VIEW", command: "v", title: "Read record (V)" } : { id: "customerEdit", label: "EDIT", command: "e", title: "Edit record (E)" }) : ""}
+    el("inspectorHeader").innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">${kind.toUpperCase()} ${asset ? "#" + asset.assetId : "/ NEW"}</span>${register}<span class="inspector-cell-label">STATE</span>${window.NRCDetailUI.renderSaveState(editing ? "EDITING" : "READ")}</div><div class="inspector-mode-row">
+      ${editing ? '<button id="customerSave" class="btn btn--primary header-operation inspector-matrix-control" type="submit" form="customerForm" data-inspector-command="s" title="Save record (S)">SAVE</button>' + window.NRCDetailUI.renderHeaderAction({ id: "customerCancel", label: "CANCEL", command: "v", title: "Cancel editing (V)" }) : window.NRCDetailUI.renderHeaderAction({ id: "customerEdit", label: "EDIT", command: "e", title: "Edit record (E)" })}
       ${window.NRCDetailUI.renderCloseControl("customerClose")}</div>`;
-    const actions = `${editing ? '<button id="customerSave" class="btn btn--primary task-modal-btn save" type="submit">SAVE</button><button id="customerCancel" class="btn btn--ghost task-modal-btn" type="button">CANCEL</button>' : ""}${asset && kind !== "company" ? '<button id="customerDelete" class="btn btn--danger task-modal-btn danger" type="button">DELETE</button>' : ""}`;
-    el("inspectorEntityHost").innerHTML = `<form id="customerForm" class="customer-inspector">
+    const actions = asset && kind !== "company" ? '<button id="customerDelete" class="btn btn--danger task-modal-btn danger" type="button">DELETE</button>' : "";
+    el("inspectorEntityHost").innerHTML = `<form id="customerForm" class="customer-inspector customer-inspector--${kind}${editing ? "" : " customer-inspector--read"}">
       ${contact ? `<p class="customer-meta">SOURCE / ${escape(d.source || "—")} · REVIEW / ${escape(d.review_status || "—")}</p>${editing ? '<label class="detail-edit-field"><span class="detail-edit-label">REVIEW STATUS — EXPLICIT CONFIRMATION</span><select class="task-detail-input" name="review_status"><option value="">UNCHANGED</option><option value="reviewed">REVIEWED</option><option value="pending">PENDING</option></select></label>' : ""}` : ""}
       <div class="customer-inspector-body detail-edit-form">${editing ? `<div id="customerFields" class="customer-fields detail-edit-form">${renderCustomerEditFields(kind, d, fields, asset)}</div>` :
-        `<h2 class="note-preview-title">${escape(d.title)}</h2>${contact ? renderContactFacts(d) : companyFacts ? renderCompanyFacts(d, fields) : window.NRCDetailUI.renderMetadataLedger(fields.map(([name, label]) => ({ label, value: d[name] })))}${kind === "activity" ? `<p id="customerActivityBody" class="customer-activity-body">${escape(asset.payload)}</p>` : ""}`}
+        `<h2 class="note-preview-title">${escape(d.title)}</h2>${contact ? renderContactFacts(d) : companyFacts ? renderCompanyFacts(d, fields) : `<p class="customer-activity-context">${escape(d.kind)} · RECORDED ${escape(window.NRCDetailUI.formatHeaderDate(asset.createdAt))}</p>`}${kind === "activity" ? `<p id="customerActivityBody" class="customer-activity-body">${escape(asset.payload)}</p>` : ""}`}
       ${contact ? '<section id="contactCompanies" class="customer-section" aria-label="Linked companies"></section>' : unlink ? `<p class="customer-meta">LINKED COMPANY / ${escape(metadata(company).title)}</p><button id="customerUnlink" class="btn" type="button">REMOVE FROM THIS COMPANY</button>` : ""}
       <p id="customerEditorError" class="customer-status" role="alert"></p></div>
       ${actions ? `<div class="note-detail-actions">${actions}</div>` : ""}</form>`;

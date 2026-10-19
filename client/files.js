@@ -129,22 +129,40 @@
   // inspector that a file reference opens in.
   function fileReadBody(asset) {
     const body = document.createElement("div"); body.className = "customer-fields file-assets-details";
-    body.innerHTML = fileFacts(asset) + renderAttachmentPreviewStripHtml(asset.attachments, "fileDetailsAttachments", { inlineImages: true, alwaysOpen: true });
+    body.innerHTML = fileFacts(asset, "fileDetailsAttachments");
     return body;
   }
 
   // Both read hosts use the same compact, grouped metadata register.
-  function fileFacts(asset) {
+  function fileFacts(asset, attachmentId) {
     const data = parseMetadata(asset), att = asset.attachments?.[0];
-    const updated = new Date(Number(BigInt(asset.updatedAt ?? asset.createdAt ?? 0) / 1000000n)).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    const updated = window.NRCDetailUI.formatHeaderDate(asset.updatedAt ?? asset.createdAt);
     const fact = (label, value) => `<dt>${label}</dt><dd>${escape(value || "—")}</dd>`;
+    const binaries = (asset.attachments || []).map(attachment => {
+      const file = getAttachmentPreviewData(attachment);
+      // Only embed declared PDFs; a filename alone must not turn arbitrary
+      // active content into an embedded document. The browser owns its viewer.
+      const isPdf = attachment.mimeType === "application/pdf" && file.href !== "#";
+      const pdfFallback = `<p class="file-assets-preview-help">PDF preview uses your browser's viewer. If it is unavailable or blank, use OPEN above.</p>`;
+      return `<section class="file-assets-binary" aria-label="${escape(file.filename)}">
+        <p class="file-assets-binary-name">${escape(file.filename)}</p>
+        <p class="file-assets-binary-facts" title="${escape(attachment.mimeType || "application/octet-stream")}">${escape(file.type)} · ${escape(file.size)}</p>
+        <div class="file-assets-binary-actions">
+          ${file.href !== "#" ? `<button class="btn btn--primary" type="button" data-attachment-open ${file.dataAttrs}>OPEN</button>` : ""}
+          <a class="btn" href="${escape(file.downloadHref)}" download="${escape(file.filename)}">DOWNLOAD</a>
+        </div>
+        ${file.isImage && file.href !== "#" ? `<button class="file-assets-image" type="button" data-attachment-open ${file.dataAttrs} aria-label="Open ${escape(file.filename)}"><img src="${escape(file.href)}" alt="${escape(file.filename)}" loading="lazy"></button>` : ""}
+        ${isPdf ? `${navigator.pdfViewerEnabled ? `<object class="file-assets-pdf" data="${escape(file.href)}#view=FitH" type="application/pdf" aria-label="PDF preview: ${escape(file.filename)}">${pdfFallback}</object>` : ""}${pdfFallback}` : ""}
+      </section>`;
+    }).join("");
     return `<section class="file-assets-metadata" aria-label="File metadata">
       <h2 class="file-assets-heading">${escape(data.title || att?.filename || "Untitled file")}</h2>
+      <p class="file-assets-updated">Updated ${escape(updated)}</p>
       ${data.description ? `<p class="file-assets-description">${escape(data.description)}</p>` : ""}
+      <nrc-attachment-list class="file-assets-content" id="${escape(attachmentId)}">${binaries || '<p class="customer-empty">No file uploaded.</p>'}</nrc-attachment-list>
       <dl>
-        <div class="file-assets-fact-group" role="group" aria-label="File">${fact("FILENAME", att?.filename)}${fact("TYPE", att?.mimeType)}${fact("SIZE", att ? formatFileSize(Number(att.size)) : "—")}</div>
         <div class="file-assets-fact-group" role="group" aria-label="Classification">${fact("CATEGORY", data.category)}${fact("TAGS", data.tags.join(", "))}</div>
-        <div class="file-assets-fact-group" role="group" aria-label="Record info">${fact("OWNER", asset.owner)}${fact("UPDATED", updated)}</div>
+        <div class="file-assets-fact-group" role="group" aria-label="Record info">${fact("OWNER", asset.owner)}</div>
       </dl>
     </section>`;
   }
@@ -179,8 +197,7 @@
         }
         render("READ ONLY", null);
         const body = document.createElement("div"); body.className = "customer-inspector-body file-assets-details";
-        body.innerHTML = fileFacts(asset);
-        body.insertAdjacentHTML("beforeend", renderAttachmentPreviewStripHtml(asset.attachments, "fileInspectorAttachments", { inlineImages: true, alwaysOpen: true }));
+        body.innerHTML = fileFacts(asset, "fileInspectorAttachments");
         const shell = document.createElement("div"); shell.className = "customer-inspector";
         shell.append(body);
         host.append(shell);

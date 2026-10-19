@@ -166,6 +166,18 @@
     }
 }
 
+.custom-select__dropdown--wrap {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.custom-select__dropdown--wrap .custom-select__option {
+    height: auto;
+    min-height: 1.5rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
 .custom-select__option--selected {
     background: var(--surface-content);
     color: var(--accent-highlight);

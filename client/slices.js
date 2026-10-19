@@ -208,6 +208,14 @@
     return `${Math.round(hours / 24)}D`;
   }
 
+  function oldestOpenAge(timestamp) {
+    const hours = ageHours(timestamp);
+    if (hours === null || !Number.isFinite(hours) || hours < 0) return null;
+    const [value, unit] = hours < 1 ? [Math.max(1, Math.round(hours * 60)), "MIN"] :
+      hours < 24 ? [Math.round(hours), "HR"] : [Math.round(hours / 24), "DAY"];
+    return `${value} ${unit}${value === 1 || unit === "MIN" || unit === "HR" ? "" : "S"} AGO`;
+  }
+
   // Both views cover all tasks, regardless of member count. Blocked overlaps
   // task statuses: the register names it in text; the record gives it a separate
   // track, never a fifth segment in the status distribution.
@@ -229,14 +237,9 @@
 
     const facts = [
       ["TASKS", tasks, false],
-      ["OPEN", openCount(slice), openCount(slice) > 6],
+      ["OPEN", openCount(slice), false],
       ["BLOCKED", slice.blocked, slice.blocked > 0],
-      ["DONE", slice.done, false],
-      ["NOTES", slice.notes, false],
-      ["FILES", slice.files, false],
-      ["TICKETS", slice.tickets ?? 0, false],
-      ["OLDEST OPEN", formatAge(slice.oldestActiveAt), false],
-      ["LAST MOVED", formatAge(slice.lastMovedAt), false],
+      ...(oldestOpenAge(slice.oldestActiveAt) ? [["OLDEST OPEN", oldestOpenAge(slice.oldestActiveAt), false]] : []),
     ];
     const legend = SHAPE_SEGMENTS.map(([status, counter]) => {
       const percentage = tasks ? Math.round(slice[counter] * 1000 / tasks) / 10 : 0;
@@ -248,9 +251,9 @@
     const blockedBar = tasks ? `<div class="slice-blocked-summary">
       <span class="slice-note">BLOCKED ${blocked} / ${tasks}</span>
       <div class="slice-bar slice-bar--blocked" role="img" aria-label="${blockedSummary}" title="${blockedSummary}">
-        <span class="slice-bar-seg slice-bar-seg--blocked" style="--slice-share:${blocked}"></span><span class="slice-bar-track" style="--slice-share:${tasks - blocked}"></span>
+        ${blocked ? `<span class="slice-bar-seg slice-bar-seg--blocked" style="--slice-share:${blocked}"></span>` : ""}<span class="slice-bar-track" style="--slice-share:${tasks - blocked}"></span>
       </div>
-      <div class="slice-status-legend"><span><i class="slice-bar-seg--blocked" aria-hidden="true"></i>INCLUDED IN TASK STATUSES</span></div>
+      <div class="slice-status-legend"><span>${blocked ? '<i class="slice-bar-seg--blocked" aria-hidden="true"></i>' : ""}INCLUDED IN TASK STATUSES</span></div>
     </div>` : "";
     return `<div class="slice-status-summary">
       <dl class="slice-facts">${facts.map(([label, value, alert]) =>
@@ -766,7 +769,9 @@
     recordHome = record.parentElement;
     inspectorRecord = record;
     host.replaceChildren(record);
-    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">SLICE #${ref.id}</span>${window.NRCDetailUI.renderHeaderMetadata([], 2, ref.id)}<span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">WORK STREAM</span></div><div class="inspector-mode-row">${window.NRCDetailUI.renderCloseControl("sliceInspectorClose")}</div>`;
+    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">SLICE #${ref.id}</span>${window.NRCDetailUI.renderHeaderMetadata([], 2, ref.id)}<span class="inspector-cell-label">STATE</span><span id="sliceInspectorState" class="detail-save-state" role="status" aria-live="polite">LOADING</span></div><div class="inspector-mode-row"><button type="button" id="sliceInspectorSave" class="btn btn--primary header-operation inspector-matrix-control" data-slice-action="save" data-inspector-command="s" title="Save slice (S)" disabled><span>SAVE</span></button>${window.NRCDetailUI.renderCloseControl("sliceInspectorClose")}</div>`;
+    record.addEventListener("input", syncInspectorState);
+    record.addEventListener("change", syncInspectorState);
     document.getElementById("sliceInspectorClose").onclick = () => window.NRCInspector.close();
     render();
     return true;
@@ -775,12 +780,28 @@
   function clearInspector() {
     ++selectionGeneration;
     if (!inspectorRecord) return;
+    inspectorRecord.removeEventListener("input", syncInspectorState);
+    inspectorRecord.removeEventListener("change", syncInspectorState);
     recordHome.append(inspectorRecord);
     inspectorRecord.nrcMarkup = null;
     paintedFields = null;
     inspectorRecord = null;
     recordHome = null;
     render();
+  }
+
+  function syncInspectorState() {
+    if (!inspectorRecord) return;
+    const ready = state.detail.mode === "ready" && state.detailSliceId === state.selected;
+    const label = state.writePending ? "SAVING" : state.writeError || state.detail.mode === "error" ? "ERROR" :
+      !ready || recordRefreshRequired ? "LOADING" : recordDirty() ? "UNSAVED" : "SAVED";
+    const status = document.getElementById("sliceInspectorState");
+    if (status) {
+      status.textContent = label;
+      status.dataset.saveState = label;
+    }
+    const save = document.getElementById("sliceInspectorSave");
+    if (save) save.disabled = state.writePending || recordRefreshRequired || !ready;
   }
 
   // The owner and the outcome are live fields on the record, so a selection
@@ -1513,6 +1534,7 @@
         record.inert = false;
       }
       syncFilterControls();
+      syncInspectorState();
       return;
     }
     updateHtml(record, renderRecord(fields), { preserveSections: paintedFields?.sliceId === slice?.sliceId });
@@ -1520,6 +1542,7 @@
     // over them is put back, and remembered for the next render to read again.
     paintedFields = fields;
     applyDraft(draft);
+    syncInspectorState();
 
     window.NRCDetailUI?.bindSuggestedInput(document.getElementById("sliceOwner"), {
       name: "OWNER",
@@ -1571,31 +1594,31 @@
       ${inspectorRecord ? "" : '<button class="btn slice-mobile-back mobile-only" type="button" data-slice-action="back">← SLICES</button>'}
       <div class="slice-identity">
         <div>
-          <span class="slice-note">SLICE #${slice.sliceId} / ${closed ? "CLOSED" : "ACTIVE"} / OPENED ${formatAge(slice.oldestActiveAt)} AGO</span>
+          <span class="slice-note">SLICE #${slice.sliceId} / ${closed ? "CLOSED" : "ACTIVE"}</span>
           <h2>${escape(slice.name)}</h2>
-        </div>
-        <div class="slice-identity-actions">
-          <button class="btn" data-slice-action="save" ${locked ? "disabled" : ""}>SAVE</button>
-          ${closed
-            ? `<button class="btn" data-slice-action="reopen" ${locked ? "disabled" : ""}>REOPEN SLICE</button>`
-            : `<button class="btn" data-slice-action="close" ${locked ? "disabled" : ""}>CLOSE SLICE</button>`}
-          <button class="btn btn--danger" data-slice-action="delete" ${locked ? "disabled" : ""}>DELETE SLICE</button>
         </div>
       </div>
       ${state.writeError ? `<p class="slice-status-line" data-state="error">${escape(state.writeError)}</p>` : ""}
       ${state.refreshError ? `<p class="slice-status-line" data-state="error">${escape(state.refreshError)}</p>` : ""}
-      <div class="slice-record-shape">
-        ${renderShape(slice, { wide: true })}
-      </div>
       <div class="slice-record-fields">
-        <div class="slice-field slice-field--owner">
-          <span class="slice-note">OWNER</span>
-          <div><input id="sliceOwner" type="hidden" maxlength="${MAX_OWNER_LENGTH}" value="${escape(owner)}"></div>
-        </div>
         <div class="slice-field slice-field--outcome">
           <label class="slice-note" for="sliceOutcome">OUTCOME</label>
           <textarea class="filter-input slice-outcome-input" id="sliceOutcome" rows="1" maxlength="${MAX_OUTCOME_LENGTH}" placeholder="One sentence. A slice is done when this is true.">${escape(outcome)}</textarea>
         </div>
+        <div class="slice-field slice-field--owner">
+          <span class="slice-note">OWNER</span>
+          <div><input id="sliceOwner" type="hidden" maxlength="${MAX_OWNER_LENGTH}" value="${escape(owner)}"></div>
+        </div>
+      </div>
+      ${inspectorRecord ? "" : `<div class="slice-identity-actions">
+        <button class="btn btn--primary" data-slice-action="save" ${locked ? "disabled" : ""}>SAVE</button>
+        ${closed
+          ? `<button class="btn" data-slice-action="reopen" ${locked ? "disabled" : ""}>REOPEN SLICE</button>`
+          : `<button class="btn" data-slice-action="close" ${locked ? "disabled" : ""}>CLOSE SLICE</button>`}
+        <button class="btn btn--danger" data-slice-action="delete" ${locked ? "disabled" : ""}>DELETE SLICE</button>
+      </div>`}
+      <div class="slice-record-shape" role="group" aria-label="Task progress">
+        ${renderShape(slice, { wide: true })}
       </div>
       <section class="slice-section">
         <div class="panel-header"><div><span>TASKS / ${taskCount(slice)}</span><button class="btn" data-slice-action="assign" data-slice-kind="task" ${state.writePending ? "disabled" : ""}>+ ASSIGN TASK</button></div></div>
@@ -1613,6 +1636,10 @@
         <div class="panel-header"><div><span>TICKETS / ${slice.tickets ?? 0}</span><button class="btn" data-slice-action="assign" data-slice-kind="ticket" ${state.writePending ? "disabled" : ""}>+ ASSIGN TICKET</button></div></div>
         ${renderTickets(state.tickets)}
       </section>
+      ${inspectorRecord ? `<div class="slice-identity-actions" aria-label="Slice lifecycle">
+        <button class="btn" data-slice-action="${closed ? "reopen" : "close"}" ${locked ? "disabled" : ""}>${closed ? "REOPEN" : "CLOSE"} SLICE</button>
+        <button class="btn btn--danger" data-slice-action="delete" ${locked ? "disabled" : ""}>DELETE SLICE</button>
+      </div>` : ""}
       <p class="slice-footnote">MEMBERS ARE ASSIGNED. A LABEL SAYS WHICH REPOSITORY SOMETHING BELONGS TO; A SLICE SAYS WHICH WORK STREAM IT MOVES.</p>`;
   }
 
@@ -1941,6 +1968,9 @@
     view.addEventListener("click", handleClick);
     document.getElementById("sliceRecord")?.addEventListener?.("click", event => {
       if (inspectorRecord) handleClick(event);
+    });
+    document.getElementById("inspectorHeader")?.addEventListener?.("click", event => {
+      if (inspectorRecord && event.target.closest("#sliceInspectorSave")) handleClick(event);
     });
 
     view.addEventListener("keydown", (event) => {

@@ -179,6 +179,17 @@
         document.getElementById("searchAssetState").textContent = "READ ONLY";
         const body = textElement("div", "customer-inspector-body", "");
         body.append(textElement("h2", "workspace-search-title", object(asset.preview).title || asset.preview), textElement("pre", "workspace-search-payload", asset.payload || ""));
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "btn";
+        copy.textContent = "COPY RAW DATA";
+        const status = textElement("span", "customer-meta", "");
+        status.setAttribute("role", "status");
+        copy.onclick = async () => {
+          try { await navigator.clipboard.writeText(asset.payload || ""); status.textContent = "COPIED"; }
+          catch { status.textContent = "Copy failed. Select and copy the data manually."; }
+        };
+        body.append(copy, status);
         body.insertAdjacentHTML("beforeend", renderAttachmentPreviewStripHtml(asset.attachments, "searchAssetAttachments"));
         host.replaceChildren(body);
       },

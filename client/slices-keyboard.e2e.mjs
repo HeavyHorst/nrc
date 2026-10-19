@@ -32,7 +32,7 @@ try {
       const names = slices.map((slice) => bytes(slice.name));
       const owners = slices.map((slice) => bytes(slice.owner));
       let size = 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + 4;
-      slices.forEach((slice, index) => { size += 2 + names[index].length + 8 + 2 + owners[index].length + 1 + 14 + 16; });
+      slices.forEach((slice, index) => { size += 2 + names[index].length + 8 + 2 + owners[index].length + 1 + 16 + 16; });
       const buffer = new ArrayBuffer(size);
       const view = new DataView(buffer);
       let offset = 0;
@@ -54,6 +54,7 @@ try {
         view.setUint16(offset, slice.blocked ?? 0, false); offset += 2;
         view.setUint16(offset, slice.notes ?? 0, false); offset += 2;
         view.setUint16(offset, slice.files ?? 0, false); offset += 2;
+        view.setUint16(offset, slice.tickets ?? 0, false); offset += 2;
         view.setBigInt64(offset, 0n, false); offset += 8;
         view.setBigInt64(offset, BigInt(Date.now()) * 1000000n, false); offset += 8;
       });
@@ -151,7 +152,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll("#sliceRecord .slice-member").length === 7);
 
   assert.deepEqual(await page.locator("#sliceRecord .slice-facts dt").allTextContents(),
-    ["TASKS", "OPEN", "BLOCKED", "DONE", "NOTES", "FILES", "OLDEST OPEN", "LAST MOVED"]);
+    ["TASKS", "OPEN", "BLOCKED"]);
   assert.equal(await page.locator("#sliceRecord .slice-identity").innerText().then(text => text.includes("OWNER")), false);
   assert.equal(await page.locator('#sliceRecord .slice-field--owner .slice-note').textContent(), "OWNER");
   assert.equal(await page.locator('#sliceRecord label[for="sliceOutcome"]').textContent(), "OUTCOME");

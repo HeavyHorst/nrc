@@ -102,6 +102,7 @@ const Opcode = {
   C_GetWorkspaceOverview: 59,
   C_GetTasksByIDs: 60,
   C_GetAssetsByIDs: 61,
+  C_ListTaskDependents: 64,
   // Tasks/Kanban (Server -> Client)
   S_TaskCreated: 130,
   S_TaskUpdated: 131,
@@ -116,6 +117,7 @@ const Opcode = {
   S_TaskAssignees: 165,
   S_CalendarPage: 166,
   S_WorkspaceOverview: 167,
+  S_TaskDependentsPage: 170,
   // Assets (Client -> Server)
   C_CreateAsset: 30,
   C_UpdateAsset: 31,
@@ -1881,6 +1883,9 @@ function handleBinaryMessage(arrayBuffer) {
       case Opcode.S_TaskQueryPage:
         window.NRCTaskQuery?.handlePage(dataView);
         window.NRCAttention?.handleTaskQueryPage?.(dataView);
+        break;
+      case Opcode.S_TaskDependentsPage:
+        window.NRCTasks?.handleTaskDependentsPage(dataView);
         break;
       case Opcode.S_TaskProjects:
         window.NRCTaskQuery?.handleProjects(dataView);

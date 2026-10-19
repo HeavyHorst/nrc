@@ -115,8 +115,8 @@
                                 <div class="header-register-control-row">
                                     <label class="header-filter-cell"><span class="filter-label">SEARCH</span><input class="filter-input" data-filter="search" type="search" placeholder="TICKETS / CONVERSATIONS / ID"></label>
                                     <label class="header-filter-cell"><span class="filter-label">STATE</span><select class="filter-select" data-filter="status"><option value="">ALL</option><option value="open">OPEN</option><option value="in_progress">IN PROGRESS</option><option value="waiting_customer">WAITING ON CUSTOMER</option><option value="resolved">RESOLVED</option><option value="closed">CLOSED</option></select></label>
-                                    <label class="header-filter-cell"><span class="filter-label">ASSIGNEE</span><input class="filter-input" data-filter="owner" placeholder="ALL ASSIGNEES"></label>
-                                    <label class="header-filter-cell"><span class="filter-label">CUSTOMER ID</span><input class="filter-input" data-filter="company" inputmode="numeric" placeholder="ALL CUSTOMERS"></label>
+                                    <label class="header-filter-cell"><span class="filter-label">ASSIGNEE</span><nrc-select><select id="ticketAssigneeFilter" class="filter-select" data-filter="owner" data-custom-select-portal data-custom-select-search-placeholder="FILTER ASSIGNEE..."><option value="">ALL ASSIGNEES</option></select></nrc-select></label>
+                                    <label class="header-filter-cell"><span class="filter-label">CUSTOMER</span><nrc-select><select id="ticketCustomerFilter" class="filter-select" data-filter="company" data-custom-select-portal data-custom-select-wrap data-custom-select-search-placeholder="FILTER CUSTOMER..." disabled><option value="">ALL CUSTOMERS</option></select></nrc-select></label>
                                     <button id="ticketsRefresh" class="btn header-operation">REFRESH</button><button id="ticketNew" class="btn btn--primary header-operation">+ TICKET</button>
                                 </div>
                             </div>

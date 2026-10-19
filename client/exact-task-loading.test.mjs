@@ -27,6 +27,7 @@ function loadRequestTask() {
     const pendingTaskRpcs = new Map();
     const pendingTaskUpdateCorrelations = new Set();
     const taskPageState = new Map();
+    let taskDependencyQuery = null;
     let ready = true;
     function sendGetTask(convId, taskId, options) {
       if (!ready) return undefined;
@@ -66,6 +67,19 @@ test("exact task reads coalesce across legacy room references and clear after er
   assert.deepEqual(calls, ["a", "b"]);
   assert.notEqual(requestTask(7n, 42n), first);
   assert.equal(sends.length, 2);
+});
+
+test("forced task reads revalidate cached records and fail offline rather than returning stale data", () => {
+  const f = loadRequestTask();
+  f.roomTasks.set(0n, new Map([[42n, { id: 42n, title: 'Old title' }]]));
+  let result, failed = false;
+  f.requestTask(0n, 42n, { force: true, onSuccess: ({ task }) => { result = task; } });
+  assert.equal(result, undefined);
+  f.sends[0].options.onSuccess({ task: { id: 42n, title: 'Current title' } });
+  assert.equal(result.title, 'Current title');
+  f.setReady(false);
+  f.requestTask(0n, 42n, { force: true, onSuccess: () => assert.fail('stale cache returned'), onError: () => { failed = true; } });
+  assert.equal(failed, true);
 });
 
 test("unavailable task transport reports failure and permits a later retry", () => {

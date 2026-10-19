@@ -4,6 +4,7 @@ window.NRCAppointments = (() => {
   let dirty = false;
   let saving = false;
   let generation = 0;
+  let editing = false;
   let metadata = { assignee: "", project: "" };
   const escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const nanos = value => {
@@ -76,14 +77,16 @@ window.NRCAppointments = (() => {
   function setError(message) {
     const target = document.getElementById("appointmentValidationError");
     if (target) { target.textContent = message; target.hidden = !message; }
+    if (message) window.NRCDetailUI.setSaveState("ERROR", document.querySelector(".agenda-panel"));
   }
   function setSaving(value) {
     saving = value;
-    document.querySelectorAll(".appointment-detail-panel input, .appointment-detail-panel textarea, .appointment-detail-panel button, #appointmentSave, #appointmentSaveHeader, #appointmentCancel, #appointmentDelete")
+    window.NRCDetailUI.setSaveState(value ? "SAVING" : dirty ? "UNSAVED" : "EDITING", document.querySelector(".agenda-panel"));
+    document.querySelectorAll(".appointment-detail-panel input, .appointment-detail-panel textarea, .appointment-detail-panel button, #appointmentSave, #appointmentCancel, #appointmentDelete, #appointmentEdit")
       .forEach(control => { control.disabled = value; });
   }
   function save() {
-    if (saving) return false;
+    if (saving || !editing) return false;
     if (typeof serverReady === "undefined" || !serverReady) { setError("OFFLINE · RECONNECT BEFORE SAVING"); return false; }
     const values = readForm(), error = validate(values);
     setError(error); if (error) return false;
@@ -94,7 +97,7 @@ window.NRCAppointments = (() => {
       if (token !== generation) return;
       setSaving(false);
       dirty = false; selected = parse(result.asset); window.NRCCalendar?.refreshSoon?.();
-      if (selected) window.NRCInspector.openEntity({ roomId: 0n, type: "appointment", id: selected.asset.assetId }, { replaceCurrent: true });
+      if (selected) window.NRCInspector.openEntity({ roomId: 0n, type: "appointment", id: selected.asset.assetId, subview: "read" }, { replaceCurrent: true });
     }, onError: result => {
       if (token !== generation) return;
       setSaving(false);
@@ -133,6 +136,26 @@ window.NRCAppointments = (() => {
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     let meeting = "";
     try { const url = new URL(appointment.url); if (["http:", "https:"].includes(url.protocol)) meeting = url.href; } catch {}
+    if (!editing) {
+      const start = new Date(Number(appointment.startAt / 1000000n));
+      const end = appointment.endAt ? new Date(Number(appointment.endAt / 1000000n)) : null;
+      const time = date => date.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+      const endText = end ? `${start.toDateString() === end.toDateString() ? "" : end.toLocaleDateString("de-DE", { dateStyle: "medium" }) + " · "}${time(end)}` : "";
+      header.innerHTML = `<div class="inspector-identity-row"><span class="header-text">APPOINTMENT #${appointment.asset.assetId}</span><span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">READ</span></div><div class="inspector-mode-row">${window.NRCDetailUI.renderHeaderAction({ id: "appointmentEdit", label: "EDIT", command: "e", title: "Edit appointment (E)" })}${window.NRCDetailUI.renderCloseControl("appointmentClose")}</div>`;
+      content.innerHTML = `<article class="schedule-detail appointment-detail-panel">
+        <h2>${escape(appointment.title)}</h2>
+        <section class="schedule-time" aria-label="Appointment time"><p class="schedule-date">${escape(start.toLocaleDateString("de-DE", { dateStyle: "full" }))}</p><p class="schedule-hours">${escape(time(start))}${endText ? ` – ${escape(endText)}` : ""}</p><p class="schedule-zone">${escape(zone)}</p></section>
+        ${meeting ? `<a class="btn btn--primary schedule-primary" href="${escape(meeting)}" target="_blank" rel="noopener noreferrer">OPEN MEETING ↗</a>` : ""}
+        ${appointment.description ? `<p class="schedule-description">${escape(appointment.description)}</p>` : ""}
+        ${window.NRCDetailUI.renderMetadataLedger([{ label: "ASSIGNEE", value: appointment.assignee }, { label: "PROJECT", value: appointment.project }])}
+        <div id="appointmentValidationError" class="reminder-detail-validation-error" role="alert" hidden></div>
+        </article><div class="task-detail-actions"><button class="btn btn--danger task-modal-btn danger" id="appointmentDelete">DELETE</button></div>`;
+      content.oninput = null; content.onchange = null;
+      document.getElementById("appointmentEdit").onclick = () => window.NRCInspector.openEntity({ ...window.NRCInspector.current(), subview: "edit" });
+      document.getElementById("appointmentClose").onclick = () => window.NRCInspector.close();
+      document.getElementById("appointmentDelete").onclick = remove;
+      return;
+    }
     metadata = { assignee: appointment.assignee, project: appointment.project };
     const token = generation;
     const field = name => window.NRCDetailUI.inlineField({ key: `appointment-${name}`, name: name.toUpperCase(), label: name.toUpperCase(),
@@ -140,25 +163,26 @@ window.NRCAppointments = (() => {
       save: value => {
         if (token !== generation || saving) throw new Error("APPOINTMENT CHANGED OR IS SAVING · CLOSE AND REOPEN THIS FIELD");
         metadata[name] = String(value).trim(); dirty = true;
+        window.NRCDetailUI.setSaveState("UNSAVED", panel);
       } });
-    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text">APPOINTMENT${fresh ? " / NEW" : ` #${appointment.asset.assetId}`}</span><span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">${fresh ? "DRAFT" : "DURABLE"}</span></div><div class="inspector-mode-row"><button class="btn btn--primary header-operation inspector-matrix-control" id="appointmentSaveHeader" type="button">SAVE</button>${window.NRCDetailUI.renderCloseControl("appointmentClose")}</div>`;
+    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text">APPOINTMENT${fresh ? " / NEW" : ` #${appointment.asset.assetId}`}</span><span class="inspector-cell-label">STATE</span>${window.NRCDetailUI.renderSaveState("EDITING")}</div><div class="inspector-mode-row">${window.NRCDetailUI.renderHeaderAction({ id: "appointmentSave", label: "SAVE", command: "s", title: "Save appointment (S)", className: "btn--primary" })}${window.NRCDetailUI.renderHeaderAction({ id: "appointmentCancel", label: "CANCEL", command: "v", title: "Cancel editing (V)" })}${window.NRCDetailUI.renderCloseControl("appointmentClose")}</div>`;
     content.innerHTML = `<div class="task-detail-panel task-detail-panel-editable reminder-detail-panel detail-edit-form appointment-detail-panel">
       <label class="task-detail-row detail-edit-field"><span class="task-detail-label detail-edit-label">TITLE</span><input id="appointmentTitle" class="task-detail-input" maxlength="256" value="${escape(appointment.title)}"></label>
-      <div class="detail-edit-grid detail-edit-grid--reminder-dates"><label class="task-detail-row detail-edit-field"><span class="task-detail-label detail-edit-label">START · ${escape(zone)}</span><input id="appointmentStart" type="datetime-local" class="task-detail-input" value="${localValue(appointment.startAt)}"></label><label class="task-detail-row detail-edit-field"><span class="task-detail-label detail-edit-label">END · ${escape(zone)} / OPTIONAL</span><input id="appointmentEnd" type="datetime-local" class="task-detail-input" value="${localValue(appointment.endAt)}"></label></div>
+      <fieldset class="schedule-fieldset"><legend>WHEN · ${escape(zone)}</legend><div class="detail-edit-grid detail-edit-grid--reminder-dates"><label class="task-detail-row detail-edit-field"><span class="task-detail-label detail-edit-label">START</span><input id="appointmentStart" type="datetime-local" class="task-detail-input" value="${localValue(appointment.startAt)}"></label><label class="task-detail-row detail-edit-field"><span class="task-detail-label detail-edit-label">END / OPTIONAL</span><input id="appointmentEnd" type="datetime-local" class="task-detail-input" value="${localValue(appointment.endAt)}"></label></div></fieldset>
       <label class="task-detail-row detail-edit-field"><span class="task-detail-label detail-edit-label">DESCRIPTION</span><textarea id="appointmentDescription" class="task-detail-textarea" maxlength="2048">${escape(appointment.description)}</textarea></label>
       <div class="detail-edit-grid detail-edit-grid--task-meta">${field("assignee")}${field("project")}</div>
       <label class="task-detail-row detail-edit-field"><span class="task-detail-label detail-edit-label">MEETING URL / OPTIONAL</span><input id="appointmentUrl" type="url" class="task-detail-input" value="${escape(appointment.url)}"></label>
       <div id="appointmentValidationError" class="reminder-detail-validation-error" role="alert" hidden></div></div>
-      <div class="task-detail-actions"><button class="btn btn--primary task-modal-btn save" id="appointmentSave">SAVE</button>${fresh ? '<button class="btn btn--ghost task-modal-btn" id="appointmentCancel">CANCEL</button>' : ""}${meeting ? `<a class="btn task-modal-btn" href="${escape(meeting)}" target="_blank" rel="noopener noreferrer">OPEN MEETING ↗</a>` : ""}${fresh ? "" : '<button class="btn btn--danger task-modal-btn danger" id="appointmentDelete">DELETE</button>'}</div>`;
-    content.oninput = () => { dirty = true; }; content.onchange = () => { dirty = true; };
+      ${fresh ? "" : '<div class="task-detail-actions"><button class="btn btn--danger task-modal-btn danger" id="appointmentDelete">DELETE</button></div>'}`;
+    content.oninput = content.onchange = () => { dirty = true; window.NRCDetailUI.setSaveState("UNSAVED", panel); };
     document.getElementById("appointmentSave").onclick = save;
-    document.getElementById("appointmentSaveHeader").onclick = save;
     document.getElementById("appointmentClose").onclick = () => window.NRCInspector.close();
-    if (fresh) document.getElementById("appointmentCancel").onclick = () => window.NRCInspector.back();
+    document.getElementById("appointmentCancel").onclick = () => fresh ? window.NRCInspector.back() : window.NRCInspector.openEntity({ ...window.NRCInspector.current(), subview: "read" });
     document.getElementById("appointmentDelete")?.addEventListener("click", remove);
   }
   function showInspector(ref, stillCurrent = () => true) {
     generation += 1; saving = false;
+    editing = BigInt(ref.id) === 0n || ref.subview === "edit";
     if (BigInt(ref.id) === 0n) { selected = null; dirty = false; render({ title: "", startAt: 0n, endAt: 0n, description: "", assignee: typeof myNickname === "undefined" ? "" : myNickname, project: "", url: "" }); return; }
     const cached = window.NRCAssets.roomAssets.get(0n)?.get(BigInt(ref.id));
     const show = asset => { if (!stillCurrent()) return; selected = parse(asset); if (selected) { dirty = false; render(selected); } };

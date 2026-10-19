@@ -56,8 +56,8 @@ body:not(:has(#chatDialog[style*="display: none"])) .agenda-panel:not(.inspector
     top: 0;
     left: 0.625rem;
     right: 0.625rem;
-    height: 3px;
-    background: var(--section-pattern) 0 0 / 3px 3px;
+    height: 1px;
+    background: var(--border-subtle);
 }
 
 #inspectorViewContextHost > .ledger-context-section:first-child .ledger-context-label {
@@ -1667,6 +1667,18 @@ body.sullivan-workbench .sullivan-submit-controls:has(#sullivanStop:not([hidden]
     color: var(--btn-hover-text);
 }
 
+.inspector-mode-row > .header-operation.btn--primary {
+    border-color: var(--btn-primary-border);
+    background: var(--btn-primary-bg);
+    color: var(--btn-primary-text);
+}
+
+.inspector-mode-row > .header-operation.btn--primary:hover:not(:disabled) {
+    border-color: var(--btn-primary-hover-border);
+    background: var(--btn-primary-hover-bg);
+    color: var(--btn-primary-hover-text);
+}
+
 .header-operation.header-create-action:hover:not(:disabled) {
     border-color: var(--action-create-hover-border);
     background: var(--action-create-hover-bg);
@@ -1875,8 +1887,9 @@ body.sullivan-workbench #logOutput .ai-run-row .message-meta {
     font: 13px/1.5 var(--font-sans);
 }
 
-.ai-source-panel > .panel-header { flex-shrink: 0; }
+.ai-source-panel > .panel-header { flex-shrink: 0; height: auto; min-height: 2rem; }
 .ai-source-panel > .panel-header > div { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+.ai-source-panel .task-detail-close { position: static; align-self: center; margin: 0; box-shadow: none; }
 .ai-source-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; overflow-wrap: anywhere; }
 .ai-source-card { padding: 16px; border: var(--content-border); border-radius: var(--content-radius); }
 .ai-source-body h2 { margin: 6px 0 12px; font: 600 17px/1.4 var(--font-sans); }

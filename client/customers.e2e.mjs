@@ -80,7 +80,7 @@ try {
   const companyId = await page.locator(".customer-row").getAttribute("data-company");
   await page.evaluate(id => NRCCustomers.openRecord("company", id), companyId);
   await page.waitForSelector(".company-facts");
-  assert.equal(await page.locator(".company-facts dd").nth(5).textContent(), "—");
+  assert.equal(await page.locator(".company-facts > div").filter({ has: page.locator("dt", { hasText: /^WEBSITE$/ }) }).locator("dd").textContent(), "—");
   await page.click("#customerEdit");
   const address = "Paulusstraße 5, 36037 Fulda, Deutschland / Verwaltungsgebäude, Eingang Hinterhof";
   await page.fill('[name="address"]', address);
@@ -102,7 +102,7 @@ try {
       await page.setViewportSize({ width, height: 900 });
       await page.evaluate(() => NRCInspector.openEntity(NRCInspector.current()));
       await page.waitForSelector(".company-facts");
-      assert.equal(await page.locator(".company-facts dd").nth(4).textContent(), address);
+      assert.equal(await page.locator(".company-facts > div").filter({ has: page.locator("dt", { hasText: /^ADDRESS$/ }) }).locator("dd").textContent(), address);
       assert.equal(await page.locator(".customer-inspector-body").evaluate(el => el.scrollWidth <= el.clientWidth), true);
       assert.equal(await page.locator(".customer-inspector-body > :first-child").evaluate(el => el.tagName), "H2");
       await capture(`company-read-${mode}-${width}`);
@@ -114,8 +114,9 @@ try {
   await save();
   await page.evaluate(id => NRCCustomers.openRecord("company", id), companyId);
   await page.waitForSelector(".company-facts");
-  assert.equal(await page.locator(".company-facts dd").nth(5).textContent(), "javascript:alert(1)");
-  assert.equal(await page.locator(".company-facts dd").nth(5).locator("a").count(), 0);
+  const websiteFact = page.locator(".company-facts > div").filter({ has: page.locator("dt", { hasText: /^WEBSITE$/ }) }).locator("dd");
+  assert.equal(await websiteFact.textContent(), "javascript:alert(1)");
+  assert.equal(await websiteFact.locator("a").count(), 0);
   await page.click("#customerClose");
   const overviewBoxes = () => page.locator(".is-overview > .customer-section").evaluateAll(sections =>
     sections.map(section => {
@@ -415,7 +416,7 @@ try {
   }, ids.contact);
   await page.click(`[data-contact="${ids.contact}"]`);
   await page.waitForFunction(() => document.querySelectorAll("[data-unlink-company]").length === 2);
-  assert.equal(await page.locator(".contact-facts dd").nth(2).textContent(), "—");
+  assert.equal(await page.locator(".contact-facts > div").filter({ has: page.locator("dt", { hasText: /^PHONE$/ }) }).locator("dd").textContent(), "—");
   assert.equal(await page.locator("[data-service-company]:disabled").count(), 2, "service roles are read-only outside editing");
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.click('[data-copy-contact="email"]');

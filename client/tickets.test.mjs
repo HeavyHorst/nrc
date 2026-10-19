@@ -9,6 +9,7 @@ function fixture(uploadFile = async () => { throw new Error('upload unavailable'
   const elements = new Map();
   const element = () => ({ isConnected: true, innerHTML: '', textContent: '', value: '', dataset: {}, addEventListener() {}, append(child) { this.lastChild = child; }, parentElement: { append(child) { this.lastChild = child; }, parentElement: { after() {} } },
     closest() { return { after() {} }; }, before() {},
+    querySelectorAll() { return []; },
     querySelector(selector) { return elements.get(selector) || null; } });
   for (const id of ['ticketsBtn', 'ticketNew', 'ticketsRefresh', 'ticketsList', 'ticketEditor', 'ticketMetadata', 'ticketsStatus', 'ticketVisibility', 'ticketConversation', 'ticketWork', '#ticketFields', '#ticketReply', '#ticketLink', '#ticketAssignSlice', '#ticketLinkPicker']) elements.set(id, element());
   elements.set('ticketReply', elements.get('#ticketReply'));
@@ -160,7 +161,11 @@ test('staff conversation displays email provenance and precise mail status as es
 });
 
 test('failed and pending saves preserve per-record drafts and never report dispatch as success', async () => {
-  const f = fixture(); await f.api.reload(); f.api.open('', '1');
+  const f = fixture(); await f.api.reload(); f.api.open('', '1'); await f.api.reload();
+  const initialSections = f.elements.get('ticketConversation').innerHTML.split('</section>');
+  assert.match(initialSections[0], /ORIGINAL REQUEST/);
+  assert.doesNotMatch(initialSections[0], /No entries/);
+  assert.match(initialSections[1], /No entries/);
   f.input('message', 'Reply draft');
   const saving = f.edit('TITLE', '<unsaved>');
   const rejected = assert.rejects(saving, /Permission denied/);

@@ -86,30 +86,41 @@ try {
   await attach('private.txt', 'private bytes');
   await page.click('#ticketReply button[data-save]');
   await page.waitForFunction(() => NRCTickets.state.entries.length === 1 && !NRCTickets.state.pending);
-  await page.selectOption('[name=kind]', 'public_reply');
+  await page.check('[name=kind][value=public_reply]');
   assert.match(await page.textContent('#ticketVisibility'), /VISIBLE IN CUSTOMER PORTAL/);
   assert.equal(await page.textContent('#ticketReply button[data-save]'), 'SEND CUSTOMER REPLY');
   await page.fill('[name=message]', 'Public answer');
-  await attach('public.txt', 'public bytes');
+  const publicFilename = 'Pilotbetrieb-Importprotokoll-und-technische-Freigabe-2026-10.txt';
+  await attach(publicFilename, 'public bytes');
   await page.click('#ticketReply button[data-save]');
   await page.waitForFunction(() => NRCTickets.state.entries.length === 2 && !NRCTickets.state.pending);
-  assert.equal(await page.inputValue('[name=kind]'), 'internal_note');
+  assert.equal(await page.inputValue('[name=kind]:checked'), 'internal_note');
   const publicConversation = await page.locator('#ticketConversation > section').first().textContent();
   assert.match(publicConversation, /Original request/);
   assert.match(publicConversation, /Public answer/);
   assert.doesNotMatch(publicConversation, /Private diagnosis/);
-  assert.match(publicConversation, /original.txt/); assert.match(publicConversation, /public.txt/);
+  assert.match(publicConversation, /original.txt/); assert.ok(publicConversation.includes(publicFilename));
   assert.doesNotMatch(publicConversation, /private.txt/);
   const privateConversation = await page.locator('#ticketConversation > section').last().textContent();
-  assert.match(privateConversation, /private.txt/); assert.doesNotMatch(privateConversation, /public.txt|original.txt/);
-  for (const [filename, bytes] of [['original.txt', 'original bytes'], ['private.txt', 'private bytes'], ['public.txt', 'public bytes']]) {
+  assert.match(privateConversation, /private.txt/); assert.doesNotMatch(privateConversation, /original.txt/);
+  assert.ok(!privateConversation.includes(publicFilename));
+  for (const [filename, bytes] of [['original.txt', 'original bytes'], ['private.txt', 'private bytes'], [publicFilename, 'public bytes']]) {
     const href = await page.locator(`#ticketConversation a[download="${filename}"]`).getAttribute('href');
     assert.equal(await page.evaluate(async href => (await fetch(href)).text(), href), bytes);
+    const aligned = await page.locator(`#ticketConversation a[download="${filename}"]`).evaluate(link => {
+      const row = link.closest('.note-link-item');
+      const centers = [...row.children].map(cell => { const box = cell.getBoundingClientRect(); return box.y + box.height / 2; });
+      return Math.max(...centers) - Math.min(...centers) < 2 && row.scrollWidth <= row.clientWidth;
+    });
+    assert.ok(aligned, 'attachment type, name, size and download share one compact row');
   }
   assert.equal(await page.locator('[data-ticket-uploads]').textContent(), '');
 
   // Competing staff update: a stale editor must not silently overwrite it.
-  assert.equal(await page.locator('#ticketEditor details, #ticketEditor summary, #ticketEditor [name=body]').count(), 0, 'no ticket-specific disclosure or duplicate original request editor');
+  assert.equal(await page.locator('#ticketEditor [name=body]').count(), 0, 'no duplicate original request editor');
+  assert.equal(await page.locator('.ticket-customer-details').evaluate(el => el.open), false, 'customer details start secondary to the conversation');
+  assert.equal(await page.locator('#ticketWork').evaluate(el => !!(el.compareDocumentPosition(document.getElementById('ticketReply')) & Node.DOCUMENT_POSITION_PRECEDING)), true, 'internal resources follow the reply composer');
+  await page.locator('.ticket-customer-details summary').click();
   const inline = async (label, value) => {
     await page.getByRole('button', { name: new RegExp(`^Edit ${label}:`) }).click();
     await page.locator('.inline-field-editor input').fill(value);
@@ -212,7 +223,6 @@ try {
   assert.equal(await resource('tasks').locator('.note-link-kind').textContent(), 'TASK');
   assert.equal(await resource('tasks').locator('.note-link-direction').textContent(), '→');
   assert.equal(await resource('tasks').locator('.note-link-relation').textContent(), 'related-to');
-  assert.equal(await page.locator('#ticketWork').evaluate(node => !!(node.compareDocumentPosition(document.getElementById('ticketConversation')) & Node.DOCUMENT_POSITION_FOLLOWING)), true, 'resources precede the conversation');
   await page.fill('[name=message]', 'Keep this reply draft while changing resources.');
   const note = await page.evaluate(async () => {
     const result = await new Promise((resolve, reject) => NRCAssets.sendCreateAsset(0n, 5, 0, 0n, JSON.stringify({ title: 'Login investigation guide' }), 'Internal diagnostic steps.', 0, { onSuccess: resolve, onError: reject }));
@@ -241,7 +251,7 @@ try {
   assert.equal(await resource('references').locator('[data-resource-toggle]').getAttribute('aria-expanded'), 'true', 'refresh preserves disclosure state');
   assert.equal(await page.inputValue('[name=message]'), 'Keep this reply draft while changing resources.');
   assert.match(await page.locator('#ticketConversation > section').first().textContent(), /original.txt/);
-  assert.match(await page.locator('#ticketConversation > section').first().textContent(), /public.txt/);
+  assert.ok((await page.locator('#ticketConversation > section').first().textContent()).includes(publicFilename));
   assert.doesNotMatch(await page.locator('#ticketConversation > section').first().textContent(), /private.txt/);
   assert.match(await page.locator('#ticketConversation > section').last().textContent(), /private.txt/);
   assert.equal(await page.evaluate(() => NRCTickets.state.drafts.get(NRCTickets.state.selected).status), 'open', 'task completion does not close ticket');
@@ -419,8 +429,12 @@ try {
   assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), [id]);
   const statusFilter = page.locator('#ticketsPanel [data-filter="status"]');
   await statusFilter.selectOption('open');
-  await page.locator('#ticketsPanel [data-filter="owner"]').fill('Other staff member');
-  await page.locator('#ticketsPanel [data-filter="company"]').fill(customer.b);
+  await page.locator('#ticketAssigneeFilter-trigger').click();
+  await page.getByPlaceholder('FILTER ASSIGNEE...').fill('Other staff');
+  await page.locator('#portal-container').getByRole('option', { name: 'Other staff member', exact: true }).click();
+  await page.locator('#ticketCustomerFilter-trigger').click();
+  await page.getByPlaceholder('FILTER CUSTOMER...').fill('Ticket customer');
+  await page.locator('#portal-container').getByRole('option', { name: `Ticket customer · #${customer.b}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#ticketsStatus').textContent.includes('INDEX STALE'));
   assert.equal(searchRequests.at(-1).query, 'semantic synonym');
   assert.deepEqual(searchRequests.at(-1).filters, { entity_types: ['asset'], asset_types: [13], ticket: { status: 'open', assignee: 'Other staff member', company_id: customer.b } });
@@ -432,8 +446,8 @@ try {
   await page.evaluate(() => NRCInspector.close());
   searchOffline = true;
   await statusFilter.selectOption('');
-  await page.locator('#ticketsPanel [data-filter="owner"]').fill('');
-  await page.locator('#ticketsPanel [data-filter="company"]').fill('');
+  await page.locator('#ticketsPanel [data-filter="owner"]').selectOption('');
+  await page.locator('#ticketsPanel [data-filter="company"]').selectOption('');
   await search.fill('Private diagnosis');
   await page.waitForFunction(() => document.querySelector('#ticketsStatus').textContent.includes('SERVER TEXT FALLBACK'));
   assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), [id], 'fallback also searches internal entry bodies');
@@ -453,6 +467,11 @@ try {
     await page.locator(`#ticketsList [data-ticket="${id}"] button`).click();
     await page.waitForFunction(() => document.body.classList.contains('inspector-open'));
     assert.equal(await page.locator('#inspector').getAttribute('aria-modal'), 'true');
+    assert.ok(await page.locator('.note-preview-attachment-name').filter({ hasText: publicFilename }).evaluate(el => {
+      const row = el.closest('.note-link-item');
+      const centers = [...row.children].map(cell => { const box = cell.getBoundingClientRect(); return box.y + box.height / 2; });
+      return getComputedStyle(el).textOverflow === 'ellipsis' && Math.max(...centers) - Math.min(...centers) < 2 && row.scrollWidth <= row.clientWidth;
+    }), 'narrow attachments keep download on the same row and truncate long names');
     await page.screenshot({ path: `${process.env.NRC_TICKETS_SCREENSHOTS}/ticket-inspector-narrow.png` });
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.body.classList.contains('inspector-open'));
@@ -483,8 +502,9 @@ try {
   }, customer.a);
   await search.fill('');
   await statusFilter.selectOption('in_progress');
-  await page.locator('#ticketsPanel [data-filter="owner"]').fill('Paging staff');
-  await page.locator('#ticketsPanel [data-filter="company"]').fill(customer.a);
+  await page.waitForFunction(() => [...document.querySelector('#ticketAssigneeFilter').options].some(option => option.value === 'Paging staff'));
+  await page.locator('#ticketsPanel [data-filter="owner"]').selectOption('Paging staff');
+  await page.locator('#ticketsPanel [data-filter="company"]').selectOption(customer.a);
   await page.evaluate(() => { NRCTickets.state.sort = 'id'; NRCTickets.state.direction = 'desc'; return NRCTickets.reload(); });
   await page.waitForFunction(() => !NRCTickets.state.loading && NRCTickets.state.total === 61);
   assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), pagingIds.slice(0, 50));

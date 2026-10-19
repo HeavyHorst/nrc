@@ -151,6 +151,7 @@ const CustomSelect = {
         this.instances.set(select, instance);
         this._syncSearchable(instance, searchable, searchPlaceholder);
         this._initPicker(instance);
+        dropdown.classList.toggle('custom-select__dropdown--wrap', select.hasAttribute('data-custom-select-wrap'));
         this._updateTrigger(instance);
         this._bindEvents(instance);
 

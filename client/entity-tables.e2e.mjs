@@ -83,7 +83,7 @@ try {
         if (width > 768) {
           assert.ok(Math.abs(dimensions.height - 34) < 1, `${view} row height: ${dimensions.height}`);
           borders.push(dimensions.border);
-          const headerSelector = { tasks: ".task-table thead tr", notes: ".notes-list-header", reminders: ".reminder-list-header" }[view];
+          const headerSelector = { tasks: ".task-table:has(#taskListBody) thead tr", notes: ".notes-list-header", reminders: ".reminder-list-header" }[view];
           const header = page.locator(headerSelector);
           const geometry = await header.evaluate(el => [...el.children].slice(0, 2).map(cell => ({ width: cell.getBoundingClientRect().width, align: getComputedStyle(cell).textAlign })));
           assert.equal(geometry[0].width, 0, `${view} legacy selection header takes no space`);
@@ -136,6 +136,7 @@ try {
       await title.focus();
       await page.keyboard.press("Enter");
       await page.locator("#reminderDetailDelete").waitFor({ state: "visible" });
+      assert.equal(await page.locator("#inspectorHeader #reminderDetailDelete").count(), 1, "Reminder delete belongs to the shared header actions");
       assert.equal(await page.locator('[data-reminder-row-id="32"] .reminder-marker').textContent(), "›");
       assert.equal(await page.locator('[data-reminder-row-id="32"] .reminder-title').getAttribute("aria-current"), "true");
       assert.equal(await page.locator(".reminder-row-selected").count(), 1);
@@ -174,15 +175,21 @@ try {
     await page.evaluate(() => {
       window.reminderCreated = null;
       NRCAssets.sendCreateAsset = (...args) => { window.reminderCreated = { preview: args[4], payload: args[5] }; };
+      NRCAssets.requestAllAssets = async () => ({ assets: NRCAssets.getAssetsByType(0n, AssetType.Note) });
       NRCDialog.prompt = async message => message.startsWith("Reminder title") ? "Visibility contract" : message.startsWith("Deadline") ? "2027-01-01T12:00" : "";
       void createReminder();
     });
     await page.locator(`input[name="reminderCreateVisibility"][value="${visibility}"]`).check();
     await page.getByRole("button", { name: "NEXT", exact: true }).click();
+    await page.locator('#reminderCreateNote').waitFor({ state: 'attached' });
+    if (visibility === 'team') await page.locator('#reminderCreateNote').selectOption({ index: 1 });
+    const linkedNote = await page.locator('#reminderCreateNote').inputValue();
+    await page.getByRole('button', { name: 'CREATE', exact: true }).click();
     await page.waitForFunction(() => window.reminderCreated);
     const sent = await page.evaluate(() => window.reminderCreated);
     assert.equal(sent.preview, sent.payload);
     assert.equal(JSON.parse(sent.payload).visibility, visibility);
+    assert.equal(JSON.parse(sent.payload).note_asset_id, linkedNote);
   }
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.evaluate(() => {

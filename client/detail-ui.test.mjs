@@ -102,6 +102,21 @@ test("metadata ledger renders explicit labels, actor roles, and escaped values",
   );
 });
 
+test("header provenance uses a unique native INFO disclosure and keeps HISTORY separate", () => {
+  const ui = loadDetailUI();
+  const rows = [{ label: "SOURCE<&>", value: 'author<"&>' }, { label: "COMPLETED", value: "today" }];
+  const html = ui.renderHeaderMetadata(rows, "note", '1"');
+  assert.match(html, /popover="auto" role="dialog"/);
+  assert.match(html, /aria-label="Close record info" autofocus/);
+  assert.match(html, /SOURCE&lt;&amp;&gt;/);
+  assert.match(html, /author&lt;&quot;&amp;&gt;/);
+  assert.match(html, /<dt>COMPLETED<\/dt>/);
+  assert.match(html, /<\/div><button[^>]*data-history-kind="note"[^>]*>HISTORY/);
+  assert.notEqual(html.match(/popovertarget="([^"]+)"/)[1], ui.renderHeaderMetadata(rows).match(/popovertarget="([^"]+)"/)[1]);
+  assert.equal(ui.renderHeaderMetadata([], null), "");
+  assert.doesNotMatch(ui.renderHeaderMetadata([], "task", 1), /INFO|popover/);
+});
+
 test("the messages register line states its count in the count cell", () => {
   const detailUI = loadDetailUI();
 
@@ -294,7 +309,7 @@ test("the composer bar opens the block and focuses the draft", () => {
   assert.equal(states.at(-1).composerOpen, true);
 });
 
-test("the composer collapses on Escape and when it loses focus while empty", () => {
+test("the composer collapses explicitly without losing its draft", () => {
   const detailUI = loadDetailUI();
   const dom = makeMessagesDom();
   const stopped = [];
@@ -314,12 +329,9 @@ test("the composer collapses on Escape and when it loses focus while empty", () 
 
   dom.composerBar.onclick();
   dom.input.value = "draft";
-  dom.input.onblur();
-  assert.equal(dom.composer.dataset.composerOpen, "true", "a draft keeps the composer open");
-
-  dom.input.value = "   ";
-  dom.input.onblur();
+  dom.strip.onclick();
   assert.equal(dom.composer.dataset.composerOpen, "false");
+  assert.equal(dom.input.value, "draft");
 });
 
 test("composer displays its byte limit and submits valid text", () => {

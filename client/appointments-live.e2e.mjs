@@ -8,7 +8,7 @@ assert.ok(["127.0.0.1", "localhost"].includes(new URL(url).hostname));
 const workspace = `appointment-review-${Date.now()}`;
 const browser = await chromium.launch();
 try {
-  const page = await browser.newPage({ serviceWorkers: "block", timezoneId: "Europe/Berlin", viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 2 });
+  const page = await browser.newPage({ serviceWorkers: "block", locale: "de-DE", timezoneId: "Europe/Berlin", viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 2 });
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(`${url}/#workspace=${workspace}`);
@@ -57,6 +57,9 @@ try {
   assert.equal(await page.locator("#appointmentClose").count(), 1);
   assert.equal(await page.locator(`[data-calendar-row="appointment:${id}"] time`).textContent(), "14:00–14:45");
   assert.equal(await page.locator(`[data-calendar-row="appointment:${id}"] .calendar-project`).textContent(), "NRC");
+  assert.equal(await page.locator("#appointmentTitle").count(), 0, "saved appointments open read-first");
+  assert.match(await page.locator(".schedule-hours").textContent(), /14:00.*14:45/);
+  await page.locator("#appointmentEdit").click();
   await page.locator("#appointmentTitle").fill("Video call with Alex · confirmed");
   await page.locator("#appointmentSave").click();
   await page.waitForFunction(() => NRCCalendar.getState().rows[0]?.title.endsWith("confirmed"));
@@ -66,10 +69,19 @@ try {
   await page.evaluate(() => { NRCCalendar.getState().month = "2026-09"; NRCViewManager.setActiveView("calendar"); });
   await page.waitForFunction(() => NRCCalendar.getState().status === "ready" && NRCCalendar.getState().rows.length === 1);
   await page.locator(`[data-calendar-row="appointment:${id}"]`).click();
-  await page.waitForSelector("#appointmentTitle");
+  await page.waitForSelector("#appointmentEdit");
+  assert.equal(await page.locator(".schedule-detail h2").textContent(), "Video call with Alex · confirmed");
+  assert.equal(await page.getByRole("link", { name: "OPEN MEETING ↗" }).getAttribute("href"), "https://meet.example.test/release-review");
+  await page.locator("#appointmentEdit").click();
   assert.equal(await page.locator("#appointmentTitle").inputValue(), "Video call with Alex · confirmed");
   assert.equal(await page.locator("#appointmentUrl").inputValue(), "https://meet.example.test/release-review");
-  assert.equal(await page.getByRole("link", { name: "OPEN MEETING ↗" }).getAttribute("href"), "https://meet.example.test/release-review");
+  await page.locator("#appointmentTitle").fill("Unsaved replacement");
+  await page.locator("#appointmentCancel").click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).last().click();
+  assert.equal(await page.locator("#appointmentTitle").inputValue(), "Unsaved replacement");
+  await page.locator("#appointmentCancel").click();
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+  assert.equal(await page.locator(".schedule-detail h2").textContent(), "Video call with Alex · confirmed");
   await page.evaluate(() => NRCInspector.close());
 
   const spanning = await page.evaluate(async () => {
@@ -102,6 +114,7 @@ try {
   await page.getByRole("button", { name: "Delete Appointment", exact: true }).click();
   await page.waitForFunction(() => NRCCalendar.getState().rows.length === 3);
   await page.locator(`[data-calendar-row="appointment:${id}"]`).click();
+  await page.locator("#appointmentEdit").click();
   await page.waitForSelector("#appointmentTitle");
   const assertMetadataFits = async () => {
     const footer = await page.locator(".agenda-content > .task-detail-actions").evaluate(element => {
@@ -139,7 +152,32 @@ try {
   await page.evaluate(() => NRCInspector.openEntity(NRCInspector.current()));
   await assertMetadataFits();
   await page.screenshot({ path: new URL("appointments-narrow.png", dir).pathname });
+  const reminderId = await page.evaluate(async () => {
+    await NRCInspector.close();
+    const payload = JSON.stringify({ title: "Review reminder", visibility: "personal", window_start_at: "0", deadline_at: "1790596800000000000", urgency_days: 3, note_asset_id: "" });
+    return new Promise((resolve, reject) => NRCAssets.sendCreateAsset(0n, 6, 0, 0n, payload, payload, 0,
+      { onSuccess: r => resolve(String(r.asset.assetId)), onError: reject }));
+  });
+  await page.evaluate(id => NRCInspector.openEntity({ type: "reminder", id: BigInt(id), roomId: 0n }), reminderId);
+  await page.locator(".schedule-detail h2").waitFor();
+  assert.equal(await page.locator("#reminderDetailTitle").count(), 0);
+  assert.match(await page.locator(".schedule-detail").textContent(), /PERSONAL/);
+  await page.locator("#reminderDetailEdit").click();
+  await page.locator("#reminderDetailTitle").fill("Unsaved reminder draft");
+  await page.locator("#reminderDetailView").click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(await page.locator("#reminderDetailTitle").inputValue(), "Unsaved reminder draft");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+  assert.equal(await page.locator(".schedule-detail h2").textContent(), "Review reminder");
+  await page.locator("#reminderDetailEdit").click();
+  await page.locator("#reminderDetailTitle").fill("Saved reminder");
+  assert.equal(await page.locator('#inspector button').filter({ hasText: /^SAVE$/ }).count(), 1);
+  await page.locator("#reminderDetailSaveHeader").click();
+  await page.waitForFunction(id => NRCAssets.roomAssets.get(0n).get(BigInt(id)).payload.includes("Saved reminder"), reminderId);
+  await page.locator("#reminderDetailView").click();
+  assert.equal(await page.locator(".schedule-detail h2").textContent(), "Saved reminder");
   assert.deepEqual(errors, []);
   await fs.writeFile("/tmp/nrc-appointment-fixture.json", JSON.stringify({ workspace, url, id }));
-  console.log("PASS: appointment create/edit/reload/delete, validation, filters and cross-month exclusive-end overlap", workspace);
+  console.log("PASS: appointment create/edit/reload/delete, validation, filters, cross-month overlap; reminder read/edit/save and guarded discard", workspace);
 } finally { await browser.close(); }

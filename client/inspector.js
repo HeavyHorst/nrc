@@ -659,6 +659,8 @@
     });
     document.addEventListener("keydown", (event) => {
       if (event.target.closest?.(".nrc-dialog-backdrop")) return;
+      // Let the native disclosure own Escape, focus and keys, not the record below it.
+      if (document.querySelector(".inspector-info:popover-open")) return;
       const drawerOpen = document.body.classList.contains("inspector-open");
       if (event.key === "Tab" && drawerOpen) {
         const focusable = Array.from(shell()?.querySelectorAll("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]") || [])
@@ -689,8 +691,8 @@
         return;
       }
       // Leave edit mode before closing, using the editor's guarded VIEW action.
-      const leaveEdit = document.querySelector('#inspectorHeader #taskDetailToggleFocus[data-inspector-command="v"], #inspectorHeader #noteDetailToggleView') ||
-        (current()?.id !== 0n && entityHost()?.querySelector("#customerCancel"));
+      const leaveEdit = document.querySelector('#inspectorHeader #taskDetailToggleFocus[data-inspector-command="v"], #inspectorHeader #noteDetailToggleView, #inspectorHeader #reminderDetailView') ||
+        (current()?.id !== 0n && entityHost()?.querySelector("#customerCancel, #appointmentCancel"));
       if (leaveEdit) {
         leaveEdit.click();
         return;

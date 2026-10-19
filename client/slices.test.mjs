@@ -514,6 +514,24 @@ test("the record covers all task statuses with counts, percentage legend and a s
   assert.match(tiny, /BACKLOG &gt;99.9%/, "an incomplete status must not be labelled complete");
 });
 
+test("record progress names only a valid oldest-open task age and leaves zero blocked neutral", () => {
+  const now = 1800000000000;
+  const slices = loadSlices({ Date: { now: () => now } });
+  const counts = { backlog: 1, todo: 0, inProgress: 0, done: 0, blocked: 0 };
+  const timestamp = hours => BigInt(now) * 1000000n - BigInt(hours * 3.6e12);
+  for (const [hours, label] of [[0.5, "30 MIN AGO"], [2, "2 HR AGO"], [48, "2 DAYS AGO"]]) {
+    const html = slices.renderShape({ ...counts, oldestActiveAt: timestamp(hours) }, { wide: true });
+    assert.match(html, /<dt>OLDEST OPEN<\/dt>/);
+    assert.ok(html.includes(label));
+    assert.doesNotMatch(html, /OPENED|slice-alert|slice-bar-seg--blocked/);
+    assert.match(html, /BLOCKED 0 \/ 1 · INCLUDED IN TASK STATUSES/);
+  }
+  for (const oldestActiveAt of [undefined, 0n, -1n, timestamp(-1)]) {
+    const html = slices.renderShape({ ...counts, oldestActiveAt }, { wide: true });
+    assert.doesNotMatch(html, /OLDEST OPEN|OPENED|AGO|NaN/);
+  }
+});
+
 // The register holds counters, not members: its shape is the share each status
 // holds. Blocked overlaps those statuses and is named separately in the row,
 // never placed as if it named an individual member.

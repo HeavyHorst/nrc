@@ -54,6 +54,13 @@ try {
     const r = el.getBoundingClientRect();
     return { x: r.x, y: r.y, width: r.width, height: r.height };
   });
+  const propertyGeometry = async () => page.locator(".record-document > .task-detail-read-register--operational").evaluateAll(registers => {
+    const rects = registers.map(el => el.getBoundingClientRect());
+    if (!rects.length) return null;
+    const x = Math.min(...rects.map(r => r.x));
+    const y = Math.min(...rects.map(r => r.y));
+    return { x, y, width: Math.max(...rects.map(r => r.right)) - x, height: Math.max(...rects.map(r => r.bottom)) - y };
+  });
   await page.evaluate(() => {
     const task = roomTasks.get(0n).get(259n);
     const empty = document.createElement("div");
@@ -88,24 +95,12 @@ try {
           const identity = await geometry("#inspectorHeader .inspector-identity-row");
           assert.equal(identity.height, listHeader.height, "record and list identity bands have equal heights");
           assert.equal(identity.y + identity.height, listHeader.y + listHeader.height, "identity bands share a bottom baseline");
-          const metadata = page.locator("#inspectorHeader .inspector-metadata");
-          assert.deepEqual(await metadata.evaluate(el => ({
-            scrollbar: getComputedStyle(el).scrollbarWidth,
-            verticalOverflow: el.scrollHeight > el.clientHeight,
-          })), { scrollbar: "none", verticalOverflow: false }, "provenance has no visible scrollbar or clipped height");
-          if (width === 1600) {
-            const fixed = await geometry("#inspectorHeader .header-text");
-            await metadata.focus();
-            await page.keyboard.press("ArrowRight");
-            await page.waitForFunction(() => document.querySelector("#inspectorHeader .inspector-metadata").scrollLeft > 0);
-            assert.deepEqual(await geometry("#inspectorHeader .header-text"), fixed, "scrolling provenance leaves record identity fixed");
-            await page.keyboard.press("ArrowLeft");
-            await page.waitForFunction(() => document.querySelector("#inspectorHeader .inspector-metadata").scrollLeft === 0);
-          }
         }
         if (type === "task") {
-          assert.equal(await page.locator('.inspector-identity-row .inspector-metadata').count(), 1);
-          assert.deepEqual(await page.locator('.inspector-metadata dt').allTextContents(), ['CREATED BY', 'CREATED', 'UPDATED', 'COMPLETED']);
+          await page.locator('#inspectorHeader button[popovertarget]').first().click();
+          assert.ok(await page.locator('#inspectorHeader .inspector-info').isVisible());
+          assert.deepEqual(await page.locator('#inspectorHeader .inspector-info dt').allTextContents(), ['CREATED BY', 'CREATED', 'UPDATED', 'COMPLETED']);
+          await page.locator('#inspectorHeader [popovertargetaction="hide"]').click();
           assert.equal(await page.locator('.record-document-scroll .detail-metadata-ledger').count(), 0, 'no duplicate body provenance');
         }
         assert.ok(await page.locator(`.inspector-mode-row #${type}DetailDelete`).isVisible(), 'delete is available in the read header');
@@ -115,12 +110,28 @@ try {
         assert.match(await page.evaluate(() => window.deleteConfirmation), new RegExp(`Delete ${type} #`));
         assert.ok(await page.locator(title).isVisible(), 'cancelling deletion preserves the record');
         await page.evaluate(() => { NRCDialog.confirm = async () => true; });
-        const before = { title: await geometry(title), properties: type === "task" ? await geometry(".record-document > .detail-read-register") : null };
+        const before = { title: await geometry(title), properties: type === "task" ? await propertyGeometry() : null };
         if (type === "note") {
-          assert.equal(await page.locator('.note-inline-metadata').count(), 0, 'read mode omits note metadata');
+          assert.ok(await page.locator('.note-inline-metadata').isVisible(), 'read mode shows note metadata');
+          assert.deepEqual(await page.locator('.note-inline-metadata .inline-field-label').allTextContents(), ['PROJECT', 'TAGS', 'FORMAT']);
+          assert.equal(await page.locator('.note-inline-metadata nrc-inline-field').count(), 2, 'project and tags retain field-local editing');
+          assert.match(await page.locator('.note-inline-metadata').textContent(), /antares\/edupool_boards/);
+          assert.match(await page.locator('.note-inline-metadata').textContent(), /oidc/);
+          assert.equal(await page.locator('.record-format span').textContent(), 'MARKDOWN');
           assert.equal(await page.locator('.note-preview-title nrc-inline-field').count(), 0, 'read mode omits rename');
+          if (width <= 768) {
+            assert.equal(await page.locator('[data-messages-toggle]').getAttribute('aria-expanded'), 'false', 'phone discussion starts collapsed even with history');
+            assert.ok(await page.locator('#noteCommentInput').isHidden());
+            await page.locator(title).click();
+            await page.keyboard.press('m');
+            assert.ok(await page.locator('#noteCommentInput').isVisible(), 'M opens discussion and composer');
+          }
         }
         const fields = await page.locator(".record-document > .detail-read-register .inline-field-label").allTextContents();
+        if (type === "task") {
+          assert.deepEqual(await page.locator('.task-detail-read-register--operational .inline-field-label').allTextContents(), ['STATUS', 'ASSIGNEE', 'DUE', 'BLOCKED BY']);
+          assert.equal(await page.locator('.task-detail-read-register nrc-inline-field').count(), 8, 'all task properties remain editable');
+        }
         assert.equal(await page.locator(title).evaluate(el => getComputedStyle(el).textTransform), "none");
         assert.equal(await page.locator('.document-resources [data-resource-open="true"]').count(), 0, "no resource tab is selected by default");
         const send = await geometry('.task-comment-send');
@@ -143,7 +154,7 @@ try {
           assert.equal(dock.y, commentsFooter.y, 'adjacent footer top borders align');
         }
         await page.locator('[data-resource="links"] [data-resource-toggle]').click();
-        assert.ok(await page.locator('[data-resource="links"] .record-resource-body').isVisible());
+        assert.ok(await page.locator('[data-resource="links"] .record-resource-body').isVisible(), `${type}/${width}/${theme}: links opened`);
         assert.equal(await page.locator('[data-resource="links"] [data-resource-count]').textContent(), "1");
         const resources = await geometry('.document-resources');
         const documentBox = await geometry('.task-detail-tab-content');
@@ -168,6 +179,11 @@ try {
         const collapsedDocument = await geometry('.task-detail-tab-content');
         assert.ok(collapsedDocument.height > expandedDocument.height || collapsedDocument.width > expandedDocument.width, 'collapsing reclaims document space');
         await page.locator('[data-messages-toggle]').click();
+        if (type === 'note' && width <= 768) {
+          await page.locator('[data-composer-toggle]').click();
+          await page.evaluate(() => showNotePreviewPanel(currentDetailNote));
+          assert.equal(await page.locator('[data-messages-toggle]').getAttribute('aria-expanded'), 'true', 'explicit opening survives rerender');
+        }
         assert.equal(await page.locator(`#${type}CommentInput`).inputValue(), 'Draft survives collapse');
         await page.locator(`#${type}CommentInput`).fill('');
         assert.ok(await page.locator('[data-messages-stream]').isVisible());
@@ -177,7 +193,10 @@ try {
         await page.locator(`#${type}CommentInput`).focus();
         await page.locator(`#${type}CommentInput`).press("Escape");
         await page.locator(title).click();
-        assert.ok(await page.locator(`#${type}CommentInput`).isVisible(), "Escape and blur never hide comments");
+        if (type === 'note' && width <= 768) {
+          assert.ok(await page.locator('#noteCommentInput').isHidden(), 'phone composer closes on Escape');
+          await page.keyboard.press('m');
+        } else assert.ok(await page.locator(`#${type}CommentInput`).isVisible(), "Escape and blur never hide desktop comments");
         await capture(`${type}-${theme}-${width}-read`);
         {
           const threads = page.locator('.document-resources [data-resource="threads"]');
@@ -199,7 +218,7 @@ try {
         await page.locator('[data-resource="attachments"] [data-resource-toggle]').click();
         await page.locator(edit).click();
         await page.locator(editor).waitFor();
-        if (type === "task") assert.equal(await page.locator('.inspector-identity-row .inspector-metadata').count(), 1, 'edit mode preserves header metadata');
+        if (type === "task") assert.equal(await page.locator('.inspector-identity-row .inspector-info').count(), 1, 'edit mode preserves header metadata');
         assert.ok(await page.locator(`.inspector-mode-row #${type}DetailDelete`).isVisible(), 'delete stays in the edit header');
         assert.equal(await page.locator('.document-resources [data-resource="threads"]').getAttribute('data-resource-open'), 'false', "attachments replace the Amp threads panel");
         assert.equal(await page.locator('.document-resources [data-resource="threads"] [data-resource-count]').textContent(), '1', 'edit retains the threads register');
@@ -208,14 +227,20 @@ try {
         // Focusing the editor on a phone may scroll the document. Compare from
         // the same scroll origin, then exercise scrolling separately below.
         await page.locator(".record-document-scroll").evaluate(el => el.scrollTop = 0);
-        const after = { title: await geometry(title), properties: await geometry(".record-document > .detail-read-register") };
+        const after = { title: await geometry(title), properties: await propertyGeometry() };
         for (const part of type === "task" ? ["title", "properties"] : ["title"]) for (const axis of type === "task" ? ["x", "y", "width", "height"] : ["x", "y", "width"]) {
           assert.ok(Math.abs(before[part][axis] - after[part][axis]) <= 1, `${type}/${theme}/${width}: stable ${part}.${axis}: ${before[part][axis]} -> ${after[part][axis]}`);
         }
-        if (type === "task") assert.deepEqual(await page.locator(".record-document > .detail-read-register .inline-field-label").allTextContents(), fields);
+        if (type === "task") {
+          assert.deepEqual(await page.locator(".record-document > .detail-read-register .inline-field-label").allTextContents(), fields);
+          assert.ok(await page.locator('.task-detail-read-register--context').evaluate(el => !!(document.querySelector('#taskDetailDesc').compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)), 'classification follows the editor, never displacing the work');
+        }
         else {
           assert.ok(await page.locator('.note-inline-metadata').isVisible(), 'edit retains note metadata');
           assert.ok(await page.locator('.note-preview-title nrc-inline-field').isVisible(), 'edit retains rename');
+          const formatCell = await page.locator('.record-format').boundingBox();
+          const formatControl = await page.locator('.record-format .custom-select__trigger').boundingBox();
+          assert.ok(formatControl.x + formatControl.width <= formatCell.x + formatCell.width, 'format control stays inside its metadata cell');
         }
         assert.equal(await page.locator('[data-resource="attachments"]').getAttribute("data-resource-open"), "true", "disclosures survive entering edit");
         await page.locator('[data-resource="attachments"] [data-resource-toggle]').click();
@@ -303,8 +328,8 @@ try {
       });
       const frame = await geometry(".note-html-frame");
       const column = await geometry(".record-document-scroll");
-      const title = await geometry(".note-preview-title");
-      assert.ok(Math.abs(frame.y - (title.y + title.height)) < 2, "HTML starts directly below the title");
+      const metadata = await geometry(".note-inline-metadata");
+      assert.ok(Math.abs(frame.y - (metadata.y + metadata.height)) < 2, "HTML starts directly below the metadata");
       assert.ok(Math.abs(frame.y + frame.height - (column.y + column.height)) < 2, "HTML fills the document column, including tall and short viewports");
       assert.ok(await page.locator(".record-document-scroll").evaluate(el => el.scrollHeight <= el.clientHeight + 1), "outer document has no second scroll area");
       await page.waitForFunction(() => {
@@ -361,6 +386,7 @@ try {
         assert.ok(await page.locator('[data-messages-body]').isHidden());
         await capture(`${type}-${theme}-${width}-empty`);
         await toggle.click();
+        if (type === 'note' && width <= 768) await page.locator('[data-composer-toggle]').click();
         assert.ok(await input.isVisible(), 'opening empty messages exposes the composer');
         await input.fill('First message draft');
         await rerender();
@@ -370,6 +396,7 @@ try {
         await rerender();
         assert.equal(await toggle.getAttribute('aria-expanded'), 'false', 'manual collapse survives rerender');
         await toggle.click();
+        if (await input.isHidden()) await page.locator('[data-composer-toggle]').click();
         assert.equal(await input.inputValue(), 'First message draft', 'collapse preserves the draft');
         await input.fill('');
         await openRecord({ subview: 'comments' });

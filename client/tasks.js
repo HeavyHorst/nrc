@@ -648,6 +648,7 @@ function showReminderDetailPanel(reminder) {
   agendaActions.style.display = "none";
 
   const state = getReminderState(reminder, BigInt(Date.now()) * 1000000n);
+  const editing = window.NRCInspector?.current()?.subview === "edit";
   const noteOptions = buildReminderNoteOptions(reminder.noteAssetId, reminder.asset.convId);
   agendaHeader.innerHTML = `<div class="inspector-identity-row">
     <span class="header-text">REMINDER #${reminder.asset.assetId}</span>
@@ -657,18 +658,32 @@ function showReminderDetailPanel(reminder) {
       { label: "UPDATED", value: window.NRCDetailUI.formatHeaderDate(reminder.asset.updatedAt) },
     ])}
     <span class="inspector-cell-label">STATE</span>
-    <span class="status-value-mono inspector-state-value">${state}</span>
+    ${window.NRCDetailUI.renderSaveState(editing ? "EDITING" : "READ")}
   </div><div class="inspector-mode-row">
-    <div class="inspector-view-cell">
-      <div class="task-detail-tabs">
-        <button class="btn nav-tab inspector-matrix-control active" data-tab="detail" type="button" aria-current="page"><span>DETAIL</span></button>
-      </div>
-    </div>
-    ${window.NRCDetailUI.renderHeaderAction({ id: "reminderDetailSaveHeader", label: "SAVE", command: "s", title: "Save reminder (S)" })}
-    ${window.NRCDetailUI.renderHeaderAction({ id: "reminderDetailOpenNoteHeader", label: "NOTE", command: "v", title: "Open linked note (V)" })}
+    ${editing ? window.NRCDetailUI.renderHeaderAction({ id: "reminderDetailSaveHeader", label: "SAVE", command: "s", title: "Save reminder (S)", className: "btn--primary" }) + window.NRCDetailUI.renderHeaderAction({ id: "reminderDetailView", label: "CANCEL", command: "v", title: "Return to reminder (V)" }) : window.NRCDetailUI.renderHeaderAction({ id: "reminderDetailEdit", label: "EDIT", command: "e", title: "Edit reminder (E)" })}
+    <button class="btn btn--danger header-operation inspector-matrix-control" id="reminderDetailDelete" title="Delete reminder">DELETE</button>
     ${window.NRCDetailUI.renderCloseControl("reminderDetailClose")}
   </div>`;
 
+  const changeView = subview => window.NRCInspector.openEntity({ ...window.NRCInspector.current(), subview });
+  document.getElementById("reminderDetailClose").onclick = () => window.NRCInspector.close();
+  if (!editing) {
+    const due = new Date(Number(reminder.deadlineAt / 1000000n));
+    const note = window.NRCAssets.roomAssets.get(reminder.asset.convId)?.get(reminder.noteAssetId);
+    const noteTitle = note ? parseNotePreviewTitle(note.preview) : `NOTE #${reminder.noteAssetId}`;
+    agendaContent.oninput = null; agendaContent.onchange = null;
+    agendaContent.innerHTML = `<article class="schedule-detail reminder-detail-panel">
+      <h2>${escapeHtml(reminder.title)}</h2>
+      <section class="schedule-time" aria-label="Reminder deadline"><span class="detail-edit-label">DUE · ${escapeHtml(state)}</span><p class="schedule-date">${escapeHtml(due.toLocaleDateString("de-DE", { dateStyle: "full" }))}</p><p class="schedule-hours">${escapeHtml(due.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }))}</p><p class="schedule-zone">${escapeHtml(Intl.DateTimeFormat().resolvedOptions().timeZone)}</p></section>
+      ${window.NRCDetailUI.renderMetadataLedger([{ label: "AVAILABLE FROM", value: reminder.windowStartAt ? window.NRCDetailUI.formatHeaderDate(reminder.windowStartAt) : "Any time" }, { label: "VISIBILITY · FIXED AT CREATION", value: reminder.visibility.toUpperCase() }, { label: "URGENCY", value: `${reminder.urgencyDays} days before due` }])}
+      ${reminder.noteAssetId ? `<section class="schedule-linked-note"><span class="detail-edit-label">LINKED NOTE</span><p>${escapeHtml(noteTitle)}</p><button class="btn btn--primary schedule-primary" id="reminderDetailOpenNote">OPEN NOTE</button></section>` : '<p class="schedule-zone">NO LINKED NOTE</p>'}
+      </article>`;
+    document.getElementById("reminderDetailEdit").onclick = () => changeView("edit");
+    document.getElementById("reminderDetailOpenNote")?.addEventListener("click", () => openReminderLinkedNote(reminder.noteAssetId));
+    document.getElementById("reminderDetailDelete").onclick = () => confirmAndDeleteReminder(reminder);
+    return;
+  }
+  document.getElementById("reminderDetailView").onclick = () => changeView("read");
   agendaContent.innerHTML = `
     <div class="task-detail-panel task-detail-panel-editable reminder-detail-panel detail-edit-form">
       <div class="task-detail-row detail-edit-field">
@@ -679,6 +694,7 @@ function showReminderDetailPanel(reminder) {
         <label class="task-detail-label detail-edit-label" for="reminderDetailTitle">TITLE</label>
         <input type="text" class="task-detail-input" id="reminderDetailTitle" value="${escapeHtml(reminder.title)}" maxlength="256">
       </div>
+      <fieldset class="schedule-fieldset"><legend>WHEN · ${escapeHtml(Intl.DateTimeFormat().resolvedOptions().timeZone)}</legend>
       <div class="detail-edit-grid detail-edit-grid--reminder-dates">
         <div class="task-detail-row detail-edit-field">
           <label class="task-detail-label detail-edit-label" for="reminderDetailWindowStart">WINDOW START</label>
@@ -689,28 +705,31 @@ function showReminderDetailPanel(reminder) {
           <input type="datetime-local" class="task-detail-input" id="reminderDetailDeadline" value="${formatDateTimeLocal(reminder.deadlineAt)}">
         </div>
       </div>
-      <div class="detail-edit-grid detail-edit-grid--reminder-meta">
         <div class="task-detail-row detail-edit-field">
-          <label class="task-detail-label detail-edit-label" for="reminderDetailUrgency">URGENCY</label>
+          <label class="task-detail-label detail-edit-label" for="reminderDetailUrgency">URGENCY · DAYS BEFORE DUE</label>
           <input type="text" class="task-detail-input" id="reminderDetailUrgency" value="${reminder.urgencyDays}" maxlength="2">
         </div>
+      </fieldset>
         <div class="task-detail-row detail-edit-field">
           <label class="task-detail-label detail-edit-label" for="reminderDetailNoteId">LINKED NOTE</label>
           <nrc-select><select class="task-detail-select" id="reminderDetailNoteId" data-custom-select-search-placeholder="FILTER NOTE...">${noteOptions}</select></nrc-select>
         </div>
-      </div>
       <div class="reminder-detail-validation-error" id="reminderDetailValidationError" style="display:none;"></div>
     </div>
     <div class="task-detail-actions">
-      <button class="btn btn--primary task-modal-btn save" id="reminderDetailSave">SAVE</button>
       <button class="btn btn--secondary task-modal-btn" id="reminderDetailOpenNote">OPEN NOTE</button>
-      <button class="btn btn--danger task-modal-btn danger" id="reminderDetailDelete">DELETE</button>
     </div>
   `;
 
   const reminderDirtyFields = new Set(["reminderDetailTitle", "reminderDetailWindowStart", "reminderDetailDeadline", "reminderDetailUrgency", "reminderDetailNoteId"]);
   const markReminderDirty = (event) => {
-    if (reminderDirtyFields.has(event.target.id)) reminderDetailDirty = true;
+    if (reminderDirtyFields.has(event.target.id)) {
+      reminderDetailDirty = true;
+      window.NRCDetailUI.setSaveState("UNSAVED", agendaPanel);
+      if (event.target.id === "reminderDetailNoteId") {
+        document.getElementById("reminderDetailOpenNote").disabled = !event.target.value;
+      }
+    }
   };
   agendaContent.oninput = markReminderDirty;
   agendaContent.onchange = markReminderDirty;
@@ -720,10 +739,6 @@ function showReminderDetailPanel(reminder) {
     closeBtn.onclick = () => window.NRCInspector?.close() ?? clearReminderSelection({ fromInspector: true });
   }
 
-  const saveBtn = document.getElementById("reminderDetailSave");
-  if (saveBtn) {
-    saveBtn.onclick = saveReminderFromDetailPanel;
-  }
   const headerSaveBtn = document.getElementById("reminderDetailSaveHeader");
   if (headerSaveBtn) {
     headerSaveBtn.onclick = saveReminderFromDetailPanel;
@@ -744,6 +759,7 @@ function showReminderDetailPanel(reminder) {
     }
   };
   if (openNoteBtn) {
+    openNoteBtn.disabled = !document.getElementById("reminderDetailNoteId")?.value;
     openNoteBtn.onclick = openLinkedNote;
   }
   if (headerOpenNoteBtn) {
@@ -1071,20 +1087,32 @@ async function createReminder() {
     return;
   }
 
-  const noteIdInput = await window.NRCDialog.prompt(
-    "Linked note ID (optional):",
-    { title: "CREATE REMINDER", placeholder: "204" },
-  );
-
-  let noteAssetId = 0n;
-  if (noteIdInput && noteIdInput.trim().length > 0) {
-    try {
-      noteAssetId = BigInt(noteIdInput.trim());
-    } catch {
-      window.NRCDialog.notify("INVALID NOTE ID", { logType: "Error" });
-      return;
-    }
+  try {
+    await window.NRCAssets.requestAllAssets(0n, AssetType.Note);
+  } catch {
+    window.NRCDialog.notify("NOTES COULD NOT BE LOADED. RECONNECT AND TRY AGAIN.", { logType: "Error" });
+    return;
   }
+  const noteAssetId = await new Promise(resolve => {
+    const view = window.NRCModal.create({ title: "CREATE REMINDER", onCancel: () => resolve(null) });
+    const field = document.createElement("label");
+    field.className = "detail-edit-field";
+    field.innerHTML = `<span class="detail-edit-label">LINKED NOTE · OPTIONAL</span><nrc-select><select id="reminderCreateNote" class="task-detail-select" data-custom-select-wrap data-custom-select-search-placeholder="FILTER NOTE...">${buildReminderNoteOptions(0n)}</select></nrc-select>`;
+    view.panel.insertBefore(field, view.actions);
+    for (const [label, create] of [["CANCEL", false], ["CREATE", true]]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = create ? "btn btn--primary" : "btn";
+      button.textContent = label;
+      button.onclick = () => {
+        const selected = create ? BigInt(field.querySelector("select").value || "0") : null;
+        view.close(); resolve(selected);
+      };
+      view.actions.append(button);
+    }
+    view.show();
+  });
+  if (noteAssetId === null) return;
 
   const reminder = {
     title: title.trim(),
@@ -1328,6 +1356,7 @@ function invalidateTaskList(convId) {
 
 function refreshTaskSearchAfterMutation(convId) {
   window.NRCTaskQuery?.afterMutation(convId);
+  taskDependencyQuery?.afterMutation(convId);
   if (convId === 0n && TaskViewState.filters.search) {
     window.NRCTaskSearch?.update?.({ debounce: true });
   }
@@ -1949,6 +1978,49 @@ function sendGetTask(convId, taskId, requestOptions = null) {
   return correlationId;
 }
 
+function sendListTaskDependents(taskId, afterTaskId, options) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !serverReady) return;
+  const correlationId = getRpcCorrelationId();
+  const buffer = new ArrayBuffer(32), view = new DataView(buffer);
+  view.setUint16(0, Opcode.C_ListTaskDependents, false);
+  view.setBigUint64(2, 0n, false);
+  view.setBigUint64(10, taskId, false);
+  view.setUint16(18, 50, false);
+  view.setBigUint64(20, afterTaskId, false);
+  view.setUint32(28, correlationId, false);
+  pendingTaskRpcs.set(correlationId, { ...options, dependents: true, taskId, afterTaskId });
+  sendPacket(buffer);
+  return correlationId;
+}
+
+function handleTaskDependentsPage(view) {
+  if (view.byteLength < 36) return;
+  const correlation = view.getUint32(view.byteLength - 4, false);
+  const pending = pendingTaskRpcs.get(correlation);
+  if (!pending?.dependents || view.getBigUint64(2, false) !== 0n || view.getBigUint64(10, false) !== pending.taskId) return;
+  pendingTaskRpcs.delete(correlation);
+  let result;
+  try {
+    const count = view.getUint16(19, false);
+    if (view.getUint8(18) > 1 || count > 50) throw new Error('Invalid dependency page');
+    let offset = 21, last = pending.afterTaskId;
+    const tasks = [];
+    for (let i = 0; i < count; i++) {
+      const parsed = parseTask(view, offset);
+      if (parsed.task.id <= last || parsed.task.blockedBy !== pending.taskId) throw new Error('Invalid dependency membership');
+      tasks.push(parsed.task); last = parsed.task.id; offset = parsed.newOffset;
+    }
+    const more = view.getUint8(offset++);
+    const nextTaskId = view.getBigUint64(offset, false); offset += 8;
+    const length = view.getUint16(offset, false); offset += 2;
+    if (offset + length + 4 !== view.byteLength || more > 1 || nextTaskId !== (count ? last : 0n) || (more && !count)) throw new Error('Invalid dependency cursor');
+    const message = new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset + offset, length));
+    if (!view.getUint8(18)) throw new Error(message || 'Dependency read failed');
+    result = { tasks, hasMore: more === 1, nextTaskId };
+  } catch (error) { pending.onError?.(error); return; }
+  pending.onSuccess?.(result);
+}
+
 function loadTaskPage(convId, statusMask, { reset = false } = {}) {
   convId = 0n;
   const state = getTaskPageState(convId, statusMask);
@@ -2047,7 +2119,7 @@ function requestTask(convId, taskId, requestOptions = null) {
   const normalizedConvId = 0n;
   const normalizedTaskId = BigInt(taskId);
   const cached = roomTasks.get(normalizedConvId)?.get(normalizedTaskId);
-  if (cached) { requestOptions?.onSuccess?.({ task: cached }); return cached; }
+  if (cached && !requestOptions?.force) { requestOptions?.onSuccess?.({ task: cached }); return cached; }
 
   const batchRead = pendingTaskBatchReads.get(normalizedTaskId);
   if (batchRead) {
@@ -2378,7 +2450,7 @@ function handleTaskCreated(dataView) {
 }
 
 function handleTaskErrorResponse(originOpcode, correlationId, errorMsg = "") {
-  if (originOpcode !== Opcode.C_CreateTask && originOpcode !== Opcode.C_UpdateTask && originOpcode !== Opcode.C_MoveTask && originOpcode !== Opcode.C_GetTask && originOpcode !== Opcode.C_GetTasksByIDs) return false;
+  if (originOpcode !== Opcode.C_CreateTask && originOpcode !== Opcode.C_UpdateTask && originOpcode !== Opcode.C_MoveTask && originOpcode !== Opcode.C_GetTask && originOpcode !== Opcode.C_GetTasksByIDs && originOpcode !== Opcode.C_ListTaskDependents) return false;
   const pendingRpc = pendingTaskRpcs.get(correlationId);
   if (!pendingRpc) return false;
   pendingTaskRpcs.delete(correlationId);
@@ -2708,6 +2780,8 @@ function handleTaskListResponse(dataView) {
 
 function clearPendingTaskRpcs() {
   window.NRCTaskQuery?.disconnect();
+  taskDependencyQuery?.disconnect(true);
+  taskDependencyQuery = null;
   // The register's headless controller holds its own pending page and has to be
   // dropped with the connection, or a reconnect would answer a dead request.
   window.NRCAttention?.disconnect?.();
@@ -3814,6 +3888,8 @@ function clearTaskSelection({ fromInspector = false, preserveDetail = false } = 
     return;
   }
   taskDetailSaveGeneration++;
+  taskDependencyQuery?.disconnect();
+  taskDependencyQuery = null;
   selectedTaskConvId = null;
   selectedTaskId = null;
   taskMessagesOpen = null;
@@ -4096,10 +4172,108 @@ function buildTaskHeaderMetadata(task) {
   return window.NRCDetailUI.renderHeaderMetadata(rows, 1, task.id);
 }
 
-function renderTaskDocumentProperties(task) {
-  const fields = ["status", "priority", "category", "dueAt", "project", "assignee", "blockedBy", "externalRef"];
+let taskDependencyQuery = null;
+
+// The targeted server page defines membership; shared-cache coverage is irrelevant.
+function mountTaskDependencies(task, host, { refreshRoot = false } = {}) {
+  taskDependencyQuery?.disconnect();
+  taskDependencyQuery = null;
+  if (!host) return;
+  let dependents = [];
+  let state = 'loading';
+  let cursor = 0n, hasMore = false, requestId, timer, refreshTimer;
+  let active = true;
+  let blocker = task.blockedBy ? roomTasks.get(0n)?.get(task.blockedBy) : null;
+  let blockerFailed = false;
+  const current = () => active && host.isConnected;
+  const cancelPage = () => {
+    clearTimeout(timer);
+    if (requestId !== undefined) pendingTaskRpcs.delete(requestId);
+    requestId = undefined;
+  };
+  taskDependencyQuery = {
+    disconnect(failed = false) {
+      if (failed) { state = 'error'; paint(); }
+      active = false; cancelPage(); clearTimeout(refreshTimer);
+    },
+    afterMutation() {
+      clearTimeout(refreshTimer);
+      if (current()) refreshTimer = setTimeout(() => {
+        if (current()) mountTaskDependencies(currentDetailTask?.id === task.id ? currentDetailTask : roomTasks.get(0n)?.get(task.id) || task, host);
+      }, 100);
+    },
+  };
+  const paint = () => {
+    if (!current()) return;
+    host.hidden = state === 'results' && !task.blockedBy && !dependents.length;
+    if (host.hidden) return;
+    const card = item => `<button type="button" class="task-dependency-card" data-dependency-id="${item.id}"><span class="task-dependency-reference">#${item.id}</span><strong>${escapeHtml(item.title || 'Task not loaded')}</strong><span class="task-dependency-status">${escapeHtml(TaskStatusNames[item.status] || 'UNKNOWN')}${item.assignee ? ` · ${escapeHtml(item.assignee)}` : ''}</span></button>`;
+    host.innerHTML = `<h3>DEPENDS ON</h3>
+      ${task.blockedBy ? card(blocker || { id: task.blockedBy }) : '<p class="task-dependency-scope">None</p>'}
+      <h3>REQUIRED BY</h3>
+      ${dependents.length ? `<div class="task-dependency-children">${dependents.map(card).join('')}</div>` : ''}
+      <p class="task-dependency-scope" role="status">${state === 'loading' ? 'Loading dependencies…' : state === 'error' || blockerFailed ? 'Dependency read incomplete. Retry to load relationships.' : `${dependents.length}${hasMore ? '+' : ''} dependent task${dependents.length === 1 ? '' : 's'}`}</p>
+      ${hasMore && state === 'results' ? '<button type="button" class="btn" data-dependency-more>LOAD MORE</button>' : ''}
+      ${state === 'error' || blockerFailed ? '<button type="button" class="btn" data-dependency-retry>RETRY</button>' : ''}`;
+    host.onclick = event => {
+      if (event.target.closest('[data-dependency-retry]')) { mountTaskDependencies(task, host, { refreshRoot: true }); return; }
+      if (event.target.closest('[data-dependency-more]')) { loadPage(); return; }
+      const button = event.target.closest('[data-dependency-id]');
+      if (button) window.NRCInspector?.openEntity({ roomId: 0n, type: 'task', id: BigInt(button.dataset.dependencyId) });
+    };
+  };
+  const fail = () => { cancelPage(); state = 'error'; paint(); };
+  const loadPage = () => {
+    if (!current()) return;
+    state = 'loading'; paint();
+    requestId = sendListTaskDependents(task.id, cursor, {
+      onSuccess: result => {
+        cancelPage();
+        if (!current()) return;
+        // Pages are exclusive and ID ordered. Re-read after mutations instead
+        // of joining a new relationship set onto an old cursor.
+        dependents.push(...result.tasks);
+        cursor = result.nextTaskId; hasMore = result.hasMore;
+        state = 'results'; paint();
+      },
+      onError: fail,
+    });
+    if (requestId === undefined) { fail(); return; }
+    timer = setTimeout(fail, 15000);
+  };
+  const start = () => {
+    if (task.blockedBy) {
+      requestTask(0n, task.blockedBy, {
+        force: refreshRoot,
+        onSuccess: result => { blocker = result.task; paint(); },
+        onError: () => { blockerFailed = true; paint(); },
+      });
+    }
+    loadPage();
+  };
+  paint();
+  if (refreshRoot) {
+    timer = setTimeout(fail, 15000);
+    requestTask(0n, task.id, {
+      force: true,
+      onSuccess: result => {
+        clearTimeout(timer);
+        if (!current()) return;
+        task = result.task;
+        if (currentDetailTask?.id === task.id) currentDetailTask = task;
+        blocker = task.blockedBy ? roomTasks.get(0n)?.get(task.blockedBy) : null;
+        start();
+      },
+      onError: fail,
+    });
+  } else start();
+}
+
+function renderTaskDocumentProperties(task, { context = false } = {}) {
+  if (context) return `<div class="detail-read-register task-detail-read-register task-detail-read-register--context" role="group" aria-label="Task context">${["priority", "category", "project", "externalRef"].map(field => fieldControl(task, field)).join("")}</div>`;
+  const operational = ["status", "assignee", "dueAt", "blockedBy"];
   return `<div class="task-detail-doc-title">${escapeHtml(task.title)} ${fieldControl(task, "title", { label: "", rename: true })}</div>
-    <div class="detail-read-register task-detail-read-register">${fields.map(field => fieldControl(task, field)).join("")}</div>`;
+    <div class="detail-read-register task-detail-read-register task-detail-read-register--operational" role="group" aria-label="Task operation">${operational.map(field => fieldControl(task, field)).join("")}</div>`;
 }
 
 // `view` defaults to the rendered document; the content editor uses false.
@@ -4136,9 +4310,9 @@ function showTaskDetailPanel(task, { view = true } = {}) {
     <span class="header-text identity-reference">TASK #${task.id}</span>
     ${buildTaskHeaderMetadata(task)}
     <span class="inspector-cell-label">STATE</span>
-    ${view || descriptionFocusMode ? '<span class="inspector-state-value">READ</span>' : window.NRCDetailUI.renderSaveState("SAVED")}
+    ${view || descriptionFocusMode ? '<span class="inspector-state-value">READ</span>' : window.NRCDetailUI.renderSaveState("EDITING")}
   </div><div class="inspector-mode-row">
-    <button class="btn btn--primary header-operation task-modal-btn save" id="taskDetailSave" title="Save description (Ctrl+Enter)">SAVE</button>
+    <button class="btn btn--primary header-operation inspector-matrix-control save" id="taskDetailSave" title="Save description (Ctrl+Enter)">SAVE</button>
     ${window.NRCDetailUI.renderHeaderAction({ id: "taskDetailToggleFocus", label: view || descriptionFocusMode ? "EDIT" : "CANCEL", command: view || descriptionFocusMode ? "e" : "v", title: view || descriptionFocusMode ? "Edit description (E)" : "Discard description edits (V)" })}
     <button class="btn btn--danger header-operation inspector-matrix-control" id="taskDetailDelete" title="Delete task">DELETE</button>
     ${window.NRCDetailUI.renderCloseControl("taskDetailClose")}</div>`;
@@ -4168,6 +4342,7 @@ function showTaskDetailPanel(task, { view = true } = {}) {
             </div>
           </div>
         </section>
+        ${renderTaskDocumentProperties(task, { context: true })}
         </div>
         ${renderTaskDocumentResources(task, renderNoteMarkdownPresentation(getTaskMarkdown(task), task.attachments || []).ampThreads)}
       </div>
@@ -4344,11 +4519,14 @@ function enterDescriptionFocus() {
   tabContent.innerHTML = `
     <div class="task-detail-document record-document record-document-scroll">
       ${renderTaskDocumentProperties(task)}
+      <section class="task-dependencies" aria-label="Task dependencies" hidden></section>
       <div class="agenda-preview task-detail-doc-body">${renderedDesc}</div>
+      ${renderTaskDocumentProperties(task, { context: true })}
     </div>
     ${renderTaskDocumentResources(task, presentation.ampThreads)}
   `;
 
+  mountTaskDependencies(task, tabContent.querySelector('.task-dependencies'));
   const descriptionBody = tabContent.querySelector(".task-detail-doc-body");
   attachMarkdownCheckboxHandlers(
     descriptionBody,
@@ -4657,6 +4835,7 @@ window.NRCTasks = {
   handleTaskListResponse,
   handleTaskListPage,
   handleTaskFull,
+  handleTaskDependentsPage,
   clearPendingTaskRpcs,
   createTaskFromPalette,
   markTaskDoneFromPalette,

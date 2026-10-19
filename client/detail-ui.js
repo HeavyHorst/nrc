@@ -31,8 +31,12 @@
     return `<span class="detail-save-state" role="status" aria-live="polite" data-save-state="${escapeHtml(state)}">${escapeHtml(state)}</span>`;
   }
 
+  let metadataSequence = 0;
   function renderHeaderMetadata(rows, historyKind, historyId) {
-    return `<div class="inspector-metadata" tabindex="0" role="region" aria-label="Record metadata">${renderMetadataLedger(rows, { compactDateLabels: true })}</div>${historyKind ? `<button class="btn header-operation" type="button" data-history-kind="${escapeHtml(historyKind)}" data-history-id="${escapeHtml(historyId)}">HISTORY</button>` : ""}`;
+    const history = historyKind ? `<button class="btn header-operation" type="button" data-history-kind="${escapeHtml(historyKind)}" data-history-id="${escapeHtml(historyId)}">HISTORY</button>` : "";
+    if (!rows.length) return history;
+    const id = `inspector-info-${++metadataSequence}`;
+    return `<button class="btn header-operation" type="button" popovertarget="${id}" aria-haspopup="dialog">INFO</button><div class="inspector-info" id="${id}" popover="auto" role="dialog" aria-labelledby="${id}-title"><div class="inspector-info-heading"><strong id="${id}-title">RECORD INFO</strong><button class="btn" type="button" popovertarget="${id}" popovertargetaction="hide" aria-label="Close record info" autofocus>CLOSE ×</button></div>${renderMetadataLedger(rows)}</div>${history}`;
   }
 
   function formatHeaderDate(nanos) {
@@ -720,12 +724,8 @@
       };
       send.onclick = submit;
       input.oninput = updateByteCount;
-      input.onblur = () => {
-        if (!input.value.trim()) {
-          setComposerOpen(false);
-          notify();
-        }
-      };
+      // Keep layout stable between pointer-down (which blurs the input) and
+      // click. Collapse explicitly via Escape or the messages strip instead.
       input.onkeydown = (event) => {
         if (event.key === "Escape") {
           event.stopPropagation();

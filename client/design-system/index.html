@@ -230,6 +230,7 @@
                             <label><span class="filter-label">SEARCH</span><input class="filter-input" type="search" placeholder="SEARCH TASKS..."></label>
                             <label><span class="filter-label">STATUS</span><nrc-select><select class="filter-select"><option>ALL</option><option>IN PROGRESS</option><option>DONE</option></select></nrc-select></label>
                             <label><span class="filter-label">FLAGS</span><nrc-select><select class="filter-select"><option>ALL</option><option>BLOCKED</option><option>OVERDUE</option><option>BLOCKED + OVERDUE</option></select></nrc-select></label>
+                            <label><span class="filter-label">CUSTOMER · FULL OPTION NAMES</span><nrc-select><select class="filter-select" data-custom-select-wrap><option>ALL CUSTOMERS</option><option>Nordlicht Bildungsverbund – Standort Nord · #42</option><option>Nordlicht Bildungsverbund – Standort Süd · #43</option></select></nrc-select></label>
                             <span class="filter-result-count">18 / 401 RESULTS</span>
                         </div>
                         <p class="catalog-usage"><b>SELECT LIFECYCLE</b> <code>&lt;nrc-select&gt;&lt;select&gt;…&lt;/select&gt;&lt;/nrc-select&gt;</code> owns the existing picker and portal in Light DOM, with no extra wrapper. The native select keeps its id, name, options, value and change events. Value, selectedIndex, disabled, option mutations and form reset synchronize the trigger. Removing the host releases listeners, observers and portals; reinserting it mounts once with the current native value. Dynamic editors need no init/refresh/destroy calls. Existing static <code>data-custom-select</code> fields are wrapped on startup.</p>
@@ -245,18 +246,24 @@
                         <div class="task-detail-panel-editable catalog-detail-form">
                             <div class="detail-edit-form task-detail-edit-form record-document">
                                 <div class="task-detail-doc-title">Catalogue all UI elements <nrc-inline-field><button class="inline-field-value" type="button">RENAME</button></nrc-inline-field></div>
-                                <div class="detail-read-register">
+                                <div class="detail-read-register task-detail-read-register task-detail-read-register--operational" role="group" aria-label="Task operation">
                                     <nrc-inline-field><span class="inline-field-label">STATUS</span><button class="inline-field-value" type="button">IN PROGRESS</button></nrc-inline-field>
-                                    <nrc-inline-field><span class="inline-field-label">PRIORITY</span><button class="inline-field-value" type="button">129</button></nrc-inline-field>
-                                    <nrc-inline-field><span class="inline-field-label">PROJECT</span><button class="inline-field-value" type="button">nrc/client</button></nrc-inline-field>
                                     <nrc-inline-field><span class="inline-field-label">ASSIGNEE</span><button class="inline-field-value" type="button">anna</button></nrc-inline-field>
+                                    <nrc-inline-field><span class="inline-field-label">DUE</span><button class="inline-field-value" type="button">Tomorrow</button></nrc-inline-field>
+                                    <nrc-inline-field><span class="inline-field-label">BLOCKED BY</span><button class="inline-field-value" type="button">—</button></nrc-inline-field>
                                 </div>
                                 <section class="detail-edit-section">
                                     <div class="task-detail-row task-detail-row-desc detail-edit-field detail-edit-field--content"><div class="detail-edit-label-row"><span class="task-detail-field-stats">75 / 4,096 BYTES</span></div><div class="task-detail-desc-container"><textarea class="task-detail-textarea" aria-label="Description" maxlength="4096">Keep the inventory explicit, dense and connected to production CSS.</textarea></div></div>
                                 </section>
+                                <div class="detail-read-register task-detail-read-register task-detail-read-register--context" role="group" aria-label="Task context">
+                                    <nrc-inline-field><span class="inline-field-label">PRIORITY</span><button class="inline-field-value" type="button">129</button></nrc-inline-field>
+                                    <nrc-inline-field><span class="inline-field-label">CATEGORY</span><button class="inline-field-value" type="button">UI</button></nrc-inline-field>
+                                    <nrc-inline-field><span class="inline-field-label">PROJECT</span><button class="inline-field-value" type="button">nrc/client</button></nrc-inline-field>
+                                    <nrc-inline-field><span class="inline-field-label">REFERENCE</span><button class="inline-field-value" type="button">—</button></nrc-inline-field>
+                                </div>
                             </div>
                         </div>
-                        <p class="catalog-usage"><b>STABLE DOCUMENT</b> Notes and Tasks keep title, compact property grid, content and resource registers in the same order in read and edit. The title preserves its casing. EDIT becomes SAVE / CANCEL in the fixed header; only content and note format belong to that draft. Metadata keeps its independent inline-save contract. Resources retain their disclosure state across modes, and links open by default. The document scrolls as one surface; short content does not push resources to the bottom. Property grids collapse to one column on phones. Customer editors retain their grouped field sections.</p>
+                        <p class="catalog-usage"><b>STABLE DOCUMENT</b> Tasks lead with title and operational fields, then content, then classification and reference. This order stays the same in read and edit; context fields remain directly editable without a disclosure. Notes keep their document composition. The title preserves its casing. EDIT becomes SAVE / CANCEL in the fixed header; only content and note format belong to that draft. Metadata keeps its independent inline-save contract. Resources retain their disclosure state across modes, and links open by default. The document scrolls as one surface; short content does not push resources to the bottom. Property grids collapse to one column on phones. Customer editors retain their grouped field sections.</p>
                     </div>
                 </div>
                 <div class="catalog-subsection">
@@ -315,9 +322,10 @@
                             <div class="agenda-resize-handle" role="separator" aria-label="Resize Inspector" tabindex="0"></div>
                             <div class="panel-header inspector-matrix-header">
                                 <div class="inspector-identity-row"><span class="header-text identity-reference">TASK #184</span><span class="inspector-cell-label">STATE</span><span class="detail-save-state" data-save-state="SAVING">SAVING</span></div>
-                                <div class="inspector-mode-row"><button class="btn header-operation inspector-back inspector-matrix-control" type="button" aria-label="Return to previous inspected object"><span>BACK</span></button><button class="btn header-operation inspector-matrix-control" data-inspector-command="v" type="button"><span>VIEW</span></button><button class="btn header-operation task-detail-close inspector-matrix-control" data-inspector-command="escape" type="button" aria-label="Close"><span>CLOSE</span><b aria-hidden="true">×</b></button></div>
+                                <div class="inspector-mode-row"><button class="btn btn--primary header-operation inspector-matrix-control" data-inspector-command="s" type="button"><span>SAVE</span></button><button class="btn header-operation inspector-matrix-control" data-inspector-command="v" type="button"><span>CANCEL</span></button><button class="btn header-operation task-detail-close inspector-matrix-control" data-inspector-command="escape" type="button" aria-label="Close"><span>CLOSE</span><b aria-hidden="true">×</b></button></div>
                             </div>
                             <div class="catalog-panel-body">
+                                <p><b>EDIT CONTRACT</b> — Exactly one SAVE/CANCEL pair in the mode row. STATE describes reading, editing or persistence, never domain status or urgency. Destructive actions remain separate; company archive semantics are unchanged. Slice keeps its live-field SAVE without an artificial read/edit mode.</p>
                                 <p><b>ONE ROW</b> — Eine Verantwortungsebene: Scope beziehungsweise Identität und die direkt darauf wirkenden globalen Aktionen. Einfache Chat- und Ausgabeheader bleiben einzeilig.</p>
                                 <p><b>TWO ROWS</b> — Zwei unabhängige Ebenen: stabile Objektidentität plus Systemzustand im 20px-Band mit 10px-Schrift oben; lokale Modi, Navigation und Objektaktionen in unveränderter Höhe unten. Das schmale Metadatenband gilt auch für den Inspector.</p>
                                 <p><b>NO RESPONSIVE WRAP</b> — Platzmangel erzeugt nie semantisch eine zweite Zeile. Auf kleinen Viewports werden Controls kompakter oder die mobile Panel-Komposition verwendet.</p>
@@ -717,6 +725,23 @@
                     </div>
                 </div>
                 <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>SCHEDULE INSPECTORS · READ FIRST</h3><code>.schedule-detail</code></div>
+                    <article class="schedule-detail">
+                        <h2>SSO pilot review</h2>
+                        <section class="schedule-time" aria-label="Appointment time"><p class="schedule-date">Tuesday, 20 October 2026</p><p class="schedule-hours">11:00 – 11:45</p><p class="schedule-zone">Europe/Berlin</p></section>
+                        <a class="btn btn--primary schedule-primary" href="#inventory">OPEN MEETING ↗</a>
+                        <p class="schedule-description">Review the claims and confirm the pilot start.</p>
+                        <dl class="detail-metadata-ledger"><div><dt>ASSIGNEE</dt><dd>anna</dd></div><div><dt>PROJECT</dt><dd>edupool</dd></div></dl>
+                    </article>
+                    <article class="schedule-detail">
+                        <h2>Ask the customer for approval</h2>
+                        <section class="schedule-time" aria-label="Reminder deadline"><span class="detail-edit-label">DUE · LOCKED</span><p class="schedule-date">Tuesday, 20 October 2026</p><p class="schedule-hours">11:00</p><p class="schedule-zone">Europe/Berlin</p></section>
+                        <dl class="detail-metadata-ledger"><div><dt>AVAILABLE FROM</dt><dd>19.10.26, 10:00</dd></div><div><dt>VISIBILITY · FIXED AT CREATION</dt><dd>TEAM</dd></div><div><dt>URGENCY</dt><dd>3 days before due</dd></div></dl>
+                        <section class="schedule-linked-note"><span class="detail-edit-label">LINKED NOTE</span><p>OIDC: Claims and scopes</p><button class="btn btn--primary schedule-primary">OPEN NOTE</button></section>
+                    </article>
+                    <p class="catalog-usage">SCHEDULE INSPECTORS: existing appointments and reminders open read-first, with title, local date/time, timezone and meeting/note action ahead of secondary facts. EDIT enters the existing form; CANCEL or Escape returns through the unsaved-change guard. New appointments still open directly in the editor. Multi-day appointments name the end date; an absent end stays absent. Uses .schedule-detail / .schedule-time, shared metadata ledger, buttons and theme tokens.</p>
+                    <fieldset class="schedule-fieldset"><legend>WHEN · Europe/Berlin</legend><div class="detail-edit-grid detail-edit-grid--reminder-dates"><label class="task-detail-row detail-edit-field"><span class="task-detail-label detail-edit-label">START</span><input type="datetime-local" class="task-detail-input" value="2026-10-20T11:00"></label><label class="task-detail-row detail-edit-field"><span class="task-detail-label detail-edit-label">END / OPTIONAL</span><input type="datetime-local" class="task-detail-input" value="2026-10-20T11:45"></label></div></fieldset>
+                    <p class="catalog-usage">Time fields share one labelled group and timezone. Reminder urgency belongs to this group; linked notes stay separate. Reading actions follow the content instead of sitting at the viewport bottom.</p>
                     <div class="catalog-subhead"><h3>DOCUMENT RESOURCES · COMPACT REGISTER</h3><code>.document-resources</code></div>
                     <div class="catalog-inspector-stage inspector">
                         <div class="task-detail-document">
@@ -892,10 +917,10 @@
                 <div class="catalog-subsection">
                     <div class="catalog-subhead"><h3>DETAIL METADATA</h3><code>.detail-metadata-ledger</code></div>
                     <div class="catalog-grid-2">
-                        <div><h4>TASK #184</h4><div class="inspector-metadata" tabindex="0" role="region" aria-label="Record metadata"><dl class="detail-metadata-ledger"><div><dt>CREATED BY</dt><dd class="identity-actor">RENE</dd></div><div><dt class="metadata-date-label">CREATED</dt><dd title="CREATED: 24.08.26, 09:42">24.08.26, 09:42</dd></div><div><dt class="metadata-date-label">UPDATED</dt><dd title="UPDATED: 24.08.26, 10:14">24.08.26, 10:14</dd></div><div><dt>COMPLETED</dt><dd>24.08.26, 10:14</dd></div></dl></div></div>
-                        <div><h4>REMINDER #91</h4><div class="inspector-metadata" tabindex="0" role="region" aria-label="Record metadata"><dl class="detail-metadata-ledger"><div><dt>CREATED BY</dt><dd class="identity-actor">SULLIVAN</dd></div><div><dt class="metadata-date-label">CREATED</dt><dd title="CREATED: 24.08.26, 08:10">24.08.26, 08:10</dd></div><div><dt class="metadata-date-label">UPDATED</dt><dd title="UPDATED: 24.08.26, 10:02">24.08.26, 10:02</dd></div></dl></div></div>
+                        <div><h4>TASK #184</h4><div id="catalogTaskInfo"></div></div>
+                        <div><h4>REMINDER #91</h4><div id="catalogReminderInfo"></div></div>
                     </div>
-                    <p class="catalog-usage"><b>CONTRACT</b> Provenance stays in the inspector identity band across read, edit and comments, including Tasks. Use <b>CREATED BY</b> for origin; mutable task responsibility remains an <b>ASSIGNEE</b> form field. Each field has a permanently visible label beside its value on one baseline and a separating rule, keeping the identity band compact. Dates use local minute precision. Metadata scrolls horizontally with touch or keyboard when necessary; record identity and state remain fixed. Tasks include COMPLETED only when a completion timestamp exists.</p>
+                    <p class="catalog-usage"><b>CONTRACT</b> INFO opens one shared, keyboard-accessible provenance popover across read, edit and comments. Author, local creation/update timestamps, source and optional completion remain labelled and wrap without horizontal scrolling. Escape, CLOSE or an outside click dismisses INFO without closing the record. Identity, HISTORY and state remain visible in the compact header. Mutable responsibility stays in the body's ASSIGNEE field.</p>
                 </div>
                 <div class="catalog-subsection">
                     <div class="catalog-subhead"><h3>HTML NOTE / SANDBOX</h3><code>.note-html-frame</code></div>
@@ -923,20 +948,21 @@
                     <div class="file-assets-details">
                         <section class="file-assets-metadata" aria-label="File metadata">
                             <h2 class="file-assets-heading">NRC application icon</h2>
-                            <p class="file-assets-description">An image File with its preview directly below the metadata register.</p>
+                            <p class="file-assets-updated">Updated 08 Oct 2026, 14:02</p>
+                            <p class="file-assets-description">Open/download and preview lead; classification and provenance follow without repeating the filename and size.</p>
+                        <nrc-attachment-list class="file-assets-content" id="fileDetailsAttachments">
+                            <section class="file-assets-binary" aria-label="favicon.png">
+                                <p class="file-assets-binary-name">favicon.png</p>
+                                <p class="file-assets-binary-facts" title="application/octet-stream">PNG · 2.0 KB</p>
+                                <div class="file-assets-binary-actions"><button class="btn btn--primary" type="button" data-attachment-open data-image="1" data-file-id="catalog-icon" data-filename="favicon.png">OPEN</button><a class="btn" href="../favicon.png" download="favicon.png">DOWNLOAD</a></div>
+                                <button class="file-assets-image" type="button" data-attachment-open data-image="1" data-file-id="catalog-icon" data-filename="favicon.png" aria-label="Open favicon.png"><img src="../favicon.png" alt="favicon.png" loading="lazy"></button>
+                            </section>
+                        </nrc-attachment-list>
                             <dl>
-                                <div class="file-assets-fact-group" role="group" aria-label="File"><dt>FILENAME</dt><dd>favicon.png</dd><dt>TYPE</dt><dd>application/octet-stream</dd><dt>SIZE</dt><dd>2.0 KB</dd></div>
                                 <div class="file-assets-fact-group" role="group" aria-label="Classification"><dt>CATEGORY</dt><dd>design-reference</dd><dt>TAGS</dt><dd>brand, icon</dd></div>
-                                <div class="file-assets-fact-group" role="group" aria-label="Record info"><dt>OWNER</dt><dd>rene</dd><dt>UPDATED</dt><dd>08 Oct 2026, 14:02</dd></div>
+                                <div class="file-assets-fact-group" role="group" aria-label="Record info"><dt>OWNER</dt><dd>rene</dd></div>
                             </dl>
                         </section>
-                        <nrc-attachment-list class="note-links-section note-preview-links note-preview-attachments" id="fileDetailsAttachments">
-                            <div class="note-links-header"><span class="note-links-label">ATTACHMENTS (1)</span></div>
-                            <div class="note-links-list">
-                                <div class="note-link-item"><span class="note-preview-attachment-type">PNG</span><span class="note-preview-attachment-name">favicon.png</span><span class="note-preview-attachment-size">2.0 KB</span><span class="note-preview-attachment-actions"><button class="btn btn--row" type="button" data-attachment-open data-image="1" data-file-id="catalog-icon" data-filename="favicon.png">OPEN</button><a class="btn btn--row" href="../favicon.png" download="favicon.png">DOWNLOAD</a></span></div>
-                                <button class="file-assets-image" type="button" data-attachment-open data-image="1" data-file-id="catalog-icon" data-filename="favicon.png" aria-label="Open favicon.png"><img src="../favicon.png" alt="favicon.png" loading="lazy"></button>
-                            </div>
-                        </nrc-attachment-list>
                     </div>
                     <div class="catalog-attachment-list">
                         <div class="task-attachment-item"><div class="task-attachment-filename-cell"><a class="task-attachment-filename">interface-specification.pdf</a></div><div class="task-attachment-type">PDF</div><div class="task-attachment-size">284 KB</div><button class="btn btn--row task-attachment-md-btn" type="button">REF</button><button class="btn btn--row btn--danger task-attachment-remove-btn" type="button">×</button></div>
@@ -1070,26 +1096,28 @@ status      ← Service Worker</code></pre>
                         <div class="note-detail-actions"><button class="btn btn--primary task-modal-btn save" type="button">SAVE</button><button class="btn btn--ghost task-modal-btn" type="button">CANCEL</button><button class="btn btn--danger task-modal-btn danger" type="button">DELETE</button></div>
                     </form>
                 </div>
-                <div class="customer-inspector"><div class="customer-inspector-body detail-edit-form">
+                <div class="customer-inspector customer-inspector--company customer-inspector--read"><div class="customer-inspector-body detail-edit-form">
                     <h2 class="note-preview-title">NORDWERK GMBH</h2>
-                    <dl class="contact-facts company-facts">
-                        <div><dt>CUSTOMER NUMBER</dt><dd>K-0012</dd></div>
-                        <div><dt>TYPE</dt><dd>Kunde</dd></div>
-                        <div><dt>SECTOR</dt><dd>Maschinenbau</dd></div>
+                    <div class="customer-fact-sections"><section class="customer-field-section"><div class="detail-edit-section-title">LOCATION &amp; CONTACT</div><dl class="contact-facts company-facts">
                         <div><dt>CITY</dt><dd>Hamburg</dd></div>
                         <div><dt>ADDRESS</dt><dd>Werkstraße 18, 21079 Hamburg, Deutschland / Verwaltungsgebäude</dd><button class="btn" type="button" aria-label="Copy address">COPY</button></div>
                         <div><dt>WEBSITE</dt><dd><a href="https://nordwerk.example" target="_blank" rel="noopener noreferrer">nordwerk.example</a></dd><button class="btn" type="button" aria-label="Copy website">COPY</button></div>
                         <div><dt>PHONE</dt><dd><a href="tel:+4940123456">+49 40 123456</a></dd><button class="btn" type="button" aria-label="Copy phone">COPY</button></div>
+                    </dl></section><section class="customer-field-section"><div class="detail-edit-section-title">COMPANY</div><dl class="contact-facts company-facts">
+                        <div><dt>CUSTOMER NUMBER</dt><dd>K-0012</dd></div>
+                        <div><dt>TYPE</dt><dd>Kunde</dd></div>
+                        <div><dt>SECTOR</dt><dd>Maschinenbau</dd></div>
                         <div><dt>RESPONSIBLE</dt><dd>rene</dd></div>
-                    </dl>
+                    </dl></section></div>
                 </div></div>
-                <p class="catalog-usage">Company read mode uses the contact facts family: full wrapping values, phone and HTTP(S) website links, copy actions for address, website and phone. Provenance belongs in the inspector identity band. Missing values display —; invalid website schemes remain plain text.</p>
-                <div class="customer-inspector"><div class="customer-inspector-body detail-edit-form">
+                <p class="catalog-usage">Company read mode puts location and contact before administrative fields. Contacts lead with name and role, then actionable email and phone with secondary copy controls. INFO holds provenance. Reading actions follow content; editing keeps its fixed action row. Activities lead with subject, type and recorded time, followed by readable body text.</p>
+                <div class="customer-inspector customer-inspector--contact customer-inspector--read"><div class="customer-inspector-body detail-edit-form">
                     <h2 class="note-preview-title">ANNA BERGER</h2>
-                    <dl class="contact-facts"><div><dt>ROLE</dt><dd>Project lead</dd></div><div><dt>EMAIL</dt><dd><a href="mailto:anna@nordwerk.example">anna@nordwerk.example</a></dd><button class="btn" type="button" aria-label="Copy email">COPY</button></div><div><dt>PHONE</dt><dd>—</dd></div></dl>
+                    <p class="contact-role">Project lead</p>
+                    <dl class="contact-facts contact-methods"><div><dt>EMAIL</dt><dd><a href="mailto:anna@nordwerk.example">anna@nordwerk.example</a></dd><button class="btn btn--ghost" type="button" aria-label="Copy email">COPY</button></div><div><dt>PHONE</dt><dd>—</dd></div></dl>
                     <section class="customer-section" aria-label="Linked companies"><div class="panel-header"><div><span>LINKED COMPANIES / 0</span><button class="btn" type="button">LINK COMPANY</button></div></div><div class="contact-company-list"><p class="customer-empty">No linked companies.</p></div></section>
                 </div></div>
-                <p class="catalog-usage"><b>CONTRACT</b> Workspace-scoped register plus company record, independent of active chat. Register rows give their full width to the company name, with city and contact below it; ACTIVE is implicit while exceptional states remain written in the metadata line. Company master data, contacts and activities use the shared inspector with read/edit modes, history and guarded draft disposal. Contact read mode puts identity and actionable contact fields first and the complete company list next. All entity inspectors keep provenance in the 20px identity band, horizontally scrollable with keyboard access when narrow; identity and save state remain visible across read/edit and comments. LINK COMPANY opens a paged inline search; existing and archived companies cannot be linked again. Relationship pages load on request, independently of the selected section's display page. UNLINK deletes only the association; DELETE permanently removes the contact/activity and all its links after explicit confirmation. Company archive preserves contacts, history and graph links. Rejected saves retain drafts; disconnected or stale drafts cannot overwrite records. The customer register scrolls horizontally at mobile widths. The server-authenticated feature flag controls availability.</p>
+                <p class="catalog-usage"><b>CONTRACT</b> Workspace-scoped register plus company record, independent of active chat. Register rows give their full width to the company name, with city and contact below it; ACTIVE is implicit while exceptional states remain written in the metadata line. Company master data, contacts and activities use the shared inspector with read/edit modes, history and guarded draft disposal. Contact read mode puts identity and actionable contact fields first and the complete company list next. Provenance opens through INFO; identity, history and save state remain visible across read/edit and comments. LINK COMPANY opens a paged inline search; existing and archived companies cannot be linked again. Relationship pages load on request, independently of the selected section's display page. UNLINK deletes only the association; DELETE permanently removes the contact/activity and all its links after explicit confirmation. Company archive preserves contacts, history and graph links. Rejected saves retain drafts; disconnected or stale drafts cannot overwrite records. The customer register scrolls horizontally at mobile widths. The server-authenticated feature flag controls availability.</p>
             </section>
 
             <section class="catalog-section" id="slices">
@@ -1184,25 +1212,25 @@ status      ← Service Worker</code></pre>
                                 <span class="slice-note">SLICE #41 / ACTIVE / OPENED 118D AGO</span>
                                 <h2>SHARDED PERSISTENCE</h2>
                             </div>
-                            <div class="slice-identity-actions"><button class="btn" type="button">SAVE</button><button class="btn" type="button">CLOSE SLICE</button><button class="btn btn--danger" type="button">DELETE SLICE</button></div>
                         </div>
-                        <div class="slice-record-shape">
+                        <div class="slice-record-fields">
+                            <div class="slice-field slice-field--outcome">
+                                <label class="slice-note" for="catalogSliceOutcome">OUTCOME</label>
+                                <textarea class="filter-input slice-outcome-input" id="catalogSliceOutcome" rows="1" maxlength="2048" placeholder="One sentence. A slice is done when this is true.">Restart-safe shard persistence with no migration commands for running installations.</textarea>
+                            </div>
+                            <div class="slice-field slice-field--owner">
+                                <span class="slice-note">OWNER</span>
+                                <div><input id="catalogSliceOwner" type="hidden" maxlength="32" value="RENE"></div>
+                            </div>
+                        </div>
+                        <div class="slice-identity-actions"><button class="btn btn--primary" type="button">SAVE</button><button class="btn" type="button">CLOSE SLICE</button><button class="btn btn--danger" type="button">DELETE SLICE</button></div>
+                        <div class="slice-record-shape" role="group" aria-label="Task progress">
                             <div class="slice-status-summary">
                             <dl class="slice-facts"><div><dt>TASKS</dt><dd>11</dd></div><div><dt>OPEN</dt><dd class="slice-alert">8</dd></div><div><dt>BLOCKED</dt><dd class="slice-alert">2</dd></div><div><dt>DONE</dt><dd>3</dd></div><div><dt>NOTES</dt><dd>2</dd></div><div><dt>FILES</dt><dd>1</dd></div><div><dt>OLDEST OPEN</dt><dd>41D</dd></div><div><dt>LAST MOVED</dt><dd>2H</dd></div></dl>
                             <div class="slice-bar-group slice-bar-group--wide" role="img" aria-label="BACKLOG: 3, TODO: 2, INPROGRESS: 3, DONE: 3" title="BACKLOG: 3, TODO: 2, INPROGRESS: 3, DONE: 3"><div class="slice-bar"><span class="slice-bar-seg slice-bar-seg--backlog" style="--slice-share:3" title="BACKLOG · 3"><span class="slice-bar-count" data-digits="1">3</span></span><span class="slice-bar-seg slice-bar-seg--todo" style="--slice-share:2" title="TODO · 2"><span class="slice-bar-count" data-digits="1">2</span></span><span class="slice-bar-seg slice-bar-seg--inprogress" style="--slice-share:3" title="IN PROGRESS · 3"><span class="slice-bar-count" data-digits="1">3</span></span><span class="slice-bar-seg slice-bar-seg--done" style="--slice-share:3" title="DONE · 3"><span class="slice-bar-count" data-digits="1">3</span></span></div></div>
                             <div class="slice-status-legend"><span><i class="slice-bar-seg--backlog" aria-hidden="true"></i>BACKLOG 27.3%</span><span><i class="slice-bar-seg--todo" aria-hidden="true"></i>TODO 18.2%</span><span><i class="slice-bar-seg--inprogress" aria-hidden="true"></i>IN PROGRESS 27.3%</span><span><i class="slice-bar-seg--done" aria-hidden="true"></i>DONE 27.3%</span></div>
                             </div>
                             <div class="slice-blocked-summary"><span class="slice-note">BLOCKED 2 / 11</span><div class="slice-bar slice-bar--blocked" role="img" aria-label="BLOCKED 2 / 11 · INCLUDED IN TASK STATUSES" title="BLOCKED 2 / 11 · INCLUDED IN TASK STATUSES"><span class="slice-bar-seg slice-bar-seg--blocked" style="--slice-share:2"></span><span class="slice-bar-track" style="--slice-share:9"></span></div><div class="slice-status-legend"><span><i class="slice-bar-seg--blocked" aria-hidden="true"></i>INCLUDED IN TASK STATUSES</span></div></div>
-                        </div>
-                        <div class="slice-record-fields">
-                            <div class="slice-field slice-field--owner">
-                                <span class="slice-note">OWNER</span>
-                                <div><input id="catalogSliceOwner" type="hidden" maxlength="32" value="RENE"></div>
-                            </div>
-                            <div class="slice-field slice-field--outcome">
-                                <label class="slice-note" for="catalogSliceOutcome">OUTCOME</label>
-                                <textarea class="filter-input slice-outcome-input" id="catalogSliceOutcome" rows="1" maxlength="2048" placeholder="One sentence. A slice is done when this is true.">Restart-safe shard persistence with no migration commands for running installations.</textarea>
-                            </div>
                         </div>
                         <section class="slice-section">
                             <div class="panel-header"><div><span>MEMBERS / 11</span><button class="btn" type="button">+ ASSIGN TASK</button></div></div>
@@ -1304,9 +1332,35 @@ status      ← Service Worker</code></pre>
                     </div>
                     <div id="catalogTicketMetadata" class="record-document ticket-metadata"></div>
                     <div id="catalogTicketResources" class="document-resources ticket-resources" aria-label="Internal ticket resources"></div>
+                    <div class="ticket-conversation">
                     <section class="customer-section" aria-label="Ticket conversation example"><div class="panel-header"><div><span>TICKET #42 / PUBLIC CONVERSATION</span></div></div><article class="customer-event"><span class="customer-meta">ORIGINAL REQUEST / ADA</span><p class="customer-activity-body">Can you confirm the revised delivery date?</p></article></section>
-                    <section class="customer-section"><div class="panel-header"><div><span>INTERNAL NOTES · NEVER PUBLIC</span></div></div><article class="customer-event"><span class="customer-meta">INTERNAL NOTE / SUPPORT</span><p class="customer-activity-body">Checking with the delivery team before replying.</p></article></section>
-                    <form id="ticketReply" data-visibility="internal"><label class="detail-edit-field">COMPOSER MODE<select class="filter-select"><option value="internal_note">INTERNAL NOTE</option><option value="public_reply">CUSTOMER REPLY</option></select></label><p class="customer-meta">INTERNAL NOTE · ONLY NRC STAFF CAN SEE THIS</p><textarea class="task-detail-textarea" rows="3" aria-label="Ticket entry draft"></textarea><div class="detail-edit-field"><span class="detail-edit-label">ATTACH FILES · 10 MAX · 100 MB EACH</span><div><button type="button" class="btn" data-ticket-add-files>+ ADD FILE</button><input type="file" multiple data-ticket-files aria-label="Ticket attachments" hidden></div><div data-ticket-uploads role="status"><div class="note-link-item"><span class="note-preview-attachment-name">diagnosis.txt</span><span class="customer-meta">BLOB UPLOADED · TICKET NOT YET SAVED</span><button type="button" class="btn btn--row btn--danger" data-remove-upload="0">REMOVE</button></div></div></div><button type="button" class="btn">SAVE INTERNAL NOTE</button></form>
+                    <section class="customer-section ticket-internal"><div class="panel-header"><div><span>INTERNAL NOTES · NEVER PUBLIC</span></div></div><article class="customer-event"><span class="customer-meta">INTERNAL NOTE / SUPPORT</span><p class="customer-activity-body">Checking with the delivery team before replying.</p></article></section>
+                    </div>
+                    <form id="ticketReply" data-visibility="internal"><fieldset class="choice-field ticket-audience"><legend>AUDIENCE</legend><label class="radio-choice"><input type="radio" name="kind" value="internal_note" checked><span>INTERNAL NOTE</span></label><label class="radio-choice"><input type="radio" name="kind" value="public_reply"><span>PUBLIC REPLY</span></label></fieldset><p class="customer-meta">INTERNAL NOTE · ONLY NRC STAFF CAN SEE THIS</p><span class="customer-meta">UNSAVED DRAFT</span><textarea class="task-detail-textarea" rows="3" aria-label="Ticket entry draft"></textarea><div class="detail-edit-field"><span class="detail-edit-label">ATTACH FILES · 10 MAX · 100 MB EACH</span><div><button type="button" class="btn" data-ticket-add-files>+ ADD FILE</button><input type="file" multiple data-ticket-files aria-label="Ticket attachments" hidden></div><div data-ticket-uploads role="status"><div class="note-link-item"><span class="note-preview-attachment-name">diagnosis.txt</span><span class="customer-meta">BLOB UPLOADED · TICKET NOT YET SAVED</span><button type="button" class="btn btn--row btn--danger" data-remove-upload="0">REMOVE</button></div></div></div><button type="button" class="btn">SAVE INTERNAL NOTE</button></form>
+                </div>
+                <div class="catalog-example">
+                    <div class="catalog-subhead"><h3>INSPECTOR VISUALIZATIONS</h3><code>.task-dependencies / .ai-source-excerpt / .file-assets-pdf</code></div>
+                    <div class="catalog-grid-2">
+                        <section class="task-dependencies" aria-label="Task dependencies">
+                            <h3>DEPENDS ON</h3>
+                            <button type="button" class="task-dependency-card"><span class="task-dependency-reference">#204</span><strong>Zugang bereitstellen</strong><span class="task-dependency-status">IN PROGRESS · Rene</span></button>
+                            <h3>REQUIRED BY</h3>
+                            <div class="task-dependency-children"><button type="button" class="task-dependency-card"><span class="task-dependency-reference">#225</span><strong>Rollout starten</strong><span class="task-dependency-status">TODO · Julia</span></button></div>
+                            <p class="task-dependency-scope" role="status">1 dependent task</p>
+                        </section>
+                        <section class="ai-source-excerpt" aria-label="Source text">
+                            <p class="ai-source-excerpt-status" role="status">First match · current source text</p>
+                            <label>FIND IN SOURCE<input class="task-detail-input" type="search" value="Zugangstest" placeholder="Find exact text…"></label>
+                            <blockquote>Vor der Freigabe werden Rollen und Kernfunktionen geprüft.
+
+Die Freigabe erfolgt nach dem <mark>Zugangstest</mark>.
+
+Danach informiert das Projektteam alle Beteiligten.</blockquote>
+                            <p class="ai-source-excerpt-status">Current record text · the answer did not supply an exact citation location. Highlights are text matches, not verified evidence.</p>
+                        </section>
+                    </div>
+                    <p class="file-assets-preview-help">PDF preview uses your browser's viewer. If it is unavailable or blank, use OPEN above.</p>
+                    <p class="catalog-usage"><b>VISUALIZATION INVENTORY</b> Task read mode connects its prerequisite, current task and dependents with navigable cards. Prerequisites load by exact ID; the targeted server index supplies 50 dependents per page, with LOAD MORE only when needed, explicit loading/error/retry states and refresh on task mutations. Sources fetch current record text and offer literal, case-sensitive search with a bounded context excerpt; text is inert, no AI relevance or historical snapshot is claimed. Files embed only declared application/pdf binaries in the native browser viewer using the existing inline URL; native pagination and fallback OPEN remain browser-owned. Existing image previews and downloads are unchanged. Shared headers are not redesigned.</p>
                 </div>
                 <header class="catalog-section-header"><span>09</span><h2>COMPLETE INVENTORY</h2><span>WORKSPACE SEARCH INCLUDED</span></header>
                 <div class="catalog-example">
@@ -1341,6 +1395,8 @@ status      ← Service Worker</code></pre>
                     <table class="catalog-inventory-table">
                         <thead><tr><th>FAMILY</th><th>ELEMENTS</th><th>PRODUCTION HOOK</th><th>SOURCE</th><th>SCOPE</th></tr></thead>
                         <tbody id="inventoryBody">
+                            <tr><td>INSPECTOR REFINEMENTS</td><td>One header SAVE/CANCEL pair for explicit editors; live-field Slice SAVE remains separate from closure/delete. Neutral READ and persistence STATE, domain status in content. Note PROJECT/TAGS/FORMAT stay visible in read; discussions start collapsed below 769px without losing drafts. Ticket audience uses native exclusive choices and resets to internal after acknowledgement; full filenames wrap above download actions. Shared de-DE record dates; system-log ISO remains unchanged. Generic assets copy exact raw payloads.</td><td><code>.inspector-mode-row</code>, <code>.ticket-audience</code>, <code>.note-inline-metadata</code>, <code>.slice-facts</code></td><td>detail-ui.js / entity renderers / css/entities.css / css/main.css</td><td><b>CONTRACT</b></td></tr>
+                            <tr><td>SCHEDULE INSPECTORS</td><td>Read-first appointments and reminders; prominent local dates/timezone, meeting or note action, secondary facts. Explicit EDIT; CANCEL/Escape guards unsaved drafts. Appointment save returns to read mode only after acknowledgement.</td><td><code>.schedule-detail</code>, <code>.schedule-time</code>, <code>.schedule-linked-note</code></td><td>appointments.js / tasks.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>CHANGE HISTORY</td><td>Read-only workspace and record scope; local-day activity groups, newest-first cursor pages, deleted identities, actor subjects, field names; loading/empty/error/offline and bounded manual pagination</td><td><code>.history-day</code>, <code>.customer-history-timeline</code>, <code>.history-event</code>, <code>.panel-header</code></td><td>history.js / detail-ui.js / view-manager.js</td><td><b>FEATURE</b></td></tr>
                             <tr><td>SUBSYSTEM STATUS</td><td>Compact global footer disclosure; instance HTTP reachability, failures, unchecked optional services and last-check evidence; never chat presence or operations</td><td><code>.subsystems-toggle</code>, <code>.subsystems-panel</code></td><td>app.js / index.html / css/workspace.css / css/mobile.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>INTERNAL TICKETS</td><td>Full-width task-style table with sortable accessible headers, persisted resizing, selected/focused rows, ↑/↓ navigation in sorted/filtered order and shared Inspector history/close. Activity descending by default. State/assignee/customer/search; company ID is authoritative. Direct inline metadata editors match tasks/notes; no EDIT TICKET disclosure. Company/contact open a coupled dialog with searchable custom selects using MemberOf membership; company scopes contacts, contact fixes company until cleared. Multi-company contacts name each company explicitly. Acknowledged create/edit; retained per-record drafts. Shared exclusive-open resource strips separate TASKS (status/assignee), SLICES (MemberOf only), and REFERENCES (notes/files/other links). Read-only original request appears once in the chronological public conversation, separated from internal notes; composer defaults internal. Related tasks/slices do not synchronize status. Customer-context entry point reuses these records.</td><td><code>#ticketsPanel</code>, <code>.task-table</code>, <code>#inspectorEntityHost</code>, <code>nrc-inline-field</code>, <code>nrc-select</code>, <code>.document-resources</code>, <code>.customer-section</code>, <code>.detail-edit-field</code></td><td>tickets.js / inspector.js / customers.js / detail-ui.js / css/main.css</td><td><b>FEATURE</b></td></tr>
@@ -1354,7 +1410,7 @@ status      ← Service Worker</code></pre>
                             <tr><td>BUTTONS</td><td>Central default, primary, secondary, ghost, danger, row, icon and disabled states; the action's role picks the modifier — create (the register's one primary action), attach or detach an association (default), a repeated table-row action (row: quiet at rest, accent or danger on hover and focus), destructive or interrupting (danger)</td><td><code>.btn</code>, <code>.btn--*</code>, <code>.btn--row</code>, <code>header-create-action</code></td><td>css/workspace.css / css/ledger.css</td><td><b>CORE</b></td></tr>
                             <tr><td>TABS</td><td>Shared overlapping register tabs, raised and tinted selection, compact header and taller customer sizing, single-line horizontal overflow, fixed count slot: tasks, attention, calendar, reminders, customers, link target type</td><td><code>.nav-tab</code>, <code>.tab-count</code>, <code>.tab-group</code>, <code>.task-detail-tabs</code>, <code>.note-link-picker-types</code></td><td>css/ledger.css</td><td><b>CORE</b></td></tr>
                             <tr><td>LINK PICKER</td><td>NOTE, TASK and FILE target modes; server paging, search, loaded count, retry, keyboard selection; per-instance state and portal cleanup</td><td><code>&lt;nrc-link-picker&gt;</code>, <code>.note-link-picker*</code></td><td>links-ui.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
-                            <tr><td>PANEL HEADER</td><td>Label/value metadata cells in the inspector identity band above local modes; fixed identity/state, scrollable provenance; compact filter registers and output plates</td><td><code>.panel-header</code>, <code>.inspector-*-row</code>, <code>.header-register*</code>, <code>.metadata-header-register</code></td><td>css/main.css / index.html / detail-ui.js / view-manager.js</td><td><b>CORE</b></td></tr>
+                            <tr><td>PANEL HEADER</td><td>Compact identity/state band above local modes; INFO reveals labelled provenance in a native keyboard-accessible popover, HISTORY remains separate; compact filter registers and output plates</td><td><code>.panel-header</code>, <code>.inspector-info</code>, <code>.header-register*</code>, <code>.metadata-header-register</code></td><td>css/main.css / index.html / detail-ui.js / view-manager.js</td><td><b>CORE</b></td></tr>
                             <tr><td>SIDEBAR NAVIGATION</td><td>Rooms, DMs, always-visible view groups (Work, Knowledge, Tools), customer building icon, unread state</td><td><code>.sidebar-*</code>, <code>.view-tabs [role="group"]</code>, <code>.dm-*</code></td><td>index.html / css/workspace.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>FILTER BAR</td><td>Register cells, label, input, select, checkbox, result state; the GROUP toggle swaps the flat-list filters for the slice filters in the same row</td><td><code>.filter-*</code>, <code>.header-filter-cell</code></td><td>css/main.css / index.html</td><td><b>CORE</b></td></tr>
                             <tr><td>CUSTOM SELECT</td><td>Native select, trigger, search, options, portal; automatic mount/cleanup, value and form-reset synchronization</td><td><code>&lt;nrc-select&gt;</code>, <code>.custom-select*</code></td><td>custom-select.js / css/custom-select.css</td><td><b>CORE</b></td></tr>
@@ -1369,7 +1425,7 @@ status      ← Service Worker</code></pre>
                             <tr><td>TASK TABLE</td><td>Server-filtered paging and sorting, loaded/matching counts, retry, resize/persistence, priority, badges, references, drag; the status token is the control that re-statuses the task in place, in the flat register and in a slice's member table; container-responsive two-line desktop register</td><td><code>.task-table</code>, <code>.task-list-view</code>, <code>.column-resize-handle</code>, <code>.task-row-status</code>, <code>data-member-status</code></td><td>tasks.js / task-query.js / column-resize.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>RECORD MESSAGES</td><td>One document surface plus one messages block per record; closed block is a single register line (label, count, last message, key hint), open block scrolls its own stream above a collapsed composer; a wide container turns the block into a column beside the document with a draggable divider; message cards render markdown through the shared chat renderer</td><td><code>.record-messages</code>, <code>.record-strip</code>, <code>.record-stream</code>, <code>.record-message</code>, <code>.record-composer</code>, <code>data-messages-toggle</code></td><td>detail-ui.js / tasks.js / notes.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>RECORD RESOURCES</td><td>Task/Note share one counter bar with no tab selected by default; at most one resource opens. ATTACH chooses a direct attachment or a reusable File with metadata; LINK offers Notes, Tasks and Files. These two actions stay in the header for every tab; comments remain visible separately.</td><td><code>.document-resources</code>, <code>.record-resource</code>, <code>data-resource-toggle</code>, <code>data-messages-persistent</code></td><td>detail-ui.js / files.js / links-ui.js / tasks.js / notes.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
-                            <tr><td>TASK DETAIL</td><td>Stable read/edit document: title, compact inline properties, description and shared resource registers. Header provenance shows CREATED BY, CREATED, UPDATED and optional COMPLETED in labelled cells, independent of document scrolling; identity, SAVE/CANCEL and confirmed save state remain visible.</td><td><code>.record-document</code>, <code>.task-detail-*</code>, <code>.inspector-metadata</code></td><td>tasks.js / detail-ui.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>TASK DETAIL</td><td>Stable read/edit document: operational status/assignee/due/blocker group before quieter priority/category/project/reference fields, description and resources. Shared INFO disclosure holds labelled author, timestamps, source and completion. Identity, HISTORY and confirmed state remain visible.</td><td><code>.record-document</code>, <code>.task-detail-*</code>, <code>.inspector-info</code></td><td>tasks.js / detail-ui.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>ENTITY REFERENCES</td><td>Typed tokens and legacy task IDs render current titles with type icons, exact-ID navigation, asynchronous resolution and ID fallback; shared title/ID picker, search status, preview card</td><td><code>.task-reference*</code>, <code>.autocomplete-status</code></td><td>chat.js / app.js / ai.js / task-references.js</td><td><b>FEATURE</b></td></tr>
                             <tr><td>WORK SLICES</td><td>Explicit work streams linked by <code>member-of</code>; proportional task-status segments with inline counts, separate blocked text and owner, accessible full counts for tiny segments; full-width detail summary with facts/status/percentage swatches on the left and an aligned blocked track on the right (stacked in narrow panes), owner/outcome fields (stacked on phones), owner-acted closure, assigned/unassigned work counters, server-side owner/name filters, paged listing, filtered count and no-match state</td><td><code>.slice-*</code>, <code>NRCSlices</code>, <code>member-of</code></td><td>slices.js / edges.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>ATTENTION REGISTER</td><td>Actionable own work grouped by primary reason: overdue, overdue/waiting follow-up, unblocks, assigned, due reminders, mentions and unread. Ordinary blocked tasks and slices are excluded. Inline dependency controls underline and use accent color on hover/focus, with a keyboard-focus outline. Dependency disclosures link directly to affected tasks across assignees; partial reads are labelled. Tasks appear once; section counts follow kind filters. Shared openers and keyboard navigation cross headings.</td><td><code>.attention-*</code>, <code>--attention-columns</code></td><td>index.html / attention.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
@@ -1377,12 +1433,12 @@ status      ← Service Worker</code></pre>
                             <tr><td>REMINDERS</td><td>Shared entity row states, column header, ID, selection marker, keyboard title, detail-only delete; deadline filters (all / local today / upcoming / overdue), hide locked, desktop-notification permission token, editor</td><td><code>.reminder-*</code>, <code>#notificationStatus</code></td><td>index.html / tasks.js / task-state.js / reminder-notify.js</td><td><b>FEATURE</b></td></tr>
                             <tr><td>NOTE LIST</td><td>Resizable header, row, selected, pagination; container-responsive two-line desktop register</td><td><code>.note-card</code>, <code>.notes-list*</code>, <code>.notes-container</code></td><td>notes.js / column-resize.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>CUSTOMER WORKSPACE</td><td>Hybrid company/contact search; exact records stay separate from projections. NEW CONTACTS review queue includes unassigned pending email contacts and live arrivals without reload; review/assign company remains explicit, legacy contacts are unchanged. Sticky identity and section navigation, four-entry overview previews, searchable 25-row detail pages and explicit shared relationship loading with partial counts. Recorded customer activities form a short timeline; linked slices/tasks/notes open their own views. Archive, inspector read/edit/create, copy actions, paged linking, guarded delete and company unlink</td><td><code>.customers-layout</code>, <code>.customer-tabs</code>, <code>.customer-overview-grid</code>, <code>.customer-history-timeline</code>, <code>.customer-page</code>, <code>.customer-inspector</code></td><td>customers.js / inspector.js / css/main.css</td><td><b>FEATURE</b></td></tr>
-                            <tr><td>NOTE DETAIL</td><td>Same stable document as Tasks; content/format draft, header SAVE/CANCEL, metadata, section jumps, shared resources, share and script-free HTML</td><td><code>.record-document</code>, <code>.note-detail-*</code>, <code>.note-preview-*</code></td><td>notes.js / detail-ui.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>NOTE DETAIL</td><td>Same stable document as Tasks; content/format draft, header SAVE/CANCEL, metadata, section jumps, shared resources, share and script-free HTML. PROJECT spans the metadata register; TAGS and FORMAT share the next row, stacking on phones. Long values truncate without breaking identifiers.</td><td><code>.record-document</code>, <code>.note-detail-*</code>, <code>.note-preview-*</code></td><td>notes.js / detail-ui.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>NOTE SHARE</td><td>Read-only header, export states, metadata, Markdown, attachments, linked nodes, responsive focus</td><td><code>.note-share-*</code>, <code>.agenda-preview</code></td><td>notes.js / css/main.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>HTML NOTE</td><td>Script-free sandbox, local fragment jumps, isolated HTTP(S) tabs, semantic theme tokens, attachment blobs</td><td><code>.note-html-frame</code>, <code>NRCHTMLNotes</code></td><td>note-html.js / notes.js</td><td><b>CONTENT</b></td></tr>
                             <tr><td>ATTACHMENTS</td><td>Lifecycle-owned read ledger: kind, filename, size, OPEN and native DOWNLOAD. Upload progress, popover and editing remain separate.</td><td><code>&lt;nrc-attachment-list&gt;</code>, <code>.task-attachment-*</code>, <code>.attachment-popover*</code></td><td>attachments.js / css/main.css</td><td><b>COMPONENT / FEATURE</b></td></tr>
-                            <tr><td>FILE ASSETS</td><td>Compact rows with OPEN and DOWNLOAD; the title opens Details. Inspector and Details share a title, description and grouped metadata register, OPEN/DOWNLOAD ledger and inline images that open the image viewer. Known raster extensions also preview when MIME is generic. Document resource tabs own the title/count; standalone sections retain a header. Read-first Details supports EDIT/CANCEL EDIT; upload/edit use paired fields and fixed footer actions.</td><td><code>.file-assets-*</code>, <code>NRCFiles</code></td><td>files.js / attachments.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
-                            <tr><td>INSPECTOR</td><td>Control-matrix header with inline scrollable provenance, scoped keyboard operations, persistent resize; entity-only rail in workspace registers, conversation context and selected system events</td><td><code>.inspector-*</code>, <code>.ledger-*</code></td><td>inspector.js / detail-ui.js / app.js</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>FILE ASSETS</td><td>Compact register rows; the title opens Details. Inspector and Details present the binary itself: full filename, type/size, OPEN/DOWNLOAD and inline image preview, followed by grouped metadata. No attachment count for the file itself; multiple binaries remain visible and an absent binary has an explicit empty state. Known raster extensions also preview when MIME is generic. Read-first Details supports EDIT/CANCEL EDIT; upload/edit use paired fields and fixed footer actions.</td><td><code>.file-assets-*</code>, <code>NRCFiles</code></td><td>files.js / attachments.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>INSPECTOR</td><td>Shared INFO provenance disclosure, scoped keyboard operations and persistent resize; entity-only rail in workspace registers, conversation context and selected system events. Native disclosure Escape leaves the underlying record open.</td><td><code>.inspector-*</code>, <code>.ledger-*</code></td><td>inspector.js / detail-ui.js / app.js</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>AI WORKBENCH</td><td>Focused response, numbered citations, research disclosure, responsive source inspector, compact response actions, run/error/cancellation state</td><td><code>.ai-*</code>, <code>.sullivan-*</code></td><td>ai.js / app.js / css/ledger.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>MARKDOWN CONTENT</td><td>Headings, code, links, tables, shared/nested quotes, KaTeX</td><td><code>.agenda-preview</code>, <code>.message-content</code>, <code>blockquote</code></td><td>app.js / css/main.css</td><td><b>CONTENT</b></td></tr>
                         </tbody>
@@ -1401,14 +1457,14 @@ status      ← Service Worker</code></pre>
     <script src="../dialog.js?v=20260925document17"></script>
     <script src="../portal.js?v=20260803a"></script>
     <script src="../custom-picker.js?v=20260927appointment2"></script>
-    <script src="../custom-select.js?v=20260924select1"></script>
+    <script src="../custom-select.js?v=20261019selectors1"></script>
     <script src="../note-html.js?v=20261007fragments1"></script>
     <script src="../loading-indicator.js?v=20261013loading1"></script>
     <script src="../page-loader.js?v=20261013loading1"></script>
     <script src="catalog.js?v=20261016registertabs1"></script>
     <script src="../attachments.js?v=20261008files1"></script>
     <script>window.NRCAssets = { MAX_PAYLOAD_LENGTH: 65535 };</script>
-    <script src="../detail-ui.js?v=20261017attention1"></script>
+    <script src="../detail-ui.js?v=20261018inspectors5"></script>
     <script>
         const ticketResources = document.getElementById("catalogTicketResources");
         ticketResources.innerHTML = [
@@ -1421,12 +1477,14 @@ status      ← Service Worker</code></pre>
             bodyHtml: `<div class="note-link-item"><span class="note-link-direction" aria-label="Outgoing link">→</span><span class="note-link-kind">${resource === "tasks" ? "TASK" : resource === "slices" ? "SLICE" : "NOTE"}</span><span class="note-link-relation" data-relation="${resource === "slices" ? 7 : 2}">${resource === "slices" ? "member-of" : "related-to"}</span><button type="button" class="note-link-target">${title}${resource === "tasks" ? `<span class="customer-meta ticket-work-context">${detail}</span>` : ""}</button><button type="button" class="btn btn--row btn--danger note-link-delete" title="Remove link" aria-label="Remove link to ${title}">×</button></div>`,
         })).join("");
         NRCDetailUI.bindResourceBlocks({ root: ticketResources });
+        document.getElementById("ticketReply").after(ticketResources);
         document.getElementById("catalogTicketMetadata").innerHTML =
             '<div class="task-detail-doc-title">Delivery date confirmation ' + NRCDetailUI.inlineField({ name: "TITLE", label: "", display: "RENAME", value: "Delivery date confirmation", save: async () => {} }) + '</div><div class="detail-read-register task-detail-read-register">' +
             NRCDetailUI.inlineField({ name: "STATUS", label: "STATUS", value: "open", display: "OPEN", options: [{ value: "open", label: "OPEN" }, { value: "waiting_customer", label: "WAITING ON CUSTOMER" }], save: async () => {} }) +
             NRCDetailUI.inlineField({ name: "ASSIGNEE", label: "ASSIGNEE", value: "rene", suggestions: () => ["rene", "sam"], save: async () => {} }) +
+            '</div><details class="ticket-customer-details"><summary>CUSTOMER DETAILS <span>Northstar</span></summary><div class="record-document"><div class="detail-read-register task-detail-read-register">' +
             '<div><span class="inline-field-label">COMPANY</span><button type="button" class="inline-field-value" data-catalog-customer>Northstar</button></div><div><span class="inline-field-label">CONTACT</span><button type="button" class="inline-field-value" data-catalog-customer>Ada</button></div>' +
-            NRCDetailUI.inlineField({ name: "REQUESTER", label: "REQUESTER", value: "ada@example.test", save: async () => {} }) + '</div>';
+            NRCDetailUI.inlineField({ name: "REQUESTER", label: "REQUESTER", value: "ada@example.test", save: async () => {} }) + '</div></div></details>';
         for (const button of document.querySelectorAll("[data-catalog-customer]")) button.onclick = () => {
             const view = NRCModal.create({ title: "CUSTOMER · COMPANY / CONTACT", className: "file-assets-dialog", closeButton: true });
             const fields = document.createElement("div");
@@ -1465,9 +1523,16 @@ status      ← Service Worker</code></pre>
         for (const loader of document.querySelectorAll("#pageLoaders nrc-page-loader")) {
             loader.setState({ hasMore: true, loading: loader.dataset.example === "loading", error: loader.dataset.example === "error" ? "PAGE UNAVAILABLE" : "" });
         }
-        // The same inline provenance contract applies to every entity inspector.
+        const catalogProvenance = [
+            { label: "CREATED BY", value: "rene", role: "actor" },
+            { label: "CREATED", value: "15.09.26, 09:30" },
+            { label: "UPDATED", value: "16.09.26, 10:14" },
+        ];
+        document.getElementById("catalogTaskInfo").innerHTML = NRCDetailUI.renderHeaderMetadata([...catalogProvenance, { label: "COMPLETED", value: "16.09.26, 10:14" }], 1, 184);
+        document.getElementById("catalogReminderInfo").innerHTML = NRCDetailUI.renderHeaderMetadata(catalogProvenance);
+        // Use the production disclosure rather than duplicating its markup.
         for (const row of document.querySelectorAll(".inspector-matrix-header > .inspector-identity-row")) {
-            row.querySelector(".header-text").insertAdjacentHTML("afterend", '<div class="inspector-metadata" tabindex="0" role="region" aria-label="Record metadata"><dl class="detail-metadata-ledger"><div><dt>CREATED BY</dt><dd class="identity-actor">rene</dd></div><div><dt class="metadata-date-label">CREATED</dt><dd title="CREATED: 15.09.26, 09:30">15.09.26, 09:30</dd></div><div><dt class="metadata-date-label">UPDATED</dt><dd title="UPDATED: 16.09.26, 10:14">16.09.26, 10:14</dd></div></dl></div>');
+            row.querySelector(".header-text").insertAdjacentHTML("afterend", NRCDetailUI.renderHeaderMetadata(catalogProvenance));
         }
         for (const [filename, mimeType, size] of [["spec.pdf", "application/pdf", 24576], ["recording.mp3", "audio/mpeg", 1048576], ["demo.mp4", "video/mp4", 2097152], ["source.zip", "application/zip", 4096]]) {
             document.getElementById("catalogChatAttachments").appendChild(renderChatAttachment({fileId: "att_00000000000000000000000000000000", filename, mimeType, size}));

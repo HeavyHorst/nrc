@@ -3595,11 +3595,11 @@ dialog.nrc-dialog-backdrop::backdrop { background: transparent; }
 }
 
 /* The SAVE dot supplements the shared .detail-save-state header token. */
-.task-modal-btn.save.is-dirty {
+.header-operation.save.is-dirty {
     position: relative;
 }
 
-.task-modal-btn.save.is-dirty::after {
+.header-operation.save.is-dirty::after {
     content: "";
     position: absolute;
     top: 0.125rem;
@@ -4347,7 +4347,7 @@ nrc-link-picker {
 }
 
 .inspector .panel-header .inspector-state-value {
-    color: var(--status-online);
+    color: var(--text-dim);
 }
 
 .inspector .panel-header.inspector-matrix-header .agenda-meta {
@@ -4412,6 +4412,14 @@ nrc-link-picker {
     flex: 0 0 auto;
 }
 
+.inspector .panel-header > .inspector-mode-row > .btn--danger:not(.task-detail-close) {
+    margin-left: auto;
+}
+
+.inspector .panel-header > .inspector-mode-row > .btn--danger + .task-detail-close {
+    margin-left: 16px;
+}
+
 .inspector-mode-row > .inspector-back + .inspector-view-cell {
     margin-left: 0;
 }
@@ -4446,7 +4454,7 @@ nrc-link-picker {
     min-width: max-content;
     max-width: none;
     flex: 0 0 auto;
-    margin-left: 0;
+    margin-left: auto;
     align-items: center;
     justify-content: center;
     flex-direction: row;
@@ -4459,11 +4467,10 @@ nrc-link-picker {
     font: inherit;
 }
 
-/* Operation-only inspectors have no VIEW cell to absorb spare width. Keep
-   their action rail at the right edge, including when BACK is injected. */
-.inspector .panel-header.inspector-matrix-header > .inspector-mode-row > .inspector-matrix-control:not(.inspector-back):first-child,
-.inspector .panel-header.inspector-matrix-header > .inspector-mode-row > #inspectorBack + .inspector-matrix-control {
-    margin-left: auto;
+/* Editing actions stay at the left in every family; close stays at the right. */
+.inspector .panel-header.inspector-matrix-header > .inspector-mode-row > .inspector-matrix-control:not(.inspector-back, .task-detail-close):first-child,
+.inspector .panel-header.inspector-matrix-header > .inspector-mode-row > #inspectorBack + .inspector-matrix-control:not(.task-detail-close) {
+    margin-left: 0;
 }
 
 /* =========================================================================
@@ -4936,7 +4943,7 @@ nrc-link-picker {
 .slice-bar-track {
     flex-basis: 0;
     flex-grow: var(--slice-share, 0);
-    background: color-mix(in srgb, var(--status-blocked) 18%, transparent);
+    background: var(--border-subtle);
 }
 
 /* A slice with no task members has no share to draw. The band stays so the
@@ -5043,6 +5050,7 @@ nrc-link-picker {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
+    margin-top: 0.625rem;
 }
 
 .slice-note {
@@ -5077,7 +5085,7 @@ nrc-link-picker {
 .slice-facts dd {
     margin: 0;
     font-family: var(--font-mono);
-    font-size: var(--font-base);
+    font-size: var(--font-xs);
 }
 
 .slice-facts dd.slice-alert {
@@ -5090,6 +5098,9 @@ nrc-link-picker {
     gap: 0.5rem 1.25rem;
     width: 100%;
     margin-top: 0.625rem;
+    padding-block: 0.5rem;
+    border-top: var(--content-border);
+    border-bottom: var(--content-border);
 }
 
 .slice-record-shape:has(.slice-blocked-summary) {
@@ -5129,13 +5140,12 @@ nrc-link-picker {
     gap: 0.5rem;
 }
 
-/* Owner and outcome are two fields of one record, so they share one row: the
-   name is narrow, the sentence takes the rest of the record's width. Each field
-   keeps the record's own shape — label on its own line, control on the next. */
+/* Lead with the goal, then its owner. Keep the sentence wide without making
+   the shared person control compete with the title or the progress register. */
 .slice-record-fields {
     display: grid;
     margin-top: 0.625rem;
-    grid-template-columns: minmax(0, 12rem) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 9rem);
     gap: 0.75rem;
     align-items: start;
 }
@@ -5811,18 +5821,53 @@ nrc-inline-field {
 .record-document > .detail-read-register > :nth-child(odd) {
     border-right: 1px solid var(--border-subtle);
 }
+.record-document > .detail-read-register > .record-format {
+    grid-template-columns: max-content minmax(0, 1fr);
+}
 .record-document .detail-read-register .inline-field-label { min-width: 0; }
+.record-document > .task-detail-read-register--operational {
+    background: var(--surface-control);
+    border: 0;
+}
+.record-document > .task-detail-read-register--operational > nrc-inline-field:nth-child(n) {
+    border: 0;
+}
+.record-document > .task-detail-read-register--context {
+    margin-block: 0.5rem 0.75rem;
+    padding-top: 0.5rem;
+    border-color: transparent;
+    border-top-color: var(--border-subtle);
+}
+.record-document > .task-detail-read-register--context > nrc-inline-field:nth-child(n) {
+    border-color: transparent;
+}
 .record-document .detail-read-register .inline-field-value,
 .appointment-detail-panel .inline-field-value {
     white-space: normal;
     overflow-wrap: anywhere;
     justify-self: start;
 }
+.record-document .record-format .custom-select {
+    min-width: 0;
+    max-width: 100%;
+}
 .record-document .record-format .custom-select__trigger {
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
     height: 1.5rem;
     min-height: 1.5rem;
     padding: 0 0.25rem;
     font-size: var(--font-xs);
+}
+.record-document > .note-inline-metadata > :first-child {
+    grid-column: 1 / -1;
+    border-right: 0;
+}
+.record-document > .note-inline-metadata > :last-child { border-right: 0; }
+.record-document .note-inline-metadata > :first-child .inline-field-value { white-space: nowrap; }
+@media (min-width: 769px) {
+    .record-document > .note-inline-metadata > :nth-child(2) { border-right: 1px solid var(--border-subtle); }
 }
 .record-document > .detail-edit-section {
     flex: 0 0 auto;
@@ -5953,7 +5998,7 @@ nrc-inline-field {
 }
 .inspector .panel-header.inspector-matrix-header > .inspector-mode-row > :is(#taskDetailSave, #noteDetailSave),
 .inspector .panel-header.inspector-matrix-header > .inspector-mode-row > #taskDetailSave[hidden] + #taskDetailToggleFocus {
-    margin-left: auto;
+    margin-left: 0;
 }
 .inspector-mode-row > [hidden] { display: none; }
 @media (max-width: 768px) {
@@ -6080,8 +6125,17 @@ nrc-inline-field {
     & [role="status"] { margin: 0; font-size: var(--font-xs); }
     & [role="status"]:empty { display: none; }
 }
-.file-assets-metadata > dl { margin: 0 0 1rem; }
-.file-assets-details .note-links-list { max-height: none; overflow: visible; }
+.file-assets-metadata > dl { margin: 1rem 0; }
+.file-assets-content { display: grid; gap: 1rem; }
+.file-assets-binary + .file-assets-binary { border-top: var(--content-border); padding-top: 1rem; }
+.file-assets-binary-name { margin: 0; font: var(--font-base)/1.5 var(--font-mono); overflow-wrap: anywhere; }
+.file-assets-binary-facts { margin: 0.375rem 0 0; color: var(--text-dim); font: var(--font-xs)/1.5 var(--font-mono); }
+.file-assets-binary-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-block: 0.75rem; }
+.file-assets-binary-actions > .btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+@media (max-width: 768px) {
+    .file-assets-binary-actions > .btn { min-height: 44px; }
+}
+.file-assets-updated { color: var(--text-dim); font-size: var(--font-sm); margin: 0 0 1rem; }
 .file-assets-heading { margin: 0 0 0.5rem; font-size: var(--font-lg); line-height: 1.35; overflow-wrap: anywhere; }
 .file-assets-description { margin: 0 0 1rem; font-size: var(--font-base); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .file-assets-image { display: block; width: 100%; padding: 0.5rem; border: 1px solid var(--border-subtle); background: var(--bg-primary); cursor: zoom-in; }
@@ -6115,7 +6169,12 @@ nrc-inline-field {
 .workspace-search-excerpt { font: var(--font-sm)/1.4 var(--font-sans); color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .workspace-search-attachments { font: var(--font-xs)/1.5 var(--font-mono); color: var(--text-dim); overflow-wrap: anywhere; }
 .workspace-search-footer { display: flex; justify-content: space-between; gap: 0.75rem; padding: 0.5rem 0.75rem; border-top: 1px solid var(--border-list); border-bottom: 0; }
-.workspace-search-payload { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--font-base)/1.5 var(--font-sans); }
+.customer-inspector-body > .workspace-search-title { margin: 0 0 1rem; font: 600 var(--font-lg)/1.4 var(--font-sans); }
+.workspace-search-payload { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--font-sm)/1.6 var(--font-mono); padding: 0.75rem; border: var(--content-border); background: var(--surface-panel); }
+@media (max-width: 768px) {
+    .customer-inspector-body > .workspace-search-title { font-size: var(--mobile-font-lg); }
+    .workspace-search-payload { font-size: var(--mobile-font-sm); }
+}
 :is(#fileInspectorAttachments, #fileDetailsAttachments, #searchAssetAttachments) { container-type: inline-size; }
 :is(#fileInspectorAttachments, #fileDetailsAttachments, #searchAssetAttachments) .note-preview-attachment-actions > .btn { display: inline-flex; align-items: center; justify-content: center; }
 @container (max-width: 24rem) {
@@ -6143,4 +6202,72 @@ nrc-inline-field {
         & .file-assets-field-pair { grid-template-columns: minmax(0, 1fr); }
     }
     .file-assets-section > .panel-header > div { gap: 0.25rem; }
+}
+
+/* Time-led reading surfaces; editing continues to use the shared form controls. */
+.agenda-content:has(> .schedule-detail) { overflow: auto; }
+.agenda-content:has(> .schedule-detail) > .task-detail-actions { margin-top: 0; flex-shrink: 0; }
+.schedule-detail {
+    flex: 0 0 auto;
+    min-height: 0;
+    overflow: visible;
+    padding: 1rem;
+    font: var(--font-base)/1.6 var(--font-sans);
+    overflow-wrap: anywhere;
+}
+.schedule-detail h2 { margin: 0 0 0.75rem; font-size: 1.125rem; line-height: 1.4; text-transform: none; }
+.schedule-time { padding: 0.625rem 0.75rem; border-inline-start: 2px solid var(--border-subtle); background: var(--surface-panel); }
+.schedule-time p { margin: 0; }
+.schedule-date { font-size: 1rem; font-weight: 600; }
+.schedule-hours { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.schedule-zone { color: var(--text-dim); font: var(--font-xs)/1.5 var(--font-mono); }
+.schedule-primary { display: inline-flex; align-items: center; margin-block: 1rem; min-height: 2.25rem; }
+.schedule-description { white-space: pre-wrap; margin-block: 1rem; }
+.schedule-detail .detail-metadata-ledger { display: block; margin-block: 1rem; }
+.schedule-detail .detail-metadata-ledger > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; padding-block: 0.5rem; }
+.schedule-detail .detail-metadata-ledger dd { min-width: 0; white-space: normal; font: var(--font-base)/1.5 var(--font-sans); }
+.schedule-linked-note { border-top: var(--content-border); padding-top: 1rem; }
+.schedule-linked-note p { margin: 0.25rem 0 0; }
+.reminder-detail-panel.detail-edit-form { padding: 1rem; gap: 0.875rem; }
+.schedule-fieldset { display: grid; gap: 0.75rem; min-width: 0; margin: 0; padding: 0.75rem; border: var(--content-border); background: var(--surface-panel); }
+.schedule-fieldset legend { padding-inline: 0.375rem; color: var(--text-dim); font: var(--font-xs)/1.5 var(--font-mono); }
+.schedule-fieldset .detail-edit-grid { gap: 0.75rem; }
+.schedule-fieldset #reminderDetailUrgency { width: 5rem; }
+@media (max-width: 768px) {
+    .schedule-detail { font-size: var(--mobile-font-base); }
+    .schedule-detail h2 { font-size: var(--mobile-font-lg); }
+    .schedule-date { font-size: var(--mobile-font-base); }
+    .schedule-hours { font-size: var(--mobile-font-lg); }
+    .schedule-zone { font-size: var(--mobile-font-sm); }
+    .schedule-detail .detail-metadata-ledger dt { font-size: var(--mobile-font-sm); }
+    .schedule-detail .detail-metadata-ledger dd { font-size: var(--mobile-font-base); }
+    .schedule-primary { min-height: 44px; }
+    .schedule-fieldset legend { font-size: var(--mobile-font-sm); }
+}
+
+/* Content-specific pictures retain the inspector's existing chrome. */
+.file-assets-pdf { display: block; box-sizing: border-box; width: 100%; min-width: 0; height: min(38rem, 65dvh); border: var(--content-border); background: var(--surface-content); }
+.file-assets-preview-help { margin: 0.5rem 0 0; color: var(--text-dim); font-size: var(--font-xs); overflow-wrap: anywhere; }
+.task-dependencies { margin: 1rem 0.75rem; width: min(40rem, calc(100% - 1.5rem)); }
+.task-dependencies[hidden] { display: none; }
+.task-dependencies > h3, .ai-source-excerpt > label { font: var(--font-xs)/1.5 var(--font-mono); color: var(--text-dim); margin: 0 0 0.5rem; }
+.task-dependency-card { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.375rem 0.75rem; width: 100%; padding: 0.75rem; box-sizing: border-box; border: var(--control-border); background: var(--surface-content); color: var(--text-primary); font: var(--font-base)/1.5 var(--font-sans); text-align: left; overflow-wrap: anywhere; }
+button.task-dependency-card { cursor: pointer; }
+button.task-dependency-card:hover { background: var(--bg-hover); }
+button.task-dependency-card:focus-visible { outline: 2px solid var(--focus-interactive); outline-offset: 2px; }
+.task-dependency-card strong { font-weight: 500; }
+.task-dependency-reference, .task-dependency-status { font: var(--font-xs)/1.5 var(--font-mono); color: var(--text-dim); }
+.task-dependency-status { grid-column: 2; }
+.task-dependencies > h3:not(:first-child) { margin-top: 1rem; }
+.task-dependency-children { display: grid; gap: 0.5rem; }
+.task-dependency-scope, .ai-source-excerpt-status { font: var(--font-xs)/1.6 var(--font-sans); color: var(--text-dim); }
+.ai-source-excerpt { margin-block: 1rem; border-block: var(--content-border); padding-block: 0.75rem; }
+.ai-source-excerpt > label { display: grid; gap: 0.375rem; }
+.ai-source-excerpt input { width: 100%; min-width: 0; box-sizing: border-box; }
+.ai-source-excerpt blockquote { margin: 0.75rem 0; padding: 0.75rem; border-left: 2px solid var(--selected-row-accent); background: var(--surface-panel); white-space: pre-wrap; overflow-wrap: anywhere; font: var(--font-base)/1.7 var(--font-sans); }
+.ai-source-excerpt mark { color: var(--text-primary); background: var(--selected-row-bg); box-shadow: inset 0 -2px var(--selected-row-accent); }
+@media (max-width: 768px) {
+    .task-dependency-card, .ai-source-excerpt blockquote { font-size: var(--mobile-font-base); }
+    .task-dependencies > h3, .task-dependency-reference, .task-dependency-status, .task-dependency-scope, .ai-source-excerpt-status, .ai-source-excerpt > label, .file-assets-preview-help { font-size: var(--mobile-font-sm); }
+    .ai-source-excerpt input { font-size: 16px; min-height: 44px; }
 }

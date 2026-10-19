@@ -2686,6 +2686,70 @@
     sourcePanelAnchor = null;
   }
 
+  function loadSourceExcerpt(source, host) {
+    const status = document.createElement('p');
+    status.className = 'ai-source-excerpt-status';
+    status.setAttribute('role', 'status');
+    status.textContent = 'Loading source text…';
+    host.append(status);
+    const unavailable = () => { status.textContent = 'Source text unavailable. Open the record to inspect it.'; };
+    const show = record => {
+      if (!host.isConnected) return;
+      let text = source.type === 'task' ? record?.description : record?.payload;
+      let metadata;
+      try { metadata = JSON.parse(record?.preview || 'null'); } catch { /* Plain preview. */ }
+      if (metadata?.format === 'html' && typeof text === 'string') {
+        const template = document.createElement('template');
+        template.innerHTML = text;
+        template.content.querySelectorAll('script, style').forEach(node => node.remove());
+        template.content.querySelectorAll('p, div, h1, h2, h3, li, br').forEach(node => node.append('\n'));
+        text = template.content.textContent;
+      }
+      if (typeof text !== 'string' || !text.trim()) { unavailable(); return; }
+      const label = document.createElement('label');
+      label.textContent = 'FIND IN SOURCE';
+      const search = document.createElement('input');
+      search.type = 'search';
+      search.className = 'task-detail-input';
+      search.placeholder = 'Find exact text…';
+      label.append(search);
+      const excerpt = document.createElement('blockquote');
+      const provenance = document.createElement('p');
+      provenance.className = 'ai-source-excerpt-status';
+      provenance.textContent = 'Current record text · the answer did not supply an exact citation location. Highlights are text matches, not verified evidence.';
+      const paint = () => {
+        const query = search.value.trim();
+        const match = query ? text.indexOf(query) : -1;
+        const start = match < 0 ? 0 : Math.max(0, match - 240);
+        const end = Math.min(text.length, Math.max(start + 1200, match + query.length));
+        excerpt.replaceChildren();
+        if (start) excerpt.append('…');
+        if (match >= 0) {
+          excerpt.append(text.slice(start, match));
+          const mark = document.createElement('mark');
+          mark.textContent = text.slice(match, match + query.length);
+          excerpt.append(mark, text.slice(match + query.length, end));
+        } else excerpt.append(text.slice(start, end));
+        if (end < text.length) excerpt.append('…');
+        status.textContent = query ? match < 0 ? 'No matching text in the current record.' : `First match · characters ${match + 1}–${match + query.length}` : `SOURCE EXCERPT · ${end} / ${text.length} characters`;
+      };
+      search.addEventListener('input', paint);
+      host.append(label, excerpt, provenance);
+      paint();
+    };
+    let id;
+    try { id = BigInt(source.id); } catch { unavailable(); return; }
+    if (!serverReady || !ws || ws.readyState !== WebSocket.OPEN) {
+      unavailable();
+      return;
+    }
+    if (source.type === 'task' && window.NRCTasks?.requestTask) {
+      window.NRCTasks.requestTask(0n, id, { force: true, onSuccess: result => show(result.task), onError: unavailable });
+    } else if (['asset', 'note', 'reminder'].includes(source.type) && window.NRCAssets?.requestAsset) {
+      window.NRCAssets.requestAsset(0n, id, { force: true, onSuccess: result => show(result.asset), onError: unavailable });
+    } else unavailable();
+  }
+
   function openSourcePanel(source, sources, contextRoomId, anchor) {
     hideAssetPreviewNow();
     closeSourcePanel(false);
@@ -2754,6 +2818,10 @@
     const heading = document.createElement("h3");
     heading.textContent = `Quellen dieser Antwort (${sources.length})`;
     card.append(identity, title, preview, facts, open);
+    const excerpt = document.createElement('section');
+    excerpt.className = 'ai-source-excerpt';
+    excerpt.setAttribute('aria-label', 'Source text');
+    card.insertBefore(excerpt, open);
     body.append(card, heading);
     sources.forEach((item, index) => {
       const button = document.createElement("button");
@@ -2776,6 +2844,7 @@
     dialog.classList.add("has-ai-sources");
     dialog.append(panel);
     syncSourcePanelInert();
+    loadSourceExcerpt(source, excerpt);
     close.focus();
   }
 

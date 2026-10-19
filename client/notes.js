@@ -18,7 +18,7 @@ let noteEditMode = false;
 let notePreviewMode = false;
 // The note panel's message block closes to one register line; the panel
 // re-renders on every comment change, so its open state lives here.
-let noteMessagesOpen = null; // Until toggled, open only when comments exist.
+let noteMessagesOpen = null; // Until toggled, phones start collapsed even with comments.
 let noteSectionsOpen = false;
 let noteComposerOpen = false;
 let noteComposerDraft = "";
@@ -897,10 +897,7 @@ function createNoteCard(note) {
 }
 
 function formatNoteTimestamp(nanos) {
-  if (!nanos || nanos === 0n) return "—";
-  const ms = Number(nanos / 1000000n);
-  const date = new Date(ms);
-  return date.toLocaleString();
+  return window.NRCDetailUI.formatHeaderDate(nanos);
 }
 
 function formatNoteCommentTime(nanos) {
@@ -927,13 +924,14 @@ function renderNoteMessagesHtml(note) {
 
 function noteMessagesAreaHtml(note) {
   const comments = getNoteComments(note);
+  const compact = window.matchMedia("(max-width: 768px)").matches;
   return window.NRCDetailUI.renderMessagesArea({
     messagesHtml: renderNoteMessagesHtml(note),
     count: comments.length,
     preview: window.NRCDetailUI.messagePreview(comments),
-    persistent: true,
-    open: noteMessagesOpen ?? comments.length > 0,
-    composerOpen: noteComposerOpen,
+    persistent: !compact,
+    open: noteMessagesOpen ?? (compact ? Boolean(noteComposerDraft) : comments.length > 0),
+    composerOpen: noteComposerOpen || Boolean(noteComposerDraft),
     draft: noteComposerDraft,
     inputId: "noteCommentInput",
     sendId: "noteCommentSend",
@@ -1753,7 +1751,10 @@ function selectNote(note, { deferDetail = false, replaceCurrent = false, fromIns
     pendingNoteCommentFocusAssetId = null;
     currentDetailNote = null;
   }
-  if (subview === "comments") noteMessagesOpen = true;
+  if (subview === "comments") {
+    noteMessagesOpen = true;
+    noteComposerOpen = true;
+  }
   if (focusId != null) pendingNoteCommentFocusAssetId = BigInt(focusId);
   selectedNoteConvId = note.convId;
   selectedNoteId = note.assetId;
@@ -2259,6 +2260,7 @@ function showNotePreviewPanel(note) {
       <div class="task-detail-tab-content note-detail-tab-content record-document active" data-tab-content="detail">
         <div class="record-document record-document-scroll">
         <div class="note-preview-title">${escapeHtml(title || "(No title)")}</div>
+        ${buildNotePreviewLedger(note, format)}
         <div class="agenda-preview note-preview-body" id="notePreviewBody"></div>
         </div>
         ${renderNoteDocumentResources(note, ampThreads)}
@@ -2435,9 +2437,9 @@ function showNoteEditPanel(note) {
     <span class="header-text identity-reference">NOTE #${note.assetId}</span>
     ${buildNoteHeaderMetadata(note)}
     <span class="inspector-cell-label">STATE</span>
-    ${window.NRCDetailUI.renderSaveState("SAVED")}
+    ${window.NRCDetailUI.renderSaveState("EDITING")}
   </div><div class="inspector-mode-row">
-    <button class="btn btn--primary header-operation task-modal-btn save" id="noteDetailSave" title="Save content (Ctrl+Enter)">SAVE</button>
+    <button class="btn btn--primary header-operation inspector-matrix-control save" id="noteDetailSave" title="Save content (Ctrl+Enter)">SAVE</button>
     ${window.NRCDetailUI.renderHeaderAction({ id: "noteDetailToggleView", label: "CANCEL", command: "v", title: "Discard content edits (V)" })}
     ${window.NRCDetailUI.renderHeaderAction({ id: "noteShareLink", label: "SHARE", command: "s", title: "Copy read-only share link (S)" })}
     <button class="btn btn--danger header-operation inspector-matrix-control" id="noteDetailDelete" title="Delete note">DELETE</button>

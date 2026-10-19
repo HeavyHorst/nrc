@@ -15,7 +15,7 @@ try {
     return [await create("A"), await create("B")];
   });
   const open = async id => {
-    await page.evaluate(id => NRCInspector.openEntity({ roomId: 0n, type: "appointment", id: BigInt(id) }), id);
+    await page.evaluate(id => NRCInspector.openEntity({ roomId: 0n, type: "appointment", id: BigInt(id), subview: "edit" }), id);
     await page.waitForFunction(id => String(NRCInspector.current()?.id) === id && !!document.getElementById("appointmentTitle"), id);
   };
   await open(a);
@@ -39,7 +39,8 @@ try {
     args.at(-1).onSuccess({ asset: { ...NRCAssets.roomAssets.get(0n).get(args[1]), preview: args[2] } });
     NRCAssets.sendUpdateAsset = updateOriginal;
   });
-  await page.waitForFunction(() => !document.getElementById("appointmentTitle").disabled);
+  await page.locator("#appointmentEdit").waitFor();
+  await page.locator("#appointmentEdit").click();
 
   // Hold a delete, then simulate another subscriber removing A. Its late local
   // acknowledgement must not clear B's selection or change B's update to create.
@@ -99,7 +100,7 @@ try {
   await page.evaluate(() => { NRCAssets.sendUpdateAsset = updateOriginal; NRCAssets.sendDeleteAsset = deleteOriginal; });
   await page.locator("#appointmentSave").click();
   await page.waitForFunction(id => NRCAssets.roomAssets.get(0n).get(BigInt(id))?.preview.includes("Offline draft"), b);
-  await page.waitForFunction(() => !document.getElementById("appointmentTitle").disabled);
+  await page.locator("#appointmentEdit").waitFor();
   await page.evaluate(() => NRCAppointments.create());
   await page.waitForFunction(() => NRCInspector.current()?.id === 0n);
   await page.locator("#appointmentTitle").fill("Unsent create");

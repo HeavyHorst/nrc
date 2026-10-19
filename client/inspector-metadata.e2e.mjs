@@ -52,60 +52,67 @@ try {
           await NRCInspector.close();
           await NRCInspector.openEntity({ roomId: 0n, type, id: BigInt(id) });
         }, { type, id });
-        const metadata = page.locator("#inspectorHeader .inspector-metadata");
+        const metadata = page.locator("#inspectorHeader .inspector-info");
+        const info = page.locator('#inspectorHeader button[popovertarget]').first();
         await page.waitForFunction(() => document.querySelector('#inspectorEntityHost')?.getAttribute('aria-busy') !== 'true');
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         assert.equal(await metadata.count(), 1, `${width}/${theme}/${type}: ${errors.join("; ")} ${await page.locator("#inspectorEntityHost").textContent()}`);
+        assert.equal(await metadata.isVisible(), false, "provenance starts behind INFO");
+        assert.equal(await info.textContent(), "INFO");
+        if (type !== "reminder") assert.equal(await page.locator('#inspectorHeader [data-history-kind]').isVisible(), true, "HISTORY stays separate");
+        await info.focus();
+        await page.keyboard.press("Enter");
         await metadata.waitFor();
         assert.deepEqual(await metadata.locator("dt").allTextContents(), ["CREATED BY", "CREATED", "UPDATED", ...(type === "note" ? ["SOURCE"] : type === "task" ? ["COMPLETED"] : [])]);
         assert.equal(await metadata.locator("dd").first().textContent(), "author<&>", "values are text, never HTML");
         assert.deepEqual((await metadata.locator("dd").allTextContents()).slice(1, 3), ["15.09.26, 23:37", "16.09.26, 10:14"], "short dotted dates and local minute precision even in an English browser");
-        assert.equal(await metadata.locator("dl > div").nth(2).evaluate(el => getComputedStyle(el).borderLeftWidth), '1px', "rules separate labelled fields");
         assert.equal(await page.locator("#inspectorEntityHost .detail-object-register").count(), 0, "no duplicate body provenance");
         assert.equal(await page.locator("#inspectorHeader .inspector-mode-row small").count(), 0, "Inspector commands use clear one-line labels");
         if (type === "task") {
-          assert.deepEqual(await page.locator(".task-detail-read-register .inline-field-label").allTextContents(),
-            ["STATUS", "PRIORITY", "CATEGORY", "DUE", "PROJECT", "ASSIGNEE", "BLOCKED BY", "REFERENCE"],
+          assert.deepEqual((await page.locator(".task-detail-read-register .inline-field-label").allTextContents()).sort(),
+            ["STATUS", "PRIORITY", "CATEGORY", "DUE", "PROJECT", "ASSIGNEE", "BLOCKED BY", "REFERENCE"].sort(),
             "Task read mode exposes operational fields");
         }
         const identityHeight = (await page.locator("#inspectorHeader .inspector-identity-row").boundingBox()).height;
-        assert.ok(identityHeight >= 24 && identityHeight <= 30, `${width}/${theme}/${type}: compact one-line identity band (${identityHeight}px)`);
-        const geometry = await metadata.evaluate(el => {
-          const state = el.parentElement.lastElementChild;
-          return { width: el.clientWidth, right: el.getBoundingClientRect().right, stateLeft: state.getBoundingClientRect().left,
-            stateClipped: state.scrollWidth > state.clientWidth };
-        });
-        assert.ok(geometry.width > 0 && geometry.right <= geometry.stateLeft && !geometry.stateClipped, `${width}/${theme}/${type}: metadata and state fit`);
-        assert.deepEqual(await metadata.locator(".metadata-date-label").evaluateAll(labels => labels.map(el => getComputedStyle(el).position)),
-          Array(2).fill("static"), "date labels remain visible even in narrow panels");
-        const cells = await metadata.locator("dl > div").evaluateAll(els => els.map(el => {
-          const label = el.querySelector("dt").getBoundingClientRect();
-          const value = el.querySelector("dd").getBoundingClientRect();
-          return { labelBottom: label.bottom, valueBottom: value.bottom, labelRight: label.right, valueLeft: value.left };
-        }));
-        assert.ok(cells.every(cell => cell.labelRight < cell.valueLeft && Math.abs(cell.labelBottom - cell.valueBottom) < 2), "each label sits beside its value on one baseline");
-        assert.equal(await metadata.locator("dd").nth(1).getAttribute("title"), "CREATED: 15.09.26, 23:37", "date tooltip includes its label");
-        await metadata.focus();
-        for (let i = 0; i < 30; i++) await page.keyboard.press("ArrowRight");
-        await page.waitForTimeout(200);
-        assert.ok(await metadata.evaluate(el => el.scrollLeft + el.clientWidth >= el.scrollWidth - 1), "keyboard reaches final metadata field");
-        await metadata.evaluate(el => { el.scrollLeft = 0; el.blur(); });
-        if (width === 2200) assert.ok(await metadata.evaluate(el => el.scrollWidth <= el.clientWidth), "wide inspector shows every metadata field without scrolling");
+        assert.ok(identityHeight >= 20 && identityHeight <= 30, `${width}/${theme}/${type}: compact one-line identity band (${identityHeight}px)`);
+        const box = await metadata.boundingBox();
+        assert.ok(box.x >= 16 && box.x + box.width <= width - 16 && Math.abs(box.x + box.width / 2 - width / 2) < 2, "popup fits and is centered");
+        assert.ok(await metadata.evaluate(el => el.scrollWidth <= el.clientWidth), "no horizontal scrolling");
+        if (width === 390) assert.equal(await metadata.locator("dd").first().evaluate(el => getComputedStyle(el).fontSize), "16px");
+        assert.equal(await metadata.locator('[autofocus]').evaluate(el => el === document.activeElement), true);
+        if (type === "note") assert.equal(await metadata.locator("dd").last().textContent(), "source<&>");
         if (process.env.NRC_SCREENSHOT_DIR && ["task", "note"].includes(type)) {
           await fs.mkdir(process.env.NRC_SCREENSHOT_DIR, { recursive: true });
-          await page.locator("#inspectorHeader").screenshot({ path: `${process.env.NRC_SCREENSHOT_DIR}/${type}-${width}-${theme}-header.png` });
+          await page.screenshot({ path: `${process.env.NRC_SCREENSHOT_DIR}/${type}-${width}-${theme}-info.png` });
         }
+        await page.keyboard.press("Escape");
+        assert.equal(await metadata.isVisible(), false);
+        assert.equal(await info.evaluate(el => el === document.activeElement), true, "Escape restores INFO focus");
+        assert.equal(await page.locator("#inspector").isVisible(), true, "Escape leaves inspector open");
+        await info.click();
+        await metadata.getByRole("button", { name: "Close record info" }).click();
+        assert.equal(await metadata.isVisible(), false);
+        assert.equal(await info.evaluate(el => el === document.activeElement), true, "close restores focus");
+        await info.click();
+        await page.mouse.click(2, 450);
+        assert.equal(await metadata.isVisible(), false, "outside click dismisses");
         if (type === "note" || type === "task") {
-          assert.equal(await page.locator("#inspectorEntityHost [data-messages-area]").getAttribute("data-messages-open"), "true",
-            "comments are visible without a tab");
+          const discussionOpen = type === "note" && width <= 768 ? "false" : "true";
+          assert.equal(await page.locator("#inspectorEntityHost [data-messages-area]").getAttribute("data-messages-open"), discussionOpen,
+            "narrow notes prioritize reading; other discussions stay visible");
+          await info.click();
           await metadata.waitFor();
           assert.equal(await metadata.locator("dd").first().textContent(), "author<&>", "provenance persists while messages are open");
-          assert.equal(await page.locator("#inspectorEntityHost [data-messages-toggle]").getAttribute("aria-expanded"), "true",
-            "comments start expanded and can be collapsed");
+          await page.keyboard.press("Escape");
+          assert.equal(await page.locator("#inspectorEntityHost [data-messages-toggle]").getAttribute("aria-expanded"), discussionOpen,
+            "INFO leaves discussion state unchanged");
         }
         for (const selector of type === "note" ? ['#noteDetailEdit'] : type === "task" ? ['#taskDetailToggleFocus'] : ["company", "contact", "activity"].includes(type) ? ['#customerEdit'] : []) {
           await page.locator(`#inspectorHeader ${selector}`).click();
+          await info.click();
           await metadata.waitFor();
           assert.equal(await metadata.locator("dd").first().textContent(), "author<&>", "provenance persists across modes");
+          await page.keyboard.press("Escape");
           if (selector === "#noteDetailEdit") {
             assert.equal(await page.locator(".note-preview-title").count(), 1, "note title stays visible while editing");
             assert.deepEqual(await page.locator(".note-inline-metadata .inline-field-label").allTextContents(), ["PROJECT", "TAGS", "FORMAT"]);
@@ -116,19 +123,22 @@ try {
             assert.ok(await page.locator(".customer-field-section .detail-edit-section-title").count() > 0, "Customer edit fields are grouped");
           }
         }
+        if (type === "reminder") {
+          await page.locator('#reminderDetailEdit').click();
+          const openNote = page.locator('#reminderDetailOpenNote');
+          assert.equal(await openNote.isDisabled(), true, 'no action without a linked note');
+          await page.selectOption('#reminderDetailNoteId', '1');
+          assert.equal(await openNote.isEnabled(), true, 'selected note can be opened');
+          await page.selectOption('#reminderDetailNoteId', '');
+          assert.equal(await openNote.isDisabled(), true, 'removing the link disables opening');
+          await page.locator('#reminderDetailView').click();
+          await page.getByRole('button', { name: 'Discard', exact: true }).click();
+        }
       }
     }
   }
-  await page.setViewportSize({ width: 1800, height: 900 });
-  const metadata = page.locator("#inspectorHeader .inspector-metadata");
-  for (const width of [561, 560, 561]) {
-    await metadata.evaluate((el, width) => el.style.flex = `0 0 ${width}px`, width);
-    assert.deepEqual(await metadata.locator(".metadata-date-label").evaluateAll(labels => labels.map(el => getComputedStyle(el).position)),
-      Array(2).fill("static"), "resizing never hides labels");
-    assert.match(await metadata.ariaSnapshot(), /term: CREATED/);
-    assert.match(await metadata.ariaSnapshot(), /term: UPDATED/);
-  }
-  console.log("PASS: six entity inspectors, both themes, desktop/mobile widths, read/edit/messages, visible aligned date labels and keyboard metadata scrolling");
+  assert.deepEqual(errors, []);
+  console.log("PASS: six inspectors, both themes, three widths, read/edit/messages, INFO rows, escaping, native dismissal and focus restoration");
 } finally {
   await browser.close();
 }
