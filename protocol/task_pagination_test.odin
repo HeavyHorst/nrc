@@ -62,6 +62,22 @@ test_task_query_request_complete_truncation_and_validation :: proc(t: ^testing.T
 	testing.expect(t, err == nil, "minimal task query should parse")
 	testing.expect_value(t, parsed.correlation_id, u32(9))
 
+	work: [60]byte
+	copy(work[:], data[:])
+	work[11] = u8(TaskQuerySort.WorkOrder)
+	endian.put_u64(work[52:], .Big, 77)
+	parsed, err = parseTaskQueryRequest(work[:])
+	testing.expect(t, err == nil)
+	testing.expect_value(t, parsed.slice_id, AssetID(77))
+	testing.expect_value(t, parsed.correlation_id, u32(9))
+	for length in 53 ..< 60 {_, e := parseTaskQueryRequest(work[:length]); testing.expect(t, e != nil)}
+	work[12] = 1
+	_, err = parseTaskQueryRequest(work[:])
+	testing.expect_value(t, err, ProtocolParseError.InvalidValue)
+	work[12] = 0; work[11] = u8(TaskQuerySort.Priority)
+	_, err = parseTaskQueryRequest(work[:])
+	testing.expect_value(t, err, ProtocolParseError.InvalidValue)
+
 	for length in 0 ..< len(data) {
 		_, truncated_err := parseTaskQueryRequest(data[:length])
 		testing.expect(t, truncated_err != nil, "every truncated task query must be rejected")
@@ -75,7 +91,7 @@ test_task_query_request_complete_truncation_and_validation :: proc(t: ^testing.T
 	_, err = parseTaskQueryRequest(tail_assignee[:])
 	testing.expect(t, err != nil, "assignee consuming the tail must be rejected")
 
-	for invalid_sort in u8(TaskQuerySort.Project) + 1 ..= u8(255) {
+	for invalid_sort in u8(TaskQuerySort.WorkOrder) + 1 ..= u8(255) {
 		invalid := data
 		invalid[11] = invalid_sort
 		_, err = parseTaskQueryRequest(invalid[:])

@@ -507,6 +507,20 @@ request. These exact-set reads do not make a list or filter cache complete.
 sorts (`Assignee`, `Title`, `Project`) carry cursor text. `HasProject` with an
 empty project is meaningful: it selects the tasks that carry no project label.
 
+`WorkOrder` (8) requires `Descending=0` and optionally accepts a trailing
+`SliceID: 8 bytes` after CorrelationID. A nonzero slice restricts tasks to its
+explicit MemberOf edges in this conversation. Other sorts reject the trailer.
+Filters and membership are applied before dependency ordering. Ready tasks are
+chosen by priority descending, positive due date ascending (missing last), then
+ID ascending. Done prerequisites are satisfied even outside the filter. Missing
+or out-of-scope unfinished prerequisites, cycles and their descendants are
+unresolved and follow the executable sequence in priority/due/ID order; Done
+tasks follow last. This does not assert that all unresolved tasks are cyclic.
+WorkOrder cursors carry the last task ID and its one-based position, not a
+scalar index key. Pages are live, not snapshots: clients refresh on mutations.
+The server recomputes the scope's order for each page; clients fetch only the
+requested page rather than loading all tasks to sort locally.
+
 #### C_ListTaskProjects (Client → Server)
 ```
 [ConversationID: 8 bytes] [CorrelationID: 4 bytes]
@@ -971,7 +985,7 @@ path per anchor. Only edges referenced by those paths are serialized.
 - `Gold` (5) - Test (#ffb700)
 
 ### TaskQuerySort
-- `Priority` (0), `Status` (1), `Assignee` (2), `DueAt` (3), `CreatedAt` (4), `Title` (5), `Color` (6), `Project` (7)
+- `Priority` (0), `Status` (1), `Assignee` (2), `DueAt` (3), `CreatedAt` (4), `Title` (5), `Color` (6), `Project` (7), `WorkOrder` (8)
 - `Assignee`, `Title` and `Project` are textual sorts; the rest are numeric.
 
 ### AssetType

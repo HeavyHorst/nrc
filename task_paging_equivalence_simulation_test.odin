@@ -1,5 +1,6 @@
 package main
 
+import "core:encoding/endian"
 import "core:testing"
 
 import "btree"
@@ -7,6 +8,7 @@ import hgl "hegel"
 import pr "protocol"
 
 when !NRC_SIMULATION {
+	_ :: endian.put_u16
 	_ :: btree.count
 	_ :: hgl.run
 	_ :: pr.Opcode
@@ -15,6 +17,66 @@ when !NRC_SIMULATION {
 when NRC_SIMULATION {
 	TASK_PAGING_EQ_CONV :: pr.WORKSPACE_DATA_ID
 	TASK_PAGING_EQ_COUNT :: 6
+
+	@(test)
+	test_work_order_split_wire_pages_preserve_state :: proc(t: ^testing.T) {
+		ctx: Sim_Test_Context
+		simulation_test_begin(&ctx, 184)
+		defer simulation_test_end(&ctx)
+		c := simulation_test_install_client(&ctx.sim, 1, "work-order", "reader")
+		if !testing.expect(t, c != nil) do return
+		ctx.conns[1] = c
+		conv := get_or_create_conversation(get_connection_workspace(c), TASK_PAGING_EQ_CONV)
+		if !testing.expect(t, task_paging_equivalence_setup(conv)) do return
+		remove_task_from_index(conv, conv.tasks[2])
+		conv.tasks[2].blocked_by = 1
+		index_task(conv, conv.tasks[2])
+		before, ok := task_paging_equivalence_capture_state(conv)
+		if !testing.expect(t, ok) do return
+		for page in 0 ..< 2 {
+			request: [54]byte
+			endian.put_u16(request[:], .Big, u16(pr.Opcode.C_QueryTasks))
+			endian.put_u64(request[2:], .Big, u64(TASK_PAGING_EQ_CONV))
+			request[10] = 7 // Open tasks only.
+			endian.put_u16(request[11:], .Big, 2)
+			request[13] = u8(pr.TaskQuerySort.WorkOrder)
+			request[15] = 255
+			if page == 1 {
+				request[31] = 1
+				endian.put_i64(request[32:], .Big, 2)
+				endian.put_u64(request[42:], .Big, 2)
+			}
+			endian.put_u32(request[50:], .Big, u32(900 + page))
+			nrc_sim_clear_inboxes(&ctx.sim)
+			if !testing.expect(t, handler_equivalence_deliver_wire(&ctx.sim, c, request[:], 7, 39)) do return
+			if !testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, c.sock), 1) do return
+			payload, payload_ok := nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&ctx.sim, c.sock, 0))
+			if !testing.expect(t, payload_ok) do return
+			// Task 2 has higher priority but must follow 1; task 5 has lower
+			// priority and belongs to the next page. Expected IDs are literal.
+			rows := [2]pr.Task{conv.tasks[1]^, conv.tasks[2]^}
+			count := 2
+			if page == 1 {rows[0] = conv.tasks[5]^; count = 1}
+			expected: [4096]byte
+			n := pr.serializeTaskQueryPage(
+				pr.TaskQueryPage {
+					conv_id = TASK_PAGING_EQ_CONV,
+					success = true,
+					tasks = rows[:count],
+					has_more = page == 0,
+					total_count = 3,
+					next_cursor_number = page == 0 ? 2 : 3,
+					next_cursor_task_id = page == 0 ? 2 : 5,
+					correlation_id = u32(900 + page),
+				},
+				expected[:],
+			)
+			if !testing.expect_value(t, len(payload), n) do return
+			for byte, i in payload {testing.expect_value(t, byte, expected[i])}
+			after, after_ok := task_paging_equivalence_capture_state(conv)
+			testing.expect(t, after_ok && task_paging_equivalence_states_equal(before, after), "work order query mutated state")
+		}
+	}
 
 	Task_Paging_Equivalence_State :: struct {
 		task_bytes:      [TASK_PAGING_EQ_COUNT][512]byte,

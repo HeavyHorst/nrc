@@ -12,6 +12,81 @@ task_query_test_add :: proc(conv: ^Conversation_State, task: ^pr.Task) {
 task_query_test_bytes :: proc(value: string) -> []byte {return transmute([]byte)value}
 
 @(test)
+test_task_work_order_scope_and_pages :: proc(t: ^testing.T) {
+	conv: Conversation_State
+	slice_test_state(&conv)
+	defer slice_test_destroy(&conv)
+	tasks := [?]pr.Task {
+		{id = 1, status = .Todo, priority = 10},
+		{id = 2, status = .Todo, priority = 90, blocked_by = 1},
+		{id = 3, status = .Todo, priority = 5},
+		{id = 4, status = .Todo, priority = 100, blocked_by = 99},
+		{id = 5, status = .Todo, priority = 80, blocked_by = 6},
+		{id = 6, status = .Todo, priority = 70, blocked_by = 5},
+		{id = 7, status = .Done, priority = 200},
+		{id = 8, status = .Todo, priority = 20, blocked_by = 7},
+		{id = 9, status = .Note, priority = 250},
+		{id = 10, status = .Todo, priority = 95, blocked_by = 4},
+	}
+	for &task in tasks {state_map_set(&conv.tasks, task.id, &task)}
+	rows := make([dynamic]pr.Task)
+	defer delete(rows)
+	req := pr.TaskQueryRequest {
+		status_mask = 15,
+		sort        = .WorkOrder,
+		color       = 255,
+		limit       = 2,
+	}
+	expected := [?]pr.TaskID{8, 1, 2, 3, 4, 10, 5, 6, 7}
+	i := 0
+	for {
+		clear(&rows)
+		page := collect_task_query_page(&conv, req, &rows)
+		testing.expect_value(t, page.total_count, u32(len(expected)))
+		for row in rows {testing.expect_value(t, row.id, expected[i]); i += 1}
+		if !page.has_more do break
+		req.has_cursor = true
+		req.cursor_task_id = page.next_cursor_task_id
+		req.cursor_number = page.next_cursor_number
+	}
+	testing.expect_value(t, i, len(expected))
+	// Member 2 cannot be planned before its excluded prerequisite 1. Done
+	// prerequisite 7, however, is satisfied even though it is not a member.
+	asset := slice_test_slice_asset(77, `{"version":1,"name":"Work"}`)
+	slice_test_add_asset(&conv, &asset)
+	for id in ([?]u64{2, 3, 8}) {slice_test_member_of(&conv, .Task, id, 77)}
+	slice_test_member_of(&conv, .Task, 1, 77, .RelatedTo)
+	req = pr.TaskQueryRequest {
+		status_mask = 7,
+		sort        = .WorkOrder,
+		color       = 255,
+		limit       = 100,
+		slice_id    = 77,
+	}
+	clear(&rows)
+	page := collect_task_query_page(&conv, req, &rows)
+	testing.expect_value(t, page.total_count, u32(3))
+	slice_expected := [3]pr.TaskID{8, 3, 2}
+	for row, j in rows {testing.expect_value(t, row.id, slice_expected[j])}
+	// Filter membership is applied before dependency ordering, too.
+	req.slice_id = 0
+	req.blocked = 1
+	clear(&rows)
+	page = collect_task_query_page(&conv, req, &rows)
+	testing.expect_value(t, page.total_count, u32(6))
+	filtered_expected := [6]pr.TaskID{8, 4, 10, 2, 5, 6}
+	for row, j in rows {testing.expect_value(t, row.id, filtered_expected[j])}
+	// A slice with no adjacency entry and a nonexistent slice are empty.
+	empty := slice_test_slice_asset(78, `{"version":1,"name":"Empty"}`)
+	slice_test_add_asset(&conv, &empty)
+	for id in ([?]pr.AssetID{78, 79}) {
+		clear(&rows); req.slice_id = id
+		page = collect_task_query_page(&conv, req, &rows)
+		testing.expect_value(t, page.total_count, u32(0))
+	}
+}
+
+@(test)
 test_task_query_order_filters_cursor_and_indexes :: proc(t: ^testing.T) {
 	conv: Conversation_State
 	conv.tasks = make(map[pr.TaskID]^pr.Task)

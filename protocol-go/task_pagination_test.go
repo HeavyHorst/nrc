@@ -46,6 +46,20 @@ func TestEncodeGetTask(t *testing.T) {
 }
 
 func TestTaskQueryWire(t *testing.T) {
+	q := TaskQuery{StatusMask: 15, Limit: 100, Color: 255, Sort: TaskQuerySortWorkOrder, SliceID: 77, CorrelationID: 9}
+	work, err := EncodeTaskQuery(q)
+	if err != nil || len(work) != 60 || work[11] != 8 || binary.BigEndian.Uint64(work[52:]) != 77 || binary.BigEndian.Uint32(work[48:]) != 9 {
+		t.Fatalf("incorrect work order query: %x %v", work, err)
+	}
+	q.Descending = true
+	if _, err := EncodeTaskQuery(q); err == nil {
+		t.Fatal("accepted reversed work order")
+	}
+	q.Descending = false
+	q.Sort = TaskQuerySortPriority
+	if _, err := EncodeTaskQuery(q); err == nil {
+		t.Fatal("accepted slice scope for scalar order")
+	}
 	assignee, project := "Åsa", "Alpha"
 	payload, err := EncodeTaskQuery(TaskQuery{ConvID: 7, StatusMask: 0x0f, Limit: 25, Sort: TaskQuerySortTitle, Descending: true, Color: 255, Blocked: 2, OverdueBefore: 99, Assignee: &assignee, Project: &project, Cursor: &TaskQueryCursor{Text: "next", TaskID: 42}, CorrelationID: 8})
 	if err != nil {

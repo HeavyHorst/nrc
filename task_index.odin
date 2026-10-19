@@ -67,6 +67,8 @@ make_task_query_key :: proc(task: ^pr.Task, sort_kind: pr.TaskQuerySort) -> Task
 		key.number = i64(task.color)
 	case .Project:
 		key.text = task.project
+	case .WorkOrder:
+		panic("WorkOrder uses the dependency graph, not a scalar index")
 	}
 	return key
 }

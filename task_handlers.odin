@@ -562,6 +562,7 @@ task_matches_query :: proc(task: ^pr.Task, req: pr.TaskQueryRequest) -> bool {
 collect_task_query_page :: proc(conv: ^Conversation_State, req: pr.TaskQueryRequest, tasks: ^[dynamic]pr.Task) -> Task_Query_Collection {
 	result: Task_Query_Collection
 	if conv == nil || tasks == nil do return result
+	if req.sort == .WorkOrder do return collect_task_work_order_page(conv, req, tasks)
 	set := &conv.task_query_indexes
 	candidate_count := btree.count(&set.trees[0][0])
 	if req.has_project {

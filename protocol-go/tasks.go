@@ -260,6 +260,7 @@ const (
 	TaskQuerySortTitle
 	TaskQuerySortColor
 	TaskQuerySortProject
+	TaskQuerySortWorkOrder
 )
 
 type TaskQueryCursor struct {
@@ -280,11 +281,12 @@ type TaskQuery struct {
 	Project       *string
 	Cursor        *TaskQueryCursor
 	CorrelationID uint32
+	SliceID       uint64 // Optional WorkOrder membership scope.
 }
 
 // EncodeTaskQuery encodes C_QueryTasks. Cursor fields are present even without a cursor.
 func EncodeTaskQuery(q TaskQuery) ([]byte, error) {
-	if q.StatusMask == 0 || q.StatusMask&^0x0f != 0 || q.Limit == 0 || q.Limit > MaxTaskPageSize || q.Sort > TaskQuerySortProject || q.Color != 255 && q.Color > 5 || q.Blocked > 2 {
+	if q.StatusMask == 0 || q.StatusMask&^0x0f != 0 || q.Limit == 0 || q.Limit > MaxTaskPageSize || q.Sort > TaskQuerySortWorkOrder || q.Color != 255 && q.Color > 5 || q.Blocked > 2 || q.Sort == TaskQuerySortWorkOrder && q.Descending || q.SliceID != 0 && q.Sort != TaskQuerySortWorkOrder {
 		return nil, fmt.Errorf("invalid task query")
 	}
 	if q.Assignee != nil && len(*q.Assignee) > MaxAssigneeLength || q.Project != nil && len(*q.Project) > MaxProjectLength || q.Cursor != nil && len(q.Cursor.Text) > MaxTaskTitleLength {
@@ -336,6 +338,9 @@ func EncodeTaskQuery(q TaskQuery) ([]byte, error) {
 		binary.Write(buf, binary.BigEndian, uint64(0))
 	}
 	binary.Write(buf, binary.BigEndian, q.CorrelationID)
+	if q.SliceID != 0 {
+		binary.Write(buf, binary.BigEndian, q.SliceID)
+	}
 	return buf.Bytes(), nil
 }
 

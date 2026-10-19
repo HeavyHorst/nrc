@@ -49,7 +49,7 @@ store_test_check_task_query :: proc(
 				key := Task_Query_Key {
 					task_id = id,
 				}
-				switch pr.TaskQuerySort(sort_kind) {
+				#partial switch pr.TaskQuerySort(sort_kind) {
 				case .Priority:
 					key.number = i64(task.priority)
 				case .Status:

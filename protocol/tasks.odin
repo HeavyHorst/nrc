@@ -1146,6 +1146,7 @@ TaskQuerySort :: enum u8 {
 	Title,
 	Color,
 	Project,
+	WorkOrder,
 }
 
 TaskQueryRequest :: struct {
@@ -1166,6 +1167,7 @@ TaskQueryRequest :: struct {
 	cursor_text:    []byte,
 	cursor_task_id: TaskID,
 	correlation_id: u32,
+	slice_id:       AssetID, // Optional membership scope, WorkOrder only.
 }
 
 parseTaskQueryRequest :: proc(data: []byte) -> (result: TaskQueryRequest, err: ProtocolParseError) {
@@ -1175,8 +1177,9 @@ parseTaskQueryRequest :: proc(data: []byte) -> (result: TaskQueryRequest, err: P
 	if result.status_mask == 0 || result.status_mask & ~u8(0x0f) != 0 do return result, .InvalidValue
 	limit, limit_ok := endian.get_u16(data[9:], .Big); if !limit_ok do return result, .TooShort
 	result.limit = limit; if limit == 0 || limit > MAX_TASK_PAGE_SIZE do return result, .TooMany
-	if data[11] > u8(TaskQuerySort.Project) || data[12] > 1 || (data[13] != 255 && data[13] > 5) || data[14] > 2 do return result, .InvalidValue
+	if data[11] > u8(TaskQuerySort.WorkOrder) || data[12] > 1 || (data[13] != 255 && data[13] > 5) || data[14] > 2 do return result, .InvalidValue
 	result.sort = TaskQuerySort(data[11]); result.descending = data[12] == 1; result.color = data[13]; result.blocked = data[14]
+	if result.sort == .WorkOrder && result.descending do return result, .InvalidValue
 	overdue, overdue_ok := endian.get_i64(data[15:], .Big); if !overdue_ok do return result, .TooShort
 	result.overdue_before = overdue
 	offset := 23
@@ -1207,7 +1210,14 @@ parseTaskQueryRequest :: proc(data: []byte) -> (result: TaskQueryRequest, err: P
 	textual_sort := result.sort == .Assignee || result.sort == .Title || result.sort == .Project
 	if result.has_cursor && ((textual_sort && result.cursor_number != 0) || (!textual_sort && len(result.cursor_text) != 0)) do return result, .InvalidValue
 	result.correlation_id, ok = endian.get_u32(data[offset:], .Big); if !ok do return result, .TooShort
-	offset += 4; if offset != len(data) do return result, .ContentLengthMismatch
+	offset += 4
+	if len(data) - offset == 8 {
+		id, id_ok := endian.get_u64(data[offset:], .Big)
+		if !id_ok || result.sort != .WorkOrder do return result, .InvalidValue
+		result.slice_id = AssetID(id)
+		offset += 8
+	}
+	if offset != len(data) do return result, .ContentLengthMismatch
 	return result, nil
 }
 
