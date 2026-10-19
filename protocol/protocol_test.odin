@@ -1755,6 +1755,18 @@ test_parse_list_assets_paged_request_without_cursor :: proc(t: ^testing.T) {
 	testing.expect_value(t, parsed.limit, limit)
 	testing.expect_value(t, parsed.has_cursor, false)
 	testing.expect_value(t, parsed.correlation_id, correlation_id)
+	testing.expect(t, !parsed.active_contacts_only)
+	// The compact extension must not reinterpret the historical padded request.
+	_, legacy_err := parseListAssetsPagedRequest(buf[:offset + 8])
+	testing.expect_value(t, legacy_err, nil)
+	endian.put_u16(buf[8:], .Big, u16(AssetType.CustomerContact))
+	buf[offset] = 1
+	filtered, filtered_err := parseListAssetsPagedRequest(buf[:offset + 1])
+	testing.expect_value(t, filtered_err, nil)
+	testing.expect(t, filtered.active_contacts_only)
+	buf[offset] = 2
+	_, invalid_err := parseListAssetsPagedRequest(buf[:offset + 1])
+	testing.expect_value(t, invalid_err, ProtocolParseError.InvalidValue)
 }
 
 @(test)

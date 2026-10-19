@@ -792,8 +792,25 @@ collect_typed_asset_page :: proc(
 	result: Note_Page_Collection
 	candidates := make([dynamic]^pr.Asset, 0, len(conv.assets))
 	defer delete(candidates)
+	// Reuse JSON scratch space without retaining metadata for the whole register.
+	arena: virtual.Arena
+	if req.active_contacts_only {
+		if virtual.arena_init_growing(&arena) != nil do panic("contact page allocation failed")
+	}
+	defer if req.active_contacts_only do virtual.arena_destroy(&arena)
 	for _, asset in conv.assets {
 		if !asset_visible_to(asset, username) || asset.asset_type != req.asset_type do continue
+		if req.active_contacts_only {
+			virtual.arena_free_all(&arena)
+			allocator := virtual.arena_allocator(&arena)
+			fields, object, valid := json_metadata_fields(asset.preview, [?]string{"version", "title", "email", "archived"}, allocator)
+			// Match the newsletter's typed JSON contract before counting or paging.
+			// Odin's struct decoder also accepts numeric strings and floats as ints.
+			if !valid || !object || fields[0].kind != .Integer || fields[0].text != "1" || fields[1].kind != .String do continue
+			if len(strings.trim_space(json_metadata_string(fields[1], allocator))) == 0 do continue
+			if fields[2].kind != .Invalid && fields[2].kind != .Null && fields[2].kind != .String do continue
+			if fields[3].kind != .Invalid && fields[3].kind != .Null && fields[3].kind != .False do continue
+		}
 		result.total_count += 1
 		if req.has_cursor && !is_note_after_cursor_desc({asset.updated_at, asset.asset_id}, req.cursor_updated_at, req.cursor_asset_id) do continue
 		append(&candidates, asset)

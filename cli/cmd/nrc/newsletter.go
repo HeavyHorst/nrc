@@ -223,15 +223,31 @@ func newNewsletterCommand() *cobra.Command {
 		if offset < 0 || limit < 1 || limit > 250 {
 			return fmt.Errorf("offset must be nonnegative; limit must be 1–250")
 		}
+		payload := map[string]any{"query": query, "offset": offset, "limit": limit}
+		cursor, _ := cmd.Flags().GetString("cursor")
+		if strings.TrimSpace(query) == "" && offset != 0 {
+			return fmt.Errorf("empty-query listing uses --cursor, not --offset")
+		}
+		if cursor != "" {
+			var next struct {
+				UpdatedAt int64  `json:"updated_at,string"`
+				AssetID   uint64 `json:"asset_id,string"`
+			}
+			if strings.TrimSpace(query) != "" || json.Unmarshal([]byte(cursor), &next) != nil || next.AssetID == 0 {
+				return fmt.Errorf("--cursor requires an empty query and a next_cursor JSON object with string updated_at and asset_id")
+			}
+			payload["cursor"] = next
+		}
 		var result map[string]any
-		if err := runNewsletter(cmd.Context(), http.MethodPost, "/subscribers/search", map[string]any{"query": query, "offset": offset, "limit": limit}, &result); err != nil {
+		if err := runNewsletter(cmd.Context(), http.MethodPost, "/subscribers/search", payload, &result); err != nil {
 			return err
 		}
 		newsletterOutput(cmd, result)
 		return nil
 	}}
 	searchContacts.Flags().String("query", "", "Case-insensitive substring (empty lists all contacts)")
-	searchContacts.Flags().Int("offset", 0, "Offset from the preceding page's next_offset")
+	searchContacts.Flags().Int("offset", 0, "Search offset from the preceding page's next_offset (nonempty query only)")
+	searchContacts.Flags().String("cursor", "", "Listing cursor: preceding page's next_cursor JSON object (empty query only)")
 	searchContacts.Flags().Int("limit", 25, "Maximum contacts per page (1–250)")
 	subscriber.AddCommand(searchContacts)
 	for _, action := range []string{"create", "update", "audience", "preview", "test", "send", "delete", "archive", "restore"} {

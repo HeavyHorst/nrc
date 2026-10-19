@@ -44,22 +44,52 @@ func (s nrcSource) assetPage(ctx context.Context, kind uint16, updated int64, id
 func (s nrcSource) exchange(ctx context.Context, opcode uint16, data []byte, response uint16) (*p.Message, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	c, close, err := s.connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer close()
+	return c.exchange(opcode, data, response)
+}
+
+type sourceConnection struct{ *websocket.Conn }
+
+// One sequential read session can serve a page and its related records.
+func (s nrcSource) connect(ctx context.Context) (sourceConnection, func(), error) {
 	h := http.Header{}
 	h.Set("X-NRC-User-Type", "bot")
 	h.Set("X-NRC-Bot-Secret", s.secret)
 	h.Set("X-NRC-Bot-Nickname", "nrc-newsletter")
 	c, _, err := websocket.DefaultDialer.DialContext(ctx, s.server+"/"+url.PathEscape(s.workspace), h)
 	if err != nil {
-		return nil, err
+		return sourceConnection{}, nil, err
 	}
-	defer c.Close()
 	stop := context.AfterFunc(ctx, func() { c.Close() })
-	defer stop()
+	close := func() { stop(); c.Close() }
 	deadline, _ := ctx.Deadline()
 	c.SetReadDeadline(deadline)
 	c.SetWriteDeadline(deadline)
 	c.SetReadLimit(8 << 20)
-	sent := false
+	session := sourceConnection{c}
+	if _, err := session.read(p.S_ServerReady); err != nil {
+		close()
+		return sourceConnection{}, nil, err
+	}
+	return session, close, nil
+}
+
+func (c sourceConnection) exchange(opcode uint16, data []byte, response uint16) (*p.Message, error) {
+	b, err := (&p.Message{Opcode: opcode, Data: data}).Write()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.WriteMessage(websocket.BinaryMessage, b); err != nil {
+		return nil, err
+	}
+	return c.read(response)
+}
+
+func (c sourceConnection) read(response uint16) (*p.Message, error) {
 	for {
 		_, b, e := c.ReadMessage()
 		if e != nil {
@@ -69,17 +99,7 @@ func (s nrcSource) exchange(ctx context.Context, opcode uint16, data []byte, res
 		if e != nil {
 			return nil, e
 		}
-		if m.Opcode == p.S_ServerReady && !sent {
-			b, e := (&p.Message{Opcode: opcode, Data: data}).Write()
-			if e != nil {
-				return nil, e
-			}
-			if e = c.WriteMessage(websocket.BinaryMessage, b); e != nil {
-				return nil, e
-			}
-			sent = true
-		}
-		if sent && m.Opcode == response {
+		if m.Opcode == response {
 			return m, nil
 		}
 		if m.Opcode == p.S_ErrorResponse {

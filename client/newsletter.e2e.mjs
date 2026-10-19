@@ -315,10 +315,16 @@ try {
     const body = route.request().postDataJSON(); searchCalls.push(body);
     const all = Array.from({length:57},(_,i)=>({contact_id:String(1000+i),name:i===56?'Später Treffer':'Kontakt '+i,email:`person${i}@example.invalid`,status:'not_subscribed',companies:[{customer_id:'101',name:'Beispiel GmbH'}]}));
     const matches = all.filter(s=>`${s.name} ${s.email}`.toLowerCase().includes(body.query.toLowerCase()));
-    const rows = matches.slice(body.offset,body.offset+body.limit);
+    const offset = body.query ? body.offset : body.cursor ? 100000-Number(body.cursor.updated_at) : 0;
+    const rows = matches.slice(offset,offset+body.limit), next = offset+rows.length;
     if (holdSearch && body.query === 'person0') await new Promise(resolve=>releaseSearch=resolve);
-    await route.fulfill({status:searchFails?503:200,json:{subscribers:rows,total_count:matches.length,next_offset:Math.min(body.offset,matches.length)+rows.length,has_more:body.offset+rows.length<matches.length}}).catch(()=>{});
+    await route.fulfill({status:searchFails && body.query?503:200,json:{subscribers:rows,total_count:matches.length,next_offset:next,has_more:next<matches.length,next_cursor:!body.query && next<matches.length ? {updated_at:String(100000-next),asset_id:rows.at(-1).contact_id} : null}}).catch(()=>{});
   });
+  await page.locator('#nlSearch').fill(' ');
+  await page.waitForFunction(()=>document.querySelector('#nlContactCount').textContent.includes('/ 57 Kontakte'));
+  await page.locator('#nlContactPager button').scrollIntoViewIfNeeded();
+  await page.waitForFunction(()=>document.querySelectorAll('#nlContacts .nl-contact').length >= 50);
+  assert.ok(searchCalls.some(c=>c.query==='' && c.cursor?.updated_at==='99975' && c.offset===undefined),'unfiltered pages use the server cursor, not offsets');
   await page.locator('#nlSearch').fill('person');
   await page.waitForFunction(()=>document.querySelector('#nlContactCount').textContent.includes('/ 57 Kontakte'));
   await page.locator('#nlContactPager button').scrollIntoViewIfNeeded();
@@ -344,6 +350,11 @@ try {
   searchFails=false;
   await page.locator('#nlContactPager button').click();
   await page.getByText('Keine passenden Kontakte.',{exact:true}).waitFor();
+  searchFails=true;
+  await page.locator('#nlSearch').fill('');
+  await page.waitForFunction(()=>document.querySelector('#nlContactCount').textContent.includes('/ 57 Kontakte'));
+  assert.ok(searchCalls.some(c=>c.query==='' && c.cursor===null),'clearing search starts a fresh listing');
+  assert.match(await page.locator('#nlContacts').innerText(),/person0@example.invalid/);
   await page.unroute('**/newsletter/api/subscribers/search');
 
   await page.locator('#nlNew').click();

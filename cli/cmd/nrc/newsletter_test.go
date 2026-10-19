@@ -149,6 +149,13 @@ func TestNewsletterCLICampaignWorkflow(t *testing.T) {
 	if _, err := executeNewsletter(t, "", "subscriber", "search", "--query", "example.com", "--offset", "25", "--limit", "10"); err != nil {
 		t.Fatal(err)
 	}
+	payload = map[string]any{"query": "", "offset": json.Number("0"), "limit": json.Number("25"), "cursor": map[string]any{"updated_at": "100", "asset_id": "9007199254740993"}}
+	if _, err := executeNewsletter(t, "", "subscriber", "search", "--cursor", `{"updated_at":"100","asset_id":"9007199254740993"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executeNewsletter(t, "", "subscriber", "search", "--offset", "25"); err == nil {
+		t.Fatal("unfiltered offset accepted instead of cursor")
+	}
 	payload = nil
 	decoder.UseNumber()
 	_ = decoder.Decode(&payload)

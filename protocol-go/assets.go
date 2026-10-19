@@ -1079,6 +1079,16 @@ func EncodeListAssetsPaged(convID int64, assetType uint16, fullContent bool, lim
 	return EncodeListAssetsPagedWithCorrelation(convID, assetType, fullContent, limit, hasCursor, cursorUpdatedAt, cursorAssetID, 0)
 }
 
+// EncodeListActiveContactsPaged requests active contact headers and an active-only
+// total. The optional filter byte requires a server supporting this extension.
+func EncodeListActiveContactsPaged(convID int64, limit uint16, hasCursor bool, cursorUpdatedAt int64, cursorAssetID uint64, correlationID uint32) []byte {
+	data := EncodeListAssetsPagedWithCorrelation(convID, AssetTypeCustomerContact, false, limit, hasCursor, cursorUpdatedAt, cursorAssetID, correlationID)
+	if !hasCursor {
+		data = data[:18] // Omit legacy no-cursor padding before the filter byte.
+	}
+	return append(data, 1)
+}
+
 // EncodeListAssetsPagedWithCorrelation encodes C_ListAssetsPaged request with a trailing correlation_id.
 func EncodeListAssetsPagedWithCorrelation(convID int64, assetType uint16, fullContent bool, limit uint16, hasCursor bool, cursorUpdatedAt int64, cursorAssetID uint64, correlationID uint32) []byte {
 	buf := bytes.NewBuffer(nil)

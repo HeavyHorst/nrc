@@ -299,6 +299,10 @@ prop_variable_size_request_parsers_reject_truncation_and_trailing_bytes :: proc(
 			if parser_raw == 3 || parser_raw == 4 {
 				return hgl.valid()
 			}
+			// Removing the optional active-contact byte leaves the legacy request.
+			if (parser_raw == 8 || parser_raw == 16) && seed % 2 == 1 && int(truncate_len_raw) == len(payload) - 1 {
+				return hgl.valid()
+			}
 			return hgl.interesting(
 				fmt.tprintf(
 					"variable-size request parser accepted truncation selector=%d len=%d valid_payload_len=%d",
@@ -313,10 +317,14 @@ prop_variable_size_request_parsers_reject_truncation_and_trailing_bytes :: proc(
 
 	valid[valid_len] = 0xA5
 	parse_err := variable_request_parse(int(parser_raw), valid[2:valid_len + 1])
-	if parse_err != .ContentLengthMismatch {
+	expected := ProtocolParseError.ContentLengthMismatch
+	// On the legacy asset-page shape the extra byte occupies the optional
+	// boolean filter field. 0xA5 is an invalid value, not an invalid length.
+	if (parser_raw == 8 || parser_raw == 16) && seed % 2 == 0 do expected = .InvalidValue
+	if parse_err != expected {
 		return hgl.interesting(
 			fmt.tprintf(
-				"variable-size request parser did not reject trailing byte as ContentLengthMismatch selector=%d valid_payload_len=%d err=%v",
+				"variable-size request parser returned wrong trailing-byte error selector=%d valid_payload_len=%d err=%v",
 				parser_raw,
 				len(payload),
 				parse_err,
@@ -403,7 +411,9 @@ variable_request_valid_message :: proc(selector: int, seed: u64, buf: []byte) ->
 	case 7:
 		return serializeListAssetsRequest(conv_id, true, .Note, false, buf, correlation_id)
 	case 8:
-		return serializeListAssetsPagedRequest(conv_id, .Note, true, 7, true, i64(seed + 705), AssetID(seed + 706), buf, correlation_id)
+		n := serializeListAssetsPagedRequest(conv_id, .CustomerContact, true, 7, true, i64(seed + 705), AssetID(seed + 706), buf, correlation_id)
+		if seed % 2 == 1 {buf[n] = 1; n += 1}
+		return n
 	case 9:
 		return serializeListAssetsPagedByProjectRequest(conv_id, .Note, false, 3, true, i64(seed + 707), AssetID(seed + 708), "proj", buf, correlation_id)
 	case 10:
@@ -465,7 +475,9 @@ variable_request_valid_message :: proc(selector: int, seed: u64, buf: []byte) ->
 		}
 		return serializeGraphCommonNeighborsRequest(req, buf)
 	case 16:
-		return serializeListAssetsPagedRequest(conv_id, .Note, true, 7, false, 0, 0, buf, correlation_id)
+		n := serializeListAssetsPagedRequest(conv_id, .CustomerContact, true, 7, false, 0, 0, buf, correlation_id)
+		if seed % 2 == 1 {buf[n] = 1; n += 1}
+		return n
 	}
 
 	return -1

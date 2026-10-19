@@ -10,6 +10,7 @@
   let reviewedAudience = null;
   let controller = new AbortController();
   let contactRows = [], contactTotal = 0, contactOffset = 0, contactMore = false, contactLoading = false, contactError = '', contactStale = false;
+  let contactCursor = null;
   let contactGeneration = 0, contactController = null, searchTimer = null;
   function cancelContacts() {
     contactGeneration++; contactController?.abort(); contactController = null;
@@ -279,17 +280,26 @@
   }
   async function loadContacts(reset) {
     if (!enabled || (!reset && (contactLoading || !contactMore && !contactError))) return;
-    if (reset) { cancelContacts(); contactRows = []; contactTotal = contactOffset = 0; contactMore = false; contactStale = false; }
+    if (reset) { cancelContacts(); contactRows = []; contactTotal = contactOffset = 0; contactCursor = null; contactMore = false; contactStale = false; }
     const generation = ++contactGeneration;
     contactController = new AbortController(); contactLoading = true; contactError = ''; contacts();
     try {
-      const page = await request('/newsletter/api/subscribers/search', 'POST', {query:$('nlSearch').value.trim(), offset:contactOffset, limit:25}, contactController.signal);
+      const query = $('nlSearch').value.trim();
+      const page = await request('/newsletter/api/subscribers/search', 'POST', {query, ...(query ? {offset:contactOffset} : {cursor:contactCursor}), limit:25}, contactController.signal);
       if (generation !== contactGeneration) return;
       if (!Array.isArray(page.subscribers) || !Number.isSafeInteger(page.total_count) || page.total_count < 0 ||
-          !Number.isSafeInteger(page.next_offset) || page.next_offset !== Math.min(contactOffset, page.total_count) + page.subscribers.length || page.next_offset > page.total_count ||
-          (page.has_more === true) !== (page.next_offset < page.total_count) || (page.has_more && !page.subscribers.length)) throw new Error('Ungültige Suchantwort. Bitte erneut versuchen.');
+          page.subscribers.length > 25 || typeof page.has_more !== 'boolean' || (page.has_more && !page.subscribers.length)) throw new Error('Ungültige Kontaktseite. Bitte erneut versuchen.');
+      if (query) {
+        if (!Number.isSafeInteger(page.next_offset) || page.next_offset !== Math.min(contactOffset, page.total_count) + page.subscribers.length || page.next_offset > page.total_count ||
+            page.has_more !== (page.next_offset < page.total_count)) throw new Error('Ungültige Suchantwort. Bitte erneut versuchen.');
+      } else if (page.has_more && (!/^-?\d+$/.test(page.next_cursor?.updated_at ?? '') || !/^[1-9]\d*$/.test(page.next_cursor?.asset_id ?? '') ||
+          contactCursor && (BigInt(page.next_cursor.updated_at) > BigInt(contactCursor.updated_at) ||
+            BigInt(page.next_cursor.updated_at) === BigInt(contactCursor.updated_at) && BigInt(page.next_cursor.asset_id) >= BigInt(contactCursor.asset_id)))) {
+        throw new Error('Ungültiger Kontaktcursor. Bitte erneut versuchen.');
+      }
       contactRows = [...new Map([...contactRows, ...page.subscribers].map(row => [row.contact_id, row])).values()];
-      contactTotal = page.total_count; contactOffset = page.next_offset; contactMore = page.has_more === true; contactStale ||= page.stale === true;
+      contactTotal = page.total_count; contactOffset = query ? page.next_offset : 0; contactCursor = query ? null : page.next_cursor;
+      contactMore = page.has_more; contactStale ||= page.stale === true;
     } catch (error) { if (generation === contactGeneration && error.name !== 'AbortError') contactError = 'Kontaktsuche nicht verfügbar. Bitte erneut versuchen.'; }
     finally { if (generation === contactGeneration) { contactLoading = false; contacts(); } }
   }

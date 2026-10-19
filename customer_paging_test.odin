@@ -143,6 +143,72 @@ test_simulation_customer_asset_paging_and_legacy_error :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_simulation_active_contact_pages :: proc(t: ^testing.T) {
+	when NRC_SIMULATION {
+		ctx: Sim_Test_Context
+		simulation_test_begin(&ctx, 198)
+		defer simulation_test_end(&ctx)
+		c := simulation_test_install_client(&ctx.sim, 1, "active-contact-page", "alice")
+		ctx.conns[1] = c
+		if c == nil do return
+		conv := get_or_create_conversation(c.workspace, 0)
+		for id in 1 ..< 6 {
+			preview := `{"version":1,"title":"Active"}`
+			if id == 1 do preview = `{"version":1,"title":"Active","TITLE":42,"email":null,"archived":null}`
+			if id == 2 || id == 5 do preview = `{"version":1,"title":"Archived","archived":true}`
+			asset_query_test_install_asset(conv, 0, pr.AssetID(id), .CustomerContact, preview, "", 100)
+		}
+		asset_query_test_install_asset(conv, 0, 6, .CustomerCompany, `{"version":1,"title":"Company"}`, "", 200)
+		invalid_previews := [?]string {
+			`{"version":"1","title":"Numeric string"}`,
+			`{"version":1.0,"title":"Float"}`,
+			`{"version":1,"title":" \t\n"}`,
+			`{"version":1,"title":"Wrong email","email":42}`,
+			`{"version":1,"title":"Wrong archive","archived":"false"}`,
+		}
+		for preview, i in invalid_previews {
+			asset_query_test_install_asset(conv, 0, pr.AssetID(7 + i), .CustomerContact, preview, "", 90)
+		}
+		req := pr.ListAssetsPagedRequest {
+			asset_type           = .CustomerContact,
+			limit                = 2,
+			active_contacts_only = true,
+			correlation_id       = 72,
+		}
+		for page in 0 ..< 2 {
+			nrc_sim_clear_inboxes(&ctx.sim)
+			handle_list_assets_paged(c, req)
+			wire, ok := asset_query_test_payload(t, &ctx.sim, c, .S_AssetListPage)
+			if !ok do return
+			msg, err := pr.parseAssetListPageMessage(wire)
+			testing.expect_value(t, err, nil)
+			if err != nil do return
+			testing.expect_value(t, msg.total_count, u32(3))
+			testing.expect_value(t, msg.has_more, page == 0)
+			testing.expect_value(t, len(msg.assets), 2 if page == 0 else 1)
+			for asset, i in msg.assets {testing.expect_value(t, asset.asset_id, pr.AssetID(4 - i) if page == 0 else pr.AssetID(1))}
+			req.has_cursor = true
+			req.cursor_updated_at = msg.next_cursor_updated_at
+			req.cursor_asset_id = msg.next_cursor_asset_id
+			delete(msg.assets)
+		}
+		// Existing callers still receive archived records and their original total.
+		req.has_cursor = false
+		req.active_contacts_only = false
+		nrc_sim_clear_inboxes(&ctx.sim)
+		handle_list_assets_paged(c, req)
+		wire, ok := asset_query_test_payload(t, &ctx.sim, c, .S_AssetListPage)
+		if !ok do return
+		msg, err := pr.parseAssetListPageMessage(wire)
+		testing.expect_value(t, err, nil)
+		if err != nil do return
+		defer delete(msg.assets)
+		testing.expect_value(t, msg.total_count, u32(5 + len(invalid_previews)))
+		testing.expect_value(t, msg.assets[0].asset_id, pr.AssetID(5))
+	}
+}
+
+@(test)
 test_simulation_edge_paging_dispatch_and_legacy_errors :: proc(t: ^testing.T) {
 	when NRC_SIMULATION {
 		ctx: Sim_Test_Context

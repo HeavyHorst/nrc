@@ -429,14 +429,15 @@ parseListAssetsRequest :: proc(data: []byte) -> (ListAssetsRequest, ProtocolPars
 // ============================================================================
 
 ListAssetsPagedRequest :: struct {
-	conv_id:           ConversationID,
-	asset_type:        AssetType,
-	full_content:      bool,
-	limit:             u16,
-	has_cursor:        bool,
-	cursor_updated_at: i64,
-	cursor_asset_id:   AssetID,
-	correlation_id:    u32, // Client-generated, echoed in S_AssetListPage for request/response correlation
+	conv_id:              ConversationID,
+	asset_type:           AssetType,
+	full_content:         bool,
+	limit:                u16,
+	has_cursor:           bool,
+	cursor_updated_at:    i64,
+	cursor_asset_id:      AssetID,
+	correlation_id:       u32, // Client-generated, echoed in S_AssetListPage for request/response correlation
+	active_contacts_only: bool, // Optional trailing byte; legacy requests retain their behavior.
 }
 
 parseListAssetsPagedRequest :: proc(data: []byte) -> (ListAssetsPagedRequest, ProtocolParseError) {
@@ -485,7 +486,11 @@ parseListAssetsPagedRequest :: proc(data: []byte) -> (ListAssetsPagedRequest, Pr
 	if len(data) < offset + 4 {
 		return result, .TooShort
 	}
-	if len(data) != offset + 4 && !(result.has_cursor == false && len(data) == offset + 12) {
+	if len(data) == offset + 5 {
+		if data[offset + 4] > 1 do return result, .InvalidValue
+		result.active_contacts_only = data[offset + 4] == 1
+		if result.active_contacts_only && result.asset_type != .CustomerContact do return result, .InvalidValue
+	} else if len(data) != offset + 4 && !(result.has_cursor == false && len(data) == offset + 12) {
 		return result, .ContentLengthMismatch
 	}
 	result.correlation_id, _ = endian.get_u32(data[offset:], .Big)
