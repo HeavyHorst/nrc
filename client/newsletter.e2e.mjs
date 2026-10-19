@@ -174,6 +174,14 @@ try {
       await page.locator('#nlCampaignTab').click();
       assert.equal(await page.locator('#nlSubject').isVisible(),true);
       assert.equal(await page.locator('#nlCampaignTab').getAttribute('aria-pressed'),'true');
+      const campaignTab = await page.locator('#nlCampaignTab').boundingBox();
+      const contactTab = await page.locator('#nlSubscriberTab').boundingBox();
+      const archiveFilter = await page.locator('#nlArchivedCell').boundingBox();
+      const campaignList = await page.locator('#nlList').boundingBox();
+      assert.ok(campaignTab.height >= (width <= 768 ? 40 : 30),'area tabs must not collapse to compact filter height');
+      assert.ok(contactTab.x >= 0 && contactTab.x + contactTab.width <= width,'both area tabs remain visible without scrolling');
+      assert.ok(archiveFilter.y >= campaignTab.y + campaignTab.height,'filters sit below area navigation');
+      assert.ok(campaignList.y >= archiveFilter.y + archiveFilter.height,'the list starts below the full-width controls');
       assert.equal(await page.evaluate(() => document.querySelector('#nlCampaigns').scrollWidth <= document.querySelector('#nlCampaigns').clientWidth),true,'campaign panes fit the available width');
       await page.locator('#nlSubscriberTab').click();
       assert.equal(await page.locator('#nlSearch').isVisible(),true);

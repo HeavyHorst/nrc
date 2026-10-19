@@ -176,7 +176,7 @@ body.sullivan-workbench #chatAttach {
 .customer-record-header .customer-identity h2 { font-size: 1rem; margin-block: 0.25rem; }
 .customer-record .customer-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem 1rem; margin-block: 0.75rem; font-size: var(--font-base); }
 .customer-record-header .customer-identity { padding: 0.75rem; border-inline: 1px solid var(--border-primary); }
-.customer-tabs { --tab-rise: 0.25rem; --tab-padding: 0.875rem; min-height: 2.25rem; padding-inline: 0.5rem; }
+.customer-tabs, .nl-tabs { --tab-rise: 0.25rem; --tab-padding: 0.875rem; min-height: 2.25rem; padding-inline: 0.5rem; }
 .customer-record-body { min-width: 0; border: 1px solid var(--border-primary); border-top: 0; border-radius: 0 0 6px 6px; padding: 0.625rem; background: var(--surface-content); }
 /* The overview is a work surface, not a content-height document. Each quadrant
    owns its overflow so empty and populated records keep the same coordinates. */
@@ -382,7 +382,7 @@ body.sullivan-workbench #chatAttach {
     .customer-record-header { top: -0.625rem; }
     .customer-record .customer-facts { font-size: var(--mobile-font-base); }
     .customer-record .customer-history-filter input { font-size: 16px; }
-    .customer-tabs { --tab-rise: 6px; min-height: 46px; }
+    .customer-tabs, .nl-tabs { --tab-rise: 6px; min-height: 46px; }
     .customer-work-row, .customer-history-timeline > .customer-event { font-size: var(--mobile-font-base); }
     .customer-facts { grid-template-columns: 1fr; }
     .customers-panel > .panel-header { flex-shrink: 0; }
@@ -453,6 +453,7 @@ button.overview-segment { cursor: pointer; }
 .nl-layout { display: grid; grid-template-columns: 12rem minmax(0, 1fr) 17rem; flex: 1; min-height: 0; }
 .nl-register, .nl-editor, .nl-review { min-width: 0; overflow: auto; }
 .nl-register, .nl-editor { border-right: var(--frame-border); }
+.nl-empty { padding: 1rem; margin: 0; color: var(--text-dim); }
 .nl-editor, .nl-review { padding: 1rem; }
 .nl-editor { container-type: inline-size; }
 .nl-identity { padding-bottom: 0.875rem; margin-bottom: 1rem; border-bottom: var(--content-border); }

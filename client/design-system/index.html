@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261019archive2">
+    <link rel="stylesheet" href="../css/main.css?v=20261019newslettertabs1">
     <link rel="stylesheet" href="../css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -1314,7 +1314,8 @@ status      ← Service Worker</code></pre>
                 <div class="catalog-example nl-panel" lang="de">
                     <header class="panel-header header-register filter-register">
                         <div class="header-register-identity-row"><span class="header-register-title">NEWSLETTER / MAILJET</span><span class="header-register-state">ENTWURF · R3</span></div>
-                        <div class="header-register-control-row"><div class="header-control-scroll"><div class="header-register-control"><nav class="tab-group" aria-label="Newsletter-Bereiche"><button class="btn nav-tab active" aria-pressed="true">Kampagnen<span class="tab-count">1</span></button><button class="btn nav-tab" aria-pressed="false">Kontakte<span class="tab-count">18</span></button></nav></div><div class="header-filter-cell header-filter-toggle"><label class="filter-checkbox-label"><input class="filter-checkbox" type="checkbox"><span>Archivierte anzeigen</span></label></div><button class="btn header-operation header-register-control">Aktualisieren</button></div><button class="btn btn--primary header-operation header-register-control header-create-action">+ Kampagne</button></div>
+                        <nav class="tab-group nl-tabs" aria-label="Newsletter-Bereiche"><button class="btn nav-tab active" aria-pressed="true">Kampagnen<span class="tab-count">1</span></button><button class="btn nav-tab" aria-pressed="false">Kontakte<span class="tab-count">18</span></button></nav>
+                        <div class="header-register-control-row"><div class="header-control-scroll"><div class="header-filter-cell header-filter-toggle"><label class="filter-checkbox-label"><input class="filter-checkbox" type="checkbox"><span>Archivierte anzeigen</span></label></div><button class="btn header-operation header-register-control">Aktualisieren</button></div><button class="btn btn--primary header-operation header-register-control header-create-action">+ Kampagne</button></div>
                     </header>
                     <div class="nl-actions"><button class="btn btn--danger">Entwurf löschen …</button><button class="btn">Archivieren …</button><button class="btn">Wiederherstellen …</button></div>
                     <p class="catalog-usage">CAMPAIGN LIFECYCLE: show delete only for saved drafts, archive only for completed campaigns, restore only for archived campaigns. Each action requires a shared confirmation dialog and the current revision, but no Mailjet configuration. Archive is a separate flag; delivery status and recipient history remain visible. The register hides archived campaigns by default; its count follows the archive checkbox. Queued/sending campaigns cannot be deleted or archived. Restoration never resends mail.</p>
