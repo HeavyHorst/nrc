@@ -145,6 +145,28 @@ try {
   assert.equal(await page.evaluate(() => changes.length), 2, "reconnection does not duplicate native change listeners");
   assert.equal(await page.evaluate(() => CustomSelect.instances.size + CustomPicker.instances.size), 0);
   assert.equal(await page.evaluate(() => documentClicks.size), baseline);
+
+  // Long customer names must not inherit the narrow header trigger width.
+  await page.evaluate(() => {
+    editor.innerHTML = `<label class="header-filter-cell" style="width:140px"><span>CUSTOMER</span>
+      <nrc-select><select id="customer" data-custom-select-portal data-custom-select-wrap>
+        <option value="">ALL CUSTOMERS</option>
+        <option value="4265">Landschaftsverband Rheinland - Medienzentrum Rheinland · #4265</option>
+        <option value="4382">101skills GmbH · #4382</option>
+      </select></nrc-select></label>`;
+  });
+  for (const width of [1280, 375]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.locator('#customer-trigger').click();
+    const menu = await page.locator('.portal-wrapper').boundingBox();
+    assert.ok(menu.width > 280, 'customer menu provides reading width independently of its trigger');
+    assert.ok(menu.x >= 0 && menu.x + menu.width <= width, 'menu stays inside the viewport');
+    const shortRow = page.locator('.portal-wrapper').getByRole('option', { name: '101skills GmbH · #4382', exact: true });
+    assert.ok((await shortRow.boundingBox()).height < 35, 'short customer name and ID fit on one compact row');
+    await page.locator('.portal-wrapper input').fill('4382');
+    await shortRow.click();
+    assert.equal(await page.locator('#customer').inputValue(), '4382');
+  }
   assert.deepEqual(errors, []);
   console.log("PASS: native values/FormData/change/reset/disabled/options, parser and dynamic mount, label/tabindex restoration, reconnect/replace/move, portal and global-listener cleanup");
 } finally { await browser.close(); }

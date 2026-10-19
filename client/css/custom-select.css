@@ -167,13 +167,17 @@
 }
 
 .custom-select__dropdown--wrap {
-    width: 100%;
+    width: 28rem;
+    min-width: 0;
+    max-width: calc(100vw - 1.5rem);
     box-sizing: border-box;
 }
 
 .custom-select__dropdown--wrap .custom-select__option {
     height: auto;
     min-height: 1.5rem;
+    padding-block: 0.3125rem;
+    line-height: 1.35;
     white-space: normal;
     overflow-wrap: anywhere;
 }

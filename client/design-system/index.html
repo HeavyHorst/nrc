@@ -6,7 +6,7 @@
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
     <link rel="stylesheet" href="../css/main.css?v=20261019workorder1">
-    <link rel="stylesheet" href="../css/custom-select.css?v=20261019selectors1">
+    <link rel="stylesheet" href="../css/custom-select.css?v=20261019customerwidth1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
 <body>
@@ -231,7 +231,7 @@
                             <label><span class="filter-label">STATUS</span><nrc-select><select class="filter-select"><option>ALL</option><option>IN PROGRESS</option><option>DONE</option></select></nrc-select></label>
                             <label><span class="filter-label">TASK SORT</span><nrc-select><select class="filter-select" aria-label="Sort tasks"><option value="createdAt">CREATED</option><option value="workOrder">WORK ORDER</option></select></nrc-select></label>
                             <label><span class="filter-label">FLAGS</span><nrc-select><select class="filter-select"><option>ALL</option><option>BLOCKED</option><option>OVERDUE</option><option>BLOCKED + OVERDUE</option></select></nrc-select></label>
-                            <label><span class="filter-label">CUSTOMER · FULL OPTION NAMES</span><nrc-select><select class="filter-select" data-custom-select-wrap><option>ALL CUSTOMERS</option><option>Nordlicht Bildungsverbund – Standort Nord · #42</option><option>Nordlicht Bildungsverbund – Standort Süd · #43</option></select></nrc-select></label>
+                            <label><span class="filter-label">CUSTOMER · FULL OPTION NAMES</span><nrc-select><select class="filter-select" data-custom-select-portal data-custom-select-wrap data-custom-select-search-placeholder="FILTER CUSTOMER..."><option>ALL CUSTOMERS</option><option>Nordlicht Bildungsverbund – Standort Nord · #42</option><option>Nordlicht Bildungsverbund – Standort Süd · #43</option></select></nrc-select></label>
                             <span class="filter-result-count">18 / 401 RESULTS</span>
                         </div>
                         <p class="catalog-usage"><b>SELECT LIFECYCLE</b> <code>&lt;nrc-select&gt;&lt;select&gt;…&lt;/select&gt;&lt;/nrc-select&gt;</code> owns the existing picker and portal in Light DOM, with no extra wrapper. The native select keeps its id, name, options, value and change events. Value, selectedIndex, disabled, option mutations and form reset synchronize the trigger. Removing the host releases listeners, observers and portals; reinserting it mounts once with the current native value. Dynamic editors need no init/refresh/destroy calls. Existing static <code>data-custom-select</code> fields are wrapped on startup.</p>
@@ -1464,7 +1464,7 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
     <script src="../dialog.js?v=20260925document17"></script>
     <script src="../portal.js?v=20260803a"></script>
     <script src="../custom-picker.js?v=20260927appointment2"></script>
-    <script src="../custom-select.js?v=20261019selectors1"></script>
+    <script src="../custom-select.js?v=20261019customerwidth1"></script>
     <script src="../note-html.js?v=20261007fragments1"></script>
     <script src="../loading-indicator.js?v=20261013loading1"></script>
     <script src="../page-loader.js?v=20261013loading1"></script>

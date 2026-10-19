@@ -143,7 +143,7 @@ const CustomSelect = {
                 position: position,
                 align: align,
                 boundary: boundary,
-                matchWidth: true,
+                matchWidth: !select.hasAttribute('data-custom-select-wrap'),
                 flipIfNeeded: true
             });
         }

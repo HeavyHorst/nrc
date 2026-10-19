@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261019contactpages2";
+const CACHE_NAME = "nrc-terminal-20261019customerwidth1";
 
 const APP_SHELL = [
   "./",
@@ -18,11 +18,11 @@ const APP_SHELL = [
   "./css/ledger.css?v=20261018inspectors5",
   "./css/mobile-tasks.css?v=20261016sliceinspector1",
   "./css/mobile.css?v=20261017subsystems1",
-  "./css/custom-select.css?v=20261019selectors1",
+  "./css/custom-select.css?v=20261019customerwidth1",
   "./dialog.js?v=20260925document17",
   "./portal.js?v=20260803a",
   "./custom-picker.js?v=20260927appointment2",
-  "./custom-select.js?v=20261019selectors1",
+  "./custom-select.js?v=20261019customerwidth1",
   "./attachments.js?v=20261008files1",
   "./assets.js?v=20261019ticketpages1",
   "./transactions.js?v=20260925inline1",
