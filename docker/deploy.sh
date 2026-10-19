@@ -83,6 +83,14 @@ if $publish_enabled; then
     COMPOSE_ARGS="--env-file .env --env-file publish.env -f $COMPOSE_FILE -f docker/compose.publish.yml"
 fi
 
+# Preserve the active newsletter gateway configuration when recreating services.
+newsletter_enabled=$(ssh "$DEPLOY_HOST" "docker ps --filter label=com.docker.compose.project=docker --filter label=com.docker.compose.service=newsletter --format '{{.ID}}'")
+if [[ -n $newsletter_enabled ]]; then
+    COMPOSE_ARGS+=" -f docker/compose.newsletter.yml"
+fi
+# Keep managed sidecars in the model, including newsletter's search dependency.
+COMPOSE_ARGS+=" --profile search --profile ai --profile metrics"
+
 echo "Deploying $head_revision from clean main to $DEPLOY_HOST:$REMOTE_DIR"
 
 changed_output=$(git ls-files -z | rsync -rltcn --from0 --files-from=- \
@@ -92,8 +100,7 @@ mapfile -t changed_files < <(printf '%s\n' "$changed_output" | sed '/\/$/d; /^$/
 if $full; then
     echo "Deployment mode: full stack"
 elif ((${#changed_files[@]} == 0)); then
-    echo "Production already matches all tracked files; nothing to deploy."
-    exit 0
+    echo "Production source matches; checking running images."
 else
     printf 'Changed tracked files:\n'
     printf '  %s\n' "${changed_files[@]}"
@@ -175,10 +182,37 @@ $tailscale && services+=(tailscale-proxy)
 $nginx && services+=(nginx)
 $publish && services+=(publish)
 
+# Source parity does not imply that containers use the latest built images.
+stale_services=$(ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && bash -s" <<'REMOTE'
+set -euo pipefail
+for id in $(docker ps -q --filter label=com.docker.compose.project=docker); do
+    ref=$(docker inspect --format '{{.Config.Image}}' "$id")
+    running=$(docker inspect --format '{{.Image}}' "$id")
+    built=$(docker image inspect --format '{{.Id}}' "$ref")
+    if [[ $running != "$built" ]]; then
+        docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$id"
+    fi
+done
+REMOTE
+)
+update_services=("${services[@]}")
+while IFS= read -r service; do
+    [[ -n $service ]] || continue
+    if [[ " ${update_services[*]} " != *" $service "* ]]; then
+        update_services+=("$service")
+    fi
+done <<< "$stale_services"
+
 if ((${#services[@]})); then
     printf 'Services to rebuild: %s\n' "${services[*]}"
 else
     echo "No image rebuild is required."
+fi
+printf 'Services to update: %s\n' "${update_services[*]}"
+
+if ! $full && ((${#changed_files[@]} == 0 && ${#update_services[@]} == 0)); then
+    echo "Production source and running images are current; nothing to deploy."
+    exit 0
 fi
 
 if $dry_run; then
@@ -255,14 +289,30 @@ ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && docker compose $COMPOSE_ARGS config -q"
 if ((${#services[@]})); then
     quoted_services=$(printf ' %q' "${services[@]}")
     ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && docker compose $COMPOSE_ARGS build$quoted_services"
+fi
+if ((${#update_services[@]})); then
+    quoted_services=$(printf ' %q' "${update_services[@]}")
     if $compose; then
-        ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && docker compose $COMPOSE_ARGS up -d"
+        ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && docker compose $COMPOSE_ARGS up -d$quoted_services"
     else
         ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && docker compose $COMPOSE_ARGS up -d --no-deps$quoted_services"
     fi
+    ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && bash -s --$quoted_services" <<'REMOTE'
+set -euo pipefail
+for service in "$@"; do
+    ids=$(docker ps -q --filter label=com.docker.compose.project=docker --filter "label=com.docker.compose.service=$service")
+    [[ -n $ids ]] || { echo "Service is not running: $service" >&2; exit 1; }
+    for id in $ids; do
+        ref=$(docker inspect --format '{{.Config.Image}}' "$id")
+        running=$(docker inspect --format '{{.Image}}' "$id")
+        built=$(docker image inspect --format '{{.Id}}' "$ref")
+        [[ $running == "$built" ]] || { echo "Stale image: $service" >&2; exit 1; }
+    done
+done
+REMOTE
 fi
 
-if $nginx || $search || $ai; then
+if $nginx || $search || $ai || [[ " ${update_services[*]} " == *" search "* ]] || [[ " ${update_services[*]} " == *" ai "* ]]; then
     ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && \
         docker compose $COMPOSE_ARGS exec -T nginx nginx -t && \
         docker compose $COMPOSE_ARGS exec -T nginx nginx -s reload"
