@@ -447,10 +447,8 @@ button.overview-segment { cursor: pointer; }
 .nl-panel { flex: 1; min-width: 0; min-height: 0; flex-direction: column; overflow: auto; background: var(--surface-content); color: var(--text-primary); font-size: var(--font-base); }
 .nl-panel [hidden], #newsletterBtn[hidden] { display: none !important; }
 .nl-panel > .panel-header { height: auto; min-height: 1.6rem; flex-shrink: 0; }
-.nl-panel .panel-header > div { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.nl-panel .panel-header:not(.header-register) > div { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
 #nlStatus { font-size: var(--font-xs); min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nl-toolbar { display: flex; align-items: stretch; justify-content: space-between; gap: 0.75rem; padding: 0.5rem 0.75rem 0; border-bottom: var(--frame-border); flex-shrink: 0; }
-.nl-toolbar .tab-group { min-height: 2.25rem; }
 .nl-actions { display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.5rem; }
 .nl-layout { display: grid; grid-template-columns: 12rem minmax(0, 1fr) 17rem; flex: 1; min-height: 0; }
 .nl-register, .nl-editor, .nl-review { min-width: 0; overflow: auto; }
@@ -507,13 +505,12 @@ button.overview-segment { cursor: pointer; }
     .nl-layout { display: block; }
     .nl-register, .nl-editor, .nl-review { overflow: visible; border-right: 0; border-bottom: var(--content-border); }
     #nlList { display: flex; overflow-x: auto; } .nl-row { min-width: 12rem; }
-    .nl-toolbar { flex-direction: column; gap: 0.375rem; }
     .nl-actions { justify-content: space-between; }
     .nl-panel, .nl-dialog { font-size: var(--mobile-font-base); }
     .nl-panel :is(input, select, textarea), .nl-dialog .task-detail-input { font-size: 16px; }
     .nl-meta, .nl-panel .detail-edit-label, .nl-panel .filter-label, .nl-contact-head { font-size: var(--mobile-font-xs); }
     .nl-subscriber-filter { align-items: stretch; flex-direction: column; gap: 0.5rem; }
-    .nl-panel .btn, .nl-dialog .btn, .nl-panel .custom-select__trigger { min-height: 44px; }
+    .nl-panel .btn:not(.header-register .btn), .nl-dialog .btn, .nl-panel .custom-select__trigger { min-height: 44px; }
 }
 @media (max-width: 1100px) { .overview-grid { grid-template-columns: 1fr; } }
 @media (max-width: 768px) {

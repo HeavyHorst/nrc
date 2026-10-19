@@ -109,7 +109,8 @@ try {
   assert.equal(await page.locator('#nlPreview').evaluate(node=>node===document.activeElement),true,'hidden archive opener falls back to visible focus');
   await page.unroute('**/newsletter/api/summary');
   assert.equal(await page.locator('.nl-row').count(),0,'archived campaigns hidden by default');
-  await page.locator('#nlArchived').check();
+  await page.getByText('Archivierte anzeigen', {exact:true}).click();
+  assert.equal(await page.locator('#nlArchived').isChecked(),true);
   await page.locator('.nl-row').click();
   assert.match(await page.locator('#nlCampaignState').innerText(),/Archiviert/);
   assert.equal(await page.locator('#nlRecipients').innerText(),history);
@@ -120,10 +121,16 @@ try {
   assert.match(await page.locator('#nlStatus').textContent(),/Kampagne wiederhergestellt\. Aktualisierung fehlgeschlagen/);
   assert.equal(await page.locator('#nlPreview').evaluate(node=>node===document.activeElement),true);
   await page.unroute('**/newsletter/api/summary');
-  await page.locator('#nlArchived').uncheck();
+  await page.locator('#nlArchived').focus();
+  await page.keyboard.press('Space');
+  assert.equal(await page.locator('#nlArchived').isChecked(),false);
   assert.equal(await page.locator('.nl-row').count(),1);
   assert.equal(await page.locator('#nlSend').isDisabled(),true,'restoring history does not enable resend');
 
+  await page.locator('#nlSubscriberTab').click();
+  assert.equal(await page.locator('#nlArchivedCell').isHidden(),true,'campaign archive filter is absent from contacts');
+  await page.locator('#nlCampaignTab').click();
+  assert.equal(await page.locator('#nlArchivedCell').isVisible(),true);
   await page.locator('#nlSubscriberTab').click();
   assert.equal(await page.getByRole('button', {name:'Kontakte 5',pressed:true}).isVisible(),true);
   assert.match(await page.locator('[data-contact-id="1"]').innerText(),/Firma: Beispiel GmbH · Muster Software KG/);
