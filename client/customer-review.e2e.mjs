@@ -115,11 +115,11 @@ try {
   await page.keyboard.press("ArrowDown");
   assert.equal(await page.locator('.customer-row[aria-pressed="true"]').getAttribute("data-company"), ids.company, "editor controls own their arrow keys");
   await page.evaluate(() => {
-    const send = NRCAssets.sendUpdateAsset;
-    NRCAssets.sendUpdateAsset = (...args) => {
-      NRCAssets.sendUpdateAsset = send;
-      const success = args[6].onSuccess;
-      args[6].onSuccess = result => { window.finishCustomerSave = () => success(result); };
+    const send = NRCTransactions.sendAssetMetadataPatch;
+    NRCTransactions.sendAssetMetadataPatch = (...args) => {
+      NRCTransactions.sendAssetMetadataPatch = send;
+      const success = args[3].onSuccess;
+      args[3].onSuccess = result => { window.finishCustomerSave = () => success(result); };
       return send(...args);
     };
   });
@@ -203,8 +203,9 @@ try {
   assert.equal(await page.locator("#customersState").isVisible(), true);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await capture("review-mobile");
-  // The stacked register exposes the paging sentinel when switching to mobile.
-  // Let automatic pagination settle before Playwright waits on row stability.
+  // Resizing alone need not expose the sentinel below the first page. Scroll
+  // it into view, then let automatic pagination settle before checking history.
+  await page.locator("#customersMore").evaluate(button => button.scrollIntoView({ block: "end" }));
   await page.waitForFunction(() => document.querySelectorAll(".customer-row").length === 40 && !document.getElementById("customerNew").disabled);
   await page.locator(".customer-footnote").scrollIntoViewIfNeeded();
   const footnote = await page.locator(".customer-footnote").boundingBox();

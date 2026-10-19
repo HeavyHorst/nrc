@@ -755,7 +755,15 @@
     const id = String(companyId);
     const generation = (container.ticketGeneration || 0) + 1;
     container.ticketGeneration = generation;
-    container.textContent = 'Loading tickets from NRC…';
+    if (container.ticketCompany !== id) container.textContent = '';
+    container.ticketCompany = id;
+    container.setAttribute('aria-busy', 'true');
+    container.inert = true;
+    const loadingTimer = setTimeout(() => {
+      if (container.isConnected && container.ticketGeneration === generation && !container.textContent) {
+        container.textContent = 'Loading tickets from NRC…';
+      }
+    }, 150);
     try {
       const { assets, has_more, total_count } = await window.NRCAssets.requestTicketPage({ company: id, sort: 'activity', descending: true, limit: 25 });
       if (!container.isConnected || container.ticketGeneration !== generation) return;
@@ -764,6 +772,13 @@
       if (has_more) container.innerHTML += `<button class="btn" data-all-tickets>VIEW ALL ${total_count} TICKETS</button>`;
       container.onclick = event => { const row = event.target.closest('[data-customer-ticket]'); if (row) open(id, row.dataset.customerTicket); else if (event.target.closest('[data-all-tickets]')) open(id); };
     } catch (error) { if (container.isConnected && container.ticketGeneration === generation) container.textContent = `Tickets unavailable: ${error.message}. Open tickets to retry.`; }
+    finally {
+      clearTimeout(loadingTimer);
+      if (container.ticketGeneration === generation) {
+        container.setAttribute('aria-busy', 'false');
+        container.inert = false;
+      }
+    }
   }
   function init() {
     const nav = document.getElementById('ticketsBtn'); if (!nav) return;

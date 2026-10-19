@@ -47,6 +47,7 @@
   let detailTimer;
   let contactLinksGeneration = 0;
   let loadingIndicator = null;
+  let reviewLoadingIndicator = null;
   const el = id => document.getElementById(id);
   const active = () => window.NRCViewManager?.getActiveView() === "customers";
   const connected = () => typeof serverReady !== "undefined" && serverReady && ws?.readyState === WebSocket.OPEN;
@@ -450,7 +451,7 @@
     const expectedRoom = room;
     if (reset) { reviewContacts = []; reviewCursor = null; }
     reviewLoading = true;
-    reviewError = "Loading contact review queue…";
+    reviewError = "";
     const cancelled = () => request !== reviewGeneration || expectedRoom !== room || !enabled || !active() || !connected();
     try {
       const result = await new Promise((resolve, reject) => {
@@ -475,7 +476,12 @@
     const companies = [...companyIds].map(id => companySearchResults.get(id) || records.get(id)).filter(asset => asset && metadata(asset));
     loadingIndicator ||= window.createLoadingIndicator(render);
     const showLoading = loadingIndicator.update(loading && active());
+    reviewLoadingIndicator ||= window.createLoadingIndicator(render);
+    const showReviewLoading = reviewLoadingIndicator.update(reviewLoading && active());
     el("customersList").setAttribute("aria-busy", String(loading));
+    el("customersList").inert = loading;
+    el("customerRecord").inert = loading || !detailReady;
+    el("customerRecord").setAttribute("aria-busy", String(loading || detailLoading));
     if (!loading || companies.length || showLoading || companyPageError) {
       el("customersState").textContent = companyPageError ? "CUSTOMER QUERY FAILED" :
         loading && companies.length === 0 ? "LOADING…" : searchMode === "results" ?
@@ -490,8 +496,11 @@
     el("customersStatus").textContent = [(error !== companyPageError ? error : "") || (!connected() ? "OFFLINE — connect to load customers." : ""), searchNotice].filter(Boolean).join(" ");
     el("customersStatus").hidden = !el("customersStatus").textContent;
     el("customerNew").disabled = !connected() || loading || !!error;
+    // Preserve the previous rows and record across fast reloads, just like tasks.
+    if (loading && !showLoading) return;
     const pending = reviewContacts.map(a => records.get(a.assetId) || a).filter(needsReview);
-    const queue = pending.length || reviewError ? `<section class="customer-section" aria-label="Contact review"><div class="panel-header"><div><span>CONTACTS TO REVIEW / ${pending.length}</span></div></div>${pending.map(a => `<button type="button" class="customer-row" data-review-contact="${a.assetId}"><span class="customer-row-copy"><strong class="customer-row-title">${escape(metadata(a).title)}</strong><span class="customer-meta">NEW · REVIEW / ASSIGN COMPANY · ${escape(metadata(a).email || "—")}</span></span></button>`).join("")}${reviewError ? `<p class="customer-empty">${escape(reviewError)}</p>` : ""}</section>` : "";
+    const reviewStatus = reviewError || (showReviewLoading ? "Loading contact review queue…" : "");
+    const queue = pending.length || reviewStatus ? `<section class="customer-section" aria-label="Contact review"><div class="panel-header"><div><span>CONTACTS TO REVIEW / ${pending.length}</span></div></div>${pending.map(a => `<button type="button" class="customer-row" data-review-contact="${a.assetId}"><span class="customer-row-copy"><strong class="customer-row-title">${escape(metadata(a).title)}</strong><span class="customer-meta">NEW · REVIEW / ASSIGN COMPANY · ${escape(metadata(a).email || "—")}</span></span></button>`).join("")}${reviewStatus ? `<p class="customer-empty">${escape(reviewStatus)}</p>` : ""}</section>` : "";
     const companyHeader = `<div class="panel-header"><div><span>CUSTOMERS / ${companies.length}</span></div></div>`;
     updateHtml(el("customersList"), queue + companyHeader + (companies.map(a => {
       const d = metadata(a);
@@ -509,9 +518,7 @@
     }
     // Keep the previous detail DOM intact until every endpoint in the page is
     // hydrated. Its actions must not operate on the newly selected company.
-    el("customerRecord").inert = !detailReady;
-    el("customerRecord").setAttribute("aria-busy", String(detailLoading));
-    if (!detailReady) return;
+    if (loading || !detailReady) return;
     // Leave the picker and its anchor intact during live updates. Apply the
     // latest record when the user closes the picker, not on a timer.
     if (window.NRCLinksUI.isPickerVisible()) return;

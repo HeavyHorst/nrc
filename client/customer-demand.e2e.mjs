@@ -45,15 +45,27 @@ try {
   });
   await page.reload();
   await page.waitForFunction(() => serverReady && NRCCustomers.isEnabled());
+  // Ticket filter initialization also reads companies after serverReady. Finish
+  // that independent startup request before measuring Customers-only traffic.
+  await page.waitForFunction(() => {
+    const filter = document.getElementById("ticketCustomerFilter");
+    return !filter.disabled && filter.options.length === 61;
+  });
   sent.length = 0;
   await page.click("#customersBtn");
   await page.waitForFunction(() => document.getElementById("customersState").textContent === "50 / 60 CUSTOMERS");
   assert.equal(await page.locator(".customer-row").count(), 50);
   assert.equal(sent.filter(b => b.readUInt16BE(0) === 55).length, 1);
   // The register opens on its first record, so exactly that record's own first
-  // edge page is read. The listing itself folds nothing: no typed collection and
-  // no whole-edge set is fetched for it.
-  assert.ok(!sent.some(b => [34, 35, 43, 53].includes(b.readUInt16BE(0))), "register does not read typed collections or the whole edge set");
+  // edge page is read. The independent contact review queue reads one bounded
+  // preview page, not whole collections or the whole edge set.
+  assert.ok(!sent.some(b => [34, 43, 53].includes(b.readUInt16BE(0))), "register does not read whole collections or the whole edge set");
+  const reviewPages = sent.filter(b => b.readUInt16BE(0) === 35);
+  assert.equal(reviewPages.length, 1, "one contact review page");
+  assert.equal(reviewPages[0].readUInt16BE(10), 9, "only contacts");
+  assert.equal(reviewPages[0][12], 0, "previews only");
+  assert.equal(reviewPages[0].readUInt16BE(13), 100, "bounded review page");
+  assert.equal(reviewPages[0][15], 0, "first page only");
   const autoSelected = await page.locator('.customer-row[aria-pressed="true"]').getAttribute("data-company");
   const registerEdgeReads = sent.filter(b => b.readUInt16BE(0) === 54);
   assert.equal(registerEdgeReads.length, 1, "the register reads only the auto-selected record's edges");
@@ -73,7 +85,8 @@ try {
   await response;
   await page.waitForFunction(() => document.getElementById("customersState").textContent === "1 / 1 CUSTOMERS");
   assert.equal(await page.locator(".customer-row").getAttribute("data-company"), ids.last, "contact search finds a company beyond the first page");
-  assert.equal(await page.evaluate(() => [...NRCAssets.roomAssets.get(0n).values()].filter(a => a.assetType === 9 || a.assetType === 10).length), 0);
+  assert.equal(await page.evaluate(() => [...NRCAssets.roomAssets.get(0n).values()].filter(a => a.assetType === 9).length), 2, "review page loads the two contact previews");
+  assert.equal(await page.evaluate(() => [...NRCAssets.roomAssets.get(0n).values()].filter(a => a.assetType === 10).length), 0, "search does not hydrate company activities");
   sent.length = 0;
   await page.click(`[data-company="${ids.last}"]`);
   await page.waitForFunction(() => document.querySelectorAll("[data-activity]").length === 4 && !!document.getElementById("customerRelationshipsMore"));

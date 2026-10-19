@@ -45,13 +45,45 @@ function fixture(uploadFile = async () => { throw new Error('upload unavailable'
   vm.runInNewContext(readFileSync(new URL('./detail-ui.js', import.meta.url), 'utf8'), { window, TextEncoder });
   const controls = new Map();
   window.NRCDetailUI.inlineField = spec => { controls.set(spec.name, spec); return ''; };
-  vm.runInNewContext(source, { window, document, myNickname: 'Staff', uploadFile });
+  vm.runInNewContext(source, { window, document, myNickname: 'Staff', uploadFile, setTimeout, clearTimeout });
   const submit = async form => { elements.get(form).onsubmit({ preventDefault() {} }); await Promise.resolve(); };
   const input = (name, value) => elements.get('ticketEditor').oninput({ target: { name, value } });
   return { api: window.NRCTickets, window, elements, records, entries, sent, pages, submit, input,
     event: (name, detail) => listeners.get(name)?.forEach(callback => callback({ detail })),
     edit: (name, value) => controls.get(name).save(value), ack: value => success(value), fail: message => failure({ message }) };
 }
+
+test('customer tickets delay loading feedback and retain same-company content during refresh', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture();
+  const container = { isConnected: true, textContent: '', innerHTML: '', setAttribute() {} };
+  let resolve;
+  f.window.NRCAssets.requestTicketPage = () => new Promise(done => { resolve = done; });
+  const first = f.api.mountCustomer(container, 42n);
+  assert.equal(container.textContent, '');
+  assert.equal(container.inert, true);
+  t.mock.timers.tick(149);
+  assert.equal(container.textContent, '');
+  t.mock.timers.tick(1);
+  assert.equal(container.textContent, 'Loading tickets from NRC…');
+  resolve({ assets: f.records, has_more: false });
+  await first;
+  assert.match(container.innerHTML, /Ticket 1/);
+  assert.equal(container.inert, false);
+  container.textContent = 'Ticket 1 Ticket 2';
+  const refresh = f.api.mountCustomer(container, 42n);
+  t.mock.timers.tick(200);
+  assert.equal(container.textContent, 'Ticket 1 Ticket 2');
+  resolve({ assets: [], has_more: false });
+  await refresh;
+  assert.match(container.innerHTML, /No tickets for this customer/);
+  const fast = f.api.mountCustomer(container, 43n);
+  assert.equal(container.textContent, '', 'a different company never displays old tickets');
+  resolve({ assets: [], has_more: false });
+  await fast;
+  t.mock.timers.tick(200);
+  assert.equal(container.textContent, '', 'completed fast reads cannot flash a delayed indicator');
+});
 
 test('company ID is authoritative and public conversation excludes internal and unknown kinds', async () => {
   const f = fixture(); await f.api.reload();
