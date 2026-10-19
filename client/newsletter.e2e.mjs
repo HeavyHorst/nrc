@@ -225,8 +225,13 @@ try {
   await page.waitForFunction(() => document.querySelector('#nlStatus').textContent.includes('Versionskonflikt'));
   await page.unroute('**/newsletter/api/summary');
 
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', {name:/Parallel geändert/}).click();
+  const discard = page.getByRole('dialog', {name:'UNGESPEICHERTE ÄNDERUNGEN'});
+  await discard.getByRole('button', {name:'Abbrechen',exact:true}).click();
+  assert.equal(await page.locator('#nlSubject').inputValue(),'Lokaler Betreff','cancel preserves unsaved campaign changes');
+  await page.getByRole('button', {name:/Parallel geändert/}).click();
+  await discard.getByRole('button', {name:'Verwerfen',exact:true}).click();
+  assert.equal(await page.locator('#nlSubject').inputValue(),'Anderer Betreff','confirm switches to the selected campaign');
   await page.locator('#nlTestEmail').fill('conflict@example.invalid');
   await page.route('**/newsletter/api/summary', async route => {
     const changed = await page.request.put('http://127.0.0.1:18997/newsletter/api/campaigns/2', {data:{revision:2,title:'Erneut geändert',template_id:'demo',subject:'Dritter Betreff',variables:{inhalt:'Noch neuer'}}});

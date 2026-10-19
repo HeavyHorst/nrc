@@ -180,8 +180,10 @@
   function clearPreview() {
     $('nlFrame').removeAttribute('srcdoc'); $('nlFrame').hidden = true; $('nlPreviewEmpty').hidden = false; $('nlTextDetails').hidden = true; $('nlTextDetails').open = false; $('nlText').textContent = ''; $('nlPreviewStatus').textContent = 'Lokale Vorschau nicht geladen. Einfache Platzhalter werden mit gespeicherten Werten angezeigt; die fertige Mail prüfen Sie per Testmail.';
   }
-  function choose(next, confirmed = false) {
-    if (!confirmed && (busy || (dirty && !window.confirm('Ungespeicherte Änderungen verwerfen?')))) return;
+  async function choose(next, confirmed = false) {
+    if (!confirmed && (busy || (dirty && !await window.NRCDialog.confirm('Ungespeicherte Änderungen verwerfen?', {
+      title: 'UNGESPEICHERTE ÄNDERUNGEN', confirmLabel: 'Verwerfen', cancelLabel: 'Abbrechen',
+    })))) return;
     campaign = next; dirty = false;
     reviewedAudience = null;
     $('nlKind').value = next?.kind || 'newsletter'; $('nlScope').value = next?.audience || 'selected_customers';

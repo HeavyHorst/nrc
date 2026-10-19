@@ -1034,7 +1034,19 @@
     const cancelled = () => !view.root.isConnected || !enabled;
     let busy = false;
     let dirty = false;
-    view.canClose = () => !busy && (!dirty || window.confirm("Discard ticket group changes?"));
+    view.canClose = () => {
+      if (busy) return false;
+      if (!dirty) return true;
+      window.NRCDialog.confirm("Discard ticket group changes?", {
+        title: "UNSAVED CHANGES", confirmLabel: "Discard",
+      }).then(confirmed => {
+        if (confirmed && !cancelled() && !busy) {
+          dirty = false;
+          view.cancel();
+        }
+      });
+      return false;
+    };
     try {
       await window.NRCAssets.requestAssetsByIds(0n, [companyId], { force: true });
       const base = window.NRCAssets.roomAssets.get(0n)?.get(companyId);

@@ -5,6 +5,8 @@ import {readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root = fileURLToPath(new URL('./', import.meta.url));
+const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+const sharedDialog = app.slice(app.indexOf('const NRCDialog ='), app.indexOf('window.NRCDialog = NRCDialog;')) + 'window.NRCDialog = NRCDialog;';
 const state = {configured:true,from_name:'NRC Demo',from_email:'newsletter@example.invalid',reply_to:'reply@example.invalid',templates:[{id:'demo',name:'FAKE MAILJET · Monatsbrief',variables:['einleitung','inhalt']}],campaigns:[{id:'1',title:'Oktober-Ausgabe',template_id:'demo',subject:'Neuigkeiten im Oktober',variables:{einleitung:'Guten Tag!',inhalt:'Dies ist ausschließlich eine lokale Demo.'},status:'draft',revision:1,tested_revision:0,recipients:[]}],subscribers:['not_subscribed','pending','subscribed','unsubscribed','blocked'].map((status,i) => ({contact_id:String(i+1),name:['Anna Beispiel','Ben Muster','Clara Demo','David Beispiel','Eva Muster'][i],email:`demo${i+1}@example.invalid`,status,source:'FAKE MAILJET · Demo'})),audience:{total:5,eligible:1,not_subscribed:1,unsubscribed:1,blocked:1}};
 state.subscribers[2].import_proof = {email:'demo3@example.invalid',source:'Zoho export',confirmed_at:'2025-02-03T10:20:00Z',evidence:'DOI export #123',scope:'Produktnewsletter',external_id:'123',imported_at:'2026-10-17T10:00:00Z'};
 state.customers = [{customer_id:'101',name:'Beispiel GmbH',contacts:[state.subscribers[0],state.subscribers[3]]},{customer_id:'102',name:'Muster Software KG',contacts:[]},{customer_id:'103',name:'Demo Handel',contacts:[state.subscribers[2]]}];
@@ -69,7 +71,7 @@ http.createServer(async (req,res) => {
       } else {Object.assign(campaign,body);campaign.revision++;campaign.tested_revision=0;}
       return json(campaign);
     }
-    if (url.pathname === '/') {res.setHeader('Content-Type','text/html; charset=utf-8');return res.end(shell.replace('<script src="/newsletter.js">','<script src="/loading-indicator.js"></script><script src="/page-loader.js"></script><script src="/newsletter.js">'));}
+    if (url.pathname === '/') {res.setHeader('Content-Type','text/html; charset=utf-8');return res.end(shell.replace('<script src="/newsletter.js">',`<script>${sharedDialog}</script><script src="/loading-indicator.js"></script><script src="/page-loader.js"></script><script src="/newsletter.js">`));}
     const filename = path.resolve(root,'.'+decodeURIComponent(url.pathname));
     if (!filename.startsWith(root) || !/\.(css|js|woff2)$/.test(filename)) {res.writeHead(404);return res.end();}
     res.setHeader('Content-Type',filename.endsWith('.css')?'text/css':filename.endsWith('.js')?'text/javascript':'font/woff2');res.end(await readFile(filename));

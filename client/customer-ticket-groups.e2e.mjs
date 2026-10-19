@@ -67,8 +67,13 @@ try {
   await dialog.getByRole('alert').filter({ hasText: 'Transaction rejected' }).waitFor();
   assert.equal(await dialog.getByLabel('Group name').inputValue(), 'Stale name');
   assert.equal((await read()).metadata.city, 'Concurrent city');
-  page.once('dialog', d => d.accept());
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  const discard = page.getByRole('dialog', { name: 'UNSAVED CHANGES', exact: true });
+  await discard.getByRole('button', { name: 'Cancel', exact: true }).click();
+  assert.equal(await dialog.getByLabel('Group name').inputValue(), 'Stale name', 'cancel preserves the dirty editor');
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await discard.getByRole('button', { name: 'Discard', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('dialog[open]'));
   await page.locator(`[data-ticket-group="${groupId}"]`).click();
   await dialog.getByLabel('Group name').waitFor();
   await dialog.getByRole('button', { name: 'DELETE GROUP', exact: true }).click();
