@@ -45,6 +45,7 @@ const (
 	C_GetTasksByIDs        uint16 = 60
 	C_GetAssetsByIDs       uint16 = 61
 	C_QueryTickets         uint16 = 63
+	C_ListTaskDependents   uint16 = 64
 
 	// Assets (Client -> Server)
 	C_CreateAsset              uint16 = 30
@@ -115,20 +116,21 @@ const (
 	S_AckUnsubscribeConvs uint16 = 127
 
 	// Tasks/Kanban (Server -> Client)
-	S_TaskCreated       uint16 = 130
-	S_TaskUpdated       uint16 = 131
-	S_TaskDeleted       uint16 = 132
-	S_TaskMoved         uint16 = 133
-	S_TaskListResponse  uint16 = 134
-	S_TaskListPage      uint16 = 135
-	S_TaskFull          uint16 = 136
-	S_TransactionResult uint16 = 137
-	S_TaskQueryPage     uint16 = 138
-	S_TaskProjects      uint16 = 139
-	S_TaskSliceList     uint16 = 164
-	S_TaskAssignees     uint16 = 165
-	S_CalendarPage      uint16 = 166
-	S_WorkspaceOverview uint16 = 167
+	S_TaskCreated        uint16 = 130
+	S_TaskUpdated        uint16 = 131
+	S_TaskDeleted        uint16 = 132
+	S_TaskMoved          uint16 = 133
+	S_TaskListResponse   uint16 = 134
+	S_TaskListPage       uint16 = 135
+	S_TaskFull           uint16 = 136
+	S_TransactionResult  uint16 = 137
+	S_TaskQueryPage      uint16 = 138
+	S_TaskProjects       uint16 = 139
+	S_TaskSliceList      uint16 = 164
+	S_TaskAssignees      uint16 = 165
+	S_CalendarPage       uint16 = 166
+	S_WorkspaceOverview  uint16 = 167
+	S_TaskDependentsPage uint16 = 170
 
 	// Assets (Server -> Client)
 	S_AssetCreated    uint16 = 140

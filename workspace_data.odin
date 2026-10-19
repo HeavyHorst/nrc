@@ -18,6 +18,7 @@ workspace_data_replay_scope :: proc(conv_id: pr.ConversationID) -> pr.Conversati
 // that field in each operation body and are validated separately after parsing.
 is_workspace_data_opcode :: proc(opcode: pr.Opcode) -> bool {
 	return(
+		opcode == .C_ListTaskDependents ||
 		opcode == .C_ListHistory ||
 		opcode == .C_ListTaskAssignees ||
 		opcode == .C_QueryCalendar ||

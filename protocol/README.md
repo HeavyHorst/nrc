@@ -123,8 +123,8 @@ its own cursor and the client asks for the next one when it needs it.
 invalid before any payload parsing happens, so a new opcode must be added to both
 the enum and the range check in `protocol/protocol.odin`.
 
-- Client to server: `1-3`, `8`, `16-63`
-- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-169`
+- Client to server: `1-3`, `8`, `16-64`
+- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-170`
 
 ### Client to Server
 
@@ -171,6 +171,7 @@ the enum and the range check in `protocol/protocol.odin`.
 | 60 | `C_GetTasksByIDs` | Read tasks by an exact set of IDs |
 | 62 | `C_ListHistory` | Page visible workspace or record change history |
 | 63 | `C_QueryTickets` | Filtered, sorted ticket pages and ticket-entry pages |
+| 64 | `C_ListTaskDependents` | Page tasks directly dependent on one task |
 
 #### Assets
 
@@ -266,6 +267,7 @@ them.
 | 167 | `S_WorkspaceOverview` | Unique task totals and open-slice distributions |
 | 168 | `S_HistoryPage` | Correlated JSON change-history page |
 | 169 | `S_TicketPage` | Ticket activity metadata and binary asset page |
+| 170 | `S_TaskDependentsPage` | ID-ordered direct dependents with an exclusive cursor |
 
 #### Assets
 
@@ -616,6 +618,30 @@ Register and attention responses carry asset headers, never conversation bodies.
 An internal note or a read acknowledgement does not answer a customer follow-up.
 Attention paging is independent of register filters. Like other live cursors,
 these pages are not a frozen snapshot across concurrent mutations.
+
+#### C_ListTaskDependents / S_TaskDependentsPage
+
+Request (30 bytes after opcode):
+```
+[Scope: u64 = 0] [TaskID: u64] [Limit: u16] [AfterTaskID: u64] [CorrelationID: u32]
+```
+Limit is 1–1000 (`MAX_TASK_PAGE_SIZE`). `AfterTaskID = 0` starts the first page;
+otherwise only dependent IDs strictly greater than the cursor are returned.
+
+Response (36 bytes including opcode, before task records and error text):
+```
+[Opcode: u16] [Scope: u64] [TaskID: u64] [Success: u8] [Count: u16]
+[Tasks: existing Task records] [HasMore: u8] [NextTaskID: u64]
+[Error: u16-length UTF-8] [CorrelationID: u32]
+```
+The server seeks the existing `(blocker ID, dependent ID)` index and stops at
+the end of that parent range, the requested limit, or the response byte budget.
+There is no total-count scan. `NextTaskID` is the last returned ID, including
+on the final page, or zero for an empty page. A missing root returns
+`task_not_found`; a single oversized record returns `task_exceeds_page_byte_limit`.
+Pages show current relationships, not a historical snapshot. Completing a
+prerequisite clears its dependents' `blocked_by` references. Clients refresh
+from the first page on task mutations; pagination is not snapshot isolation.
 
 #### C_ListHistory / S_HistoryPage
 

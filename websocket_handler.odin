@@ -359,6 +359,9 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 		return
 	}
 	#partial switch opcode {
+	case .C_ListTaskDependents:
+		req, err := pr.parseListTaskDependentsRequest(frame_data[2:])
+		if err == nil {process_list_task_dependents(c, req)} else {send_error_response(c, opcode, "Failed to parse request")}
 	case .C_ListHistory:
 		process_list_history(c, frame_data[2:])
 	case .C_SendMessage:
