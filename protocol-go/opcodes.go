@@ -44,6 +44,7 @@ const (
 	C_GetWorkspaceOverview uint16 = 59
 	C_GetTasksByIDs        uint16 = 60
 	C_GetAssetsByIDs       uint16 = 61
+	C_QueryTickets         uint16 = 63
 
 	// Assets (Client -> Server)
 	C_CreateAsset              uint16 = 30
@@ -147,6 +148,7 @@ const (
 	S_AllEdgeListPage    uint16 = 161
 	S_EdgeListPage       uint16 = 162
 	S_CustomerSearchPage uint16 = 163
+	S_TicketPage         uint16 = 169
 
 	// Graph Query (Server -> Client)
 	S_GraphQueryResult           uint16 = 154

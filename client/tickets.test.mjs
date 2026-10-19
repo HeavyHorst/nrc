@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('./tickets.js', import.meta.url), 'utf8');
 function fixture(uploadFile = async () => { throw new Error('upload unavailable'); }) {
+  const listeners = new Map();
   const elements = new Map();
   const element = () => ({ isConnected: true, innerHTML: '', textContent: '', value: '', dataset: {}, addEventListener() {}, append(child) { this.lastChild = child; }, parentElement: { append(child) { this.lastChild = child; }, parentElement: { after() {} } },
     closest() { return { after() {} }; }, before() {},
@@ -20,6 +21,12 @@ function fixture(uploadFile = async () => { throw new Error('upload unavailable'
     NRCViewManager: { setActiveView() {} },
     NRCAssets: {
       requestAllAssets: async (room, type, options) => { pages.push([room, type, options]); return { assets: type === 13 ? records : entries }; },
+      requestTicketPage: async query => {
+        pages.push(query);
+        const assets = query.mode === 'entries' ? entries.filter(a => String(a.parentId) === query.parent) : records;
+        return { assets, total_count: assets.length, has_more: false, cursor: {} };
+      },
+      requestAssetsByIds: async () => [],
       sendCreateAsset(...args) { sent.push(args); success = args[7].onSuccess; failure = args[7].onError; return 7; },
       sendUpdateAsset(...args) { sent.push(args); success = args[6].onSuccess; failure = args[6].onError; return 8; },
       sendGetAsset(room, id, options) { options.onSuccess({ asset: records.find(a => a.assetId === id) }); return 9; },
@@ -32,14 +39,17 @@ function fixture(uploadFile = async () => { throw new Error('upload unavailable'
   } };
   const records = [1n, 2n].map(assetId => ({ assetId, updatedAt: 123456789n, convId: 0n, assetType: 13, payload: 'Original request', attachments: [{ fileId: 7n }], preview: JSON.stringify({ version: 1, title: `Ticket ${assetId}`, company_id: '42', contact_id: '', requester: 'ada@example.test', status: 'open', assignee: 'Sam' }) }));
   const entries = [];
-  const document = { readyState: 'complete', getElementById: id => elements.get(id) || null, querySelector: () => null, querySelectorAll: () => [], addEventListener() {}, createElement: element };
+  const document = { readyState: 'complete', getElementById: id => elements.get(id) || null, querySelector: () => null, querySelectorAll: () => [],
+    addEventListener(name, callback) { if (!listeners.has(name)) listeners.set(name, []); listeners.get(name).push(callback); }, createElement: element };
   vm.runInNewContext(readFileSync(new URL('./detail-ui.js', import.meta.url), 'utf8'), { window, TextEncoder });
   const controls = new Map();
   window.NRCDetailUI.inlineField = spec => { controls.set(spec.name, spec); return ''; };
   vm.runInNewContext(source, { window, document, myNickname: 'Staff', uploadFile });
   const submit = async form => { elements.get(form).onsubmit({ preventDefault() {} }); await Promise.resolve(); };
   const input = (name, value) => elements.get('ticketEditor').oninput({ target: { name, value } });
-  return { api: window.NRCTickets, window, elements, records, entries, sent, pages, submit, input, edit: (name, value) => controls.get(name).save(value), ack: value => success(value), fail: message => failure({ message }) };
+  return { api: window.NRCTickets, window, elements, records, entries, sent, pages, submit, input,
+    event: (name, detail) => listeners.get(name)?.forEach(callback => callback({ detail })),
+    edit: (name, value) => controls.get(name).save(value), ack: value => success(value), fail: message => failure({ message }) };
 }
 
 test('company ID is authoritative and public conversation excludes internal and unknown kinds', async () => {
@@ -49,13 +59,89 @@ test('company ID is authoritative and public conversation excludes internal and 
   f.api.state.entries = ['internal_note', 'customer_reply', 'public_reply', 'unknown'].map((kind, i) => ({ assetId: BigInt(i), parentType: 2, parentId: 1n, createdAt: BigInt(4 - i), preview: JSON.stringify({ kind }) }));
   assert.deepEqual(Array.from(f.api.conversation('1', false), a => f.api.metadata(a).kind), ['public_reply', 'customer_reply']);
   assert.deepEqual(Array.from(f.api.conversation('1', true), a => f.api.metadata(a).kind), ['internal_note']);
-  assert.deepEqual(f.pages.map(p => p[1]), [13, 14]);
-  assert.ok(f.pages.every(p => p[0] === 0n && p[2].fullContent));
+  assert.deepEqual(f.pages.map(p => p.mode || 'register'), ['register', 'attention']);
   f.entries.push(...f.api.state.entries);
   f.api.open('', '1');
+  await f.api.reload();
   const html = f.elements.get('ticketConversation').innerHTML;
   for (const label of ['PUBLIC REPLY', 'CUSTOMER REPLY', 'INTERNAL NOTE']) assert.ok(html.includes(`${label} /`));
   assert.doesNotMatch(html, /public_reply|customer_reply|internal_note|unknown/);
+});
+
+test('ticket register sends filters and sort before paging and ignores an obsolete response', async () => {
+  const f = fixture(), pending = [];
+  f.window.NRCAssets.requestAllAssets = () => { throw new Error('register must not download every ticket or entry'); };
+  f.window.NRCAssets.requestTicketPage = query => query.mode === 'attention'
+    ? Promise.resolve({ assets: [], has_more: false })
+    : new Promise(resolve => pending.push({ query, resolve }));
+  f.api.state.filters = { status: 'open', owner: 'Sam', company: '42' };
+  f.api.state.sort = 'title'; f.api.state.direction = 'asc';
+  const old = f.api.reload();
+  f.api.state.filters.status = 'closed';
+  const current = f.api.reload();
+  assert.equal(pending[1].query.status, 'closed');
+  assert.equal(pending[1].query.assignee, 'Sam');
+  assert.equal(pending[1].query.company, '42');
+  assert.equal(pending[1].query.sort, 'title');
+  assert.equal(pending[1].query.descending, false);
+  assert.equal(pending[1].query.limit, 50);
+  pending[1].resolve({ assets: [f.records[1]], total_count: 61, has_more: true, cursor: { id: '2' } });
+  await current;
+  pending[0].resolve({ assets: [f.records[0]], total_count: 1, has_more: false, cursor: { id: '1' } });
+  await old;
+  assert.deepEqual(Array.from(f.api.state.rows, a => a.assetId), [2n]);
+  assert.equal(f.api.state.total, 61);
+  assert.equal(f.api.state.hasMore, true);
+  assert.equal(f.api.state.cursor.id, '2');
+  assert.equal(f.api.state.entries.length, 0);
+});
+
+test('a read acknowledgement supersedes an initial page that captured older unread state', async () => {
+  const f = fixture(), pending = [];
+  let through = '0';
+  f.window.NRCRecordActivity = { cursors: () => ({ '1': through }), cursor: () => BigInt(through) };
+  f.window.NRCAssets.requestTicketPage = query => query.mode === 'attention'
+    ? Promise.resolve({ assets: [], has_more: false })
+    : new Promise(resolve => pending.push({ query, resolve }));
+  const first = f.api.reload();
+  through = '10';
+  f.event('nrc:record-activity', { kind: 'ticket', id: '1' });
+  assert.equal(pending.length, 2);
+  assert.equal(pending[1].query.read['1'], '10');
+  pending[0].resolve({ assets: [f.records[0]], total_count: 1, has_more: false });
+  await first;
+  assert.equal(f.api.state.rows.length, 0, 'obsolete initial response cannot commit');
+  pending[1].resolve({ assets: [f.records[1]], total_count: 1, has_more: false });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(Array.from(f.api.state.rows, a => a.assetId), [2n]);
+});
+
+test('read and unknown-deletion refreshes retain loaded depth; task activity does not reset tickets', async () => {
+  const f = fixture();
+  const rows = Array.from({ length: 61 }, (_, i) => ({ ...f.records[0], assetId: BigInt(i + 1) }));
+  let reads = 0;
+  f.window.NRCAssets.requestTicketPage = async query => {
+    if (query.mode === 'attention') return { assets: [], has_more: false };
+    reads++;
+    const start = query.cursor?.id ? 50 : 0;
+    return { assets: rows.slice(start, start + 50), total_count: 61, has_more: start === 0, cursor: { id: String(start + 50) } };
+  };
+  f.api.state.rows = rows;
+  f.event('nrc:record-activity', { kind: 'task' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 0);
+  f.event('nrc:record-activity', { kind: 'ticket', id: '60' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.api.state.rows.length, 61);
+  assert.equal(reads, 2);
+  f.event('nrc:asset-deleted', { convId: 0n, assetId: 999n, asset: null });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 4);
+  assert.equal(f.api.state.rows.length, 61);
+  f.api.state.sort = 'company_id';
+  f.event('nrc:asset-updated', { asset: { assetType: 8 } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 6, 'linked-name ordering is server-derived and must be refreshed');
 });
 
 test('staff conversation displays email provenance and precise mail status as escaped metadata', async () => {
@@ -66,6 +152,7 @@ test('staff conversation displays email provenance and precise mail status as es
     f.entries.push({ assetId: BigInt(10 + i), parentType: 2, parentId: 1n, createdAt: 1n, payload: 'Reply', preview: JSON.stringify({ kind: 'public_reply', channel: 'email', recipient: 'ada@example.test', mail_delivery: status }) });
   }
   await f.api.reload(); f.api.open('', '1');
+  await f.api.reload();
   const html = f.elements.get('ticketConversation').innerHTML;
   assert.match(html, /ORIGINAL REQUEST[^<]*EMAIL/);
   for (const label of ['TO ada@example.test', 'MAIL QUEUED', 'MAIL SERVER ACCEPTED', 'MAIL FAILED', 'MAIL STATUS UNKNOWN']) assert.ok(html.includes(label));
@@ -120,7 +207,7 @@ test('selection failure never substitutes another record; failed refresh retains
   assert.equal(f.api.state.drafts.has('999'), false);
   f.api.open('', '1'); f.input('message', 'Keep me');
   await new Promise(resolve => setImmediate(resolve));
-  f.window.NRCAssets.requestAllAssets = async () => { throw new Error('read failed'); };
+  f.window.NRCAssets.requestTicketPage = async () => { throw new Error('read failed'); };
   await f.api.reload();
   assert.equal(f.api.state.selected, '1'); assert.equal(f.api.state.drafts.get('1').message, 'Keep me');
   assert.match(f.api.state.error, /read failed/);
@@ -305,9 +392,10 @@ test('incoming replies resurface waiting/closed tickets; reading and internal no
   a.preview = JSON.stringify({ ...f.api.metadata(a), status: 'waiting_customer', assignee: 'Staff' });
   assert.equal(f.api.activity(a).waiting, false);
   const entry = (assetId, kind, createdAt) => ({ assetId, parentType: 2, parentId: a.assetId, createdAt, preview: JSON.stringify({ kind }) });
+  f.api.state.entries = f.entries;
   f.entries.push(entry(10n, 'public_reply', 20n), entry(11n, 'customer_reply', 30n));
   assert.equal(f.api.activity(a).waiting, true);
-  f.window.NRCRecordActivity = { cursor: () => 11n, observe() {} };
+  f.window.NRCRecordActivity = { cursor: () => 11n, cursors: () => ({ '1': '11' }), observe() {} };
   assert.equal(f.api.activity(a).unread, 0);
   f.entries.push(entry(12n, 'internal_note', 40n));
   a.preview = JSON.stringify({ ...f.api.metadata(a), status: 'closed' });
@@ -318,5 +406,6 @@ test('incoming replies resurface waiting/closed tickets; reading and internal no
   assert.equal(f.api.activity(a).waiting, true);
   assert.equal(f.api.activity(a).unread, 1);
   assert.equal(f.api.activity(a).timestamp, 60n, 'metadata update time is not conversation activity');
+  await f.api.reload();
   assert.equal(f.api.snapshot().length, 1, 'another assignee does not enter my inbox');
 });

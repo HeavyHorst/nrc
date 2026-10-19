@@ -59,6 +59,8 @@ let pendingInitialization = null; // Store initialization function to call when 
 const Opcode = {
   C_ListHistory: 62,
   S_HistoryPage: 168,
+  C_QueryTickets: 63,
+  S_TicketPage: 169,
   C_SendMessage: 1,
   C_SubscribeConvs: 2,
   C_UnsubscribeConvs: 3,
@@ -1923,6 +1925,9 @@ function handleBinaryMessage(arrayBuffer) {
         break;
       case Opcode.S_CustomerSearchPage:
         window.NRCAssets.handleCustomerSearchPage(dataView);
+        break;
+      case Opcode.S_TicketPage:
+        window.NRCAssets.handleTicketPage(dataView);
         break;
       case Opcode.S_NoteProjectList:
         window.NRCAssets.handleNoteProjectList(dataView);

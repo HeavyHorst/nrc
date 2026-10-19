@@ -154,6 +154,7 @@ const AssetOriginOpcode = {
   ListTags: 39,
   SearchCustomers: 55,
   GetByIDs: 61,
+  QueryTickets: 63,
 };
 
 function normalizeAssetRequestOptions(options) {
@@ -226,6 +227,8 @@ function getAssetRequestKindFromOriginOpcode(originOpcode) {
       return "list_tags";
     case AssetOriginOpcode.SearchCustomers:
       return "customer_search";
+    case AssetOriginOpcode.QueryTickets:
+      return "ticket_query";
     default:
       return null;
   }
@@ -988,6 +991,78 @@ function requestAllAssets(convId, assetType, options = {}) {
 
     requestPage();
   });
+}
+
+let ticketReadSnapshot = null, ticketReadSequence = 0;
+let ticketQueryQueue = Promise.resolve();
+
+function requestTicketPage(query = {}, options = {}) {
+  const { read, ...request } = query;
+  if (!read) return sendTicketPage(request, options);
+  const socket = ws, scope = JSON.stringify([currentWorkspaceId, myNickname]);
+  const key = JSON.stringify(read);
+  const run = async () => {
+    const cancelled = () => options.isCancelled?.() || ws !== socket || scope !== JSON.stringify([currentWorkspaceId, myNickname]);
+    if (cancelled()) throw new Error('Ticket query cancelled');
+    if (ticketReadSnapshot?.socket !== socket || ticketReadSnapshot.scope !== scope || ticketReadSnapshot.key !== key) {
+      ticketReadSnapshot = null;
+      const snapshot = ++ticketReadSequence, entries = Object.entries(read);
+      // Each chunk fits independently; old/deleted ticket cursors never make
+      // a register request exceed its wire limit. The final ACK commits it.
+      for (let start = 0; start < Math.max(1, entries.length); start += 512) {
+        await sendTicketPage({ mode: 'read', read_snapshot: snapshot, read_start: start === 0,
+          read_end: start + 512 >= entries.length, read: Object.fromEntries(entries.slice(start, start + 512)) }, { isCancelled: cancelled });
+        if (cancelled()) throw new Error('Ticket query cancelled');
+      }
+      ticketReadSnapshot = { socket, scope, key, snapshot };
+    }
+    return sendTicketPage({ ...request, read_snapshot: ticketReadSnapshot.snapshot }, { isCancelled: cancelled });
+  };
+  // Uploads and queries share one connection-local snapshot. Serializing this
+  // lane prevents one view replacing another view's snapshot before its query.
+  const result = ticketQueryQueue.then(run);
+  ticketQueryQueue = result.catch(() => {});
+  return result;
+}
+
+function sendTicketPage(query, { isCancelled } = {}) {
+  return new Promise((resolve, reject) => {
+    const bytes = assetTextEncoder.encode(JSON.stringify(query));
+    if (bytes.length > 65532) return reject(new Error("Ticket query exceeds 64 KiB"));
+    if (!ws || ws.readyState !== WebSocket.OPEN || !serverReady) return reject(new Error("Not connected"));
+    const correlationId = generateCorrelationId();
+    const buffer = new ArrayBuffer(6 + bytes.length), view = new DataView(buffer);
+    view.setUint16(0, Opcode.C_QueryTickets);
+    view.setUint32(2, correlationId);
+    new Uint8Array(buffer, 6).set(bytes);
+    registerPendingAssetRpc(correlationId, {
+      kind: "ticket_query", originOpcode: AssetOriginOpcode.QueryTickets, convId: 0n,
+      snapshotStartVersion: assetMutationSequence, isCancelled,
+      onSuccess: resolve, onError: detail => reject(new Error(detail.message || "Ticket query failed")),
+    });
+    sendPacket(buffer);
+  });
+}
+
+function handleTicketPage(view) {
+  const correlationId = view.getUint32(2), pending = pendingAssetRpcByCorrelation.get(correlationId);
+  if (!pending) return;
+  if (pending.isCancelled?.()) { settlePendingAssetRpc(correlationId, false, { message: "Ticket query cancelled" }); return; }
+  const length = view.getUint32(6);
+  const page = JSON.parse(assetTextDecoder.decode(new Uint8Array(view.buffer, view.byteOffset + 10, length)));
+  let offset = 10 + length;
+  const count = view.getUint16(offset), full = view.getUint8(offset + 2) === 1;
+  offset += 3;
+  const assets = [];
+  for (let i = 0; i < count; i++) {
+    const parsed = full ? parseAssetFull(view, offset) : parseAsset(view, offset);
+    offset = parsed.newOffset;
+    const asset = parsed.asset;
+    const version = assetMutationVersions.get(assetMutationKey(0n, asset.assetId)) ?? 0;
+    if (version <= pending.snapshotStartVersion) storeAsset(asset);
+    assets.push(roomAssets.get(0n)?.get(asset.assetId) || asset);
+  }
+  settlePendingAssetRpc(correlationId, true, { ...page, assets });
 }
 
 function requestCustomerPage(convId, options = {}) {
@@ -2173,6 +2248,7 @@ window.NRCAssets = {
   handleAssetList,
   handleAssetListPage,
   handleCustomerSearchPage,
+  handleTicketPage,
   handleNoteProjectList,
   handleNoteTagList,
 
@@ -2187,6 +2263,7 @@ window.NRCAssets = {
   sendListAssetsPaged,
   requestAllAssets,
   requestCustomerPage,
+  requestTicketPage,
   sendListAssetsPagedByProject,
   sendListNoteProjects,
   sendListAssetsPagedByTag,

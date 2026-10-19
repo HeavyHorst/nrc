@@ -573,6 +573,8 @@ test_get_opcode_valid_client_opcodes :: proc(t: ^testing.T) {
 
 	endian.put_u16(buf[:], .Big, 59)
 	testing.expect_value(t, get_opcode(buf[:]), Opcode.C_GetWorkspaceOverview)
+	endian.put_u16(buf[:], .Big, 63)
+	testing.expect_value(t, get_opcode(buf[:]), Opcode.C_QueryTickets)
 }
 
 @(test)
@@ -609,6 +611,8 @@ test_get_opcode_valid_server_opcodes :: proc(t: ^testing.T) {
 	testing.expect_value(t, get_opcode(buf[:]), Opcode.C_ListHistory)
 	endian.put_u16(buf[:], .Big, 168)
 	testing.expect_value(t, get_opcode(buf[:]), Opcode.S_HistoryPage)
+	endian.put_u16(buf[:], .Big, 169)
+	testing.expect_value(t, get_opcode(buf[:]), Opcode.S_TicketPage)
 }
 
 @(test)
@@ -616,7 +620,7 @@ test_get_opcode_invalid :: proc(t: ^testing.T) {
 	buf: [2]byte
 
 	// Invalid opcode above the client range
-	endian.put_u16(buf[:], .Big, 63)
+	endian.put_u16(buf[:], .Big, 64)
 	testing.expect_value(t, get_opcode(buf[:]), Opcode(0xFFFF))
 
 	// Reserved client opcode 0 (formerly C_SetNickname)

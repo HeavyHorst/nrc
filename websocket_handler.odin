@@ -661,6 +661,10 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 		req, parse_err := pr.parseSearchCustomersRequest(frame_data[2:])
 		if parse_err == nil do handle_search_customers(c, req)
 		else do send_error_response(c, .C_SearchCustomers, "Failed to parse request")
+	case .C_QueryTickets:
+		req, parse_err := pr.parseTicketQueryRequest(frame_data[2:])
+		if parse_err == nil do handle_query_tickets(c, req)
+		else do send_error_response(c, .C_QueryTickets, "Failed to parse request")
 	// Graph Query operations
 	case .C_GraphQuery:
 		req, parse_err := pr.parseGraphQueryRequest(frame_data[2:])

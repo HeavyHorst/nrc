@@ -13,17 +13,29 @@ window.NRCRecordActivity = (() => {
     const local = memory.get(key) || 0n;
     return saved > local ? saved : local;
   }
-  function changed() {
+  function changed(detail = { kind: 'task' }) {
     const badge = document.getElementById('tasksUnreadCount'), total = snapshot().length;
     if (badge) { badge.textContent = String(total); badge.hidden = !total; badge.setAttribute('aria-label', `${total} assigned tasks with unread comments`); }
-    document.dispatchEvent(new CustomEvent('nrc:record-activity'));
+    document.dispatchEvent(new CustomEvent('nrc:record-activity', { detail }));
+  }
+  function cursors(kind) {
+    if (!identity()) return {};
+    const prefix = `nrc:record-read:${identity()}:${kind}:`, ids = new Set();
+    try {
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const key = window.localStorage.key(i);
+        if (key?.startsWith(prefix)) ids.add(key.slice(prefix.length));
+      }
+    } catch {}
+    for (const key of memory.keys()) if (key.startsWith(prefix)) ids.add(key.slice(prefix.length));
+    return Object.fromEntries([...ids].map(id => [id, String(cursor(kind, id))]));
   }
   function markRead(kind, id, through) {
     const key = keyFor(kind, id);
     if (!key || through <= cursor(kind, id)) return;
     memory.set(key, through);
     try { window.localStorage.setItem(key, String(through)); } catch {}
-    changed();
+    changed({ kind, id: String(id) });
   }
   // A hidden inspector, collapsed messages or background tab is not a read.
   // Capture the exact last incoming record, not an ID looked up after scrolling.
@@ -111,6 +123,10 @@ window.NRCRecordActivity = (() => {
     else if (tasks.has(task.id)) tasks.set(task.id, { ...tasks.get(task.id), ...task });
     changed();
   });
-  window.addEventListener('storage', e => { if (e.key?.startsWith('nrc:record-read:')) changed(); });
-  return { cursor, markRead, observe, watchTask, snapshot, refresh, disconnect };
+  window.addEventListener('storage', e => {
+    const prefix = keyFor('ticket', '');
+    if (prefix && e.key?.startsWith(prefix)) changed({ kind: 'ticket' });
+    else if (e.key?.startsWith('nrc:record-read:')) changed();
+  });
+  return { cursor, cursors, markRead, observe, watchTask, snapshot, refresh, disconnect };
 })();

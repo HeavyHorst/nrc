@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261018ticketmail2";
+const CACHE_NAME = "nrc-terminal-20261019ticketpages1";
 
 const APP_SHELL = [
   "./",
@@ -24,7 +24,7 @@ const APP_SHELL = [
   "./custom-picker.js?v=20260927appointment2",
   "./custom-select.js?v=20260924select1",
   "./attachments.js?v=20261008files1",
-  "./assets.js?v=20261018mailguard2",
+  "./assets.js?v=20261019ticketpages1",
   "./transactions.js?v=20260925inline1",
   "./edges.js?v=20260924slicelive1",
   "./files.js?v=20261017history1",
@@ -41,7 +41,7 @@ const APP_SHELL = [
   "./task-search.js?v=20260917taskscroll1",
   "./detail-ui.js?v=20261017history5",
   "./column-resize.js?v=20260913tables2",
-  "./record-activity.js?v=20261017attention1",
+  "./record-activity.js?v=20261019ticketpages1",
   "./tasks.js?v=20261018ticketregister1",
   "./attention.js?v=20261017attention1",
   "./calendar.js?v=20261013loading1",
@@ -58,10 +58,10 @@ const APP_SHELL = [
   "./ai.js?v=20261016sullivannav1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20261015copy3",
-  "./app.js?v=20261017history5",
+  "./app.js?v=20261019ticketpages1",
   "./newsletter.js?v=20261017contacts2",
   "./customers.js?v=20261018contactreview2",
-  "./tickets.js?v=20261018ticketmail2",
+  "./tickets.js?v=20261019ticketpages1",
   "./mobile-shell.js?v=20261018ticketregister1",
   "./latency-worker.js",
 ];

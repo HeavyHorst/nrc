@@ -83,6 +83,7 @@ Opcode :: enum u16 {
 	C_GetTasksByIDs = 60,
 	C_GetAssetsByIDs = 61,
 	C_ListHistory = 62,
+	C_QueryTickets = 63,
 
 	// Tasks/Kanban (Server -> Client)
 	S_TaskCreated = 130,
@@ -146,6 +147,7 @@ Opcode :: enum u16 {
 	S_AllEdgeListPage = 161,
 	S_EdgeListPage = 162,
 	S_CustomerSearchPage = 163,
+	S_TicketPage = 169,
 
 	// Graph Query (Server -> Client)
 	S_GraphQueryResult = 154,

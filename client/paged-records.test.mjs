@@ -18,6 +18,7 @@ function load(file) {
   const context = vm.createContext({
     window, console: quiet, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, DataView, BigInt,
     WebSocket: { OPEN: 1 }, ws: { readyState: 1 }, serverReady: true, currentRoomId: 1n,
+    currentWorkspaceId: 'test', myNickname: 'alice',
     sendPacket: packet => packets.push(packet), updateAgendaDisplay() {}, logMessage() {},
     CustomEvent: customEvent(), document: { dispatchEvent() {}, addEventListener() {}, removeEventListener() {} },
     Opcode: {
@@ -26,6 +27,7 @@ function load(file) {
       C_ListEdges: 42, C_ListAllEdges: 43, C_GraphQuery: 44, C_GraphShortestPath: 45,
       C_GraphDegree: 46, C_GraphCommonNeighbors: 47, C_ListAllEdgesPaged: 53,
       C_ListEdgesPaged: 54, C_SearchCustomers: 55, C_GetAssetsByIDs: 61,
+      C_QueryTickets: 63,
     },
   });
   vm.runInContext(fs.readFileSync(new URL(file, import.meta.url), "utf8"), context, { filename: file });
@@ -66,6 +68,41 @@ function assetBytes({ type = 8, id, room = 0n, preview = `asset-${id}`, updated 
   if (includeAttachments) w.u16(0);
   return new Uint8Array(w.done().buffer);
 }
+
+test('large ticket read snapshots are chunked, acknowledged and rebuilt after reconnect', async () => {
+  const f = load('assets.js');
+  const read = Object.fromEntries(Array.from({ length: 3000 }, (_, i) => [String(9007199254740993n + BigInt(i)), '9007199254749999']));
+  assert.ok(enc.encode(JSON.stringify(read)).length > 65532);
+  const received = {};
+  let snapshot = 0, uploads = 0, queries = 0;
+  f.context.sendPacket = buffer => {
+    const view = new DataView(buffer), correlation = view.getUint32(2);
+    assert.ok(buffer.byteLength <= 65538);
+    const query = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 6)));
+    if (query.mode === 'read') {
+      uploads++;
+      if (query.read_start) { for (const key of Object.keys(received)) delete received[key]; snapshot = 0; }
+      Object.assign(received, query.read);
+      if (query.read_end) snapshot = query.read_snapshot;
+    } else {
+      queries++;
+      assert.equal(query.read_snapshot, snapshot);
+      assert.deepEqual(received, read);
+      assert.equal(query.read, undefined);
+    }
+    const metadata = enc.encode(JSON.stringify({ activity: [], total_count: 0, has_more: false, cursor: {} }));
+    const w = writer(); w.u16(169); w.u32(correlation); w.u32(metadata.length); w.bytes(metadata); w.u16(0); w.u8(0);
+    f.api.handleTicketPage(w.done());
+  };
+  await f.api.requestTicketPage({ read, status: 'closed', sort: 'unread' });
+  assert.equal(uploads, 6);
+  await f.api.requestTicketPage({ read, mode: 'attention' });
+  assert.equal(uploads, 6, 'same connection snapshot is reused');
+  f.context.ws = { readyState: 1 };
+  await f.api.requestTicketPage({ read, status: 'open' });
+  assert.equal(uploads, 12, 'a replacement connection cannot reuse the previous server snapshot');
+  assert.equal(queries, 3);
+});
 
 function assetPage(correlation, assets, { room = 0n, more = false, cursorTime = 0n, cursorId = 0n } = {}) {
   const w = writer(); w.u16(130); w.u64(room); w.u8(0); w.u8(more ? 1 : 0); w.i64(cursorTime);

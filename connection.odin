@@ -82,6 +82,9 @@ connection_remove :: proc(conn: ^NRC_Connection) {
 	if td.connection_handles[conn.sock] == conn.handle {
 		connection_clear_socket_handle(conn.sock)
 	}
+	// Ephemeral browser read state belongs to this allocation, including direct
+	// fixture removal and shutdown paths that skip logical user cleanup.
+	delete(conn.ticket_read_cursors)
 	_, _ = hm.remove(&td.connections_by_handle, conn.handle)
 	assert(td.retained_connection_count > 0)
 	td.retained_connection_count -= 1
@@ -1020,6 +1023,9 @@ NRC_Connection :: struct #align (64) {
 
 	// ============ FEATURE STATE ============
 	workspace:                 ^Workspace_State, // Cached workspace state for connection-scoped handlers
+	ticket_read_cursors:       map[pr.AssetID]pr.AssetID,
+	ticket_read_snapshot:      u32,
+	ticket_read_upload:        u32,
 
 	// ============ COLD PATH ============
 	handle:                    Connection_Handle,

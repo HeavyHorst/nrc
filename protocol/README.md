@@ -90,6 +90,9 @@ content flag and ID array. Their responses still use a trailing correlation ID.
 `S_HistoryPage` puts the correlation ID immediately after the opcode, before
 its UTF-8 JSON body. `C_ListHistory` uses the normal trailing correlation ID.
 
+`C_QueryTickets` and `S_TicketPage` also put the correlation ID immediately
+after the opcode. Ticket queries always address workspace scope `0` implicitly.
+
 A response that spans several frames repeats
 the same correlation ID on every frame; the client accumulates until the
 continuation flag is clear. Paged listings — the task query, the task page and
@@ -120,8 +123,8 @@ its own cursor and the client asks for the next one when it needs it.
 invalid before any payload parsing happens, so a new opcode must be added to both
 the enum and the range check in `protocol/protocol.odin`.
 
-- Client to server: `1-3`, `8`, `16-62`
-- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-168`
+- Client to server: `1-3`, `8`, `16-63`
+- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-169`
 
 ### Client to Server
 
@@ -167,6 +170,7 @@ the enum and the range check in `protocol/protocol.odin`.
 | 59 | `C_GetWorkspaceOverview` | Read one complete, unpaged workspace aggregate snapshot |
 | 60 | `C_GetTasksByIDs` | Read tasks by an exact set of IDs |
 | 62 | `C_ListHistory` | Page visible workspace or record change history |
+| 63 | `C_QueryTickets` | Filtered, sorted ticket pages and ticket-entry pages |
 
 #### Assets
 
@@ -261,6 +265,7 @@ them.
 | 166 | `S_CalendarPage` | Compact calendar summaries with a time/kind/ID cursor |
 | 167 | `S_WorkspaceOverview` | Unique task totals and open-slice distributions |
 | 168 | `S_HistoryPage` | Correlated JSON change-history page |
+| 169 | `S_TicketPage` | Ticket activity metadata and binary asset page |
 
 #### Assets
 
@@ -568,6 +573,49 @@ creates with `nrc slice create <name>` and addresses existing slices only by ID,
 including `nrc slice update <id> --name <label>`; there is no name fallback.
 Use `nrc slice list --fields slice_id,name` to discover IDs. List name queries
 remain case-insensitive substring searches, not identity lookups.
+
+#### C_QueryTickets / S_TicketPage
+
+Request: opcode `u16`, correlation ID `u32`, then a UTF-8 JSON object (at most
+65532 bytes). Fields:
+
+- `mode`: empty for the register, `attention` for actionable tickets assigned to
+  the authenticated user or unassigned, `entries` for a ticket's conversation,
+  or `read` to upload browser-owned read cursors.
+- `status`, `assignee`, `company`: exact metadata filters; empty means any.
+- `sort`: `activity` (default), `id`, `title`, `status`, `assignee`, `company_id`,
+  `contact_id`, or `unread`; `descending` selects direction. Text compares
+  lowercase UTF-8 values; company/contact sorting resolves linked names.
+- `limit`: 0 means 50; otherwise 1–250. Both row count and the protocol byte
+  limit bound the page. Filters apply before pagination.
+- `cursor`: `{id, number, text}`, with decimal strings for the ID and numeric
+  sort key. Equal sort values use descending asset ID as the tie-breaker.
+  Pass the returned cursor unchanged, with unchanged filters and ordering.
+- `parent`: decimal ticket ID, required for `entries`. Entry pages sort by
+  creation time; full entry payloads are returned only in this mode.
+- `read_snapshot`: nonzero `u32` identifying an acknowledged connection-local
+  read snapshot; omitted/zero means all incoming records are unread.
+- In `read` mode, `read` maps decimal ticket IDs to decimal last-read incoming
+  asset IDs. Upload bounded chunks with the same `read_snapshot`; `read_start`
+  replaces the old snapshot and `read_end` commits the new one. Each chunk gets
+  an empty page acknowledgement. Queries reject incomplete/stale snapshots.
+  Serialize uploads and dependent queries on the connection. Re-upload after
+  reconnect. These cursors are ephemeral, not persisted workflow state; deleted
+  ticket IDs are discarded. Historical cursors therefore cannot overflow a
+  register query's request limit.
+- `search_results` and `ids`: restrict to up to 100 search-service result IDs.
+- `search`: case-insensitive substring fallback across title, requester, ID,
+  original body and entry bodies. Compressed bodies are decoded server-side.
+
+Response: opcode `u16`, correlation ID `u32`, JSON byte length `u32`, JSON,
+asset count `u16`, full-content flag `u8`, then ordinary binary assets. The JSON
+contains `has_more`, `total_count` (before the cursor), `cursor`, and an `activity`
+array aligned with the assets. Activity contains `unread`, `waiting`, `latest`
+(incoming asset ID as a string), and `timestamp` (nanoseconds as a string).
+Register and attention responses carry asset headers, never conversation bodies.
+An internal note or a read acknowledgement does not answer a customer follow-up.
+Attention paging is independent of register filters. Like other live cursors,
+these pages are not a frozen snapshot across concurrent mutations.
 
 #### C_ListHistory / S_HistoryPage
 

@@ -20,7 +20,8 @@ function fixture(storage = new Map()) {
   ];
   const tasks = [{ id: 1n, assignee: 'rene', title: 'Assigned' }, { id: 2n, assignee: 'mara', title: 'Other' }];
   const window = { addEventListener, removeEventListener,
-    localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) },
+    localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value),
+      get length() { return storage.size; }, key: i => [...storage.keys()][i] },
     NRCAssets: { requestAllAssets: async () => ({ assets: records }) },
     NRCTasks: { requestTasksByIds: async () => tasks } };
   const context = vm.createContext({ window, document, myNickname: 'rene', currentWorkspaceId: 'alpha',
@@ -41,8 +42,11 @@ test('assigned comments exclude own writes; read cursors survive reload without 
   assert.equal(f.api.cursor('task', 1n), 10n);
   const reloaded = fixture(f.storage); await reloaded.api.refresh();
   assert.equal(reloaded.api.snapshot()[0].first.assetId, 13n);
+  assert.equal(reloaded.api.cursors('task')['1'], '10');
+  assert.equal(Object.keys(reloaded.api.cursors('ticket')).length, 0);
   reloaded.context.currentWorkspaceId = 'beta';
   assert.equal(reloaded.api.cursor('task', 1n), 0n);
+  assert.equal(Object.keys(reloaded.api.cursors('task')).length, 0);
   reloaded.context.currentWorkspaceId = 'alpha'; reloaded.context.myNickname = 'alex';
   assert.equal(reloaded.api.cursor('task', 1n), 0n);
   f.event('nrc:task-changed', { task: { id: 2n, assignee: 'rene', title: 'Reassigned' }, reason: 'updated' });
