@@ -137,6 +137,11 @@ func (a *app) publicHandler() http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'")
+		// Process reachability only; does not verify sending configuration or Mailjet.
+		if r.URL.Path == "/health" && r.Method == http.MethodGet {
+			reply(w, http.StatusOK, map[string]string{"status": "ok"})
+			return
+		}
 		if r.URL.Path == "/events" {
 			a.events(w, r)
 			return

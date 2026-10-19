@@ -92,7 +92,7 @@ func TestSubsystemHealthRouteWiring(t *testing.T) {
 	defer backend.Close()
 	unavailable := httptest.NewServer(http.NotFoundHandler())
 	unavailable.Close()
-	for _, service := range []string{"search", "ai", "publish", "metrics"} {
+	for _, service := range []string{"search", "ai", "publish", "metrics", "newsletter", "tickets"} {
 		key := "NRC_" + strings.ToUpper(service) + "_HEALTH_URL"
 		for _, target := range []string{"", backend.URL + "/health", unavailable.URL + "/health"} {
 			t.Setenv(key, target)

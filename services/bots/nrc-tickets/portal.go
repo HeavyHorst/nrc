@@ -68,14 +68,14 @@ func (v *entryPreview) UnmarshalJSON(data []byte) error {
 // Never serialize an asset or pass one to a template. Only validated public
 // attachments get ticket-scoped download URLs, not generic blob-service URLs.
 type publicTicket struct {
-	ID            uint64             `json:"id"`
-	Title         string             `json:"title"`
-	Status        string             `json:"status"`
-	Shared        bool               `json:"shared"`
-	SubmittedBy   string             `json:"submitted_by,omitempty"`
-	Body          string             `json:"body,omitempty"`
-	Entries       []publicEntry      `json:"entries,omitempty"`
-	Attachments   []publicAttachment `json:"attachments,omitempty"`
+	ID          uint64             `json:"id"`
+	Title       string             `json:"title"`
+	Status      string             `json:"status"`
+	Shared      bool               `json:"shared"`
+	SubmittedBy string             `json:"submitted_by,omitempty"`
+	Body        string             `json:"body,omitempty"`
+	Entries     []publicEntry      `json:"entries,omitempty"`
+	Attachments []publicAttachment `json:"attachments,omitempty"`
 }
 type publicEntry struct {
 	Author      string             `json:"author"`
@@ -189,6 +189,12 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// no-referrer makes Chromium send Origin: null for these navigations.
 	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	// Process reachability only; no customer data or backend operations.
+	if r.URL.Path == "/health" && r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		return
+	}
 	login, password, ok := r.BasicAuth()
 	var who account
 	valid := false

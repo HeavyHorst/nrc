@@ -7,6 +7,7 @@ services:
       NRC_SEARCH_FILES_ADDR: :8094
       NRC_NEWSLETTER_BACKEND: http://newsletter:8096
       NRC_NEWSLETTER_WORKSPACE: ${NRC_NEWSLETTER_WORKSPACE:?set NRC_NEWSLETTER_WORKSPACE}
+      NRC_NEWSLETTER_HEALTH_URL: http://newsletter:8097/health
   newsletter:
     build:
       context: ..

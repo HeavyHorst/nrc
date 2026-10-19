@@ -20,6 +20,21 @@ import (
 
 type fakeSource struct{ rows []contact }
 
+func TestPublicHealth(t *testing.T) {
+	a := &app{}
+	for _, path := range []string{"/health", "/health/private"} {
+		w := httptest.NewRecorder()
+		a.publicHandler().ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if path == "/health" {
+			if w.Code != 200 || w.Body.String() != "{\"status\":\"ok\"}\n" || w.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("health: %d %s", w.Code, w.Body.String())
+			}
+		} else if w.Code != 404 {
+			t.Fatalf("unexpected health subpath: %d", w.Code)
+		}
+	}
+}
+
 func (s *fakeSource) contacts(context.Context) ([]contact, error) { return s.rows, nil }
 func assertion(a *app, workspace string) string {
 	h := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))

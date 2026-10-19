@@ -11,6 +11,8 @@ let search = { status: 200, body: '{"status":"ok"}' };
 let ai = { status: 503, body: "Unavailable" };
 let publish = { status: 200, body: '{"status":"ok"}' };
 let metrics = { status: 200, body: '{"status":"degraded"}' };
+let newsletter = { status: 200, body: '{"status":"ok"}' };
+let tickets = { status: 200, body: '{"status":"ok"}' };
 const healthRequests = [];
 try {
   for (const mobile of [false, true]) {
@@ -25,7 +27,7 @@ try {
       const url = new URL(route.request().url());
       if (url.pathname.startsWith("/api/subsystems/")) {
         healthRequests.push(url.pathname);
-        const response = { search, ai, publish, metrics }[url.pathname.split("/").at(-1)];
+        const response = { search, ai, publish, metrics, newsletter, tickets }[url.pathname.split("/").at(-1)];
         await route.fulfill({ ...response, contentType: "application/json" });
         return;
       }
@@ -65,6 +67,8 @@ try {
       ai = { status: 200, body: '{"status":"unavailable"}' };
       publish = { status: 200, body: '{"status":"ok"}' };
       metrics = { status: 200, body: '{"status":"degraded"}' };
+      newsletter = { status: 200, body: '{"status":"ok"}' };
+      tickets = { status: 200, body: '{"status":"ok"}' };
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
       await trigger.click();
       await page.waitForFunction(() => document.getElementById("subsystemsChecked").textContent.startsWith("LAST CHECK"));
@@ -75,7 +79,8 @@ try {
       assert.match(await page.locator('[data-subsystem="publish"]').textContent(), /✓ REACHABLE/);
       assert.match(await page.locator('[data-subsystem="metrics"]').textContent(), /! DEGRADED/);
       assert.equal(await page.locator("#subsystemsSummary").textContent(), "! 2 ISSUES");
-      assert.deepEqual(await panel.locator("tbody th").allTextContents(), ["SEARCH", "SULLIVAN / AI", "PUBLISH", "METRICS"]);
+      assert.deepEqual(await panel.locator("tbody th").allTextContents(), ["SEARCH", "SULLIVAN / AI", "PUBLISH", "METRICS", "NEWSLETTER", "TICKET PORTAL"]);
+      for (const id of ["newsletter", "tickets"]) assert.match(await page.locator(`[data-subsystem="${id}"]`).textContent(), /✓ REACHABLE/);
       assert.equal(await panel.locator('[data-state="unknown"]').count(), 0);
       const fits = await panel.evaluate(el => {
         const r = el.getBoundingClientRect();
@@ -89,9 +94,11 @@ try {
       search = { status: 200, body: "<html>not a health response</html>" };
       publish = { status: 200, body: '{"status":"not_configured"}' };
       metrics = { status: 200, body: '{"status":"unknown"}' };
+      newsletter = { status: 200, body: '{"status":"not_configured"}' };
+      tickets = { status: 200, body: '{"status":"not_configured"}' };
       await page.locator("#subsystemsRefresh").click();
       await page.waitForFunction(() => document.getElementById("subsystemsRefresh").getAttribute("aria-busy") === "false");
-      assert.equal(await panel.locator('[data-state="unknown"]').count(), 4, "missing route and non-JSON response are unknown, not service failures");
+      assert.equal(await panel.locator('[data-state="unknown"]').count(), 6, "missing route and non-JSON response are unknown, not service failures");
       assert.equal(await page.locator("#subsystemsSummary").textContent(), "DETAILS");
       if (!mobile && theme === "light") await capture("subsystems-not-configured");
       await page.keyboard.press("Escape");
@@ -122,13 +129,13 @@ try {
     await page.keyboard.press("Tab");
     await panel.waitFor({ state: "hidden" });
     assert.ok(await panel.isHidden(), "leaving the register forwards closes it");
-    assert.ok(healthRequests.every(path => ["search", "ai", "publish", "metrics"].some(id => path === `/api/subsystems/${id}`)), "no readiness actions or private endpoints are probed");
+    assert.ok(healthRequests.every(path => ["search", "ai", "publish", "metrics", "newsletter", "tickets"].some(id => path === `/api/subsystems/${id}`)), "no readiness actions or private endpoints are probed");
     await page.evaluate(() => { updateUsersList([]); NRCInspector.refreshContext(); });
     assert.equal(await page.locator(".users-section-count").textContent(), "0");
     await context.close();
   }
   assert.deepEqual(errors, []);
-  console.log("PASS: people-only presence; four subsystems; reachability/failure/unknown; refresh, Escape, close, outside click, focus exit; desktop/touch layouts in both themes");
+  console.log("PASS: people-only presence; six subsystems; reachability/failure/unknown; refresh, Escape, close, outside click, focus exit; desktop/touch layouts in both themes");
 } finally {
   await browser.close();
 }

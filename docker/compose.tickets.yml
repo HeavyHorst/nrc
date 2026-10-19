@@ -1,6 +1,9 @@
 # Optional customer portal. Publish ONLY through a TLS reverse proxy.
 # docker compose --env-file .env -f docker/docker-compose.yml -f docker/compose.tickets.yml up -d --build tickets
 services:
+  tailscale-proxy:
+    environment:
+      NRC_TICKETS_HEALTH_URL: http://tickets:8096/health
   tickets:
     build:
       context: ..

@@ -311,7 +311,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:745bcd5"
+BUILD_VERSION :: "dev-2026-10:3273972a"
 PROTOCOL_VERSION :: 9 // Slice rows carry an independent Ticket member counter.
 
 jwt_auth_secret: string

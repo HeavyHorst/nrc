@@ -17,6 +17,21 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+func TestPublicHealth(t *testing.T) {
+	s := &portal{}
+	for _, path := range []string{"/health", "/health/private", "/"} {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if path == "/health" {
+			if w.Code != 200 || w.Body.String() != "{\"status\":\"ok\"}\n" || w.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("health: %d %s", w.Code, w.Body.String())
+			}
+		} else if w.Code != 401 {
+			t.Fatalf("unauthenticated portal access: %d", w.Code)
+		}
+	}
+}
+
 type fakeSource struct {
 	mu     sync.Mutex
 	assets map[uint64]p.Asset

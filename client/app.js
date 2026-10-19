@@ -6331,7 +6331,7 @@ function initSubsystemStatus() {
     controller = request;
     refresh.setAttribute("aria-busy", "true");
     checked.textContent = "CHECKING HTTP HEALTH…";
-    await Promise.all(["search", "ai", "publish", "metrics"].map(async id => {
+    await Promise.all(["search", "ai", "publish", "metrics", "newsletter", "tickets"].map(async id => {
       const row = panel.querySelector(`[data-subsystem="${id}"]`);
       const state = row.querySelector(".subsystems-state");
       const evidence = row.querySelector(".subsystems-evidence");

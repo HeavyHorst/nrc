@@ -1147,10 +1147,12 @@ func proxyHandler(proxy http.Handler, localClient tailscaleClient, policy worksp
 	})
 	mux.HandleFunc("/api/features", handleFeatures(parseCustomerUsers(os.Getenv("NRC_CUSTOMERS_USERS")), localClient))
 	mux.Handle("/api/subsystems/", subsystemHealth(map[string]string{
-		"search":  os.Getenv("NRC_SEARCH_HEALTH_URL"),
-		"ai":      os.Getenv("NRC_AI_HEALTH_URL"),
-		"publish": os.Getenv("NRC_PUBLISH_HEALTH_URL"),
-		"metrics": os.Getenv("NRC_METRICS_HEALTH_URL"),
+		"search":     os.Getenv("NRC_SEARCH_HEALTH_URL"),
+		"ai":         os.Getenv("NRC_AI_HEALTH_URL"),
+		"publish":    os.Getenv("NRC_PUBLISH_HEALTH_URL"),
+		"metrics":    os.Getenv("NRC_METRICS_HEALTH_URL"),
+		"newsletter": os.Getenv("NRC_NEWSLETTER_HEALTH_URL"),
+		"tickets":    os.Getenv("NRC_TICKETS_HEALTH_URL"),
 	}))
 	mux.HandleFunc("/upload", handleUpload)
 	mux.HandleFunc("/files/", handleDownload)
