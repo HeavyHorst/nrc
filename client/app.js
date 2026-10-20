@@ -5317,8 +5317,11 @@ function logMessage(type, message, roomId = null, metadata = {}) {
       if (!isVisibleInActiveRoom && !isOwnMessage && window.NRCChat.shouldNotify(messageData)) {
         const roomLabel = getRoomName(targetRoomId);
         const authorLabel = messageData.author || "MESSAGE";
+        const workspaceId = currentWorkspaceId;
         sendNotification(`[${roomLabel}] ${authorLabel}`, {
           body: messageData.message,
+        }, () => {
+          if (currentWorkspaceId === workspaceId) openChatRoom(targetRoomId);
         });
       }
       incrementUnread();
@@ -5345,8 +5348,8 @@ function isConversationVisible(roomId, messageData = null) {
   return String(messageData.aiContextRoomId) === String(window.NRCAI.getContextConvId?.());
 }
 
-// A string third argument is a URL to open; a function is invoked in place, so
-// an in-app destination (an inspector record, a view) can be the click target.
+// Record destinations use the same workspace-qualified route as shared links.
+// Strings open URLs; callbacks retain richer destinations such as occurrences.
 function sendNotification(title, options = {}, onClickUrl = null) {
   if (!("Notification" in window)) {
     console.warn(
@@ -5369,15 +5372,32 @@ function sendNotification(title, options = {}, onClickUrl = null) {
     return;
   }
 
+  const recordHash = onClickUrl && typeof onClickUrl === "object"
+    ? `#/inspect/${encodeURIComponent(currentWorkspaceId)}/${onClickUrl.type}/${onClickUrl.id}`
+    : null;
   const notification = new Notification(title, options);
   if (onClickUrl) {
-    notification.onclick = () => {
-      if (typeof onClickUrl === "function") {
+    notification.onclick = async () => {
+      window.focus();
+      notification.close();
+      if (recordHash) {
+        const ref = parseInspectorRouteFromHash(recordHash);
+        if (ref.workspaceId !== currentWorkspaceId) {
+          await window.NRCInspector.requestWorkspaceChange(ref.workspaceId, () => {
+            window.history.pushState(null, "", recordHash);
+            window.location.reload();
+          });
+        } else if (await window.NRCInspector.openEntity(ref)) {
+          if (["noteShare", "sullivanShare", "overview"].includes(window.NRCViewManager?.getActiveView())) {
+            window.NRCViewManager.setActiveView("chat");
+          }
+          window.history.pushState(null, "", recordHash);
+        }
+      } else if (typeof onClickUrl === "function") {
         onClickUrl();
       } else {
         window.open(onClickUrl, "_blank");
       }
-      notification.close();
     };
   }
   return true;
@@ -7221,7 +7241,7 @@ for (const event of ["nrc:task-created", "nrc:task-changed", "nrc:asset-created"
 }
 
 function parseInspectorRouteFromHash(hash = window.location.hash) {
-  const match = hash.match(/^#\/inspect\/([^/]+)\/(note|task)\/([0-9]+)$/);
+  const match = hash.match(/^#\/inspect\/([^/]+)\/(note|task|reminder|appointment|file|ticket|slice|company|contact|activity)\/([0-9]+)$/);
   if (!match) return null;
   try {
     const id = BigInt(match[3]);

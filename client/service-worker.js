@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261019registers1";
+const CACHE_NAME = "nrc-terminal-20261020notify1";
 
 const APP_SHELL = [
   "./",
@@ -42,7 +42,7 @@ const APP_SHELL = [
   "./detail-ui.js?v=20261019ticketschedule1",
   "./column-resize.js?v=20260913tables2",
   "./record-activity.js?v=20261019ticketpages1",
-  "./tasks.js?v=20261019registers1",
+  "./tasks.js?v=20261020notify1",
   "./attention.js?v=20261019followupattention1",
   "./calendar.js?v=20261019recurrence1",
   "./appointments.js?v=20261019recurrence2",
@@ -58,7 +58,7 @@ const APP_SHELL = [
   "./ai.js?v=20261018visuals1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20261015copy3",
-  "./app.js?v=20261019recurrence2",
+  "./app.js?v=20261020notify1",
   "./calls.js?v=20261019recurrence2",
   "./newsletter.js?v=20261019newslettertabs2",
   "./customers.js?v=20261019loading1",

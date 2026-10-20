@@ -2442,7 +2442,7 @@ function handleTaskCreated(dataView) {
     task.assignee === myNickname &&
     task.createdBy !== myNickname
   ) {
-    sendNotification("Task Assigned", { body: task.title });
+    sendNotification("Task Assigned", { body: task.title }, { type: "task", id: task.id });
   }
 
   notifyTaskChanged(task, "created");
@@ -2530,9 +2530,9 @@ function handleTaskUpdated(dataView) {
   const wasAssignedToMe = oldTask && oldTask.assignee === myNickname;
   const isAssignedToMe = task.assignee === myNickname;
   if (isAssignedToMe && !wasAssignedToMe) {
-    sendNotification("Task Assigned", { body: task.title });
+    sendNotification("Task Assigned", { body: task.title }, { type: "task", id: task.id });
   } else if (wasAssignedToMe && isAssignedToMe) {
-    sendNotification("Task Updated", { body: task.title });
+    sendNotification("Task Updated", { body: task.title }, { type: "task", id: task.id });
   }
 }
 
@@ -2568,7 +2568,10 @@ function handleTaskDeleted(dataView) {
     if (pendingTaskDeletes.has(taskId)) {
       pendingTaskDeletes.delete(taskId);
     } else if (task && task.assignee === myNickname) {
-      sendNotification("Task Deleted", { body: taskTitle });
+      const workspaceId = currentWorkspaceId;
+      sendNotification("Task Deleted", { body: taskTitle }, () => {
+        if (currentWorkspaceId === workspaceId) showKanban();
+      });
     }
 
     tasks.delete(taskId);
@@ -2669,7 +2672,7 @@ function handleTaskMoved(dataView) {
       ) {
         sendNotification("Task Completed", {
           body: `${task.title} marked done by ${completedBy}`,
-        });
+        }, { type: "task", id: taskId });
       }
     }
   }
