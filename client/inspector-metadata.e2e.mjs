@@ -135,6 +135,27 @@ try {
           await page.getByRole('button', { name: 'Discard', exact: true }).click();
         }
       }
+      for (const history of [false, true]) {
+        await page.evaluate(async history => {
+          await NRCInspector.close();
+          if (history) await NRCInspector.openEntity({ roomId: 0n, type: "task", id: 6n });
+          await NRCInspector.openEntity({ roomId: 0n, type: "note", id: 1n });
+        }, history);
+        for (const editing of [false, true]) {
+          if (editing) await page.locator('#noteDetailEdit').click();
+          const spacing = await page.locator('#inspectorHeader > .inspector-mode-row').evaluate(row => {
+            const first = [...row.children].find(el => el.getBoundingClientRect().width > 0);
+            return { id: first.id, inset: first.getBoundingClientRect().left - row.getBoundingClientRect().left,
+              expected: innerWidth > 768 ? parseFloat(getComputedStyle(document.documentElement).fontSize) / 4 : 0 };
+          });
+          assert.equal(spacing.id, history ? 'inspectorBack' : editing ? 'noteDetailSave' : 'noteDetailEdit');
+          assert.equal(spacing.inset, spacing.expected, `${width}/${theme}: consistent inset with history=${history}, editing=${editing}`);
+          if (process.env.NRC_SCREENSHOT_DIR && width === 1440) {
+            await fs.mkdir(process.env.NRC_SCREENSHOT_DIR, { recursive: true });
+            await page.locator('#inspectorHeader').screenshot({ path: `${process.env.NRC_SCREENSHOT_DIR}/spacing-${theme}-${history ? 'back' : 'direct'}-${editing ? 'edit' : 'read'}.png` });
+          }
+        }
+      }
     }
   }
   assert.deepEqual(errors, []);

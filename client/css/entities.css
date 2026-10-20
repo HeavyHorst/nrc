@@ -4491,12 +4491,6 @@ nrc-link-picker {
     font: inherit;
 }
 
-/* Editing actions stay at the left in every family; close stays at the right. */
-.inspector .panel-header.inspector-matrix-header > .inspector-mode-row > .inspector-matrix-control:not(.inspector-back, .task-detail-close):first-child,
-.inspector .panel-header.inspector-matrix-header > .inspector-mode-row > #inspectorBack + .inspector-matrix-control:not(.task-detail-close) {
-    margin-left: 0;
-}
-
 /* =========================================================================
    AI Preview Portals
    ========================================================================= */
@@ -5891,9 +5885,6 @@ nrc-inline-field {
 .appointment-detail-panel [hidden] {
     display: none !important;
 }
-.inspector .panel-header.inspector-matrix-header > .inspector-mode-row > :is(#appointmentEdit, #appointmentSave):first-child {
-    margin-left: 0.5rem;
-}
 .record-document .record-format .custom-select {
     min-width: 0;
     max-width: 100%;
@@ -6037,10 +6028,6 @@ nrc-inline-field {
     flex: 0 0 auto;
     height: auto;
     padding: 0.25rem 0.75rem;
-}
-.inspector .panel-header.inspector-matrix-header > .inspector-mode-row > :is(#taskDetailSave, #noteDetailSave),
-.inspector .panel-header.inspector-matrix-header > .inspector-mode-row > #taskDetailSave[hidden] + #taskDetailToggleFocus {
-    margin-left: 0;
 }
 .inspector-mode-row > [hidden] { display: none; }
 @media (max-width: 768px) {
