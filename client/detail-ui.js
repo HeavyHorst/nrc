@@ -143,6 +143,13 @@
     const actions = document.createElement("div");
     actions.className = "inline-field-actions";
     actions.append(save, cancel);
+    const clear = spec.clearable ? document.createElement("button") : null;
+    if (clear) {
+      clear.type = "button";
+      clear.className = "btn";
+      clear.textContent = "CLEAR";
+      actions.append(clear);
+    }
     if (spec.action) {
       const action = document.createElement("button");
       action.type = "button";
@@ -197,10 +204,10 @@
     panel.addEventListener("click", event => event.stopPropagation());
     panel.addEventListener("keydown", event => event.stopPropagation());
     cancel.onclick = dismiss;
-    const submit = async event => {
+    const submit = async (event, force = false) => {
       event?.preventDefault();
       if (session.pending || !input.reportValidity()) return;
-      if (input.value === String(spec.value ?? "")) { dismiss(); return; }
+      if (!force && input.value === String(spec.value ?? "")) { dismiss(); return; }
       if (spec.maxBytes && new TextEncoder().encode(input.value).length > spec.maxBytes) {
         state.textContent = `EXCEEDS ${spec.maxBytes} UTF-8 BYTES`;
         panel.dataset.state = "failed";
@@ -208,6 +215,7 @@
       }
       session.pending = true;
       input.disabled = save.disabled = cancel.disabled = true;
+      if (clear) clear.disabled = true;
       state.textContent = "SAVING";
       panel.dataset.state = "saving";
       const value = input.value;
@@ -223,12 +231,14 @@
       } catch (error) {
         session.pending = false;
         input.disabled = save.disabled = cancel.disabled = false;
+        if (clear) clear.disabled = false;
         state.textContent = error?.message || "SAVE FAILED — RETRY OR CANCEL";
         panel.dataset.state = "failed";
         input.focus();
       }
     };
     panel.onsubmit = submit;
+    if (clear) clear.onclick = () => { if (!session.pending) { input.value = ""; submit(null, true); } };
     if (spec.options) input.onchange = submit;
     activeInline = session;
     document.body.append(panel);

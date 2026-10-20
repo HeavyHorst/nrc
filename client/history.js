@@ -5,8 +5,8 @@ window.NRCHistory = (() => {
   const active = () => window.NRCViewManager?.getActiveView() === "history";
   const ready = () => typeof serverReady !== "undefined" && serverReady && ws?.readyState === WebSocket.OPEN;
   const escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-  const assetNames = { 1: "Comment", 2: "Document", 3: "File", 4: "Agenda", 5: "Note", 6: "Reminder", 7: "Room", 8: "Company", 9: "Contact", 10: "Activity", 11: "Slice", 12: "Appointment" };
-  const inspectorTypes = { 3: "file", 5: "note", 6: "reminder", 8: "company", 9: "contact", 10: "activity", 11: "slice", 12: "appointment" };
+  const assetNames = { 1: "Comment", 2: "Document", 3: "File", 4: "Agenda", 5: "Note", 6: "Reminder", 7: "Room", 8: "Company", 9: "Contact", 10: "Activity", 11: "Slice", 12: "Appointment", 13: "Ticket", 14: "Ticket entry" };
+  const inspectorTypes = { 3: "file", 5: "note", 6: "reminder", 8: "company", 9: "contact", 10: "activity", 11: "slice", 12: "appointment", 13: "ticket" };
   const fieldNames = { title: "Title", description: "Description", status: "Status", order_index: "Position", assignee: "Assignee", priority: "Priority", color: "Color", external_ref: "External reference", due_at: "Due date", blocked_by: "Dependency", completed_at: "Completion date", completed_by: "Completed by", project: "Project", attachments: "Attachments", asset_type: "Record type", parent_type: "Parent record", parent_id: "Parent record", owner: "Owner", preview: "Details", payload: "Content", source: "Linked record", target: "Linked record", relation: "Relationship" };
   function record(kind, id, label, assetType, available) {
     const type = kind === "task" ? "Task" : assetNames[assetType] || "Record";

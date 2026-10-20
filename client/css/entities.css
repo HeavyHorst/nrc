@@ -818,6 +818,24 @@ body.sullivan-share-focused .chat-header {
     min-width: 0;
 }
 
+.note-card > .note-header { display: block; }
+
+.register-row-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-width: 0;
+    margin-top: 0.1875rem;
+    color: var(--text-dim);
+    font: var(--font-xs)/1.4 var(--font-mono);
+    font-weight: 400;
+}
+
+.register-row-meta > :is(nrc-inline-field, div) { min-width: 0; flex: 0 1 auto; }
+.register-row-meta :is(.note-project, .note-owner, .inline-field-value) { color: inherit; font: inherit; }
+.register-row-meta .note-updated { text-align: left; }
+.task-table tr[data-task-id] .col-title > span { top: 0.3125rem; transform: none; }
+
 .note-title {
     width: 100%;
     font-weight: 500;
@@ -913,7 +931,7 @@ body.sullivan-share-focused .chat-header {
         width: 100%;
         min-width: 0;
         grid-template-columns: minmax(0, 1fr) 7rem;
-        grid-template-areas: "title id" "project tags" "owner created";
+        grid-template-areas: "title title" "tags id" "created created";
         gap: 6px 12px;
         padding: 12px;
         align-items: center;
@@ -1933,7 +1951,7 @@ body.sullivan-share-focused .chat-header {
    rather than the viewport. Preserve the table grammar, but move identity to a
    first line and aligned operational metadata to a second line. */
 @media (min-width: 769px) {
-    @container task-register (max-width: 700px) {
+    @container task-register (max-width: 1040px) {
         .task-table,
         .task-table thead,
         .task-table tbody {
@@ -1944,7 +1962,7 @@ body.sullivan-share-focused .chat-header {
         .task-table thead tr,
         .task-table tbody tr[data-task-id] {
             display: grid;
-            grid-template-columns: 2.5rem 4rem 3.25rem minmax(3.5rem, 1fr) 4rem repeat(4, 2rem);
+            grid-template-columns: 2.5rem 4rem 3.25rem minmax(4rem, 1fr) repeat(4, 2rem);
             column-gap: 0.375rem;
             box-sizing: border-box;
             width: 100%;
@@ -1976,7 +1994,7 @@ body.sullivan-share-focused .chat-header {
         }
 
         .task-table .column-resize-handle,
-        .task-table :is(.col-marker, .col-project, .col-color, .col-age) {
+        .task-table :is(.col-marker, .col-color, .col-age) {
             display: none;
         }
 
@@ -1984,12 +2002,11 @@ body.sullivan-share-focused .chat-header {
         .task-table .col-title { grid-area: 1 / 2 / 2 / -1; }
         .task-table .col-status { grid-area: 2 / 2; }
         .task-table .col-priority { grid-area: 2 / 3; }
-        .task-table .col-assignee { grid-area: 2 / 4; }
-        .task-table .col-due { grid-area: 2 / 5; }
-        .task-table .col-blk { grid-area: 2 / 6; }
-        .task-table .col-ref { grid-area: 2 / 7; }
-        .task-table .col-att { grid-area: 2 / 8; }
-        .task-table .col-cmt { grid-area: 2 / 9; }
+        .task-table .col-due { grid-area: 2 / 4; }
+        .task-table .col-blk { grid-area: 2 / 5; }
+        .task-table .col-ref { grid-area: 2 / 6; }
+        .task-table .col-att { grid-area: 2 / 7; }
+        .task-table .col-cmt { grid-area: 2 / 8; }
 
         .task-table tbody .col-title {
             font-size: var(--font-base);
@@ -2021,14 +2038,14 @@ body.sullivan-share-focused .chat-header {
         .note-card {
             width: 100%;
             min-width: 0;
-            grid-template-columns: 2.5rem minmax(4rem, 1fr) minmax(4rem, 1fr) minmax(4rem, 1fr) 4.5rem;
-            grid-template-rows: auto auto;
+            grid-template-columns: 2.5rem minmax(0, 1fr) 4.5rem;
             column-gap: 0.625rem;
             box-sizing: border-box;
             padding: 0.3125rem 0.625rem;
         }
 
         .notes-list-header {
+            height: auto;
             min-height: 42px;
         }
 
@@ -2056,8 +2073,6 @@ body.sullivan-share-focused .chat-header {
         :is(.notes-list-header, .note-card) > :nth-child(3) { grid-area: 1 / 2 / 2 / -1; }
         :is(.notes-list-header, .note-card) > :nth-child(4) { grid-area: 2 / 2; }
         :is(.notes-list-header, .note-card) > :nth-child(5) { grid-area: 2 / 3; }
-        :is(.notes-list-header, .note-card) > :nth-child(6) { grid-area: 2 / 4; }
-        :is(.notes-list-header, .note-card) > :nth-child(7) { grid-area: 2 / 5; }
 
         .note-card .note-title {
             font-size: var(--font-base);

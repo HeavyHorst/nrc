@@ -270,6 +270,9 @@ func (req *searchRequest) normalize() error {
 		}
 	}
 	if req.Filters.Ticket != nil {
+		if v := req.Filters.Ticket.Priority; v != "" && !protocol.ValidTicketPriority(v) {
+			return fmt.Errorf("invalid ticket priority")
+		}
 		if req.Filters.Customer != nil || req.Filters.Task != nil || req.SimilarEntity != nil ||
 			len(req.Filters.EntityTypes) != 1 || req.Filters.EntityTypes[0] != EntityTypeAsset ||
 			(len(req.Filters.AssetTypes) > 0 && !sameAssetTypeSet(req.Filters.AssetTypes, []uint16{protocol.AssetTypeTicket})) {

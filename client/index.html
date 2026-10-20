@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20261013fold1">
     <link rel="icon" type="image/png" href="favicon.png?v=20261013fold1">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=20261013fold1">
-    <link rel="stylesheet" href="css/main.css?v=20261020appointment-spacing1">
+    <link rel="stylesheet" href="css/main.css?v=20261019registers1">
     <link rel="stylesheet" href="css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 </head>
@@ -113,10 +113,26 @@
                             <div class="panel-header header-register filter-register">
                                 <div class="header-register-identity-row"><span class="header-register-title">TICKETS</span><span id="ticketsStatus" class="header-register-state" role="status">NOT LOADED</span></div>
                                 <div class="header-register-control-row">
+                                    <div class="header-control-scroll">
                                     <label class="header-filter-cell"><span class="filter-label">SEARCH</span><input class="filter-input" data-filter="search" type="search" placeholder="TICKETS / CONVERSATIONS / ID"></label>
                                     <label class="header-filter-cell"><span class="filter-label">STATE</span><select class="filter-select" data-filter="status"><option value="">ALL</option><option value="open">OPEN</option><option value="in_progress">IN PROGRESS</option><option value="waiting_customer">WAITING ON CUSTOMER</option><option value="resolved">RESOLVED</option><option value="closed">CLOSED</option></select></label>
+                                    <label class="header-filter-cell"><span class="filter-label">PRIORITY</span><select class="filter-select" data-filter="priority"><option value="">ALL</option><option value="low">LOW</option><option value="normal">NORMAL</option><option value="high">HIGH</option><option value="urgent">URGENT</option></select></label>
+                                    <label class="header-filter-cell"><span class="filter-label">FOLLOW-UP</span><select class="filter-select" data-filter="follow_up"><option value="">ALL</option><option value="due">DUE</option></select></label>
                                     <label class="header-filter-cell"><span class="filter-label">ASSIGNEE</span><nrc-select><select id="ticketAssigneeFilter" class="filter-select" data-filter="owner" data-custom-select-portal data-custom-select-search-placeholder="FILTER ASSIGNEE..."><option value="">ALL ASSIGNEES</option></select></nrc-select></label>
                                     <label class="header-filter-cell"><span class="filter-label">CUSTOMER</span><nrc-select><select id="ticketCustomerFilter" class="filter-select" data-filter="company" data-custom-select-portal data-custom-select-wrap data-custom-select-search-placeholder="FILTER CUSTOMER..." disabled><option value="">ALL CUSTOMERS</option></select></nrc-select></label>
+                                    </div>
+                                    <label class="header-filter-cell"><span class="filter-label">SORT</span><select id="ticketsSort" class="filter-select">
+                                        <option value="id:desc">ID ↓</option><option value="id:asc">ID ↑</option>
+                                        <option value="title:asc">Title A–Z</option><option value="title:desc">Title Z–A</option>
+                                        <option value="status:asc">Status A–Z</option><option value="status:desc">Status Z–A</option>
+                                        <option value="priority:desc">Priority ↓</option><option value="priority:asc">Priority ↑</option>
+                                        <option value="follow_up_at:asc">Follow-up ↑</option><option value="follow_up_at:desc">Follow-up ↓</option>
+                                        <option value="assignee:asc">Assignee A–Z</option><option value="assignee:desc">Assignee Z–A</option>
+                                        <option value="company_id:asc">Company A–Z</option><option value="company_id:desc">Company Z–A</option>
+                                        <option value="contact_id:asc">Contact A–Z</option><option value="contact_id:desc">Contact Z–A</option>
+                                        <option value="unread:desc">Unread ↓</option><option value="unread:asc">Unread ↑</option>
+                                        <option value="activity:desc" selected>Activity: newest</option><option value="activity:asc">Activity: oldest</option>
+                                    </select></label>
                                     <button id="ticketsRefresh" class="btn header-operation">REFRESH</button><button id="ticketNew" class="btn btn--primary header-operation">+ TICKET</button>
                                 </div>
                             </div>
@@ -126,10 +142,8 @@
                                         <th class="col-id" data-sort="id" scope="col"><button class="task-row-open" type="button">ID</button></th>
                                         <th class="col-title" data-sort="title" scope="col"><button class="task-row-open" type="button">TITLE</button></th>
                                         <th class="col-status" data-sort="status" scope="col"><button class="task-row-open" type="button">STATUS</button></th>
-                                        <th class="col-assignee" data-sort="assignee" scope="col"><button class="task-row-open" type="button">ASSIGNEE</button></th>
-                                        <th class="col-project" data-sort="company_id" scope="col"><button class="task-row-open" type="button">COMPANY</button></th>
-                                        <th class="col-contact" data-sort="contact_id" scope="col"><button class="task-row-open" type="button">CONTACT</button></th>
-                                        <th class="col-unread" data-sort="unread" scope="col"><button class="task-row-open" type="button">UNREAD</button></th>
+                                        <th class="col-priority" data-sort="priority" scope="col"><button class="task-row-open" type="button">PRIORITY</button></th>
+                                        <th class="col-follow-up" data-sort="follow_up_at" scope="col"><button class="task-row-open" type="button">FOLLOW-UP</button></th>
                                         <th class="col-activity" data-sort="activity" scope="col"><button class="task-row-open" type="button">ACTIVITY</button></th>
                                     </tr></thead><tbody id="ticketsList"></tbody>
                                 </table>
@@ -322,8 +336,17 @@
                                         <span>INCLUDE CLOSED</span>
                                     </label>
                                 </div>
-                                <label class="header-filter-cell task-flat-only"><span class="filter-label">SORT</span><select id="mobileTaskSort" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area" aria-label="Sort tasks" aria-describedby="taskWorkOrderHelp"><option value="priority">PRIORITY</option><option value="title">TITLE</option><option value="status">STATUS</option><option value="assignee">ASSIGNEE</option><option value="project">PROJECT</option><option value="dueAt">DUE</option><option value="createdAt">AGE</option><option value="color">CATEGORY</option><option value="workOrder">WORK ORDER</option></select></label>
-                                <button id="mobileTaskSortDirection" class="btn header-operation task-flat-only mobile-only" type="button">DESCENDING ↓</button>
+                                <label class="header-filter-cell task-flat-only"><span class="filter-label">SORT</span><select id="mobileTaskSort" class="filter-select" data-custom-select data-custom-select-portal data-custom-select-align="auto" data-custom-select-boundary=".main-area" aria-label="Sort tasks" aria-describedby="taskWorkOrderHelp">
+                                    <option value="priority:desc">Priority ↓</option><option value="priority:asc">Priority ↑</option>
+                                    <option value="title:asc">Title A–Z</option><option value="title:desc">Title Z–A</option>
+                                    <option value="status:asc">Status ↑</option><option value="status:desc">Status ↓</option>
+                                    <option value="assignee:asc">Assignee A–Z</option><option value="assignee:desc">Assignee Z–A</option>
+                                    <option value="project:asc">Project A–Z</option><option value="project:desc">Project Z–A</option>
+                                    <option value="dueAt:asc">Due ↑</option><option value="dueAt:desc">Due ↓</option>
+                                    <option value="createdAt:desc">Age: newest</option><option value="createdAt:asc">Age: oldest</option>
+                                    <option value="color:asc">Category ↑</option><option value="color:desc">Category ↓</option>
+                                    <option value="workOrder">WORK ORDER</option>
+                                </select></label>
                                 <div class="filter-group filter-group-search header-filter-cell task-flat-only">
                                     <label class="filter-label" for="taskSearch">QUERY</label>
                                     <input type="text" id="taskSearch" class="filter-input" placeholder="SEARCH...">
@@ -409,8 +432,6 @@
                                     <th data-sort="priority" class="col-priority">PRI</th>
                                     <th data-sort="title" class="col-title">TITLE</th>
                                     <th data-sort="status" class="col-status">STATUS</th>
-                                    <th data-sort="assignee" class="col-assignee">ASN</th>
-                                    <th data-sort="project" class="col-project">PROJ</th>
                                     <th data-sort="dueAt" class="col-due">DUE</th>
                                     <th class="col-blk">BLK</th>
                                     <th class="col-ref">REF</th>
@@ -452,11 +473,8 @@
                             <div class="note-marker"></div>
                             <div>ID</div>
                             <div>TITLE</div>
-                            <div>PROJ</div>
                             <div>TAGS</div>
-                            <div>CREATED BY</div>
                             <div>AGE</div>
-                            <div>MOD</div>
                         </div>
                         <div class="notes-list" id="notesList"></div>
                     </div>
@@ -666,15 +684,15 @@
     <script src="virtual-list.js?v=20260908a"></script>
     <script src="loading-indicator.js?v=20261013loading1"></script>
     <script src="page-loader.js?v=20261013loading1"></script>
-    <script src="task-state.js?v=20261019workorder1"></script>
+    <script src="task-state.js?v=20261019registers1"></script>
     <script src="query-controller.js?v=20260914workspace1"></script>
     <script src="workspace-search.js?v=20261018inspectors5"></script>
     <script src="task-search.js?v=20260917taskscroll1"></script>
-    <script src="detail-ui.js?v=20261018inspectors5"></script>
+    <script src="detail-ui.js?v=20261019ticketschedule1"></script>
     <script src="column-resize.js?v=20260913tables2"></script>
     <script src="record-activity.js?v=20261019ticketpages1"></script>
-    <script src="tasks.js?v=20261019workorder1"></script>
-    <script src="attention.js?v=20261017attention1"></script>
+    <script src="tasks.js?v=20261019registers1"></script>
+    <script src="attention.js?v=20261019followupattention1"></script>
     <script src="calendar.js?v=20261019recurrence1"></script>
     <script src="appointments.js?v=20261019recurrence2"></script>
     <script src="appointment-notify.js?v=20261019recurrence1"></script>
@@ -682,9 +700,9 @@
     <script src="task-query.js?v=20261019workorder1"></script>
     <script src="slices.js?v=20261019workorder1"></script>
     <script src="overview.js?v=20261013overviewactions2"></script>
-    <script src="history.js?v=20261017history4"></script>
+    <script src="history.js?v=20261019ticketschedule1"></script>
     <script src="note-html.js?v=20261007fragments1"></script>
-    <script src="notes.js?v=20261018inspectors5"></script>
+    <script src="notes.js?v=20261019registers1"></script>
     <script src="task-references.js?v=20260914workspace1"></script>
     <script src="ai.js?v=20261018visuals1"></script>
     <script src="retained-messages.js?v=20260902a"></script>
@@ -707,8 +725,8 @@
     <script src="calls.js?v=20261019recurrence2"></script>
     <script src="newsletter.js?v=20261019newslettertabs2"></script>
     <script src="customers.js?v=20261019loading1"></script>
-    <script src="tickets.js?v=20261019loading1"></script>
-    <script src="mobile-shell.js?v=20261019sortfix1"></script>
+    <script src="tickets.js?v=20261019ticketsort2"></script>
+    <script src="mobile-shell.js?v=20261019registers1"></script>
     <script>
         if ("serviceWorker" in navigator) {
             window.addEventListener("load", () => navigator.serviceWorker.register("service-worker.js"));

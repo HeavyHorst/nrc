@@ -218,6 +218,8 @@ Ticket_Preview :: struct {
 	contact_id:     string `json:"contact_id"`,
 	requester:      string `json:"requester"`,
 	requester_name: string `json:"requester_name"`,
+	priority:       string `json:"priority"`,
+	follow_up_at:   string `json:"follow_up_at"`,
 }
 
 Ticket_Entry_Preview :: struct {
@@ -236,16 +238,26 @@ parse_ticket_preview :: proc(data: []byte, allocator: mem.Allocator, strict := f
 	}
 	f, object, valid := json_metadata_fields(
 		data,
-		[?]string{"version", "title", "company_id", "contact_id", "requester", "requester_name", "status", "assignee"},
+		[?]string{"version", "title", "company_id", "contact_id", "requester", "requester_name", "status", "assignee", "priority", "follow_up_at"},
 		allocator,
 	)
 	if !valid || !object || f[0].kind != .Integer || f[0].text != "1" do return
 	limits := [?]int{256, 20, 20, 320, 256, 32, 64}
 	outs := [?]^string{&m.title, &m.company_id, &m.contact_id, &m.requester, &m.requester_name, &m.status, &m.assignee}
-	for token, i in f[1:] {
+	for token, i in f[1:8] {
 		if token.kind != .String do return
 		outs[i]^ = json_metadata_string(token, allocator)
 		if len(outs[i]^) > limits[i] do return
+	}
+	if f[8].kind != .Invalid {
+		if f[8].kind != .String do return
+		m.priority = json_metadata_string(f[8], allocator)
+		if !ticket_priority_valid(m.priority) do return
+	}
+	if f[9].kind != .Invalid {
+		if f[9].kind != .String do return
+		m.follow_up_at = json_metadata_string(f[9], allocator)
+		if _, valid_time := ticket_follow_up_time(m.follow_up_at); !valid_time do return
 	}
 	if len(strings.trim_space(m.title)) == 0 do return
 	for id in ([?]string{m.company_id, m.contact_id}) {
@@ -279,6 +291,18 @@ parse_ticket_entry_preview :: proc(data: []byte, allocator: mem.Allocator, stric
 	ok = json.unmarshal(data, &legacy, allocator = allocator) == nil
 	m.kind = legacy.kind
 	return
+}
+
+ticket_priority_valid :: proc(value: string) -> bool {
+	return value == "low" || value == "normal" || value == "high" || value == "urgent"
+}
+
+// Empty means unscheduled; otherwise require canonical positive i64 milliseconds.
+ticket_follow_up_time :: proc(value: string) -> (timestamp: i64, valid: bool) {
+	if value == "" do return 0, true
+	if value[0] < '1' || value[0] > '9' do return
+	for c in value do if c < '0' || c > '9' do return
+	return json_metadata_integer(value)
 }
 
 // Tickets keep their public/private classification in validated metadata, not

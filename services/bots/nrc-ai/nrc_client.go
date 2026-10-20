@@ -431,7 +431,7 @@ func (c *NRCClient) readPump(ctx context.Context) {
 			c.handleTaskListResponse(msg.Data)
 		case protocol.S_TaskListPage:
 			c.handleTaskListPage(msg.Data)
-		case protocol.S_TransactionResult, protocol.S_TaskFull, protocol.S_CalendarPage, protocol.S_TaskSliceList, protocol.S_EdgeListPage:
+		case protocol.S_TicketPage, protocol.S_TransactionResult, protocol.S_TaskFull, protocol.S_CalendarPage, protocol.S_TaskSliceList, protocol.S_EdgeListPage:
 			c.handleDataRead(msg.Opcode, msg.Data)
 		case protocol.S_EdgeCreated:
 			c.handleEdgeCreated(msg.Data)

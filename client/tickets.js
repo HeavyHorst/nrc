@@ -2,12 +2,14 @@
 (function () {
   const statuses = ['open', 'in_progress', 'waiting_customer', 'resolved', 'closed'];
   const statusLabels = { open: 'OPEN', in_progress: 'IN PROGRESS', waiting_customer: 'WAITING ON CUSTOMER', resolved: 'RESOLVED', closed: 'CLOSED' };
+  const priorities = ['low', 'normal', 'high', 'urgent'];
   const kinds = ['internal_note', 'public_reply'];
   const kindLabels = { public_reply: 'PUBLIC REPLY', customer_reply: 'CUSTOMER REPLY', internal_note: 'INTERNAL NOTE' };
   const state = { tickets: [], entries: [], selected: '', drafts: new Map(), filters: {}, pending: false, error: '', loading: false, notice: '', sort: 'activity', direction: 'desc' };
   Object.assign(state, { rows: [], attention: [], cursor: null, hasMore: false, total: 0 });
   let generation = 0, session = '';
   let listGeneration = 0, detailGeneration = 0, attentionGeneration = 0;
+  let attentionTimer;
   const readCursors = () => window.NRCRecordActivity?.cursors('ticket') || {};
   function pageAssets(page) {
     return page.assets.map((asset, i) => ({ ...asset, ticketActivity: page.activity?.[i] }));
@@ -16,27 +18,53 @@
   let searchController;
   let searchState = { mode: 'idle', ids: new Set(), stale: false };
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  function metadata(asset) { try { const value = JSON.parse(asset.preview); return value && typeof value === 'object' ? value : {}; } catch { return {}; } }
+  function metadata(asset) { try { const value = JSON.parse(asset.preview); return value && typeof value === 'object' ? { priority: 'normal', follow_up_at: '', ...value } : {}; } catch { return {}; } }
+  function followUpInput(value) {
+    if (!value) return '';
+    const date = new Date(Number(value));
+    if (!Number.isFinite(date.getTime())) return '';
+    const pad = n => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+  function followUpValue(value) {
+    if (!value) return '';
+    const ms = new Date(value).getTime();
+    if (!Number.isFinite(ms) || ms <= 0) throw new Error('Choose a valid follow-up date after 1970.');
+    return String(ms);
+  }
+  function followUpLabel(value, due = Number(value) <= Date.now()) {
+    if (!value) return '—';
+    const date = new Date(Number(value));
+    if (!Number.isFinite(date.getTime())) return 'OUT OF DATE RANGE';
+    return `${due ? 'DUE · ' : ''}${date.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}`;
+  }
   function matches(asset, filters) {
     const m = metadata(asset);
     const query = String(filters.search || '').trim().toLowerCase();
     const text = query ? [m.title, m.requester, m.requester_name, `#${asset.assetId}`, asset.payload,
       ...state.entries.filter(entry => entry.parentType === 2 && entry.parentId === asset.assetId).map(entry => entry.payload)].join('\n').toLowerCase() : '';
     return (!filters.status || m.status === filters.status) && (!filters.owner || m.assignee === filters.owner) &&
+      (!filters.priority || m.priority === filters.priority) &&
+      (filters.follow_up !== 'due' || (Number(m.follow_up_at) > 0 && Number(m.follow_up_at) <= Date.now())) &&
       (!filters.company || m.company_id === filters.company) && (!query || text.includes(query));
   }
   function updateSearch({ debounce = false, preserve = false } = {}) {
     searchController?.cancel();
     const query = String(state.filters.search || '').trim();
-    const { status = '', owner = '', company = '' } = state.filters;
-    const key = JSON.stringify([query, status, owner, company]);
+    const { status = '', owner = '', company = '', priority = '', follow_up = '' } = state.filters;
+    const key = JSON.stringify([query, status, owner, company, priority, follow_up]);
     if (!query || key !== searchState.key) searchState = { mode: query ? 'loading' : 'idle', ids: new Set(), stale: false, key };
     renderList(); renderStatus();
     if (!query) { loadPage(true, preserve); return; }
+    // Due-time filtering must happen before any ranked top-N truncation.
+    if (follow_up === 'due') {
+      searchState = { mode: 'due-text', ids: new Set(), stale: false, key };
+      loadPage(true, preserve); return;
+    }
     listGeneration++; state.loading = false; state.hasMore = false;
     searchController ||= window.NRCSearch.createController();
     searchController.search({ query, top_n: 100,
-      filters: { entity_types: ['asset'], asset_types: [13], ticket: { status, assignee: owner, company_id: company } },
+      filters: { entity_types: ['asset'], asset_types: [13], ticket: { status, assignee: owner, company_id: company, priority } },
     }, {
       debounce: debounce ? 250 : 0,
       onResult: data => {
@@ -60,7 +88,7 @@
   function activity(asset) {
     if (asset.ticketActivity) {
       const summary = asset.ticketActivity;
-      return { unread: summary.unread, waiting: summary.waiting, latest: { assetId: BigInt(summary.latest) }, timestamp: BigInt(summary.timestamp) };
+      return { unread: summary.unread, waiting: summary.waiting, followUpDue: summary.follow_up_due === true, latest: { assetId: BigInt(summary.latest) }, timestamp: BigInt(summary.timestamp) };
     }
     const entries = state.entries.filter(a => a.parentType === 2 && a.parentId === asset.assetId);
     const publicEntries = entries.filter(a => ['customer_reply', 'public_reply'].includes(metadata(a).kind));
@@ -89,7 +117,7 @@
   function draft() {
     if (!state.drafts.has(state.selected)) {
       const a = state.tickets.find(a => String(a.assetId) === state.selected);
-      state.drafts.set(state.selected, { version: 1, title: '', company_id: state.filters.company || '', contact_id: '', requester: '', requester_name: '', status: 'open', assignee: '', ...metadata(a || {}), ...(!a ? { body: '' } : {}), message: '', kind: 'internal_note' });
+      state.drafts.set(state.selected, { version: 1, title: '', company_id: state.filters.company || '', contact_id: '', requester: '', requester_name: '', status: 'open', assignee: '', priority: 'normal', follow_up_at: '', ...metadata(a || {}), ...(!a ? { body: '' } : {}), message: '', kind: 'internal_note' });
     }
     const d = state.drafts.get(state.selected);
     d.uploads ||= [];
@@ -140,9 +168,10 @@
     try {
       const query = {
         status: state.filters.status || '', assignee: state.filters.owner || '', company: state.filters.company || '',
+        priority: state.filters.priority || '', follow_up: state.filters.follow_up || '',
         sort: state.sort, descending: state.direction === 'desc', limit: 50, cursor: state.cursor || {}, read: readCursors(),
         search_results: searchState.mode === 'results', ids: [...searchState.ids],
-        search: searchState.mode === 'fallback' ? state.filters.search || '' : '',
+        search: ['fallback', 'due-text'].includes(searchState.mode) ? state.filters.search || '' : '',
       };
       let page, rows = [];
       do {
@@ -170,11 +199,12 @@
     }
   }
   async function refreshAttention() {
+    clearTimeout(attentionTimer);
     const token = ++attentionGeneration, scope = generation, rows = [];
     let cursor = {};
     try {
       for (;;) {
-        const page = await window.NRCAssets.requestTicketPage({ mode: 'attention', sort: 'id', descending: true, cursor, read: readCursors(), limit: 100 },
+        const page = await window.NRCAssets.requestTicketPage({ mode: 'attention', sort: 'id', descending: true, omit_total_count: true, cursor, read: readCursors(), limit: 100 },
           { isCancelled: () => token !== attentionGeneration || scope !== generation });
         if (token !== attentionGeneration || scope !== generation) return;
         rows.push(...pageAssets(page));
@@ -182,7 +212,18 @@
         cursor = page.cursor;
       }
       state.attention = rows; publishActivity();
+      // An open scheduled register must cross deadlines too, using server time.
+      // Leave in-flight queries and edits alone; retain loaded depth and scroll.
+      if (window.NRCViewManager?.getActiveView?.() === 'tickets' && !state.loading && !state.pending && searchState.mode !== 'loading' &&
+          (state.filters.follow_up === 'due' || state.rows.some(a => metadata(a).follow_up_at))) {
+        await loadPage(true, true);
+      }
     } catch { /* Retain the last confirmed attention snapshot on failure. */ }
+    finally {
+      if (token === attentionGeneration && scope === generation && session && typeof serverReady !== 'undefined' && serverReady) {
+        attentionTimer = setTimeout(refreshAttention, 30000);
+      }
+    }
   }
   async function loadDetail() {
     const id = state.selected, token = ++detailGeneration, scope = generation;
@@ -255,6 +296,11 @@
   async function save(entry = false) {
     if (state.pending) return;
     const selected = state.selected, d = draft(), snapshot = { ...d, uploads: [...d.uploads] };
+    if (!entry) {
+      const input = document.querySelector('#ticketFields [name=follow_up_at]');
+      try { if (input) snapshot.follow_up_at = followUpValue(input.value); }
+      catch (error) { state.error = error.message; renderStatus(); return; }
+    }
     if (snapshot.uploads.some(u => !u.attachment)) { state.error = 'Wait for blob uploads; remove failed uploads before saving. Draft retained.'; renderStatus(); return; }
     if (selected && !state.tickets.some(a => String(a.assetId) === selected)) { state.error = 'Ticket is unavailable. Draft retained; refresh before saving.'; renderStatus(); return; }
     if (entry ? !snapshot.message.trim() : !snapshot.title.trim()) { state.error = entry ? 'Message is required.' : 'Title is required.'; renderStatus(); return; }
@@ -308,10 +354,10 @@
     const el = document.getElementById('ticketsStatus');
     const searchStatus = searchState.mode === 'loading' ? 'SEARCHING' : searchState.mode === 'results'
       ? `${searchState.ids.size} RESULTS · TOP 100${searchState.stale ? ' · INDEX STALE' : ''}`
-      : searchState.mode === 'fallback' ? 'SERVER TEXT FALLBACK' : '';
+      : searchState.mode === 'fallback' ? 'SERVER TEXT FALLBACK' : searchState.mode === 'due-text' ? 'DUE · SERVER TEXT SEARCH' : '';
     if (el) {
       el.textContent = state.error || (state.pending ? 'SAVING · awaiting NRC acknowledgement' : state.loading ? 'LOADING PAGE' : `${state.rows.length} / ${state.total} TICKETS${searchStatus ? ` · ${searchStatus}` : ''}`);
-      el.title = searchState.mode === 'fallback' ? 'Search service unavailable. Server searches ticket metadata, requests and conversations before paging.' : searchState.mode === 'results' ? 'Search service: up to 100 ticket results. Index updates are asynchronous.' : '';
+      el.title = searchState.mode === 'due-text' ? 'Due follow-ups: server text search applies before pagination, without ranked search truncation.' : searchState.mode === 'fallback' ? 'Search service unavailable. Server searches ticket metadata, requests and conversations before paging.' : searchState.mode === 'results' ? 'Search service: up to 100 ticket results. Index updates are asynchronous.' : '';
     }
     document.getElementById('ticketsPager')?.setState({ hasMore: state.hasMore, loading: state.loading, error: state.error,
       active: window.NRCViewManager?.getActiveView?.() === 'tickets', root: document.getElementById('ticketsRegister'), label: 'LOAD MORE TICKETS' });
@@ -356,20 +402,27 @@
     const el = document.getElementById('ticketsList'); if (!el) return;
     const rows = (searchState.mode === 'loading' ? [] : state.rows).map(asset => ({ asset, ...activity(asset) }));
     const focused = el.contains?.(document.activeElement) ? document.activeElement.closest('[data-ticket]')?.dataset.ticket : null;
-    el.innerHTML = rows.map(({ asset: a, unread, waiting, timestamp }) => {
-      const m = metadata(a), selected = state.selected === String(a.assetId), contact = contactName(m);
-      return `<tr data-ticket="${a.assetId}" class="${selected ? 'task-row-selected' : ''}" aria-selected="${selected}"><td class="col-id">#${a.assetId}</td><td class="col-title"><button class="task-row-open" type="button">${esc(m.title)}</button>${waiting ? '<span class="customer-meta">CUSTOMER WAITING</span>' : ''}</td><td class="col-status">${esc(statusLabels[m.status] || m.status)}</td><td class="col-assignee">${esc(m.assignee || 'UNASSIGNED')}</td><td class="col-project" title="${esc(customerName(m.company_id))}">${esc(customerName(m.company_id))}</td><td class="col-contact" title="${esc(contact)}">${esc(contact || '—')}</td><td class="col-unread">${unread ? `${unread} UNREAD` : '—'}</td><td class="col-activity" title="${esc(window.NRCDetailUI.formatHeaderDate(timestamp))}">${timestamp ? esc(typeof formatRelativeAge === 'function' ? formatRelativeAge(timestamp) : window.NRCDetailUI.formatHeaderDate(timestamp)) : '—'}</td></tr>`;
-    }).join('') || `<tr><td colspan="8" class="customer-empty">${searchState.mode === 'loading' ? 'Searching tickets…' : 'No matching tickets.'}</td></tr>`;
+    el.innerHTML = rows.map(({ asset: a, unread, waiting, timestamp, followUpDue }) => {
+      const m = metadata(a), selected = state.selected === String(a.assetId);
+      const context = [customerName(m.company_id), m.assignee || 'UNASSIGNED'].filter(Boolean).join(' · ');
+      const date = new Date(Number(m.follow_up_at));
+      const scheduled = !!m.follow_up_at, validDate = Number.isFinite(date.getTime());
+      const dateLabel = !scheduled ? '' : validDate ? date.toLocaleString(undefined, { day: 'numeric', month: 'short', ...(date.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}), hour: '2-digit', minute: '2-digit' }) : 'OUT OF DATE RANGE';
+      const due = followUpDue ?? (scheduled && Number(m.follow_up_at) <= Date.now());
+      return `<tr data-ticket="${a.assetId}" class="${selected ? 'task-row-selected' : ''}" aria-selected="${selected}"><td class="col-id">#${a.assetId}</td><td class="col-title"><button class="task-row-open" type="button" title="${esc(m.title)}">${esc(m.title)}</button><span class="customer-meta" title="${esc(context)}">${esc(context)}</span></td><td class="col-status">${esc(statusLabels[m.status] || m.status)}${waiting ? '<span class="customer-meta">CUSTOMER WAITING</span>' : ''}</td><td class="col-priority" data-priority="${esc(m.priority)}">${esc(m.priority.toUpperCase())}</td><td class="col-follow-up${due ? ' ticket-follow-up-due' : ''}" title="${esc(scheduled ? followUpLabel(m.follow_up_at, due) : 'No follow-up scheduled')}">${due ? '<span>DUE</span>' : ''}<span class="customer-meta">${esc(dateLabel)}</span></td><td class="col-activity" title="${esc(window.NRCDetailUI.formatHeaderDate(timestamp))}">${timestamp ? esc(typeof formatRelativeAge === 'function' ? formatRelativeAge(timestamp) : window.NRCDetailUI.formatHeaderDate(timestamp)) : ''}${unread ? `<span class="col-unread">${unread} UNREAD</span>` : ''}</td></tr>`;
+    }).join('') || `<tr><td colspan="6" class="customer-empty">${searchState.mode === 'loading' ? 'Searching tickets…' : 'No matching tickets.'}</td></tr>`;
     document.querySelectorAll('#ticketsTable th[data-sort]').forEach(th => {
       const active = th.dataset.sort === state.sort;
       th.classList.toggle('sorted-asc', active && state.direction === 'asc');
       th.classList.toggle('sorted-desc', active && state.direction === 'desc');
       th.setAttribute('aria-sort', active ? state.direction === 'asc' ? 'ascending' : 'descending' : 'none');
     });
+    const sort = document.getElementById('ticketsSort');
+    if (sort) sort.value = `${state.sort}:${state.direction}`;
     if (focused) el.querySelector(`[data-ticket="${focused}"] .task-row-open`)?.focus({ preventScroll: true });
     window.NRCColumnResize?.init({
-      root: '#ticketsTable', headers: 'thead th', storageKey: 'nrc.ticket.columns.v1',
-      defaults: [56, 280, 160, 110, 150, 150, 88, 110], minimums: [48, 160, 110, 80, 88, 88, 72, 88],
+      root: '#ticketsTable', headers: 'thead th', storageKey: 'nrc.ticket.columns.v3',
+      defaults: [56, 280, 160, 104, 160, 100], minimums: [48, 160, 110, 88, 130, 88],
       apply: (table, widths) => {
         table.style.tableLayout = 'fixed';
         const fixed = widths.reduce((sum, width, i) => sum + (i === 1 ? 0 : width), 0);
@@ -440,7 +493,7 @@
     const identity = session;
     const control = (name, label, extra = {}) => window.NRCDetailUI.inlineField({
       key: `ticket-${asset.assetId}-${name}`, name: label, label, value: m[name] || '',
-      ...extra, save: value => saveMetadata(asset, { [name]: value.trim() }, identity),
+      save: value => saveMetadata(asset, { [name]: value.trim() }, identity), ...extra,
     });
     const customer = (name, label) => {
       const linked = window.NRCAssets.roomAssets?.get(0n)?.get(BigInt(m[name] || '0'));
@@ -448,7 +501,9 @@
     };
     root.innerHTML = `<div class="task-detail-doc-title">${esc(m.title)} ${control('title', 'TITLE', { label: '', display: 'RENAME', required: true, maxBytes: 256 })}</div>
       <div class="detail-read-register task-detail-read-register">${control('status', 'STATUS', { display: statusLabels[m.status], options: statuses.map(value => ({ value, label: statusLabels[value] })) })}
-      ${control('assignee', 'ASSIGNEE', { maxBytes: 64, suggestions: () => [...new Set([...(typeof userDirectory === 'function' ? userDirectory() : []), ...state.tickets.map(a => metadata(a).assignee)].filter(Boolean))] })}</div>
+      ${control('assignee', 'ASSIGNEE', { maxBytes: 64, suggestions: () => [...new Set([...(typeof userDirectory === 'function' ? userDirectory() : []), ...state.tickets.map(a => metadata(a).assignee)].filter(Boolean))] })}
+      ${control('priority', 'PRIORITY', { display: m.priority.toUpperCase(), options: priorities.map(value => ({ value, label: value.toUpperCase() })) })}
+      ${control('follow_up_at', 'FOLLOW-UP · LOCAL TIME', { type: 'datetime-local', clearable: !!m.follow_up_at, value: followUpInput(m.follow_up_at), display: followUpLabel(m.follow_up_at), save: value => saveMetadata(asset, { follow_up_at: followUpValue(value) }, identity) })}</div>
       <details class="ticket-customer-details"${customerOpen ? ' open' : ''}><summary>CUSTOMER DETAILS <span>${esc(customerName(m.company_id) || m.requester_name || m.requester || 'NOT ASSIGNED')}</span></summary><div class="record-document"><div class="detail-read-register task-detail-read-register">
       ${customer('company_id', 'COMPANY')}${customer('contact_id', 'CONTACT')}
       ${control('requester', 'REQUESTER', { maxBytes: 320 })}${control('requester_name', 'REQUESTER NAME', { maxBytes: 256 })}</div></div></details>`;
@@ -482,6 +537,8 @@
     host.innerHTML = `<p id="ticketStatus" class="customer-status" role="status" aria-live="polite" hidden></p>${state.selected ? '<div id="ticketMetadata" class="record-document ticket-metadata"></div>' : `<h2>New ticket</h2>
         <form id="ticketFields">${field('title', 'TITLE')}${field('company_id', 'COMPANY ID')}${field('contact_id', 'CONTACT ID')}${field('requester', 'REQUESTER · PORTAL ACCOUNT IDENTITY')}${field('requester_name', 'REQUESTER NAME')}${field('assignee', 'ASSIGNEE')}
           <label class="task-detail-row">STATUS <select name="status" class="filter-select">${statuses.map(s => `<option value="${s}" ${d.status === s ? 'selected' : ''}>${statusLabels[s]}</option>`).join('')}</select></label>
+          <label class="task-detail-row">PRIORITY <select name="priority" class="filter-select">${priorities.map(value => `<option value="${value}" ${d.priority === value ? 'selected' : ''}>${value.toUpperCase()}</option>`).join('')}</select></label>
+          <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">FOLLOW-UP · LOCAL TIME</span><input name="follow_up_at" type="datetime-local" class="task-detail-input" value="${esc(followUpInput(d.follow_up_at))}"></label>
           <label class="detail-edit-field ticket-original-request"><span class="detail-edit-label">ORIGINAL REQUEST</span><textarea name="body" class="task-detail-textarea" rows="5" maxlength="32000">${esc(d.body)}</textarea></label>
           <button class="btn btn--primary" data-save>SAVE TICKET</button>
         </form>`}<div id="ticketConversation" class="ticket-conversation"></div>
@@ -591,7 +648,11 @@
         };
       } else loadCustomers();
     }
-    host.oninput = e => { if (e.target.name) { d[e.target.name] = e.target.value; state.notice = 'UNSAVED DRAFT'; renderStatus(); } };
+    host.oninput = e => { if (e.target.name) {
+      try { d[e.target.name] = e.target.name === 'follow_up_at' ? followUpValue(e.target.value) : e.target.value; state.error = ''; state.notice = 'UNSAVED DRAFT'; }
+      catch (error) { state.error = error.message; }
+      renderStatus();
+    } };
     host.onchange = host.oninput;
     const fields = host.querySelector('#ticketFields'); if (fields) fields.onsubmit = e => { e.preventDefault(); save(); };
     const reply = host.querySelector('#ticketReply'); if (reply) reply.onsubmit = e => { e.preventDefault(); save(true); };
@@ -732,7 +793,7 @@
     if (!host || !header) return;
     const record = document.createElement('article'); record.id = 'ticketEditor'; record.className = 'customer-record'; record.setAttribute('aria-label', 'Ticket detail');
     host.replaceChildren(record);
-    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">${ref.id ? `TICKET #${ref.id}` : 'NEW TICKET'}</span><span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">${ref.id ? 'READ' : 'EDITING'}</span></div><div class="inspector-mode-row">${window.NRCDetailUI.renderHeaderAction({ id: 'ticketReplyFocus', label: 'MESSAGE', command: 'm', title: 'Focus message composer (M)' })}${window.NRCDetailUI.renderCloseControl('ticketInspectorClose')}</div>`;
+    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">${ref.id ? `TICKET #${ref.id}` : 'NEW TICKET'}</span><span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">${ref.id ? 'READ' : 'EDITING'}</span></div><div class="inspector-mode-row">${window.NRCDetailUI.renderHeaderAction({ id: 'ticketReplyFocus', label: 'MESSAGE', command: 'm', title: 'Focus message composer (M)' })}${ref.id ? window.NRCDetailUI.renderHeaderMetadata([], 2, ref.id) : ''}${window.NRCDetailUI.renderCloseControl('ticketInspectorClose')}</div>`;
     document.getElementById('ticketInspectorClose').onclick = () => window.NRCInspector.close();
     document.getElementById('ticketReplyFocus').onclick = () => record.querySelector('[name=message], [name=title]')?.focus();
     state.entries = []; state.detailLoading = !!ref.id; editor(); renderList();
@@ -787,6 +848,10 @@
     document.getElementById('ticketsRefresh').onclick = () => { state.error = ''; reload(); };
     document.getElementById('ticketsPager')?.addEventListener('nrc:load-more', () => loadPage(!state.cursor));
     document.getElementById('ticketsList').onclick = e => { const row = e.target.closest('[data-ticket]'); if (row) selectTicket(row.dataset.ticket); };
+    document.getElementById('ticketsSort')?.addEventListener('change', e => {
+      [state.sort, state.direction] = e.target.value.split(':');
+      loadPage(true);
+    });
     document.querySelectorAll('#ticketsTable th[data-sort]').forEach(th => th.onclick = e => {
       if (e.target.closest('.column-resize-handle')) return;
       state.direction = state.sort === th.dataset.sort && state.direction === 'asc' ? 'desc' : 'asc';
@@ -830,6 +895,9 @@
       if (e.detail?.kind !== 'ticket') return;
       refreshAttention(); if (state.rows.length || state.loading) loadPage(true, true);
     });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && session && typeof serverReady !== 'undefined' && serverReady) refreshAttention();
+    });
     window.NRCEdges?.addEdgeChangeListener?.((edge, reason) => {
       renderWork();
       if (state.selected && reason === 'created' && edge.convId === 0n &&
@@ -837,6 +905,7 @@
     });
   }
   function disconnect() {
+    clearTimeout(attentionTimer);
     generation++; state.loading = false; state.reloadAgain = false;
     searchController?.cancel(); searchState = { mode: 'idle', ids: new Set(), stale: false };
     state.tickets = []; state.entries = []; state.rows = []; state.attention = []; state.hasMore = false; state.total = 0;

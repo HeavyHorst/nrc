@@ -47,6 +47,24 @@ func nextTicketRequest(t *testing.T, ch <-chan *protocol.Message) *protocol.Mess
 	}
 }
 func TestTicketTypesAndPrivacy(t *testing.T) {
+	for _, wire := range []string{`{"metadata":{"priority":null}}`, `{"metadata":{"priority":""}}`, `{"metadata":{"follow_up_at":null}}`, `{"metadata":{"follow_up_at":"01"}}`} {
+		var a ticketAction
+		if json.Unmarshal([]byte(wire), &a) == nil {
+			t.Fatalf("accepted invalid schedule: %s", wire)
+		}
+	}
+	a := ticketAction{Operation: "create", Metadata: map[string]string{"title": "Help", "priority": "urgent", "follow_up_at": "123"}}
+	if err := validateTicketAction(&a); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := ticketPreview(a, protocol.Asset{})
+	if err != nil || !bytes.Contains(preview, []byte(`"follow_up_at":"123"`)) {
+		t.Fatalf("schedule preview: %s %v", preview, err)
+	}
+	r := ticketRecord(protocol.Asset{AssetType: protocol.AssetTypeTicket, Preview: `{}`, Payload: "original"}, true)
+	if r["metadata"].(map[string]any)["priority"] != "normal" || r["payload"] != "original" {
+		t.Fatalf("legacy read: %#v", r)
+	}
 	for name, want := range map[string]uint16{"ticket": 13, "tickets": 13, "13": 13, "entry": 14, "ticket_entry": 14, "entries": 14, "14": 14} {
 		got, err := parseListAssetType(name)
 		if err != nil || got != want {
@@ -60,7 +78,7 @@ func TestTicketTypesAndPrivacy(t *testing.T) {
 	if assetTypeName(13) != "Ticket" || assetTypeName(14) != "TicketEntry" {
 		t.Fatal("missing names")
 	}
-	a := ticketAction{Operation: "entry", TicketID: "9007199254740993", ExpectedVersion: "456", Content: "staff only"}
+	a = ticketAction{Operation: "entry", TicketID: "9007199254740993", ExpectedVersion: "456", Content: "staff only"}
 	if err := validateTicketAction(&a); err != nil || a.Kind != "internal_note" {
 		t.Fatal(a, err)
 	}

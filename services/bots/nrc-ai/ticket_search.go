@@ -11,6 +11,7 @@ import (
 )
 
 type adkSearchTicketsInput struct {
+	Priority  string `json:"priority,omitempty" jsonschema:"Exact priority filter: low, normal, high, urgent; legacy tickets are normal"`
 	Query     string `json:"query"`
 	Limit     uint8  `json:"limit,omitempty"`
 	Status    string `json:"status,omitempty"`
@@ -29,6 +30,9 @@ func newADKSearchTicketsTool(search *SearchClient, cache *adkAssetSourceCache) (
 			return out, err
 		}
 		query := strings.TrimSpace(input.Query)
+		if input.Priority != "" && !protocol.ValidTicketPriority(input.Priority) {
+			return out, fmt.Errorf("invalid ticket priority")
+		}
 		if query == "" {
 			return out, fmt.Errorf("query is required")
 		}
@@ -39,7 +43,7 @@ func newADKSearchTicketsTool(search *SearchClient, cache *adkAssetSourceCache) (
 		if limit > 12 {
 			limit = 12
 		}
-		response, err := search.SearchEntities(ctx, protocol.SearchRequest{Workspace: workspace, ConvID: convID, Query: query, TopN: limit, Filters: &protocol.SearchFilters{EntityTypes: []protocol.SearchEntityType{protocol.SearchEntityAsset}, AssetTypes: []uint16{13}, Ticket: &protocol.SearchTicketFilters{Status: input.Status, Assignee: input.Assignee, CompanyID: input.CompanyID}}})
+		response, err := search.SearchEntities(ctx, protocol.SearchRequest{Workspace: workspace, ConvID: convID, Query: query, TopN: limit, Filters: &protocol.SearchFilters{EntityTypes: []protocol.SearchEntityType{protocol.SearchEntityAsset}, AssetTypes: []uint16{13}, Ticket: &protocol.SearchTicketFilters{Status: input.Status, Assignee: input.Assignee, CompanyID: input.CompanyID, Priority: input.Priority}}})
 		if err != nil {
 			return out, err
 		}

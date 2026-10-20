@@ -16,6 +16,11 @@ func ticketMetadata(asset protocol.Asset) SearchMetadata {
 			Version int `json:"version"`
 		}
 		if json.Unmarshal([]byte(asset.Preview), &preview) == nil && preview.Version == 1 && strings.TrimSpace(preview.Title) != "" {
+			var raw map[string]json.RawMessage
+			if json.Unmarshal([]byte(asset.Preview), &raw) != nil || protocol.ValidateTicketScheduling(raw) != nil {
+				return metadata
+			}
+			preview.Priority = protocol.EffectiveTicketPriority(preview.Priority)
 			metadata.Ticket = &preview.SearchTicketMetadata
 		}
 	}
@@ -34,12 +39,16 @@ func (idx *Index) ticketCandidates(workspace string, convID uint64, filters *pro
 		m := entry.Metadata.Ticket
 		if key.EntityType != EntityTypeAsset || entry.AssetType != protocol.AssetTypeTicket || m == nil ||
 			(filters.Status != "" && m.Status != filters.Status) ||
+			(filters.Priority != "" && protocol.EffectiveTicketPriority(m.Priority) != filters.Priority) ||
 			(filters.Assignee != "" && m.Assignee != filters.Assignee) ||
 			(filters.CompanyID != "" && m.CompanyID != filters.CompanyID) {
 			continue
 		}
 		copy := *entry
-		copy.PreviewLower = strings.ToLower(strings.Join([]string{m.Title, m.Status, m.Assignee, m.CompanyID, m.ContactID, m.Requester, m.RequesterName}, "\n"))
+		meta := *m
+		meta.Priority = protocol.EffectiveTicketPriority(meta.Priority)
+		copy.Metadata.Ticket = &meta
+		copy.PreviewLower = strings.ToLower(strings.Join([]string{m.Title, m.Status, meta.Priority, m.Assignee, m.CompanyID, m.ContactID, m.Requester, m.RequesterName}, "\n"))
 		copy.Chunks = append([]IndexChunk(nil), entry.Chunks...)
 		if len(copy.Chunks) == 0 {
 			copy.Chunks = append(copy.Chunks, IndexChunk{Vector: entry.Vector})

@@ -128,6 +128,46 @@ try {
     await page.waitForFunction(() => !NRCTickets.state.pending && !document.querySelector('.inline-field-editor'));
   };
   await inline('ASSIGNEE', 'Initial owner');
+  await page.getByRole('button', { name: /^Edit PRIORITY:/ }).click();
+  await page.locator('.inline-field-editor select').selectOption('urgent');
+  await page.waitForFunction(() => !NRCTickets.state.pending && !document.querySelector('.inline-field-editor'));
+  await inline('FOLLOW-UP · LOCAL TIME', '2020-01-02T13:45');
+  const schedule = await page.evaluate(async id => JSON.parse((await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0].preview), id);
+  assert.equal(schedule.priority, 'urgent');
+  assert.equal(schedule.follow_up_at, String(new Date(2020, 0, 2, 13, 45).getTime()));
+  await page.locator('#ticketsPanel [data-filter="priority"]').selectOption('normal');
+  await page.waitForFunction(() => !NRCTickets.state.loading && NRCTickets.state.rows.length === 0);
+  await page.locator('#ticketsPanel [data-filter="priority"]').selectOption('urgent');
+  await page.locator('#ticketsPanel [data-filter="follow_up"]').selectOption('due');
+  await page.waitForFunction(() => !NRCTickets.state.loading && NRCTickets.state.rows.length === 1);
+  await page.locator('#ticketsPanel [data-filter="search"]').fill('Original request');
+  await page.waitForFunction(() => !NRCTickets.state.loading && document.querySelector('#ticketsStatus').textContent.includes('DUE · SERVER TEXT SEARCH'));
+  assert.equal(await page.locator('#ticketsList [data-ticket]').count(), 1);
+  await page.locator('#ticketsPanel [data-filter="search"]').fill('');
+  await page.locator('#ticketsPanel [data-filter="priority"]').selectOption('');
+  await page.locator('#ticketsPanel [data-filter="follow_up"]').selectOption('');
+  await inline('FOLLOW-UP · LOCAL TIME', '');
+  // The wire supports dates beyond JavaScript Date: CLEAR must still write.
+  await page.evaluate(async id => {
+    const asset = (await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0];
+    const preview = JSON.stringify({ ...JSON.parse(asset.preview), follow_up_at: '9223372036854775807' });
+    await new Promise((resolve, reject) => NRCTransactions.sendAssetMetadataPatch(asset, preview, null, { onSuccess: resolve, onError: reject }));
+    await NRCTickets.reload();
+  }, id);
+  await page.getByRole('button', { name: /^Edit FOLLOW-UP/ }).click();
+  assert.equal(await page.locator('.inline-field-editor input').inputValue(), '');
+  await page.locator('.inline-field-editor').getByRole('button', { name: 'CLEAR', exact: true }).click();
+  await page.waitForFunction(() => !NRCTickets.state.pending && !document.querySelector('.inline-field-editor'));
+  assert.equal(await page.evaluate(async id => JSON.parse((await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0].preview).follow_up_at, id), '');
+  await page.locator('#inspectorHeader [data-history-kind]').click();
+  await page.waitForFunction(() => document.querySelector('#historyStatus').textContent.includes('EVENTS'));
+  assert.match(await page.textContent('#historyBody'), /Changed Details/);
+  await page.locator(`#historyBody [data-history-id="${id}"]`).first().click();
+  await page.waitForFunction(id => NRCInspector.current()?.type === 'ticket' && String(NRCInspector.current().id) === id, id);
+  await page.click('#ticketsBtn');
+  await page.waitForFunction(() => !NRCTickets.state.loading && !NRCTickets.state.detailLoading);
+  if (!(await page.locator('#ticketMetadata').count())) await page.locator(`#ticketsList [data-ticket="${id}"] button`).click();
+  await page.locator('.ticket-customer-details summary').click();
   const savedOriginal = await page.evaluate(async id => (await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0].payload, id);
   assert.equal(savedOriginal, 'Original request', 'inline metadata save preserves original request');
   assert.deepEqual(await page.evaluate(async id => (await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0].attachments.map(a => a.filename), id), ['original.txt'], 'metadata save preserves original attachments');
@@ -358,24 +398,43 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('#ticketsList [data-ticket]').length === 2);
   const taskSort = () => page.evaluate(() => JSON.stringify([TaskViewState.sortColumn, TaskViewState.sortDirection, localStorage.getItem('nrc_task_view_state')]));
   const taskSortBefore = await taskSort();
-  await page.locator('#ticketsTable th[data-sort="contact_id"] button').click();
+  await page.selectOption('#ticketsSort', 'contact_id:asc');
   await page.waitForFunction(() => !NRCTickets.state.loading);
   assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), [keyboardTickets.alpha, keyboardTickets.zulu]);
-  await page.locator('#ticketsTable th[data-sort="contact_id"] button').click();
+  await page.selectOption('#ticketsSort', 'contact_id:desc');
   await page.waitForFunction(() => !NRCTickets.state.loading);
   assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), [keyboardTickets.zulu, keyboardTickets.alpha]);
-  await page.locator('#ticketsTable th[data-sort="company_id"] button').click();
+  await page.selectOption('#ticketsSort', 'company_id:asc');
+  await page.waitForFunction(() => !NRCTickets.state.loading);
   await page.locator('#ticketsTable th[data-sort="title"] button').focus();
   await page.keyboard.press('Enter');
   assert.equal(await taskSort(), taskSortBefore, 'ticket sorting never changes or persists task sorting');
   await page.waitForFunction(() => !NRCTickets.state.loading);
   assert.equal(await page.locator('#ticketsTable th[data-sort="title"]').getAttribute('aria-sort'), 'ascending');
+  assert.equal(await page.inputValue('#ticketsSort'), 'title:asc', 'header sorting keeps field and direction in sync');
+  assert.match(await page.locator('#ticketsList .col-title .customer-meta').first().textContent(), /Sam/);
   assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), [keyboardTickets.alpha, keyboardTickets.zulu]);
+  const checkTicketGeometry = () => page.waitForFunction(() => {
+    const register = document.querySelector('#ticketsRegister');
+    const row = register.querySelector('#ticketsList tr[data-ticket]');
+    const title = row.querySelector('.col-title .task-row-open').getBoundingClientRect();
+    const metadata = row.querySelector('.col-title .customer-meta').getBoundingClientRect();
+    return register.scrollWidth <= register.clientWidth && title.height > 0 && metadata.height > 0 &&
+      metadata.top >= title.bottom && metadata.bottom <= row.getBoundingClientRect().bottom;
+  });
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await checkTicketGeometry();
+  }
   await page.locator('#ticketsRegister').focus();
   await page.keyboard.press('ArrowDown');
   await page.waitForFunction(id => NRCTickets.state.selected === id, keyboardTickets.alpha);
   assert.equal(await page.locator(`#ticketsList [data-ticket="${keyboardTickets.alpha}"]`).getAttribute('aria-selected'), 'true');
   assert.equal(await page.locator('#inspectorEntityHost #ticketEditor').count(), 1);
+  for (const width of [1100, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await checkTicketGeometry();
+  }
   await page.keyboard.press('m');
   assert.equal(await page.locator('[name=message]').evaluate(el => el === document.activeElement), true, 'M reaches the reply composer');
   await page.locator('#ticketsRegister').focus();
@@ -396,6 +455,7 @@ try {
   assert.equal(await page.evaluate(() => NRCTickets.state.selected), keyboardTickets.zulu, 'filter owns arrow keys');
   await page.locator('#ticketsRegister').focus(); await page.keyboard.press('Escape');
   await page.waitForFunction(() => !NRCInspector.hasEntity());
+  await page.setViewportSize({ width: 1800, height: 1000 });
   const resize = page.locator('#ticketsTable th[data-sort="id"] [role="separator"]');
   await resize.focus();
   const width = Number(await resize.getAttribute('aria-valuenow'));
@@ -404,6 +464,7 @@ try {
   await page.keyboard.press('ArrowDown');
   assert.equal(await page.evaluate(() => NRCTickets.state.selected), '', 'separator does not navigate rows');
   await page.keyboard.press('Home');
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await search.fill('no matching ticket');
   await page.waitForFunction(() => document.querySelector('#ticketsList').textContent.includes('No matching tickets'));
   assert.match(await page.textContent('#ticketsList'), /No matching tickets/);
@@ -437,7 +498,7 @@ try {
   await page.locator('#portal-container').getByRole('option', { name: `Ticket customer · #${customer.b}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#ticketsStatus').textContent.includes('INDEX STALE'));
   assert.equal(searchRequests.at(-1).query, 'semantic synonym');
-  assert.deepEqual(searchRequests.at(-1).filters, { entity_types: ['asset'], asset_types: [13], ticket: { status: 'open', assignee: 'Other staff member', company_id: customer.b } });
+  assert.deepEqual(searchRequests.at(-1).filters, { entity_types: ['asset'], asset_types: [13], ticket: { status: 'open', assignee: 'Other staff member', company_id: customer.b, priority: '' } });
   assert.equal(searchRequests.at(-1).top_n, 100);
   await page.locator(`#ticketsList [data-ticket="${id}"] button`).click();
   await page.waitForSelector('#inspectorEntityHost #ticketEditor');
@@ -482,7 +543,7 @@ try {
     await page.evaluate(() => NRCViewManager.setActiveView('kanban'));
     await page.locator('#kanbanPanel [data-mobile-filters]').click();
     await page.locator('[data-task-grouping="flat"]').click();
-    await page.selectOption('#mobileTaskSort', 'title');
+    await page.selectOption('#mobileTaskSort', 'title:asc');
     assert.equal(await page.evaluate(() => TaskViewState.sortColumn), 'title');
     assert.deepEqual(await page.evaluate(() => [NRCTickets.state.sort, NRCTickets.state.direction]), ticketSortBefore, 'mobile task sorting never touches ticket sorting');
   }

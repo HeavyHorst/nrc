@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/heavyhorst/nrc/cli/pkg/conn"
 	"github.com/heavyhorst/nrc/cli/pkg/output"
@@ -36,6 +38,17 @@ func ticketView(a p.Asset) (ticketResource, error) {
 	}
 	if m == nil {
 		return ticketResource{}, fmt.Errorf("invalid ticket metadata object")
+	}
+	if a.AssetType == p.AssetTypeTicket {
+		if e := p.ValidateTicketScheduling(m); e != nil {
+			return ticketResource{}, e
+		}
+		if _, ok := m["priority"]; !ok {
+			m["priority"] = json.RawMessage(`"normal"`)
+		}
+		if _, ok := m["follow_up_at"]; !ok {
+			m["follow_up_at"] = json.RawMessage(`""`)
+		}
 	}
 	body, e := p.DecodeAssetPayload(a)
 	return ticketResource{a.AssetID, m, body, a.Attachments, a.CreatedAt, a.UpdatedAt, a.Owner}, e
@@ -68,9 +81,9 @@ func ticketEmit(v any) {
 					fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", m.Kind, m.ID, m.Title, memberState(m))
 				}
 			} else {
-				fmt.Fprintln(w, "ID\tTITLE\tSTATUS\tASSIGNEE\tREQUESTER")
+				fmt.Fprintln(w, "ID\tTITLE\tSTATUS\tPRIORITY\tFOLLOW_UP_AT\tASSIGNEE\tREQUESTER")
 				for _, r := range record.Entries {
-					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", r.ID, ticketString(r.Metadata, "title"), ticketString(r.Metadata, "status"), ticketString(r.Metadata, "assignee"), ticketString(r.Metadata, "requester"))
+					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, ticketString(r.Metadata, "title"), ticketString(r.Metadata, "status"), ticketString(r.Metadata, "priority"), ticketString(r.Metadata, "follow_up_at"), ticketString(r.Metadata, "assignee"), ticketString(r.Metadata, "requester"))
 				}
 			}
 			_ = w.Flush()
@@ -184,6 +197,9 @@ func ticketCompany(s *conn.Session, m map[string]json.RawMessage) error {
 	return nil
 }
 func ticketValidate(m map[string]json.RawMessage) error {
+	if err := p.ValidateTicketScheduling(m); err != nil {
+		return err
+	}
 	for key, limit := range map[string]int{"title": 256, "company_id": 20, "contact_id": 20, "requester": 320, "requester_name": 256, "status": 32, "assignee": 64} {
 		var value string
 		if json.Unmarshal(m[key], &value) != nil || len(value) > limit {
@@ -216,11 +232,15 @@ func ticketCommand(action string) *cobra.Command {
 		c.Annotations = map[string]string{"mutation": "true"}
 	}
 	if action == "create" || action == "update" || action == "list" {
-		for _, f := range []string{"title", "requester", "requester-name", "company", "contact", "assignee", "status"} {
+		for _, f := range []string{"title", "requester", "requester-name", "company", "contact", "assignee", "status", "priority"} {
 			c.Flags().String(f, "", "Ticket "+f)
 		}
 	}
+	if action == "create" || action == "update" {
+		c.Flags().String("follow-up", "", "RFC3339 timestamp with timezone; empty clears follow-up")
+	}
 	if action == "list" {
+		c.Flags().Bool("follow-up-due", false, "Only tickets with follow-up at or before now")
 		c.Flags().String("search", "", "Case-insensitive title/requester/body search")
 	}
 	if action == "create" || action == "reply" || action == "internal-note" {
@@ -283,6 +303,11 @@ func ticketCommand(action string) *cobra.Command {
 			return nil
 		}
 		if action == "list" {
+			priority, _ := cmd.Flags().GetString("priority")
+			if cmd.Flags().Changed("priority") && !p.ValidTicketPriority(priority) {
+				return fmt.Errorf("invalid ticket priority")
+			}
+			due, _ := cmd.Flags().GetBool("follow-up-due")
 			for _, flag := range []string{"company", "contact"} {
 				v, _ := cmd.Flags().GetString(flag)
 				if v != "" {
@@ -295,6 +320,30 @@ func ticketCommand(action string) *cobra.Command {
 			if e != nil {
 				return e
 			}
+			var dueIDs map[uint64]bool
+			if due {
+				dueIDs, e = p.TicketDueMembership(assets, func(q json.RawMessage) (*p.TicketPage, error) {
+					data, err := p.EncodeTicketQuery(1, q)
+					if err != nil {
+						return nil, err
+					}
+					resp, err := s.SendAndRecv(&p.Message{Opcode: p.C_QueryTickets, Data: data})
+					if err != nil {
+						return nil, err
+					}
+					if resp.Opcode != p.S_TicketPage {
+						return nil, fmt.Errorf("unexpected ticket response %d", resp.Opcode)
+					}
+					page, err := p.DecodeTicketPage(resp.Data)
+					if err == nil && page.CorrelationID != 1 {
+						return nil, fmt.Errorf("ticket correlation mismatch")
+					}
+					return page, err
+				})
+				if e != nil {
+					return e
+				}
+			}
 			entries := make([]ticketResource, 0)
 			for _, a := range assets {
 				v, e := ticketView(a)
@@ -302,6 +351,12 @@ func ticketCommand(action string) *cobra.Command {
 					return e
 				}
 				match := true
+				if priority != "" && ticketString(v.Metadata, "priority") != priority {
+					match = false
+				}
+				if due && !dueIDs[a.AssetID] {
+					match = false
+				}
 				for flag, key := range map[string]string{"status": "status", "assignee": "assignee", "company": "company_id", "contact": "contact_id", "requester": "requester", "title": "title", "requester-name": "requester_name"} {
 					f, _ := cmd.Flags().GetString(flag)
 					if f != "" && ticketString(v.Metadata, key) != f {
@@ -359,12 +414,24 @@ func ticketCommand(action string) *cobra.Command {
 				}
 			}
 			changed := false
-			for flag, key := range map[string]string{"title": "title", "requester": "requester", "requester-name": "requester_name", "company": "company_id", "contact": "contact_id", "assignee": "assignee", "status": "status"} {
+			for flag, key := range map[string]string{"title": "title", "requester": "requester", "requester-name": "requester_name", "company": "company_id", "contact": "contact_id", "assignee": "assignee", "status": "status", "priority": "priority"} {
 				if cmd.Flags().Changed(flag) {
 					v, _ := cmd.Flags().GetString(flag)
 					m[key], _ = json.Marshal(v)
 					changed = true
 				}
+			}
+			if cmd.Flags().Changed("follow-up") {
+				v, _ := cmd.Flags().GetString("follow-up")
+				if v != "" {
+					at, err := time.Parse(time.RFC3339Nano, v)
+					if err != nil || at.UnixMilli() <= 0 {
+						return fmt.Errorf("follow-up must be a positive RFC3339 timestamp with timezone")
+					}
+					v = strconv.FormatInt(at.UnixMilli(), 10)
+				}
+				m["follow_up_at"], _ = json.Marshal(v)
+				changed = true
 			}
 			if action == "update" && !changed {
 				return fmt.Errorf("pass at least one metadata flag")
@@ -484,6 +551,10 @@ func ticketSearchCommand() *cobra.Command {
 				return &conn.InvalidArgumentError{Err: fmt.Errorf("ticket search requires a nonblank query and --top between 1 and 100")}
 			}
 			status, _ := cmd.Flags().GetString("status")
+			priority, _ := cmd.Flags().GetString("priority")
+			if cmd.Flags().Changed("priority") && !p.ValidTicketPriority(priority) {
+				return fmt.Errorf("invalid ticket priority")
+			}
 			assignee, _ := cmd.Flags().GetString("assignee")
 			company, _ := cmd.Flags().GetString("company")
 			payload, _ := cmd.Flags().GetBool("payload")
@@ -493,7 +564,7 @@ func ticketSearchCommand() *cobra.Command {
 				Filters: &p.SearchFilters{
 					EntityTypes: []p.SearchEntityType{p.SearchEntityAsset},
 					AssetTypes:  []uint16{p.AssetTypeTicket},
-					Ticket:      &p.SearchTicketFilters{Status: status, Assignee: assignee, CompanyID: company},
+					Ticket:      &p.SearchTicketFilters{Status: status, Assignee: assignee, CompanyID: company, Priority: priority},
 				},
 			}, room)
 			if err != nil {
@@ -503,7 +574,7 @@ func ticketSearchCommand() *cobra.Command {
 			return nil
 		},
 	}
-	for _, flag := range []string{"status", "assignee", "company"} {
+	for _, flag := range []string{"status", "assignee", "company", "priority"} {
 		c.Flags().String(flag, "", "Exact ticket "+flag+" filter")
 	}
 	c.Flags().Int("top", 100, "Maximum number of results (1-100)")

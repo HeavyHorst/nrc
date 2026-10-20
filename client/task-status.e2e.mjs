@@ -91,7 +91,7 @@ try {
     // server still has it.
     const serverTasks = new Map([
       [1n, { id: 1n, convId: 0n, title: "Re-status from the register", status: 1, orderIndex: 3, priority: 128, color: 0, createdAt: stamp, attachments: [], assignee: "tester", project: "NRC" }],
-      [2n, { id: 2n, convId: 0n, title: "Member of the slice", status: 3, orderIndex: 1, priority: 96, color: 0, createdAt: stamp + 1n, attachments: [], assignee: "tester", project: "NRC" }],
+      [2n, { id: 2n, convId: 0n, title: "Member of the slice", status: 3, orderIndex: 1, priority: 96, color: 0, createdAt: stamp + 1n, attachments: [], assignee: "anna", project: "Alpha" }],
     ]);
     const assets = new Map([
       [5n, { assetId: 5n, assetType: 11, preview: JSON.stringify({ version: 1, name: "Alpha", owner: "tester" }) }],
@@ -208,7 +208,7 @@ try {
       document.documentElement.dataset.theme = theme;
       document.getElementById('mobileTaskSort').closest('.panel-header').classList.add('mobile-filters-open');
     }, theme);
-    for (const [label, column, ids] of [["TITLE", "title", ["2", "1"]], ["PRIORITY", "priority", ["1", "2"]]]) {
+    for (const [label, column, ids] of [["Title A–Z", "title", ["2", "1"]], ["Project A–Z", "project", ["2", "1"]], ["Project Z–A", "project", ["1", "2"]], ["Assignee A–Z", "assignee", ["2", "1"]], ["Assignee Z–A", "assignee", ["1", "2"]], ["Priority ↓", "priority", ["1", "2"]]]) {
       await page.locator('#mobileTaskSort-trigger').click();
       await page.locator('.custom-select__dropdown:visible').getByRole('option', { name: label, exact: true }).click();
       assert.equal(await page.locator('#mobileTaskSort-trigger .custom-select__value').textContent(), label);
@@ -312,8 +312,8 @@ try {
     retained: window.__retainedSections.every(element => element.isConnected),
     inert: document.getElementById("sliceRecord").inert,
     draft: document.getElementById("sliceOutcome").value,
-    done: [...document.querySelectorAll(".slice-facts > div")].find(element => element.querySelector("dt").textContent === "DONE").querySelector("dd").textContent,
-  })), { retained: true, inert: false, draft: "Unsaved outcome", done: "1" },
+    done: document.querySelector("#sliceRecord .slice-bar-group").getAttribute("aria-label").includes("DONE: 1"),
+  })), { retained: true, inert: false, draft: "Unsaved outcome", done: true },
   "confirmation and counter refresh retain unrelated sections and keep the record interactive");
   await page.evaluate(() => {
     window.__confirmedToken = document.querySelector('[data-member-status="1"]');

@@ -66,6 +66,13 @@ func ticketPreview(a ticketAction, current protocol.Asset) ([]byte, error) {
 		return nil, fmt.Errorf("ticket metadata exceeds protocol preview limit")
 	}
 	if a.Operation == "create" || a.Operation == "update_metadata" {
+		raw := map[string]json.RawMessage{}
+		for k, v := range m {
+			raw[k], _ = json.Marshal(v)
+		}
+		if err := protocol.ValidateTicketScheduling(raw); err != nil {
+			return nil, err
+		}
 		for key, limit := range map[string]int{"title": 256, "company_id": 20, "contact_id": 20, "requester": 320, "requester_name": 256, "status": 32, "assignee": 64} {
 			v, ok := m[key].(string)
 			if !ok || !utf8.ValidString(v) || len(v) > limit {
@@ -88,7 +95,7 @@ type ticketAction struct {
 	Operation       string                   `json:"operation"`
 	TicketID        string                   `json:"ticket_id,omitempty"`
 	ExpectedVersion string                   `json:"expected_updated_at,omitempty"`
-	Metadata        map[string]string        `json:"metadata,omitempty"`
+	Metadata        map[string]string        `json:"metadata,omitempty" jsonschema:"Ticket patch: title, company_id, contact_id, requester, requester_name, status, assignee; priority is low|normal|high|urgent (absent defaults normal); follow_up_at is a canonical positive Unix milliseconds string or empty to clear. Staff scheduling is private."`
 	Content         string                   `json:"content,omitempty"`
 	Kind            string                   `json:"kind,omitempty"`
 	Recipient       string                   `json:"recipient,omitempty"`
@@ -99,7 +106,24 @@ type ticketGeneratedFile struct {
 	Filename string `json:"filename"`
 	Content  string `json:"content"`
 }
+
+func (a *ticketAction) UnmarshalJSON(data []byte) error {
+	type plain ticketAction
+	var raw struct {
+		Metadata map[string]json.RawMessage `json:"metadata"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if err := protocol.ValidateTicketScheduling(raw.Metadata); err != nil {
+		return err
+	}
+	return json.Unmarshal(data, (*plain)(a))
+}
+
 type ticketReadInput struct {
+	Priority        string `json:"priority,omitempty" jsonschema:"Exact priority: low, normal (including legacy tickets), high, urgent"`
+	FollowUpDue     bool   `json:"follow_up_due,omitempty" jsonschema:"Only tickets with follow_up_at at or before now"`
 	TicketID        string `json:"ticket_id,omitempty"`
 	CursorUpdatedAt string `json:"cursor_updated_at,omitempty"`
 	CursorID        string `json:"cursor_id,omitempty"`
@@ -115,13 +139,32 @@ type ticketReadInput struct {
 
 func ticketMetadata(a protocol.Asset) (map[string]any, error) {
 	var m map[string]any
-	if err := json.Unmarshal([]byte(a.Preview), &m); err != nil || m == nil {
+	decoder := json.NewDecoder(strings.NewReader(a.Preview))
+	decoder.UseNumber()
+	if err := decoder.Decode(&m); err != nil || m == nil {
 		return nil, fmt.Errorf("invalid ticket metadata")
+	}
+	if a.AssetType == protocol.AssetTypeTicket {
+		raw := map[string]json.RawMessage{}
+		for k, v := range m {
+			raw[k], _ = json.Marshal(v)
+		}
+		if err := protocol.ValidateTicketScheduling(raw); err != nil {
+			return nil, err
+		}
 	}
 	return m, nil
 }
 func ticketRecord(a protocol.Asset, payload bool) map[string]any {
 	m, _ := ticketMetadata(a)
+	if a.AssetType == protocol.AssetTypeTicket && m != nil {
+		if _, ok := m["priority"]; !ok {
+			m["priority"] = "normal"
+		}
+		if _, ok := m["follow_up_at"]; !ok {
+			m["follow_up_at"] = ""
+		}
+	}
 	files := make([]map[string]any, 0, len(a.Attachments))
 	for _, f := range a.Attachments {
 		files = append(files, map[string]any{"file_id": f.FileId, "filename": f.Filename, "mime_type": f.MimeType, "size": strconv.FormatInt(f.Size, 10)})
@@ -189,6 +232,14 @@ func validateTicketAction(a *ticketAction) error {
 	}
 	for k, v := range a.Metadata {
 		switch k {
+		case "priority":
+			if !protocol.ValidTicketPriority(v) {
+				return fmt.Errorf("invalid ticket priority")
+			}
+		case "follow_up_at":
+			if !protocol.ValidTicketFollowUp(v) {
+				return fmt.Errorf("follow_up_at must be empty or canonical positive Unix milliseconds string")
+			}
 		case "title", "requester", "requester_name", "assignee":
 			if k == "title" && strings.TrimSpace(v) == "" {
 				return fmt.Errorf("title cannot be empty")
@@ -378,6 +429,9 @@ func newTicketTools(wm *WorkspaceManager, store *AgentSessionStore) []fantasy.Ag
 			cursor = &assetPageCursor{UpdatedAt: at, AssetID: id}
 		}
 		limit := in.Limit
+		if in.Priority != "" && !protocol.ValidTicketPriority(in.Priority) {
+			return fantasy.ToolResponse{}, fmt.Errorf("invalid ticket priority")
+		}
 		if limit == 0 {
 			limit = 20
 		}
@@ -388,12 +442,26 @@ func newTicketTools(wm *WorkspaceManager, store *AgentSessionStore) []fantasy.Ag
 		if err != nil {
 			return fantasy.ToolResponse{}, err
 		}
+		var dueIDs map[uint64]bool
+		if in.FollowUpDue {
+			dueIDs, err = protocol.TicketDueMembership(page.Assets, func(q json.RawMessage) (*protocol.TicketPage, error) { return c.QueryTickets(ctx, q) })
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+		}
 		rows := []map[string]any{}
 		for _, a := range page.Assets {
 			if ticketID != 0 && (a.ParentType != 2 || a.ParentID != ticketID) {
 				continue
 			}
 			m, _ := ticketMetadata(a)
+			priority, _ := m["priority"].(string)
+			if in.Priority != "" && protocol.EffectiveTicketPriority(priority) != in.Priority {
+				continue
+			}
+			if in.FollowUpDue && !dueIDs[a.AssetID] {
+				continue
+			}
 			if (in.Status != "" && m["status"] != in.Status) || (in.Assignee != "" && m["assignee"] != in.Assignee) || (in.Requester != "" && m["requester"] != in.Requester) || (in.CompanyID != "" && m["company_id"] != in.CompanyID) {
 				continue
 			}

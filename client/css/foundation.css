@@ -74,7 +74,7 @@
     --link-hover-text: #111111;
     --markdown-link: var(--link-text);
     --markdown-link-hover: var(--link-hover-text);
-    --note-columns: 0px 48px 260px 130px 170px 110px 72px 72px;
+    --note-columns: 0px 48px 340px 170px 72px;
 
     /* Accents - purpose-based naming */
     --accent-interactive: #111111; /* Focus and interactive hints */

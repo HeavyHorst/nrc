@@ -202,6 +202,8 @@ Conversation_State :: struct {
 	note_project_assets:       map[string]^Note_Secondary_Index, // project name -> sorted note index
 	note_tag_assets:           map[string]^Note_Secondary_Index, // tag name -> sorted note index
 	asset_parents:             btree.BTreeG(Entity_Reference_Key), // parent kind/id -> child assets
+	ticket_index:              map[pr.AssetID]^Ticket_Index_Row,
+	ticket_assignees:          btree.BTreeG(Ticket_Assignee_Key),
 	edges:                     map[pr.EdgeID]^pr.Edge, // edge_id -> edge (knowledge graph links)
 	edges_by_entity:           map[Edge_Entity_Key][dynamic]pr.EdgeID, // entity -> incident edge IDs (for O(1) lookup)
 	dm_participants:           ^DM_Participants, // nil for regular rooms, set for DM conversations
@@ -311,7 +313,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:91d94ec"
+BUILD_VERSION :: "dev-2026-10:d4e8b33"
 PROTOCOL_VERSION :: 10 // Calendar kind 3 carries a stable series occurrence identity.
 
 jwt_auth_secret: string

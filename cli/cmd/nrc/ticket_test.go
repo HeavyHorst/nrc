@@ -7,6 +7,23 @@ import (
 )
 
 func TestTicketCommandContract(t *testing.T) {
+	for _, action := range []string{"create", "update", "list"} {
+		c := ticketCommand(action)
+		if c.Flags().Lookup("priority") == nil {
+			t.Fatal("missing priority flag")
+		}
+		flag := "follow-up"
+		if action == "list" {
+			flag = "follow-up-due"
+		}
+		if c.Flags().Lookup(flag) == nil {
+			t.Fatalf("missing %s flag", flag)
+		}
+	}
+	v, err := ticketView(p.Asset{AssetType: p.AssetTypeTicket, Preview: `{"future":{"x":1}}`, Payload: "original", PayloadRawLen: 8})
+	if err != nil || ticketString(v.Metadata, "priority") != "normal" || ticketString(v.Metadata, "follow_up_at") != "" || string(v.Metadata["future"]) != `{"x":1}` || v.Body != "original" {
+		t.Fatalf("legacy ticket view: %#v %v", v, err)
+	}
 	for name, kind := range map[string]uint16{"ticket": p.AssetTypeTicket, "ticket_entry": p.AssetTypeTicketEntry} {
 		got, e := parseAssetTypeName(name)
 		if e != nil || got != kind || assetTypeName(got) != name {

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const source = readFileSync(new URL('./tickets.js', import.meta.url), 'utf8');
-function fixture(uploadFile = async () => { throw new Error('upload unavailable'); }) {
+function fixture(uploadFile = async () => { throw new Error('upload unavailable'); }, globals = {}) {
   const listeners = new Map();
   const elements = new Map();
   const element = () => ({ isConnected: true, innerHTML: '', textContent: '', value: '', dataset: {}, addEventListener() {}, append(child) { this.lastChild = child; }, parentElement: { append(child) { this.lastChild = child; }, parentElement: { after() {} } },
@@ -45,13 +45,41 @@ function fixture(uploadFile = async () => { throw new Error('upload unavailable'
   vm.runInNewContext(readFileSync(new URL('./detail-ui.js', import.meta.url), 'utf8'), { window, TextEncoder });
   const controls = new Map();
   window.NRCDetailUI.inlineField = spec => { controls.set(spec.name, spec); return ''; };
-  vm.runInNewContext(source, { window, document, myNickname: 'Staff', uploadFile, setTimeout, clearTimeout });
+  vm.runInNewContext(source, { window, document, myNickname: 'Staff', uploadFile, setTimeout, clearTimeout, ...globals });
   const submit = async form => { elements.get(form).onsubmit({ preventDefault() {} }); await Promise.resolve(); };
   const input = (name, value) => elements.get('ticketEditor').oninput({ target: { name, value } });
-  return { api: window.NRCTickets, window, elements, records, entries, sent, pages, submit, input,
+  return { api: window.NRCTickets, window, document, elements, records, entries, sent, pages, submit, input,
     event: (name, detail) => listeners.get(name)?.forEach(callback => callback({ detail })),
     edit: (name, value) => controls.get(name).save(value), ack: value => success(value), fail: message => failure({ message }) };
 }
+
+test('connected tickets poll server attention, refresh on visibility, and stop on disconnect', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture(undefined, { serverReady: true, currentWorkspaceId: 'test' });
+  let calls = 0;
+  f.window.NRCViewManager.getActiveView = () => 'tickets';
+  f.records[0].preview = JSON.stringify({ ...JSON.parse(f.records[0].preview), assignee: 'Staff', follow_up_at: '4102444800000' });
+  f.window.NRCAssets.requestTicketPage = async query => {
+    if (query.mode === 'attention') {
+      assert.equal(query.omit_total_count, true, 'Attention counts its complete result, not every server page');
+      calls++;
+    }
+    return { assets: [f.records[0]], activity: [{ unread: 0, waiting: false, follow_up_due: calls > 1, latest: '1', timestamp: '0' }], total_count: 1, has_more: false };
+  };
+  f.api.sessionStarted(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 1); assert.equal(f.api.snapshot()[0].followUpDue, false);
+  assert.doesNotMatch(f.elements.get('ticketsList').innerHTML, /ticket-follow-up-due|title="DUE/);
+  t.mock.timers.tick(29999); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 1);
+  t.mock.timers.tick(1); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 2); assert.equal(f.api.snapshot()[0].followUpDue, true, 'server decision wins even when local clock disagrees');
+  assert.match(f.elements.get('ticketsList').innerHTML, /class="col-follow-up ticket-follow-up-due" title="DUE/, 'register and tooltip cross the deadline on server time too');
+  f.document.visibilityState = 'visible'; f.event('visibilitychange');
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(calls, 3);
+  f.api.disconnect(); t.mock.timers.tick(60000);
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(calls, 3);
+  assert.equal(f.api.snapshot().length, 0);
+});
 
 test('customer tickets delay loading feedback and retain same-company content during refresh', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -267,6 +295,30 @@ test('create adopts acknowledged ID; a later save updates instead of duplicating
   f.input('message', 'Reply written while saving'); f.ack({ asset }); await update;
   assert.equal(f.api.state.drafts.get('3').message, 'Reply written while saving');
   assert.match(f.elements.get('ticketConversation').innerHTML, />Original<\/p>/);
+});
+
+test('ticket scheduling defaults legacy priority and saves local follow-up timestamps without changing the request', async () => {
+  const f = fixture(); await f.api.reload(); f.api.open('', '1');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.api.metadata(f.records[0]).priority, 'normal');
+  assert.equal(f.api.matches(f.records[0], { priority: 'normal' }), true);
+  assert.equal(f.api.matches(f.records[0], { follow_up: 'due' }), false);
+  for (const [field, value, key, expected] of [
+    ['PRIORITY', 'urgent', 'priority', 'urgent'],
+    ['FOLLOW-UP · LOCAL TIME', '2020-01-02T13:45', 'follow_up_at', String(new Date(2020, 0, 2, 13, 45).getTime())],
+    ['FOLLOW-UP · LOCAL TIME', '', 'follow_up_at', ''],
+  ]) {
+    const saving = f.edit(field, value);
+    const call = f.sent.at(-1), preview = JSON.parse(call[2]);
+    assert.equal(preview[key], expected);
+    assert.equal(call[3], null);
+    assert.equal(preview.status, 'open');
+    f.records[0] = { ...f.records[0], preview: call[2] };
+    f.ack({}); await saving;
+    assert.equal(f.api.matches(f.records[0], { follow_up: 'due' }), !!preview.follow_up_at);
+  }
+  assert.equal(f.api.matches(f.records[0], { priority: 'normal' }), false);
+  assert.throws(() => f.edit('FOLLOW-UP · LOCAL TIME', 'invalid'), /valid follow-up/);
 });
 
 test('a concurrent edit between ACK and readback cannot become the base of an older draft', async () => {

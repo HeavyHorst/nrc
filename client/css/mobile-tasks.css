@@ -1,4 +1,4 @@
-/* Compact task register composition. The 14-cell desktop row remains intact so
+/* Compact task register composition. The 12-cell desktop row remains intact so
    sorting, detail data, and virtual-list table spacers keep one data source. */
 @media (max-width: 768px) {
     .task-list-view {
@@ -21,7 +21,7 @@
         grid-template-columns: minmax(0, 1fr) auto auto;
         grid-template-areas:
             "title title title"
-            "status priority assignee";
+            "status priority due";
         gap: 0.375rem 0.625rem;
         min-height: 4.25rem;
         padding: 0.625rem 0.75rem;
@@ -61,8 +61,8 @@
         text-align: left;
     }
 
-    .task-table tbody tr[data-task-id] > .col-assignee {
-        grid-area: assignee;
+    .task-table tbody tr[data-task-id] > .col-due {
+        grid-area: due;
         align-self: center;
         overflow: hidden;
         max-width: 8rem !important;
@@ -71,7 +71,7 @@
         white-space: nowrap;
     }
 
-    .task-table tbody tr[data-task-id] > :not(.col-title):not(.col-status):not(.col-priority):not(.col-assignee) {
+    .task-table tbody tr[data-task-id] > :not(.col-title):not(.col-status):not(.col-priority):not(.col-due) {
         display: none;
     }
 

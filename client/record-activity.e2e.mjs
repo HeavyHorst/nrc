@@ -97,6 +97,48 @@ try {
   }, ids.task);
   await page.waitForFunction(() => NRCRecordActivity.snapshot().some(s => s.count === 1));
   assert.equal(await page.textContent('#tasksUnreadCount'), '1');
+  await page.click('#attentionBtn');
+  await page.click('[data-attention-filter="all"]');
+  // A read, closed ticket becomes actionable from time alone, without another write.
+  const scheduled = await page.evaluate(async () => {
+    const result = await new Promise((resolve, reject) => NRCAssets.sendCreateAsset(0n, 13, 0, 0n,
+      JSON.stringify({ version: 1, title: 'Verify scheduled customer follow-up', company_id: '', contact_id: '', requester: 'ada@example.test', requester_name: 'Ada', status: 'closed', assignee: myNickname, follow_up_at: String(Date.now() + 4000) }),
+      'Check whether the customer can log in again.', 0, { onSuccess: resolve, onError: reject }));
+    return String(result.asset.assetId);
+  });
+  await page.waitForFunction(id => NRCTickets.state.tickets.some(a => String(a.assetId) === id), scheduled);
+  assert.equal(await page.locator(`[data-attention-key="TICKET:${scheduled}"]`).count(), 0);
+  await page.waitForFunction(id => NRCAttention.getState().rows.some(r => r.key === `TICKET:${id}` && r.chip.label === 'FOLLOW-UP DUE'), scheduled, { timeout: 40000 });
+  const incoming = await author.evaluate(async id => {
+    const result = await new Promise((resolve, reject) => NRCAssets.sendCreateAsset(0n, 14, 2, BigInt(id), JSON.stringify({ version: 1, kind: 'customer_reply', author: 'Ada' }), 'Please check again.', 0, { onSuccess: resolve, onError: reject }));
+    return String(result.asset.assetId);
+  }, scheduled);
+  await page.waitForFunction(id => NRCTickets.snapshot().some(r => String(r.asset.assetId) === id && r.followUpDue && r.waiting && r.unread > 0), scheduled);
+  await page.locator(`[data-attention-key="TICKET:${scheduled}"] .attention-title`).click();
+  await page.waitForSelector('#ticketMetadata');
+  await page.locator('#ticketConversation article').last().scrollIntoViewIfNeeded();
+  await page.waitForFunction(({ id, entry }) => NRCRecordActivity.cursor('ticket', BigInt(id)) >= BigInt(entry), { id: scheduled, entry: incoming });
+  await page.click('#ticketInspectorClose');
+  await page.click('#attentionBtn');
+  await page.locator(`[data-attention-key="TICKET:${scheduled}"]`).waitFor({ state: 'visible' });
+  assert.equal(await page.locator(`[data-attention-key="TICKET:${scheduled}"]`).count(), 1, 'reading must not clear a due follow-up');
+  if (process.env.NRC_ACTIVITY_SCREENSHOTS) {
+    for (const theme of ['matte-black', 'lupine']) {
+      await page.evaluate(theme => setTheme(theme, false), theme);
+      await page.screenshot({ path: `${process.env.NRC_ACTIVITY_SCREENSHOTS}/follow-up-attention-${theme}.png` });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: `${process.env.NRC_ACTIVITY_SCREENSHOTS}/follow-up-attention-narrow.png` });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+  }
+  await page.evaluate(async id => {
+    await new Promise((resolve, reject) => NRCAssets.sendCreateAsset(0n, 14, 2, BigInt(id), JSON.stringify({ version: 1, kind: 'public_reply', author: myNickname }), 'Following up with you.', 0, { onSuccess: resolve, onError: reject }));
+  }, scheduled);
+  await page.waitForFunction(id => NRCTickets.snapshot().some(r => String(r.asset.assetId) === id && r.followUpDue && !r.waiting), scheduled);
+  await page.locator(`[data-attention-key="TICKET:${scheduled}"] .attention-title`).click();
+  await page.getByRole('button', { name: /^Edit FOLLOW-UP/ }).click();
+  await page.getByRole('button', { name: 'CLEAR', exact: true }).click();
+  await page.waitForFunction(id => !NRCAttention.getState().rows.some(r => r.key === `TICKET:${id}`), scheduled);
   assert.deepEqual(errors, []);
-  console.log('PASS: two-user tickets/task comments, own-write exclusion, reading, reply debt, internal/public replies, reload and re-notification');
+  console.log('PASS: two-user activity, reading/replies, reload, automatic timed follow-up in Attention, retained after reading/public reply, cleared via editor');
 } finally { await browser.close(); }

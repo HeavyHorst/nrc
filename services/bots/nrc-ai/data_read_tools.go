@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -44,6 +45,13 @@ func (c *NRCClient) handleDataRead(opcode uint16, payload []byte) {
 	var value any
 	var err error
 	switch opcode {
+	case protocol.S_TicketPage:
+		origin = protocol.C_QueryTickets
+		var p *protocol.TicketPage
+		p, err = protocol.DecodeTicketPage(payload)
+		if err == nil {
+			id, value = p.CorrelationID, p
+		}
 	case protocol.S_TransactionResult:
 		origin = protocol.C_ApplyTransaction
 		var p *protocol.TransactionResult
@@ -95,6 +103,14 @@ func (c *NRCClient) handleDataRead(opcode uint16, payload []byte) {
 	if id != 0 {
 		c.settleDataRead(id, origin, value, err)
 	}
+}
+
+func (c *NRCClient) QueryTickets(ctx context.Context, q json.RawMessage) (*protocol.TicketPage, error) {
+	v, err := c.correlatedDataRead(ctx, protocol.WorkspaceDataConvID, protocol.C_QueryTickets, func(id uint32) ([]byte, error) { return protocol.EncodeTicketQuery(id, q) })
+	if err != nil {
+		return nil, err
+	}
+	return v.(*protocol.TicketPage), nil
 }
 
 func (c *NRCClient) correlatedDataRead(ctx context.Context, convID uint64, opcode uint16, encode func(uint32) ([]byte, error), ticketWrite ...bool) (any, error) {

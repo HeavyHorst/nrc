@@ -22,6 +22,7 @@ window.NRCAttention = (() => {
   const REASONS = [
     ["overdue", "OVERDUE / MY WORK"],
     ["waiting", "OVERDUE / WAITING"],
+    ["ticket_follow_up", "FOLLOW-UP DUE / TICKETS"],
     ["unblocks", "UNBLOCKS / MY WORK"],
     ["ticket_waiting", "CUSTOMER WAITING / ASSIGNED TO ME"],
     ["ticket_inbox", "SUPPORT INBOX / UNASSIGNED"],
@@ -315,14 +316,14 @@ window.NRCAttention = (() => {
   }
 
   function ticketRows() {
-    return (window.NRCTickets?.snapshot() || []).filter(item => item.waiting || item.unread).map(item => {
+    return (window.NRCTickets?.snapshot() || []).filter(item => item.followUpDue || item.waiting || item.unread).map(item => {
       const m = window.NRCTickets.metadata(item.asset), inbox = !m.assignee;
       return {
         kind: "TICKET", group: "ticket", id: item.asset.assetId, title: m.title,
-        reason: inbox ? "ticket_inbox" : item.waiting ? "ticket_waiting" : "ticket_unread",
-        detail: `${inbox ? "UNASSIGNED" : "ASSIGNED TO ME"} · ${m.requester}${item.unread ? ` · ${item.unread} UNREAD` : ""}`,
-        chip: item.waiting ? { label: "REPLY NEEDED", tone: "priority" } : { label: `${item.unread} NEW`, tone: "new" },
-        age: formatAge(item.timestamp), sortKey: -Number(item.timestamp),
+        reason: item.followUpDue ? "ticket_follow_up" : inbox ? "ticket_inbox" : item.waiting ? "ticket_waiting" : "ticket_unread",
+        detail: `${inbox ? "UNASSIGNED" : "ASSIGNED TO ME"} · ${m.requester}${item.followUpDue && item.waiting ? ' · REPLY NEEDED' : ''}${item.unread ? ` · ${item.unread} UNREAD` : ""}`,
+        chip: item.followUpDue ? { label: "FOLLOW-UP DUE", tone: "danger" } : item.waiting ? { label: "REPLY NEEDED", tone: "priority" } : { label: `${item.unread} NEW`, tone: "new" },
+        age: formatAge(item.followUpDue ? BigInt(m.follow_up_at) * 1000000n : item.timestamp), sortKey: item.followUpDue ? Number(m.follow_up_at) : -Number(item.timestamp),
         open: () => window.NRCTickets.open("", String(item.asset.assetId)),
       };
     });

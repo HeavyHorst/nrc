@@ -168,14 +168,15 @@ try {
   assert.equal(await page.locator("#taskSearch").evaluate(el => getComputedStyle(el).fontSize), "16px");
   assert.equal((await page.locator("#mobileTaskSort-trigger").boundingBox()).height, 44);
   await page.locator("#mobileTaskSort-trigger").tap();
-  await page.locator('.custom-select__dropdown:visible').getByRole('option', { name: 'TITLE', exact: true }).tap();
+  await page.locator('.custom-select__dropdown:visible').getByRole('option', { name: 'Title A–Z', exact: true }).tap();
   assert.equal(await page.evaluate(() => TaskViewState.sortColumn), "title");
-  await page.locator("#mobileTaskSortDirection").tap();
+  await page.locator("#mobileTaskSort-trigger").tap();
+  await page.locator('.custom-select__dropdown:visible').getByRole('option', { name: 'Title Z–A', exact: true }).tap();
   assert.equal(await page.evaluate(() => TaskViewState.sortDirection), "desc");
   await page.locator("#mobileTaskSort-trigger").tap();
   await page.locator('.custom-select__dropdown:visible').getByRole('option', { name: 'WORK ORDER', exact: true }).tap();
   assert.equal(await page.evaluate(() => TaskViewState.sortColumn), "workOrder");
-  assert.equal(await page.locator("#mobileTaskSortDirection").isDisabled(), true);
+  assert.equal(await page.evaluate(() => TaskViewState.sortDirection), "asc");
   await capture("task-filters");
   await page.locator("#taskFilterBar [data-mobile-filters]").tap();
   await page.locator('[data-mobile-view="notes"]').tap();

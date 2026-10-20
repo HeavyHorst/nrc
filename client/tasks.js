@@ -2998,9 +2998,9 @@ function renderTaskList() {
   const sorted = ranked ? filtered : getSortedTasks(filtered);
 
   window.NRCColumnResize?.init({
-    root: "#taskListView .task-table", headers: "thead th", storageKey: "nrc.task.columns.v1",
-    defaults: [16, 48, 52, 280, 104, 110, 120, 86, 48, 64, 48, 48, 70, 72],
-    minimums: [16, 48, 44, 160, 84, 72, 88, 72, 40, 48, 40, 40, 56, 56],
+    root: "#taskListView .task-table", headers: "thead th", storageKey: "nrc.task.columns.v2",
+    defaults: [16, 48, 64, 280, 104, 86, 48, 64, 48, 48, 70, 72],
+    minimums: [16, 48, 60, 160, 84, 72, 40, 48, 40, 40, 56, 56],
     locked: [0],
     apply: (table, widths) => {
       table.style.tableLayout = "fixed";
@@ -3037,7 +3037,7 @@ function renderTaskList() {
     else if (searchState?.mode === "loading") message = "SEARCHING TASKS…";
     else if (searchState?.mode === "fallback") message = "SEARCH UNAVAILABLE — LOCAL SEARCH COVERS LOADED TASKS ONLY";
     else if (searchState?.mode === "results") message = searchState.stale ? "NO RESULTS · SEARCH INDEX STALE" : "NO SEARCH RESULTS";
-    tbody.innerHTML = `<tr><td colspan="14" class="task-list-empty">${message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" class="task-list-empty">${message}</td></tr>`;
     renderedTaskListRoomId = 0n;
     taskListDirty = false;
     renderedTaskSearchState = window.NRCTaskSearch?.getState?.() || null;
@@ -3048,7 +3048,7 @@ function renderTaskList() {
 
   if (searchState?.mode === "fallback" || searchState?.stale) {
     const notice = document.createElement("tr");
-    notice.innerHTML = `<td colspan="14" class="task-list-empty">${searchState.mode === "fallback" ? "SEARCH UNAVAILABLE — SHOWING LOADED TASKS ONLY" : "SEARCH INDEX STALE — RESULTS MAY BE OUT OF DATE"}</td>`;
+    notice.innerHTML = `<td colspan="12" class="task-list-empty">${searchState.mode === "fallback" ? "SEARCH UNAVAILABLE — SHOWING LOADED TASKS ONLY" : "SEARCH INDEX STALE — RESULTS MAY BE OUT OF DATE"}</td>`;
     tbody.appendChild(notice);
   }
 
@@ -3056,8 +3056,8 @@ function renderTaskList() {
   if (window.NRCVirtualList && sorted.length > 100) {
     tbody.virtualList = window.NRCVirtualList.create({
       host: tbody, scroller: document.getElementById("taskListView"),
-      items: sorted, columns: 14,
-      estimate: window.matchMedia?.("(max-width: 768px)").matches ? 68 : 32,
+      items: sorted, columns: 12,
+      estimate: window.matchMedia?.("(max-width: 768px)").matches ? 88 : 48,
       render: (task) => createTaskRow(task, { draggable }),
       key: (task) => `${task.convId}:${task.id}`,
       dispose: closeStatusMenuFor,
@@ -3125,6 +3125,10 @@ function createTaskRow(task, { draggable = true } = {}) {
   const renameControl = document.createElement("span");
   renameControl.innerHTML = fieldControl(task, "title", { label: "", rename: true });
   titleTd.appendChild(renameControl);
+  const metadata = document.createElement("div");
+  metadata.className = "register-row-meta";
+  metadata.innerHTML = `${fieldControl(task, "project", { label: "" })}<span aria-hidden="true">·</span>${fieldControl(task, "assignee", { label: "" })}`;
+  titleTd.appendChild(metadata);
   titleTd.title = task.title || "";
   row.appendChild(titleTd);
 
@@ -3135,24 +3139,10 @@ function createTaskRow(task, { draggable = true } = {}) {
   statusTd.appendChild(createTaskStatusControl(task));
   row.appendChild(statusTd);
 
-  // Assignee
-  const asnTd = document.createElement("td");
-  asnTd.className = "col-assignee";
-  asnTd.innerHTML = fieldControl(task, "assignee", { label: "" });
-  asnTd.title = task.assignee || "";
-  row.appendChild(asnTd);
-
   titleButton.setAttribute(
     "aria-label",
     `Open task ${task.id}: ${task.title || "untitled"}. Status ${statusName}. Priority ${priValue}. Assignee ${task.assignee || "unassigned"}`,
   );
-
-  // Project
-  const projectTd = document.createElement("td");
-  projectTd.className = "col-project";
-  projectTd.innerHTML = fieldControl(task, "project", { label: "" });
-  projectTd.title = task.project || "";
-  row.appendChild(projectTd);
 
   // Due date
   const dueTd = document.createElement("td");
@@ -3396,18 +3386,13 @@ function closeStatusMenuFor(node) {
 function updateSortHeaders() {
   const workOrder = TaskViewState.sortColumn === "workOrder";
   const select = document.getElementById("mobileTaskSort");
-  if (select) select.value = TaskViewState.sortColumn;
+  if (select) select.value = workOrder ? 'workOrder' : `${TaskViewState.sortColumn}:${TaskViewState.sortDirection}`;
   const help = document.getElementById("taskWorkOrderHelp");
   if (help) {
     help.hidden = !workOrder;
     help.textContent = TaskViewState.filters.search
       ? "WORK ORDER PAUSED DURING TEXT SEARCH. CLEAR QUERY TO RESTORE DEPENDENCY ORDER."
       : "DEPENDENCIES FIRST · AVAILABLE: PRIORITY, DUE, ID. UNRESOLVED THEN DONE LAST; NOT ALL ROWS ARE RUNNABLE.";
-  }
-  const direction = document.getElementById("mobileTaskSortDirection");
-  if (direction) {
-    direction.disabled = workOrder;
-    direction.textContent = workOrder ? "DEPENDENCY ORDER" : TaskViewState.sortDirection === "asc" ? "ASCENDING ↑" : "DESCENDING ↓";
   }
   const headers = document.querySelectorAll("#taskListView .task-table th[data-sort]");
   headers.forEach((th) => {

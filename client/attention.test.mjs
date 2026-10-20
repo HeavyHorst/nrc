@@ -48,7 +48,7 @@ function reminder(id, title, state, offsetMs) {
 
 // A headless task query controller is replaced by a scripted one: the register
 // asks it for a total per count query and walks the `mine` and dependency rows.
-function harness({ tasks = [], counts = {}, taskPages = null, dependencyPages = null, errors = {}, reminders = [], unread = [], dms = [], retained = null, activeView = "attention" } = {}) {
+function harness({ tasks = [], counts = {}, taskPages = null, dependencyPages = null, errors = {}, reminders = [], unread = [], tickets = [], dms = [], retained = null, activeView = "attention" } = {}) {
   const opened = [];
   const listeners = {};
   const elements = {};
@@ -118,6 +118,7 @@ function harness({ tasks = [], counts = {}, taskPages = null, dependencyPages = 
     NRCSlices: { readAll: () => { throw new Error("ATTENTION must not read slices"); } },
     NRCViewManager: { getActiveView: () => viewState.active, setActiveView() {} },
     NRCInspector: { openEntity: (ref) => opened.push(ref), refreshContext() {} },
+    NRCTickets: { snapshot: () => tickets, metadata: asset => JSON.parse(asset.preview), open: (_, id) => opened.push(id) },
   };
 
   // The register walks the same openers the browser would: one per rendered row,
@@ -211,6 +212,24 @@ function harness({ tasks = [], counts = {}, taskPages = null, dependencyPages = 
     runTimers: () => { for (const timer of timers.splice(0)) timer?.callback(); },
     timerCount: () => timers.length };
 }
+
+test("due ticket follow-ups win the single row reason without hiding reply debt or unread", () => {
+  const item = (id, overrides = {}) => ({ asset: { assetId: BigInt(id), preview: JSON.stringify({ title: `Ticket ${id}`, assignee: 'rene', requester: 'ada@example.test', follow_up_at: String(now - DAY) }) }, followUpDue: true, waiting: false, unread: 0, timestamp: nanos(now), ...overrides });
+  const tickets = [item(1), item(2, { waiting: true, unread: 3 }), item(3, { followUpDue: false })];
+  const h = harness({ tickets });
+  h.attention.refresh();
+  const rows = h.attention.getState().rows;
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every(row => row.reason === 'ticket_follow_up' && row.chip.label === 'FOLLOW-UP DUE'));
+  assert.match(rows.find(row => row.id === 2n).detail, /REPLY NEEDED.*3 UNREAD/);
+  rows[0].open(); assert.deepEqual(h.opened, ['1']);
+  tickets[1].unread = 0; h.attention.refresh();
+  assert.equal(h.attention.getState().rows.length, 2, 'reading cannot clear a scheduled follow-up');
+  tickets[0].followUpDue = tickets[1].followUpDue = false;
+  h.attention.refresh();
+  assert.equal(h.attention.getState().rows.length, 1);
+  assert.equal(h.attention.getState().rows[0].reason, 'ticket_waiting', 'rescheduling still preserves independent reply debt');
+});
 
 test("only actionable tasks are rows; slices and ordinary blocked tasks are excluded", () => {
   const prerequisite = task(3);

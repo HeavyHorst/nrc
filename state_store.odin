@@ -58,8 +58,11 @@ task_store_assert_counts :: proc(conv: ^Conversation_State) {
 }
 
 asset_store_put :: proc(ws: ^Workspace_State, workspace_id: string, conv: ^Conversation_State, asset: ^pr.Asset) {
+	old_parent: pr.AssetID
 	if old := conv.assets[asset.asset_id]; old != nil {
 		assert(old != asset, "asset_store_put requires a distinct owned post-image")
+		if old.asset_type == .TicketEntry && old.parent_type == .Asset do old_parent = pr.AssetID(old.parent_id)
+		ticket_index_remove(conv, old, asset.asset_type == .Ticket)
 		remove_room_mapping_asset(ws, old)
 		// Removal reads the old asset's metadata from the map.
 		remove_note_asset_from_index(conv, old.asset_id)
@@ -67,16 +70,21 @@ asset_store_put :: proc(ws: ^Workspace_State, workspace_id: string, conv: ^Conve
 	}
 	state_map_set(&conv.assets, asset.asset_id, asset)
 	index_note_asset(conv, asset)
+	ticket_index_put(conv, asset)
+	if old_parent != 0 do ticket_index_repair(conv, old_parent)
 	index_room_mapping_asset(ws, workspace_id, asset)
 	when ODIN_DEBUG do asset_store_assert_counts(conv)
 }
 
 asset_store_remove :: proc(ws: ^Workspace_State, conv: ^Conversation_State, id: pr.AssetID) {
 	if old := conv.assets[id]; old != nil {
+		parent := old.asset_type == .TicketEntry && old.parent_type == .Asset ? pr.AssetID(old.parent_id) : 0
+		ticket_index_remove(conv, old)
 		remove_room_mapping_asset(ws, old)
 		remove_note_asset_from_index(conv, id)
 		delete_key(&conv.assets, id)
 		free_asset(old)
+		if parent != 0 do ticket_index_repair(conv, parent)
 	}
 	when ODIN_DEBUG do asset_store_assert_counts(conv)
 }

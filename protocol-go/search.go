@@ -52,6 +52,8 @@ type SearchMetadata struct {
 }
 
 type SearchTicketMetadata struct {
+	Priority      string `json:"priority"`
+	FollowUpAt    string `json:"follow_up_at"`
 	Title         string `json:"title"`
 	Status        string `json:"status"`
 	Assignee      string `json:"assignee"`
@@ -63,6 +65,7 @@ type SearchTicketMetadata struct {
 
 // Ticket filters apply to the parent ticket before conversation ranking/limiting.
 type SearchTicketFilters struct {
+	Priority  string `json:"priority,omitempty"`
 	Status    string `json:"status,omitempty"`
 	Assignee  string `json:"assignee,omitempty"`
 	CompanyID string `json:"company_id,omitempty"`

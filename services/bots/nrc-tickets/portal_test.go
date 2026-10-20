@@ -32,6 +32,21 @@ func TestPublicHealth(t *testing.T) {
 	}
 }
 
+func TestStaffSchedulingIsPrivate(t *testing.T) {
+	s := &portal{}
+	for _, extra := range []string{"", `,"priority":"urgent","follow_up_at":"123"`} {
+		a := p.Asset{AssetID: 1, AssetType: ticketType, Preview: `{"version":1,"title":"Help","requester":"ada","status":"open"` + extra + `}`, Payload: "original"}
+		v, ok := s.project(a, account{Requester: "ada"}, nil)
+		if !ok {
+			t.Fatal("optional scheduling broke projection")
+		}
+		b, err := json.Marshal(v)
+		if err != nil || strings.Contains(string(b), "priority") || strings.Contains(string(b), "follow_up") {
+			t.Fatalf("private schedule leaked: %s %v", b, err)
+		}
+	}
+}
+
 type fakeSource struct {
 	mu     sync.Mutex
 	assets map[uint64]p.Asset

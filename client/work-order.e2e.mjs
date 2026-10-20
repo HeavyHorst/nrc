@@ -72,7 +72,7 @@ try {
     await choose('#mobileTaskSort', 'WORK ORDER');
     await page.waitForFunction(() => NRCTaskQuery.getState().mode === 'results' && NRCTaskQuery.getState().query.sort === 'workOrder');
     assert.deepEqual(await page.locator('#taskListBody tr[data-task-id]').evaluateAll(rows => rows.slice(0, 4).map(r => r.dataset.taskId)), fixture.ids.slice(0, 4));
-    assert.equal(await page.locator('#mobileTaskSortDirection').isDisabled(), true);
+    assert.equal(await page.evaluate(() => TaskViewState.sortDirection), 'asc');
     await capture(`flat-${theme}-${width}`);
     await page.evaluate(async id => {
       setTaskGrouping('slices');

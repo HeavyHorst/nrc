@@ -49,10 +49,20 @@ try {
     roomTasks.set(0n, tasks);
     NRCAssets.roomAssets.set(0n, new Map());
     NRCLinksUI.loadLinks = async () => {};
+    window.NRCTaskQuery = undefined; // This fixture renders its local task cache.
     taskListDirty = true;
     window.__sends = [];
-    ws.send = () => { window.__sends.push(1); };
+    ws.send = buffer => { if (new DataView(buffer).getUint16(0, false) === Opcode.C_UpdateTask) window.__sends.push(1); };
   });
+
+  await page.evaluate(() => { setTaskGrouping('flat'); NRCViewManager.setActiveView('kanban'); renderTaskList(); });
+  const metadata = page.locator('#taskListBody tr[data-task-id="6"] .register-row-meta');
+  for (const field of ['project', 'assignee']) {
+    await metadata.locator(`nrc-inline-field[data-control$="-${field}"] button`).click();
+    assert.equal(await dropdownVisible(), true, `${field} remains editable below the title`);
+    assert.equal(await page.evaluate(() => NRCInspector.hasEntity()), false, 'metadata editing does not open the inspector');
+    await page.keyboard.press('Escape');
+  }
 
   await openTaskEdit(6);
   await assignee.click();
@@ -104,7 +114,7 @@ try {
     NRCAssets.roomAssets.set(0n, new Map([[88n, company]]));
     NRCAssets.requestAsset = (_room, _id, options) => { options.onSuccess({ asset: company }); return 1; };
     window.companyWrites = [];
-    NRCAssets.sendUpdateAsset = (...args) => { companyWrites.push(args); return 1; };
+    NRCTransactions.sendAssetMetadataPatch = (...args) => { companyWrites.push(args); return 1; };
     await NRCInspector.openEntity({ roomId: 0n, type: "company", id: 88n, subview: "edit" });
   });
   const responsible = () => page.getByRole("button", { name: /^Edit RESPONSIBLE:/ });
@@ -131,7 +141,8 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await page.locator('input[name="assignee"]').inputValue(), "ben");
   await page.locator("#customerSave").click();
-  assert.equal(await page.evaluate(() => JSON.parse(companyWrites[0][2]).assignee), "ben", "the existing form SAVE includes the chosen person");
+  await page.waitForFunction(() => companyWrites.length === 1);
+  assert.equal(await page.evaluate(() => JSON.parse(companyWrites[0][1]).assignee), "ben", "the existing form SAVE includes the chosen person");
   assert.equal(await responsible().isDisabled(), true, "a pending record save locks the person field");
   await page.evaluate(() => companyWrites[0].at(-1).onError({ message: "Test rejection" }));
   await page.waitForFunction(() => document.getElementById("customerEditorError")?.textContent === "Test rejection");

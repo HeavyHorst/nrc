@@ -63,6 +63,18 @@ try {
     };
   });
 
+  await page.evaluate(() => {
+    Object.assign(getNotesPaginationState(0n), { initialized: true, loading: false, hasMore: false });
+    NRCViewManager.setActiveView('notes'); renderNotesView();
+  });
+  const metadata = page.locator('#notesList .note-card').first().locator('.register-row-meta');
+  assert.match(await metadata.innerText(), /anna/);
+  assert.match(await metadata.innerText(), /Updated/);
+  await metadata.locator('nrc-inline-field button').click();
+  assert.equal(await page.locator('.inline-field-editor').isVisible(), true, 'project stays editable in the second line');
+  assert.equal(await page.evaluate(() => NRCInspector.hasEntity()), false, 'metadata editing does not open the note');
+  await page.keyboard.press('Escape');
+
   // Markdown references share the inspector's cache, lazy reads and history.
   await page.evaluate(async () => {
     const source = NRCAssets.roomAssets.get(0n).get(1n);

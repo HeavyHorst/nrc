@@ -68,6 +68,14 @@ func TestTicketCLIEndToEnd(t *testing.T) {
 	run(false, "ticket", "update", ticket, "--expect-updated-at", "1", "--status", "resolved")
 	run(false, "ticket", "update", ticket, "--body", "no")
 	run(true, "ticket", "update", ticket, "--status", "in_progress", "--assignee", "staff")
+	run(true, "ticket", "update", ticket, "--priority", "urgent", "--follow-up", "2020-01-02T13:45:00+01:00")
+	if result := run(true, "ticket", "list", "--priority", "urgent", "--follow-up-due"); string(result["count"]) != "1" {
+		t.Fatalf("server due ticket missing: %v", result)
+	}
+	run(true, "ticket", "update", ticket, "--follow-up", "")
+	if result := run(true, "ticket", "list", "--follow-up-due"); string(result["count"]) != "0" {
+		t.Fatalf("cleared follow-up still due: %v", result)
+	}
 	run(true, "edge", "create", "--source-type", "asset", "--source-id", other, "--target-type", "asset", "--target-id", contact, "--relation", "member-of")
 	run(false, "ticket", "create", "--title", "Ambiguous", "--requester", "user@example.test", "--body", "body", "--contact", contact)
 	// Explicit selection is accepted even with memberships in both directions.

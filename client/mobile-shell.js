@@ -81,15 +81,9 @@
     button.onclick = () => {
       const open = button.closest(".panel-header").classList.toggle("mobile-filters-open");
       button.setAttribute("aria-expanded", String(open));
-      el("mobileTaskSort").value = TaskViewState.sortColumn;
       updateSortHeaders();
     };
   });
-  el("mobileTaskSortDirection").onclick = () => {
-    if (TaskViewState.sortColumn === "workOrder") return;
-    document.querySelector(`#taskListView .task-table th[data-sort="${TaskViewState.sortColumn}"]`).click();
-    el("mobileTaskSortDirection").textContent = TaskViewState.sortDirection === "asc" ? "ASCENDING ↑" : "DESCENDING ↓";
-  };
   document.querySelectorAll("[data-mobile-target]").forEach(button => {
     button.onclick = () => {
       if (button.dataset.mobileView === "chat") openChatRoom(currentRoomId);

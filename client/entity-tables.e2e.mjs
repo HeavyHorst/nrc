@@ -22,6 +22,7 @@ try {
     currentRoomId = 7n;
     currentWorkspaceId = "table-test";
     myNickname = "tester";
+    window.NRCTaskQuery = undefined; // Render the fixture cache, without server paging.
     const stamp = BigInt(Date.now()) * 1000000n;
     const assets = new Map();
     const tasks = new Map();
@@ -81,7 +82,8 @@ try {
         });
         assert.equal(dimensions.width, "1px", `${view} row separator at ${width}`);
         if (width > 768) {
-          assert.ok(Math.abs(dimensions.height - 34) < 1, `${view} row height: ${dimensions.height}`);
+          if (view === 'reminders') assert.ok(Math.abs(dimensions.height - 34) < 1, `${view} row height: ${dimensions.height}`);
+          else assert.ok(dimensions.height >= 44, `${view} has space for title and metadata: ${dimensions.height}`);
           borders.push(dimensions.border);
           const headerSelector = { tasks: ".task-table:has(#taskListBody) thead tr", notes: ".notes-list-header", reminders: ".reminder-list-header" }[view];
           const header = page.locator(headerSelector);
@@ -119,9 +121,21 @@ try {
           await page.keyboard.press("Home");
           assert.equal(await handle.getAttribute("aria-valuenow"), "48");
           assert.ok(Math.abs(await header.locator(":scope > :nth-child(2)").evaluate(cell => cell.getBoundingClientRect().width) - 48) < 1, `${view} rendered ID width follows reset`);
+          if (view === 'notes') {
+            const titleHandle = header.getByRole('separator', { name: 'Resize TITLE column', exact: true });
+            const titleCell = header.locator(':scope > :nth-child(3)');
+            const before = (await titleCell.boundingBox()).width;
+            await titleHandle.focus(); await page.keyboard.press('ArrowRight');
+            assert.equal((await titleCell.boundingBox()).width, before + 8, 'keyboard resize moves the actual title boundary');
+            const box = await titleHandle.boundingBox();
+            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+            await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2); await page.mouse.up();
+            assert.equal((await titleCell.boundingBox()).width, before + 88, 'pointer resize moves the actual title boundary');
+            await titleHandle.focus(); await page.keyboard.press('Home');
+          }
         }
         if (width <= 768 && view === "tasks") {
-          const renameRights = await page.locator(`${selector} .col-title nrc-inline-field`).evaluateAll(fields => fields.map(field => field.getBoundingClientRect().right));
+          const renameRights = await page.locator(`${selector} .col-title > span nrc-inline-field`).evaluateAll(fields => fields.map(field => field.getBoundingClientRect().right));
           assert.ok(Math.max(...renameRights) - Math.min(...renameRights) < 1, `Mobile task rename controls share one position: ${renameRights.join(", ")}`);
         }
         if (width <= 768 && view === "notes") {
@@ -211,8 +225,9 @@ try {
     await page.waitForFunction(view => document.querySelector(view === "tasks" ? "#taskListBody tr[data-task-id]" : "#notesList .note-card")
       ?.classList.contains(view === "tasks" ? "task-row-selected" : "note-selected"), view);
     if (view === "tasks") {
-      assert.deepEqual(await row.locator(":scope > :is(.col-status, .col-priority, .col-assignee, .col-blk, .col-ref, .col-att, .col-cmt)").allTextContents(),
-        ["240", "IN PROGRESS", "tester", "#2", "https://example.com/nrc/register-review", "2", "2"], "compact task fixture fills every status and signal field");
+      assert.deepEqual(await row.locator(":scope > :is(.col-status, .col-priority, .col-blk, .col-ref, .col-att, .col-cmt)").allTextContents(),
+        ["240", "IN PROGRESS", "#2", "https://example.com/nrc/register-review", "2", "2"], "compact task fixture fills every status and signal field");
+      assert.match(await row.locator('.register-row-meta').textContent(), /tester/);
       assert.notEqual(await row.locator(".col-due").textContent(), "—", "compact task fixture includes a due date");
       await page.getByText("Validate the responsive two-line register with complete operational metadata.", { exact: true }).waitFor();
     }
@@ -220,19 +235,18 @@ try {
     const inspectorWidth = (await page.locator("#inspector").boundingBox()).width;
     assert.equal(inspectorWidth, 720, `${view} restores the persisted wide Inspector`);
     assert.ok(hostWidth <= 700, `${view} fixture enters the compact container range (${hostWidth}px list / ${inspectorWidth}px Inspector)`);
-    assert.equal((await row.boundingBox()).height, 50, `${view} uses the two-line desktop row beside a wide Inspector`);
+    assert.ok((await row.boundingBox()).height >= 50, `${view} makes space for title, metadata and operational fields`);
     assert.equal(await row.evaluate(el => getComputedStyle(el).borderBottomWidth), "1px", `${view} compact row retains its shared divider`);
     const compact = await row.evaluate((element, view) => {
-      const title = element.querySelector(view === "tasks" ? ".col-title" : ".note-header").getBoundingClientRect();
-      const metadata = element.querySelector(view === "tasks" ? ".col-status" : ".note-project").getBoundingClientRect();
-      const hidden = element.querySelector(view === "tasks" ? ".col-project" : ".note-updated");
+      const title = element.querySelector('.task-row-open').getBoundingClientRect();
+      const metadata = element.querySelector('.register-row-meta').getBoundingClientRect();
       return {
         titleAboveMetadata: title.bottom <= metadata.top + 1,
-        hiddenSecondaryField: getComputedStyle(hidden).display === "none",
+        titleUsable: title.width > 100,
         overflow: element.scrollWidth - element.clientWidth,
       };
     }, view);
-    assert.deepEqual({ ...compact, overflow: compact.overflow > 1 }, { titleAboveMetadata: true, hiddenSecondaryField: true, overflow: false }, `${view} keeps identity above aligned metadata without overflow (${compact.overflow}px)`);
+    assert.deepEqual({ ...compact, overflow: compact.overflow > 1 }, { titleAboveMetadata: true, titleUsable: true, overflow: false }, `${view} keeps identity above aligned metadata without overflow (${compact.overflow}px)`);
     await page.screenshot({ path: `.amp/in/artifacts/entity-${view}-compact-inspector.png` });
   }
   await page.evaluate(() => { document.documentElement.dataset.theme = "matte-black"; });
@@ -245,7 +259,7 @@ try {
     const row = page.locator(view === "tasks" ? "#taskListBody tr[data-task-id]" : "#notesList .note-card").first();
     await row.click();
     await page.waitForFunction(view => NRCInspector.current()?.type === (view === "tasks" ? "task" : "note"), view);
-    assert.equal((await row.boundingBox()).height, 50, `${view} keeps the compact register geometry in the dark theme`);
+    assert.ok((await row.boundingBox()).height >= 50, `${view} keeps the compact register geometry in the dark theme`);
     assert.equal(await row.evaluate(element => element.scrollWidth - element.clientWidth > 1), false, `${view} dark compact row does not overflow`);
     await page.screenshot({ path: `.amp/in/artifacts/entity-${view}-compact-inspector-dark.png` });
   }
@@ -263,8 +277,39 @@ try {
     const row = page.locator(view === "tasks" ? "#taskListBody tr[data-task-id]" : "#notesList .note-card").first();
     assert.equal((await page.locator("#inspector").boundingBox()).width, 440, `${view} restores the persisted narrow Inspector`);
     assert.ok((await host.boundingBox()).width > 700, `${view} fixture leaves the compact container range`);
-    assert.ok(Math.abs((await row.boundingBox()).height - 34) < 1, `${view} restores the one-line desktop row when the Inspector narrows`);
+    assert.ok((await row.boundingBox()).height >= 44, `${view} retains its title and second-line metadata`);
   }
+  await page.evaluate(async () => { await NRCInspector.close(); showNotesView(); });
+  const noteHost = page.locator('#notesPanel .notes-container');
+  await noteHost.evaluate(el => { el.style.width = '800px'; });
+  const noteTitleHandle = page.getByRole('separator', { name: 'Resize TITLE column', exact: true });
+  await noteTitleHandle.focus();
+  for (let i = 0; i < 40; i++) await page.keyboard.press('ArrowRight');
+  await noteHost.evaluate(el => { el.scrollLeft = el.scrollWidth; });
+  const visibleAge = await page.locator('#notesList .note-card').first().evaluate(row => {
+    const host = row.closest('.notes-container').getBoundingClientRect();
+    const age = row.querySelector('.note-body').getBoundingClientRect();
+    return age.right <= host.right + 1 && age.left >= host.left && age.right <= row.getBoundingClientRect().right + 1;
+  });
+  assert.equal(visibleAge, true, 'widened note columns can scroll their trailing age fully into view');
+  await noteTitleHandle.focus(); await page.keyboard.press('Home');
+  await noteHost.evaluate(el => { el.style.width = '380px'; el.scrollLeft = 0; });
+  const narrowNote = page.locator('#notesList .note-card').first();
+  assert.ok((await narrowNote.locator('.task-row-open').boundingBox()).width > 100, 'title remains usable in a 380px desktop register');
+  assert.equal(await page.locator('.notes-list-header').evaluate(header => {
+    const bounds = header.getBoundingClientRect();
+    const title = header.children[2].getBoundingClientRect();
+    const tags = header.children[3].getBoundingClientRect();
+    return title.bottom <= tags.top && title.top >= bounds.top && tags.bottom <= bounds.bottom;
+  }), true, 'compact title and tags headers occupy separate rows inside the header');
+  await page.evaluate(() => { serverReady = true; renderNotesView(); });
+  await narrowNote.locator('.note-project button').click();
+  assert.equal(await page.locator('.inline-field-editor').isVisible(), true, 'narrow project editor remains reachable');
+  await page.keyboard.press('Escape');
+  assert.equal(await narrowNote.evaluate(row => row.scrollWidth <= row.clientWidth + 1), true);
+  await page.screenshot({ path: '.amp/in/artifacts/entity-notes-380px.png' });
+  await noteHost.evaluate(el => { el.style.width = ''; });
+
   // Old grid layouts contain a 24px locked marker. Collapse only that column;
   // preserve an intentionally widened ID and asymmetric title width.
   const restored = await page.evaluate(() => {
@@ -298,7 +343,7 @@ try {
         document.documentElement.dataset.theme = theme;
         document.documentElement.style.setProperty("--border-list", "rgb(13, 57, 91)");
       }, theme);
-      for (const selector of [".note-card", ".reminder-row", ".attention-row", '.task-table tbody tr:not([aria-hidden="true"])', ".customer-row", ".customer-event", ".slice-row", ".file-assets-picker-row", "#divider-fixtures .file-assets-row:first-child", ".customer-contact", ".slice-member"]) {
+      for (const selector of [".note-card", ".reminder-row", ".attention-row", '.task-table tbody tr:not([aria-hidden="true"])', ".customer-row", ".customer-event:not(.history-event)", ".slice-row", ".file-assets-picker-row", "#divider-fixtures .file-assets-row:first-child", ".customer-contact", ".slice-member"]) {
         const rows = page.locator(selector);
         assert.ok(await rows.count(), `${selector} has a catalogue fixture`);
         const edge = [".customer-contact", ".slice-member"].includes(selector) ? "borderTop" : "borderBottom";

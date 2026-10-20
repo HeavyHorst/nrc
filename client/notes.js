@@ -555,12 +555,12 @@ function renderNotesViewIfNeeded() {
 
 function renderNotesView({ append = false, debounce = false } = {}) {
   window.NRCColumnResize?.init({
-    root: ".notes-container", headers: ".notes-list-header > div", storageKey: "nrc.note.columns.v3",
-    // Keep the hidden slot so saved data-column widths retain their indexes.
-    defaults: [0, 48, 260, 130, 170, 110, 72, 72],
-    minimums: [16, 48, 140, 88, 104, 80, 56, 56],
+    root: ".notes-container", headers: ".notes-list-header > div", storageKey: "nrc.note.columns.v4",
+    // The hidden selection slot shares the header and row grid.
+    defaults: [0, 48, 340, 170, 72],
+    minimums: [16, 48, 180, 104, 56],
     locked: [0],
-    apply: (container, widths) => container.style.setProperty("--note-columns", widths.map((width) => `${width}px`).join(" ")),
+    apply: (container, widths) => container.style.setProperty("--note-columns", widths.map(width => `${width}px`).join(" ")),
   });
   const notesList = document.getElementById("notesList");
   if (!notesList) return;
@@ -666,6 +666,7 @@ function renderNotesLocal(notesList, searchTerm, { append = false } = {}) {
       host: notesList,
       scroller: document.querySelector("#notesPanel .notes-container"),
       items: notes,
+      estimate: window.matchMedia("(max-width: 768px)").matches ? 104 : 48,
       render: createNoteCard,
       key: (note) => `${note.convId}:${note.assetId}`,
       dispose: (row) => {
@@ -834,6 +835,9 @@ function createNoteCard(note) {
   titleEl.innerHTML = `<button type="button" class="task-row-open">${escapeHtml(title || "(No title)")}</button>${noteFieldControl(note, "title", { label: "", rename: true })}`;
   titleEl.title = title || "(No title)";
   header.appendChild(titleEl);
+  const metadata = document.createElement("div");
+  metadata.className = "register-row-meta";
+  header.appendChild(metadata);
 
   card.appendChild(header);
 
@@ -841,7 +845,7 @@ function createNoteCard(note) {
   projectEl.className = "note-project";
   projectEl.innerHTML = noteFieldControl(note, "project", { label: "" }) || escapeHtml(project || "—");
   projectEl.title = project || "No project";
-  card.appendChild(projectEl);
+  metadata.appendChild(projectEl);
 
   const tagsEl = document.createElement("div");
   tagsEl.className = "note-tags";
@@ -852,9 +856,9 @@ function createNoteCard(note) {
 
   const ownerEl = document.createElement("div");
   ownerEl.className = "note-owner";
-  ownerEl.textContent = note.owner || "—";
+  ownerEl.textContent = note.owner ? `· ${note.owner}` : "";
   ownerEl.title = note.owner || "No owner";
-  card.appendChild(ownerEl);
+  metadata.appendChild(ownerEl);
 
   const body = document.createElement("div");
   body.className = "note-body";
@@ -868,9 +872,9 @@ function createNoteCard(note) {
   const updatedEl = document.createElement("div");
   updatedEl.className = "note-updated";
   const updatedStr = note.updatedAt && typeof formatRelativeAge === "function" ? formatRelativeAge(note.updatedAt) : formatNoteTimestamp(note.updatedAt);
-  updatedEl.textContent = updatedStr && updatedStr !== createdStr ? updatedStr : "—";
+  updatedEl.textContent = note.updatedAt ? `· Updated ${updatedStr}` : "";
   updatedEl.title = note.updatedAt ? `Updated ${formatNoteTimestamp(note.updatedAt)}` : "Not updated";
-  card.appendChild(updatedEl);
+  metadata.appendChild(updatedEl);
 
   const prefetch = () => window.NRCInspector?.prefetchNote?.({ roomId: note.convId, id: note.assetId });
   card.addEventListener("pointerenter", (event) => {

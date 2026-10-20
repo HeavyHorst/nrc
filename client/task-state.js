@@ -141,10 +141,13 @@ function getSortedTasks(tasks) {
   });
 }
 
-function toggleSort(column) {
+function toggleSort(column, direction) {
   if (column === "workOrder") {
     TaskViewState.sortColumn = column;
     TaskViewState.sortDirection = "asc";
+  } else if (direction) {
+    TaskViewState.sortColumn = column;
+    TaskViewState.sortDirection = direction;
   } else if (TaskViewState.sortColumn === column) {
     TaskViewState.sortDirection =
       TaskViewState.sortDirection === "asc" ? "desc" : "asc";
@@ -501,8 +504,8 @@ function initTaskViewState() {
   // Sort headers (for list view)
   const taskSort = document.getElementById("mobileTaskSort");
   if (taskSort) {
-    taskSort.value = TaskViewState.sortColumn;
-    taskSort.addEventListener("change", () => toggleSort(taskSort.value));
+    taskSort.value = TaskViewState.sortColumn === "workOrder" ? "workOrder" : `${TaskViewState.sortColumn}:${TaskViewState.sortDirection}`;
+    taskSort.addEventListener("change", () => toggleSort(...taskSort.value.split(":")));
   }
   document.querySelectorAll("#taskListView .task-table th[data-sort]").forEach((th) => {
     th.addEventListener("click", () => toggleSort(th.dataset.sort));

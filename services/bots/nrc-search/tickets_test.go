@@ -113,6 +113,24 @@ func TestTicketConversationSearchHTTPAndReload(t *testing.T) {
 	if err != nil || len(got) != 2 {
 		t.Fatalf("restart lost conversation metadata: %#v %v", got, err)
 	}
+	// Simulate metadata cached before priority existed.
+	for _, result := range got {
+		entry, _ := index.GetEntity(result.Entity)
+		entry.Metadata.Ticket.Priority = ""
+	}
+	got, err = index.SearchText("ws", "distinctive", 0, SearchFilters{Ticket: &protocol.SearchTicketFilters{Priority: "normal"}})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("legacy normal filtering: %#v %v", got, err)
+	}
+	for _, result := range got {
+		if result.Metadata.Ticket.Priority != "normal" {
+			t.Fatal("legacy priority not normalized")
+		}
+	}
+	got, err = index.SearchText("ws", "distinctive", 0, SearchFilters{Ticket: &protocol.SearchTicketFilters{Priority: "urgent"}})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("urgent filter matched normal: %#v %v", got, err)
+	}
 	got, err = index.SearchText("ws", `R&D "timeout"`, 0, SearchFilters{Ticket: &protocol.SearchTicketFilters{Status: "open", Assignee: "Sam", CompanyID: "8"}})
 	if err != nil || len(got) != 2 {
 		t.Fatalf("restart lost literal metadata search: %#v %v", got, err)

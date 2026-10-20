@@ -75,6 +75,70 @@ request attachments and each entry's attachments use the existing file ledger.
 Task completion never changes ticket status. Drafts are kept during navigation,
 but are not persisted across page reloads.
 
+## Priority, follow-up and history
+
+Tickets have LOW, NORMAL, HIGH and URGENT priority. Missing `priority` on older
+records means NORMAL; no migration is needed. Staff can set priority when creating
+a ticket or through the Inspector, filter it, and sort by its semantic order.
+CLI and Sullivan use the same values (`low`, `normal`, `high`, `urgent`), including
+the ticket search filter. These are independent of linked task priorities.
+
+FOLLOW-UP is an optional staff scheduling timestamp. The browser edits and displays
+it in local time; clear the date to remove it. The DUE filter selects positive
+timestamps at or before server time, regardless of ticket status, assignee or
+reply debt; other selected filters still apply. Refresh the list to reevaluate
+time alone passing. It does not send notifications, create a reminder asset, change
+status or clear automatically on a reply. Unscheduled records sort as zero (first
+ascending, last descending). With both DUE and search selected, the register uses
+server substring search before pagination rather than filtering ranked top-100
+results afterward.
+
+Due follow-ups also appear automatically in ATTENTION for tickets assigned to the
+operator or unassigned, even when read, answered or closed. FOLLOW-UP DUE is the
+primary reason; reply debt and unread counts remain visible on that same row.
+Reading and replies do not clear it: reschedule or clear the date. The connected
+client refreshes the server's Attention snapshot every 30 seconds and immediately
+when the tab becomes visible. Background browser throttling can delay polling;
+reconnect rebuilds the snapshot. No desktop notification or reminder asset is created.
+The Tickets navigation badge remains an unread count; the Attention count includes
+due follow-ups.
+
+Attention polling opts into `omit_total_count: true` on descending-ID ticket
+queries. The response marks `total_count_omitted: true`; its zero `total_count`
+is unavailable, not an exact count. The client walks `has_more` pages and counts
+the complete result. Queries without this opt-in retain exact totals. Other sort
+orders and text searches retain the existing scan path.
+
+The fast path merges the operator and unassigned ranges of a worker-owned
+assignee/ID B-tree. Per-ticket decoded metadata and conversation summaries are
+maintained by the central asset store, including replay and transaction patches.
+Customer-reply IDs provide unread counts by binary search against the personal
+read watermark. Due state is evaluated against server time, never cached.
+The existing `asset_parents` index supplies children for reconstruction and
+repairs after deleting/reclassifying an activity maximum; no duplicate parent
+index, persistent projection or WAL format is introduced. Such repairs still
+cost a scan of the affected ticket's entries. Empty/sparse Attention results
+can still visit all own/unassigned ticket summaries, but not all entry histories.
+Pages are live rather than a point-in-time snapshot; concurrent edits or a newly
+due ticket above the cursor are reconciled on the next refresh.
+
+Preview metadata adds optional `priority` and `follow_up_at`. The latter is an
+empty string (or absent) for none, otherwise canonical positive signed-i64 Unix
+milliseconds encoded as a string. Both fields remain private in the customer portal.
+Deploy the updated server and search service before their clients.
+
+```sh
+nrc ticket update 123 --priority urgent --follow-up '2026-10-23T09:00:00+02:00'
+nrc ticket list --priority urgent --follow-up-due
+nrc ticket update 123 --follow-up ''
+nrc ticket search 'login' --priority high
+```
+
+HISTORY in the Ticket Inspector opens the existing durable asset-scoped change
+register, including related links. Ticket links in History reopen the Ticket
+Inspector. This reuses the general history: metadata changes still say Details,
+without old/new field values. The ticket conversation remains separate.
+
 ## Attention and read state
 
 The Tickets navigation badge counts unread tickets assigned to the signed-in

@@ -19,6 +19,77 @@ This document lists the benchmarks currently in this repository, what they measu
 7. Disk, network, and concurrent workloads use explicit stopwatches because their multi-phase boundaries do not fit a single microbenchmark callback. Their output must state warm/cold cache and durability semantics.
 8. Allocation counts are separate runs with explicit tracking allocators. Do not compare allocator-instrumented timing with normal timing.
 
+## Ticket Attention collection
+
+`main.benchmark_ticket_attention` compares the retained scanning/counting path
+with indexed descending-ID Attention and `omit_total_count`. Both return the
+same IDs. It measures first-page and complete walks, including per-page arena
+lifetime, byte-budget checks and final serialization. Fixtures are built outside
+the read timings: half the tickets assigned to the reader, 10% of all tickets
+due, all closed/read with public replies, plus one unrelated note per ticket.
+Pages contain at most 100 rows. Warm-up and calibration target at least 0.6s per
+sample; a single slow complete scan can exceed that. Checksums are independently
+derived from fixture IDs. There is no network, persistence, concurrent traffic
+or production TLSF allocator in these timings.
+
+The same process reports index reconstruction from existing parent ranges and
+separately calibrated metadata-maintenance and add/remove-newest-reply cycles.
+The latter forces a parent-history repair; these are index maintenance costs,
+not complete WAL write latency. Reconstruction is a single sample per process,
+not a warmed throughput result or disk-replay benchmark. Separate tracking runs
+measure retained requested bytes for the new projection only (not RSS, allocator
+overhead, primary assets or the already-existing parent index), first with public
+replies and then with all customer replies to include retained ID vectors.
+
+```sh
+HEGEL_LIBHEGEL_PATH=$(./test/fetch_libhegel.sh) odin build . -build-mode:test \
+  -o:speed -out:/tmp/nrc-ticket-attention-bench \
+  -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false \
+  -define:ODIN_TEST_NAMES=main.benchmark_ticket_attention
+for sample in $(seq 1 10); do
+  for spec in '100 10' '1000 10' '10000 10' '10000 100'; do
+    set -- $spec
+    BENCH_TICKET_ATTENTION=1 MEASURE_TICKETS=$1 MEASURE_ENTRIES=$2 /tmp/nrc-ticket-attention-bench
+  done
+done
+# Run separately from timing; 1 = public replies, 2 = customer replies.
+for mode in 1 2; do
+  BENCH_TICKET_ATTENTION=1 BENCH_TICKET_ALLOC=$mode MEASURE_TICKETS=10000 \
+    MEASURE_ENTRIES=100 /tmp/nrc-ticket-attention-bench
+done
+```
+
+Measured 2026-10-19 on base
+[91d94ec](https://github.com/HeavyHorst/nrc/commit/91d94ec328bc51cf67a72ae2e10ac5fbc7843fe5)
+plus the local ticket/index changes. E2B Linux x64, Intel Xeon 2.60GHz,
+2 vCPUs; host power policy unavailable; Odin `dev-2026-10-nightly:84bc3fc`.
+Ten independent processes per size, sequentially, without concurrent builds,
+tests, browser sessions or servers. The old scan and new index were both measured
+in each process over identical fixtures; numbers are not network latency or a
+production concurrency limit. All 40 timing and 8 allocation runs passed.
+
+Complete Attention walk, milliseconds, median (min–max):
+
+| Tickets | Entries/ticket | Scan | Indexed | Median speedup |
+| ---: | ---: | ---: | ---: | ---: |
+| 100 | 10 | 1.577 (1.455–1.687) | 0.151 (0.138–0.167) | 10.4× |
+| 1,000 | 10 | 22.046 (20.766–22.673) | 7.411 (7.009–9.357) | 3.0× |
+| 10,000 | 10 | 1712.642 (1542.482–1908.649) | 75.887 (69.908–82.002) | 22.6× |
+| 10,000 | 100 | 9882.256 (9639.166–10457.174) | 76.864 (75.216–79.697) | 128.6× |
+
+At 10,000 tickets × 100 entries, first-page median fell from 992.598ms to
+7.668ms (indexed range 7.318–7.878ms). Ticket metadata index maintenance cost
+5.993µs (5.794–6.231); adding/removing the newest customer reply with full parent
+repair cost 178.697µs (174.788–194.133). Reconstructing the projection over that
+million-entry fixture took 2.839s (2.786–3.093), excluding disk and primary-index
+construction. Updating metadata on an activity maximum can also trigger such a
+parent repair; the optimization does not make all writes constant-time.
+
+The added projection retained 3,798,362 requested bytes for 10,000 tickets with
+only public replies. With all replies changed to customer replies, it retained
+5,078,362 bytes at 10 entries/ticket and 14,038,362 at 100 entries/ticket.
+Tracked allocations returned to zero after index destruction in all cases.
+
 ## Priority-aware task work order
 
 `work_order/benchmark` measures the standalone dependency sorter; its
