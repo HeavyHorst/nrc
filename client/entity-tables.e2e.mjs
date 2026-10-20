@@ -87,6 +87,8 @@ try {
           borders.push(dimensions.border);
           const headerSelector = { tasks: ".task-table:has(#taskListBody) thead tr", notes: ".notes-list-header", reminders: ".reminder-list-header" }[view];
           const header = page.locator(headerSelector);
+          assert.equal(await header.evaluate(el => Math.abs(el.lastElementChild.getBoundingClientRect().right - el.getBoundingClientRect().right) <= 1), true, `${view} columns fill the header without a trailing empty strip`);
+          assert.equal(await page.locator(selector).first().evaluate(el => Math.abs(el.lastElementChild.getBoundingClientRect().right - el.getBoundingClientRect().right) <= 1), true, `${view} columns fill each row without a trailing empty strip`);
           const geometry = await header.evaluate(el => [...el.children].slice(0, 2).map(cell => ({ width: cell.getBoundingClientRect().width, align: getComputedStyle(cell).textAlign })));
           assert.equal(geometry[0].width, 0, `${view} legacy selection header takes no space`);
           assert.deepEqual(await page.locator(selector).locator(".col-marker, .note-marker, .reminder-marker").evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().width)), [0, 0, 0], `${view} legacy selection cells take no space`);
@@ -114,7 +116,7 @@ try {
           await page.keyboard.press("Home");
           assert.equal(await handle.getAttribute("aria-valuenow"), "48");
           assert.ok(Math.abs(await header.locator(":scope > :nth-child(2)").evaluate(cell => cell.getBoundingClientRect().width) - 48) < 1, `${view} rendered ID width follows reset`);
-          if (view === 'notes' || view === 'tasks') {
+          {
             const titleHandle = header.getByRole('separator', { name: 'Resize TITLE column', exact: true });
             const titleCell = header.locator(`:scope > :nth-child(${view === 'tasks' ? 4 : 3})`);
             const before = (await titleCell.boundingBox()).width;
@@ -127,7 +129,7 @@ try {
               await page.mouse.down();
               await page.mouse.move(handleBox.x + handleBox.width / 2 - 37, handleBox.y + handleBox.height / 2);
               await page.mouse.up();
-              assert.equal((await titleCell.boundingBox()).width, before - 37, 'first drag starts at the automatic rendered width');
+              assert.equal((await titleCell.boundingBox()).width, before, 'narrowing TITLE cannot leave an empty strip beside the table');
               await titleHandle.dblclick();
               assert.equal((await titleCell.boundingBox()).width, before, 'double-click restores automatic width');
             }
@@ -136,15 +138,23 @@ try {
             const box = await titleHandle.boundingBox();
             await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
             await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 - 137, box.y + box.height / 2); await page.mouse.up();
-            assert.equal((await titleCell.boundingBox()).width, before - 129, 'pointer resize narrows the actual title boundary');
+            assert.equal((await titleCell.boundingBox()).width, before, `${view} pointer resize respects the register width floor`);
             await header.screenshot({ path: `.amp/in/artifacts/resize-${view}-${theme}-manual.png` });
-            if (view === 'tasks') {
-              await page.setViewportSize({ width: 390, height: 1000 });
-              assert.equal(await page.locator('#taskListView').evaluate(host => host.scrollWidth <= host.clientWidth + 1), true, 'manual desktop widths do not overflow the mobile register');
-              await page.setViewportSize({ width: 1000, height: 1000 });
-              assert.equal(await page.locator('#taskListView').evaluate(host => host.scrollWidth <= host.clientWidth + 1), true, 'manual desktop widths do not overflow the compact register');
+            {
+              await titleHandle.focus(); await page.keyboard.press('ArrowRight');
+              assert.equal((await titleCell.boundingBox()).width, before + 8, 'resize starts at the visible boundary, not the smaller saved minimum');
+              await page.setViewportSize({ width: 1900, height: 1000 });
+              assert.equal(await header.evaluate(el => Math.abs(el.lastElementChild.getBoundingClientRect().right - el.getBoundingClientRect().right) <= 1), true, `${view} saved widths expand to fill a wider register`);
+              const hostSelector = { tasks: '#taskListView', notes: '#notesPanel .notes-container', reminders: '#reminderQueueBody' }[view];
+              await page.locator(hostSelector).screenshot({ path: `.amp/in/artifacts/${view}-table-fill-${theme}.png` });
+              if (view !== 'reminders') {
+                await page.setViewportSize({ width: 390, height: 1000 });
+                assert.equal(await page.locator(hostSelector).evaluate(host => host.scrollWidth <= host.clientWidth + 1), true, 'manual desktop widths do not overflow the mobile register');
+                await page.setViewportSize({ width: 900, height: 1000 });
+                assert.equal(await page.locator(hostSelector).evaluate(host => host.scrollWidth <= host.clientWidth + 1), true, 'manual desktop widths do not overflow the compact register');
+              }
               await page.setViewportSize({ width, height: 1000 });
-              assert.equal((await titleCell.boundingBox()).width, before - 129, 'desktop width survives responsive layout changes');
+              assert.equal((await titleCell.boundingBox()).width, before + 8, 'larger manual desktop width survives responsive layout changes');
             }
             await titleHandle.focus(); await page.keyboard.press('Home');
             assert.equal((await titleCell.boundingBox()).width, before, 'reset restores automatic/default title width');
@@ -351,6 +361,10 @@ try {
   });
   await persistedTitle.waitFor({ state: 'visible' });
   assert.equal((await persistedTitle.boundingBox()).width, savedTitleWidth, 'manual title width survives page reload');
+  assert.equal(await page.locator('#taskListView').evaluate(host => {
+    const age = host.querySelector('th.col-age').getBoundingClientRect();
+    return Math.abs(age.right - host.getBoundingClientRect().left - host.clientWidth) <= 1;
+  }), true, 'empty rows span only visible columns, without a phantom trailing column');
   await persistedHandle.focus();
   await page.keyboard.press('Home');
   // An asymmetric token override catches a family reverting to panel/content

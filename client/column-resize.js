@@ -27,8 +27,9 @@
     }
     const handles = [];
     const headerCells = Array.from(container.querySelectorAll(headers));
-    // A null default leaves a column automatic until the user resizes it.
-    const currentWidth = (index) => widths[index] ?? headerCells[index].getBoundingClientRect().width;
+    // Flexible columns can grow beyond their saved minimum. Start at the
+    // visible boundary, including after the register itself changes width.
+    const currentWidth = (index) => headerCells[index].getBoundingClientRect().width;
     const commit = () => {
       apply(container, widths);
       handles.forEach(({ handle, index }) => handle.setAttribute("aria-valuenow", String(Math.round(currentWidth(index)))));

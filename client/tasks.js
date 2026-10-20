@@ -990,8 +990,9 @@ function renderReminderQueue() {
     // Keep the hidden slot so saved data-column widths retain their indexes.
     defaults: [0, 48, 320, 160, 130, 130, 180],
     minimums: [16, 48, 160, 150, 110, 110, 120],
+    maximums: [640, 640, 4096],
     locked: [0],
-    apply: (header, widths) => header.parentElement.style.setProperty("--reminder-columns", widths.map((width) => `${width}px`).join(" ")),
+    apply: (header, widths) => header.parentElement.style.setProperty("--reminder-columns", widths.map((width, index) => index === 2 ? `minmax(${width}px, 1fr)` : `${width}px`).join(" ")),
   });
 
   queueBody.querySelectorAll("[data-note-id]").forEach((el) => {
@@ -3008,13 +3009,13 @@ function renderTaskList() {
     locked: [0],
     apply: (table, widths) => {
       table.style.tableLayout = "fixed";
-      // TITLE fills spare space until explicitly resized. A manual table width
-      // prevents native table layout from redistributing the freed space.
+      // Saved widths are a minimum, not a cap on the register. TITLE absorbs
+      // spare space when the viewport grows or the Inspector closes.
       const fixedWidth = widths.reduce((sum, width, index) => sum + (index === 0 || index === 3 ? 0 : width), 0);
-      table.style.setProperty("--task-table-width", widths[3] == null ? "100%" : `${fixedWidth + widths[3]}px`);
+      table.style.setProperty("--task-table-width", `max(100%, ${fixedWidth + (widths[3] ?? 160)}px)`);
       table.querySelectorAll("thead th").forEach((cell, index) => {
-        cell.style.width = index === 3 && widths[3] == null
-          ? `max(160px, calc(100% - ${fixedWidth}px))`
+        cell.style.width = index === 3
+          ? `calc(100% - ${fixedWidth}px)`
           : `${widths[index]}px`;
       });
     },
@@ -3041,7 +3042,7 @@ function renderTaskList() {
     else if (searchState?.mode === "loading") message = "SEARCHING TASKS…";
     else if (searchState?.mode === "fallback") message = "SEARCH UNAVAILABLE — LOCAL SEARCH COVERS LOADED TASKS ONLY";
     else if (searchState?.mode === "results") message = searchState.stale ? "NO RESULTS · SEARCH INDEX STALE" : "NO SEARCH RESULTS";
-    tbody.innerHTML = `<tr><td colspan="12" class="task-list-empty">${message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="task-list-empty">${message}</td></tr>`;
     renderedTaskListRoomId = 0n;
     taskListDirty = false;
     renderedTaskSearchState = window.NRCTaskSearch?.getState?.() || null;
@@ -3052,7 +3053,7 @@ function renderTaskList() {
 
   if (searchState?.mode === "fallback" || searchState?.stale) {
     const notice = document.createElement("tr");
-    notice.innerHTML = `<td colspan="12" class="task-list-empty">${searchState.mode === "fallback" ? "SEARCH UNAVAILABLE — SHOWING LOADED TASKS ONLY" : "SEARCH INDEX STALE — RESULTS MAY BE OUT OF DATE"}</td>`;
+    notice.innerHTML = `<td colspan="11" class="task-list-empty">${searchState.mode === "fallback" ? "SEARCH UNAVAILABLE — SHOWING LOADED TASKS ONLY" : "SEARCH INDEX STALE — RESULTS MAY BE OUT OF DATE"}</td>`;
     tbody.appendChild(notice);
   }
 
@@ -3060,7 +3061,7 @@ function renderTaskList() {
   if (window.NRCVirtualList && sorted.length > 100) {
     tbody.virtualList = window.NRCVirtualList.create({
       host: tbody, scroller: document.getElementById("taskListView"),
-      items: sorted, columns: 12,
+      items: sorted, columns: 11,
       estimate: window.matchMedia?.("(max-width: 768px)").matches ? 88 : 48,
       render: (task) => createTaskRow(task, { draggable }),
       key: (task) => `${task.convId}:${task.id}`,

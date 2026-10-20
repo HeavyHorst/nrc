@@ -559,8 +559,9 @@ function renderNotesView({ append = false, debounce = false } = {}) {
     // The hidden selection slot shares the header and row grid.
     defaults: [0, 48, 340, 170, 72],
     minimums: [16, 48, 180, 104, 56],
+    maximums: [640, 640, 4096],
     locked: [0],
-    apply: (container, widths) => container.style.setProperty("--note-columns", widths.map(width => `${width}px`).join(" ")),
+    apply: (container, widths) => container.style.setProperty("--note-columns", widths.map((width, index) => index === 2 ? `minmax(${width}px, 1fr)` : `${width}px`).join(" ")),
   });
   const notesList = document.getElementById("notesList");
   if (!notesList) return;
