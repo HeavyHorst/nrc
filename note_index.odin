@@ -42,6 +42,8 @@ init_note_index :: proc(conv: ^Conversation_State) {
 
 destroy_note_index :: proc(conv: ^Conversation_State) {
 	destroy_ticket_index(conv)
+	destroy_person_counts(&conv.slice_owners)
+	destroy_person_counts(&conv.appointment_people)
 	btree.destroy(&conv.note_index)
 	delete(conv.note_index_keys)
 	for _, index in conv.note_project_assets {

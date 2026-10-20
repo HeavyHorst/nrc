@@ -366,16 +366,6 @@ function getAssigneeFilterOptions() {
   const users = new Set();
   for (const user of window.NRCTaskQuery?.getAssignees?.() || []) users.add(user);
 
-  if (typeof knownRoomUsers !== "undefined" && knownRoomUsers.size > 0) {
-    for (const user of knownRoomUsers) users.add(user);
-  }
-  if (typeof roomPresence !== "undefined" && typeof currentRoomId !== "undefined") {
-    const presence = roomPresence.get(currentRoomId);
-    if (presence) {
-      for (const user of presence.keys()) users.add(user);
-    }
-  }
-
   for (const user of Array.from(users).sort()) {
     if (user && user !== myNickname) {
       options.push({ label: user, value: user });

@@ -23,6 +23,7 @@ window.NRCCalendar = (() => {
   let query = null, timer = null, pending = null, loaded = [];
   let waitingFor = new Set();
   let rendered = false;
+  let people = [], peopleGeneration = 0;
   let loadingIndicator = null;
   const encoder = new TextEncoder(), decoder = new TextDecoder("utf-8", { ignoreBOM: true });
   const active = () => window.NRCViewManager?.getActiveView?.() === "calendar";
@@ -40,7 +41,7 @@ window.NRCCalendar = (() => {
     query = window.createTaskQueryController({
       getNickname: () => myNickname, isReady: ready,
       nextId: () => getRpcCorrelationId(), send: buffer => sendPacket(buffer),
-      onProjects: () => complete("projects"), onAssignees: () => complete("assignees"),
+      onProjects: () => complete("projects"),
       onMetadataError: () => { state.status = "error"; render(); },
     });
     return query;
@@ -121,6 +122,11 @@ window.NRCCalendar = (() => {
     loaded = [];
     render();
     controller().requestMetadata();
+    const scope = ++peopleGeneration;
+    window.NRCAssets.requestPersonList(67, { isCancelled: () => scope !== peopleGeneration }).then(values => {
+      if (scope !== peopleGeneration) return;
+      people = values; complete("assignees");
+    }).catch(() => { if (scope === peopleGeneration) { state.status = "error"; render(); } });
     requestPage();
   }
   function refreshSoon() {
@@ -128,6 +134,7 @@ window.NRCCalendar = (() => {
     timer = setTimeout(() => { timer = null; refresh(); }, 400);
   }
   function disconnect() {
+    ++peopleGeneration; people = [];
     if (pending) clearTimeout(pending.timeout);
     pending = null; loaded = [];
     clearTimeout(timer); timer = null;
@@ -211,7 +218,7 @@ window.NRCCalendar = (() => {
     el("calendarRange").textContent = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(dayDate(`${state.month}-01`)).toUpperCase();
     el("calendarCount").textContent = `${monthRows.length} ITEMS`;
     el("calendarContext").textContent = `WHEN · OPEN TASKS, APPOINTMENTS & REMINDER DEADLINES · ${Intl.DateTimeFormat().resolvedOptions().timeZone}${state.person || state.project ? " · FILTERS EXCLUDE REMINDERS" : ""}`;
-    options("calendarPerson", [...(query?.getAssignees() || []), ...state.rows.filter(row => row.kind === "appointment").map(row => row.assignee)], state.person);
+    options("calendarPerson", people, state.person);
     options("calendarProject", [...(query?.getProjects(0n) || []), ...state.rows.filter(row => row.kind === "appointment").map(row => row.project)], state.project);
     document.querySelectorAll("[data-calendar-mode]").forEach(button => {
       button.classList.toggle("active", button.dataset.calendarMode === state.mode);

@@ -34,7 +34,7 @@ try {
       const names = slices.map((slice) => bytes(slice.name));
       const owners = slices.map((slice) => bytes(slice.owner));
       let size = 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + 4;
-      slices.forEach((slice, index) => { size += 2 + names[index].length + 8 + 2 + owners[index].length + 1 + 14 + 16; });
+      slices.forEach((slice, index) => { size += 2 + names[index].length + 8 + 2 + owners[index].length + 1 + 16 + 16; });
       const buffer = new ArrayBuffer(size);
       const view = new DataView(buffer);
       let offset = 0;
@@ -56,6 +56,7 @@ try {
         view.setUint16(offset, slice.blocked ?? 0, false); offset += 2;
         view.setUint16(offset, slice.notes ?? 0, false); offset += 2;
         view.setUint16(offset, slice.files ?? 0, false); offset += 2;
+        view.setUint16(offset, slice.tickets ?? 0, false); offset += 2;
         view.setBigInt64(offset, 0n, false); offset += 8;
         view.setBigInt64(offset, slice.movedAt, false); offset += 8;
       });
@@ -127,6 +128,10 @@ try {
     serverReady = true;
 
     NRCAssets.roomAssets.set(0n, new Map());
+    NRCAssets.requestPersonList = async opcode => {
+      if (opcode !== 65) throw new Error(`Unexpected person facet ${opcode}`);
+      return [...new Set(slices.map(slice => slice.owner).filter(Boolean))].sort();
+    };
     NRCEdges.getEdgesForEntity = () => [];
     NRCEdges.requestEdgePage = () => Promise.resolve({});
 
@@ -176,6 +181,9 @@ try {
   assert.equal(await rows(), 100, "the register draws one page");
   assert.equal(await head(), "100 / 150 SLICES / 34 OPEN");
   assert.equal(await page.locator("#sliceRegisterList .slice-row").first().getAttribute("data-slice-id"), "1000");
+
+  // Anke owns only records beyond the first page, but is already selectable.
+  assert.equal(await page.locator('#sliceOwnerFilter option[value="anke"]').count(), 1);
 
   // Reaching the end of the drawn rows asks for the next page.
   await scrollToEnd();

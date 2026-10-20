@@ -316,6 +316,118 @@ when NRC_SIMULATION {
 		if edge != nil do testing.expect(t, edge.source_id == 1 && edge.target_id == 1, "replay should preserve symbolic edge resolution")
 	}
 
+	@(test)
+	test_simulation_people_facets_transaction_rejection_and_replay :: proc(t: ^testing.T) {
+		ctx: Sim_Test_Context
+		simulation_test_begin(&ctx, 159)
+		server: NRC_Server
+		td.server = &server
+		defer {
+			nrc_sim_run_all_receives(&ctx.sim)
+			nrc_sim_run_all_send_completions(&ctx.sim)
+			if ctx.conns[1] != nil do _ = simulation_test_disconnect_client(&ctx, 1)
+			shutdown_shard_writer_registry(&td.shard_writers)
+			td.server = nil
+			shard_replay_state_destroy()
+			simulation_test_end(&ctx)
+		}
+		workspace := "people-transactions"
+		shard := int(shard_for_workspace(transmute([]byte)workspace))
+		if !transaction_simulation_prepare_storage(&ctx, "/shard") || !transaction_simulation_init_writer(&ctx, "/shard", shard) {
+			testing.expect(t, false, "prepare person facet transaction storage")
+			return
+		}
+		td.asset_seq = 0
+		requester := simulation_test_install_client(&ctx.sim, 1, workspace, "requester", init_send_queue = true)
+		ctx.conns[1] = requester
+		if requester == nil {testing.expect(t, false, "install person facet client"); return}
+		kinds := [?]int{1, 2, 4}
+		for kind, k in kinds {
+			// Two records share the old person; patch one, reject a mixed
+			// transaction, then remove the final old reference. Each transition
+			// crosses the real protocol, transaction planner, WAL and store.
+			for phase in 0 ..< 5 {
+				typ, preview := people_test_asset_preview(kind, phase < 2 ? "alice" : phase == 3 ? "ghost" : "bob", "carol", 2)
+				defer delete(preview)
+				id := u64(2 * k + 1)
+				body := make([]byte, (phase < 2 ? 21 : 31) + len(preview))
+				defer delete(body)
+				endian.put_u64(body, .Big, u64(pr.WORKSPACE_DATA_ID))
+				op := pr.TransactionOperationType.AssetCreate
+				if phase < 2 {
+					id += u64(phase)
+					endian.put_u16(body[8:], .Big, u16(typ))
+					endian.put_u16(body[17:], .Big, u16(len(preview)))
+					copy(body[19:], transmute([]byte)preview)
+				} else {
+					op = .AssetPatch
+					transaction_test_ref(body[8:], .Existing, .Asset, id)
+					body[28] = pr.TRANSACTION_ASSET_PATCH_PREVIEW
+					endian.put_u16(body[29:], .Big, u16(len(preview)))
+					copy(body[31:], transmute([]byte)preview)
+				}
+				conv := get_conversation(get_workspace(workspace), pr.WORKSPACE_DATA_ID)
+				stale: [28]byte
+				if phase == 3 do stale = transaction_test_delete_body(pr.WORKSPACE_DATA_ID, .Asset, id, conv.assets[pr.AssetID(id)].updated_at - 1)
+				deletion := transaction_test_delete_body(pr.WORKSPACE_DATA_ID, .Asset, id + 1, 0)
+				ops := [2]pr.TransactionOperation{{op_type = op, body = body}, {op_type = .AssetDelete, body = stale[:]}}
+				if phase == 4 {id += 1; op = .AssetDelete; ops[0] = {
+						op_type = op,
+						body    = deletion[:],
+					}}
+				writer := &td.shard_writers.writers[0]
+				before_wal := writer.wal.record_count
+				nrc_sim_clear_inboxes(&ctx.sim)
+				correlation := u32(100 + k * 5 + phase)
+				testing.expect(t, transaction_simulation_enqueue_request(&ctx, requester, correlation, ops[:phase == 3 ? 2 : 1]), "enqueue facet mutation")
+				nrc_sim_run_all_receives(&ctx.sim)
+				testing.expect(t, simulation_test_commit_shards(&ctx.sim), "complete facet transaction durability")
+				result := [1]pr.TransactionOperationResult{{op_type = op, entity_id = id}}
+				testing.expect(
+					t,
+					transaction_simulation_result_matches(
+						&ctx.sim,
+						requester,
+						phase == 3 ? .Rejected : .Committed,
+						correlation,
+						phase == 3 ? 1 : max(u16),
+						phase == 3 ? nil : result[:],
+					),
+					"exact facet transaction result",
+				)
+				testing.expect_value(t, writer.wal.record_count, before_wal + (phase == 3 ? 0 : 1))
+				conv = get_conversation(get_workspace(workspace), pr.WORKSPACE_DATA_ID)
+				testing.expect_value(t, people_test_reference_reason(conv), "")
+				if phase == 3 {
+					_, expected := people_test_asset_preview(kind, "bob", "carol", 2)
+					defer delete(expected)
+					testing.expect_value(t, string(conv.assets[pr.AssetID(id)].preview), expected)
+				}
+			}
+		}
+		testing.expect(t, shutdown_shard_writer_registry(&td.shard_writers), "close durable facet writer")
+		testing.expect(t, simulation_test_disconnect_client(&ctx, 1), "disconnect before facet replay")
+		cleanup_workspaces()
+		td.workspaces = make(map[string]^Workspace_State, 256)
+		td.asset_seq = 0
+		shard_replay_state_destroy()
+		if !transaction_simulation_init_writer(&ctx, "/shard", shard) {testing.expect(t, false, "reopen facet WAL"); return}
+		shard_replay_state_init()
+		writer := &td.shard_writers.writers[0]
+		_, ok := replay_shard_compaction_sequence(writer.storage, writer.shard_dir, writer.manifest, true, false)
+		testing.expect(t, ok, "replay person facet transactions")
+		conv := get_conversation(get_workspace(workspace), pr.WORKSPACE_DATA_ID)
+		if conv == nil {testing.expect(t, false, "restored facet workspace"); return}
+		testing.expect_value(t, len(conv.assets), 3)
+		for kind, k in kinds {
+			_, preview := people_test_asset_preview(kind, "bob", "carol", 2)
+			defer delete(preview)
+			asset := conv.assets[pr.AssetID(2 * k + 1)]
+			testing.expect(t, asset != nil && string(asset.preview) == preview, "replay retains committed patch, not rejected ghost or deleted duplicate")
+		}
+		testing.expect_value(t, people_test_reference_reason(conv), "")
+	}
+
 	// This campaign deliberately keeps its oracle independent of the live maps: the
 	// ledger is advanced only by completed fsync snapshots.  In particular, a
 	// transaction visible in memory before a failed fsync is not added to it.

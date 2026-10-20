@@ -7,7 +7,8 @@ import vm from "node:vm";
 const source = fs.readFileSync(path.resolve("client/task-state.js"), "utf8");
 test("assignee choices include indexed offline owners without cached task rows or chat presence", () => {
   const window = { NRCTaskQuery: { getAssignees: () => ["zoe", "tester", "alex", "alex"] } };
-  const context = { window, myNickname: "tester", localStorage: { getItem: () => null }, document: { getElementById: () => null } };
+  const context = { window, myNickname: "tester", localStorage: { getItem: () => null }, document: { getElementById: () => null },
+    currentRoomId: 7n, knownRoomUsers: new Set(["chat-only"]), roomPresence: new Map([[7n, new Map([["online-only", {}]])]]) };
   vm.runInNewContext(`${source}\nwindow.options = getAssigneeFilterOptions();`, context);
   assert.deepEqual(Array.from(window.options, item => [item.label, item.value]), [["ALL", ""], ["MY TASKS", "me"], ["alex", "alex"], ["zoe", "zoe"]]);
 });

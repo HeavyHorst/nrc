@@ -1307,16 +1307,18 @@ TaskProjects :: struct {
 	correlation_id: u32,
 }
 getSizeTaskProjects :: proc(msg: TaskProjects) -> int {size := 2 + 8 + 2 + 1 + 4; for project in msg.projects do size += 2 + len(project); return size}
-// Both indexed task facets share this chunked string-list wire format.
+// Indexed facets share this chunked string-list wire format. Person facets can
+// include full usernames and legacy ticket names, not just project-length names.
 serializeTaskProjects :: proc(msg: TaskProjects, buf: []byte, opcode: Opcode = .S_TaskProjects) -> int {
 	if len(msg.projects) > 65535 do return -1
 	total := getSizeTaskProjects(msg); if len(buf) < total do return -1
+	max_length := opcode == .S_SliceOwners || opcode == .S_TicketAssignees || opcode == .S_CalendarPeople ? 65535 : MAX_PROJECT_LENGTH
 	endian.put_u16(
 		buf,
 		.Big,
 		u16(opcode),
 	); endian.put_u64(buf[2:], .Big, u64(msg.conv_id)); endian.put_u16(buf[10:], .Big, u16(len(msg.projects))); offset := 12
-	for project in msg.projects {if len(project) > MAX_PROJECT_LENGTH do return -1; endian.put_u16(buf[offset:], .Big, u16(len(project))); offset += 2; copy(buf[offset:], project); offset += len(project)}
+	for project in msg.projects {if len(project) > max_length do return -1; endian.put_u16(buf[offset:], .Big, u16(len(project))); offset += 2; copy(buf[offset:], project); offset += len(project)}
 	buf[offset] = msg.has_more ? 1 : 0
 	offset += 1
 	endian.put_u32(buf[offset:], .Big, msg.correlation_id); return total

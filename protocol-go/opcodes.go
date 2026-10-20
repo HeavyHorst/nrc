@@ -46,6 +46,9 @@ const (
 	C_GetAssetsByIDs       uint16 = 61
 	C_QueryTickets         uint16 = 63
 	C_ListTaskDependents   uint16 = 64
+	C_ListSliceOwners      uint16 = 65
+	C_ListTicketAssignees  uint16 = 66
+	C_ListCalendarPeople   uint16 = 67
 
 	// Assets (Client -> Server)
 	C_CreateAsset              uint16 = 30
@@ -131,6 +134,9 @@ const (
 	S_CalendarPage       uint16 = 166
 	S_WorkspaceOverview  uint16 = 167
 	S_TaskDependentsPage uint16 = 170
+	S_SliceOwners        uint16 = 171
+	S_TicketAssignees    uint16 = 172
+	S_CalendarPeople     uint16 = 173
 
 	// Assets (Server -> Client)
 	S_AssetCreated    uint16 = 140

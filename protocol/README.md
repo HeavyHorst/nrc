@@ -124,8 +124,8 @@ its own cursor and the client asks for the next one when it needs it.
 invalid before any payload parsing happens, so a new opcode must be added to both
 the enum and the range check in `protocol/protocol.odin`.
 
-- Client to server: `1-3`, `8`, `16-64`
-- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-170`
+- Client to server: `1-3`, `8`, `16-67`
+- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-173`
 
 ### Client to Server
 
@@ -173,6 +173,9 @@ the enum and the range check in `protocol/protocol.odin`.
 | 62 | `C_ListHistory` | Page visible workspace or record change history |
 | 63 | `C_QueryTickets` | Filtered, sorted ticket pages and ticket-entry pages |
 | 64 | `C_ListTaskDependents` | Page tasks directly dependent on one task |
+| 65 | `C_ListSliceOwners` | List distinct workspace slice owners, including closed slices |
+| 66 | `C_ListTicketAssignees` | List distinct workspace ticket assignees, including closed tickets |
+| 67 | `C_ListCalendarPeople` | List task assignees and appointment people independently of date range |
 
 #### Assets
 
@@ -269,6 +272,9 @@ them.
 | 168 | `S_HistoryPage` | Correlated JSON change-history page |
 | 169 | `S_TicketPage` | Ticket activity metadata and binary asset page |
 | 170 | `S_TaskDependentsPage` | ID-ordered direct dependents with an exclusive cursor |
+| 171 | `S_SliceOwners` | Chunked distinct slice owners, same layout as S_TaskProjects |
+| 172 | `S_TicketAssignees` | Chunked distinct ticket assignees, same layout as S_TaskProjects |
+| 173 | `S_CalendarPeople` | Chunked distinct calendar people, same layout as S_TaskProjects |
 
 #### Assets
 
@@ -1125,6 +1131,20 @@ For v2 correlation-enabled RPC requests, missing trailing `CorrelationID` is tre
    `scope:u64, correlation_id:u32`; `S_TaskAssignees` (165) uses the same chunked
    string-list layout as `S_TaskProjects` (139). Wait for `has_more=false` before
    replacing the previous list; no tasks means a single empty final chunk.
+
+   The person facets `C_ListSliceOwners` (65), `C_ListTicketAssignees` (66), and
+   `C_ListCalendarPeople` (67) use the same request layout. Responses 171–173
+   contain `scope:u64, count:u16, names[count]:str16, has_more:u8,
+   correlation_id:u32` after the opcode. Names are sorted, unique and nonempty
+   across all chunks. Lists cover the complete workspace data scope, independently
+   of record paging, search, active filters and calendar dates. Slice owners include
+   closed slices; ticket assignees include resolved/closed tickets. Calendar people
+   combine task assignees (Backlog through Done, even without a deadline) with
+   appointment assignees and, for v2 appointments, organizers, participants and
+   non-cancelled occurrence participant overrides. These are filter candidates,
+   not user-directory entries or proof of a matching event in the current range.
+   Person facets support full username lengths, not the project-name limit.
+
    Calendar uses `C_QueryCalendar` (58), with big-endian fields after the opcode:
    `scope:u64=0, start:i64, end:i64, limit:u16, has_cursor:u8,
    cursor_at:i64, cursor_kind:u8, cursor_id:u64, assignee:str16,

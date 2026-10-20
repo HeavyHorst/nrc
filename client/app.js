@@ -103,6 +103,9 @@ const Opcode = {
   C_GetTasksByIDs: 60,
   C_GetAssetsByIDs: 61,
   C_ListTaskDependents: 64,
+  C_ListSliceOwners: 65,
+  C_ListTicketAssignees: 66,
+  C_ListCalendarPeople: 67,
   // Tasks/Kanban (Server -> Client)
   S_TaskCreated: 130,
   S_TaskUpdated: 131,
@@ -118,6 +121,9 @@ const Opcode = {
   S_CalendarPage: 166,
   S_WorkspaceOverview: 167,
   S_TaskDependentsPage: 170,
+  S_SliceOwners: 171,
+  S_TicketAssignees: 172,
+  S_CalendarPeople: 173,
   // Assets (Client -> Server)
   C_CreateAsset: 30,
   C_UpdateAsset: 31,
@@ -1896,7 +1902,11 @@ function handleBinaryMessage(arrayBuffer) {
         break;
       case Opcode.S_TaskAssignees:
         window.NRCTaskQuery?.handleAssignees(dataView);
-        window.NRCCalendar?.handleTaskAssignees(dataView);
+        break;
+      case Opcode.S_SliceOwners:
+      case Opcode.S_TicketAssignees:
+      case Opcode.S_CalendarPeople:
+        window.NRCAssets?.handlePersonList(dataView);
         break;
       case Opcode.S_CalendarPage:
         window.NRCCalendar?.handlePage(dataView);

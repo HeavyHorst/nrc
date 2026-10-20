@@ -204,6 +204,8 @@ Conversation_State :: struct {
 	asset_parents:             btree.BTreeG(Entity_Reference_Key), // parent kind/id -> child assets
 	ticket_index:              map[pr.AssetID]^Ticket_Index_Row,
 	ticket_assignees:          btree.BTreeG(Ticket_Assignee_Key),
+	slice_owners:              map[string]Person_Count,
+	appointment_people:        map[string]Person_Count,
 	edges:                     map[pr.EdgeID]^pr.Edge, // edge_id -> edge (knowledge graph links)
 	edges_by_entity:           map[Edge_Entity_Key][dynamic]pr.EdgeID, // entity -> incident edge IDs (for O(1) lookup)
 	dm_participants:           ^DM_Participants, // nil for regular rooms, set for DM conversations
@@ -313,7 +315,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:9a80dc8"
+BUILD_VERSION :: "dev-2026-10:200e6d1"
 PROTOCOL_VERSION :: 10 // Calendar kind 3 carries a stable series occurrence identity.
 
 jwt_auth_secret: string

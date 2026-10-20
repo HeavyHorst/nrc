@@ -316,21 +316,17 @@
     return ownerName(state.filters.owner);
   }
 
-  // The owner filter offers every owner the register has seen: the set grows as
-  // pages arrive and never shrinks, because a filter that narrowed the listing
-  // must not take the other owners out of the dropdown. The reader's own name stays
-  // out of the list because MY SLICES says it.
-  const seenOwners = new Set();
+  // Workspace-wide indexed owners, independent of register pages and filters.
+  let completeOwners = [];
+  let ownerGeneration = 0;
+  let ownerError = "";
   let ownerOptions = null;
 
   function syncOwnerFilter() {
     const select = document.getElementById("sliceOwnerFilter");
     if (!select) return;
     const me = identity();
-    for (const slice of state.slices) {
-      if (slice.owner && slice.owner !== me) seenOwners.add(slice.owner);
-    }
-    const owners = new Set(seenOwners);
+    const owners = new Set(completeOwners.filter(owner => owner && owner !== me));
     const current = state.filters.owner;
     if (current !== null && current !== OWNER_MINE && current !== OWNER_UNASSIGNED) owners.add(current);
     const listed = Array.from(owners).sort();
@@ -475,6 +471,14 @@
   }
 
   function requestList({ force = false } = {}) {
+    const scope = ++ownerGeneration;
+    window.NRCAssets.requestPersonList(65, { isCancelled: () => scope !== ownerGeneration }).then(values => {
+      if (scope !== ownerGeneration) return;
+      completeOwners = values; ownerError = ""; syncOwnerFilter(); render();
+    }).catch(error => {
+      if (scope !== ownerGeneration) return;
+      ownerError = `OWNER LIST FAILED · ${error.message}`; render();
+    });
     if (pendingList) {
       if (!force) return Promise.resolve(false);
       clearTimeout(pendingList.timer);
@@ -1540,12 +1544,13 @@
     if (status) {
       const message = state.mode === "error" ? state.error :
         state.pageError ? state.pageError :
+        ownerError ? ownerError :
         state.mode === "loading" && !loaded ? (showLoading ? "LOADING SLICES…" : "") :
         state.loadingMore ? (showLoading ? "LOADING MORE SLICES…" : "") :
         state.mode === "ready" && !loaded && filterActive() ? "NO SLICES MATCH THE FILTER" :
         state.mode === "ready" && !loaded ? "NO SLICES IN THIS WORKSPACE" : "";
       status.textContent = message;
-      status.dataset.state = state.mode === "error" || state.pageError ? "error" : "info";
+      status.dataset.state = state.mode === "error" || state.pageError || ownerError ? "error" : "info";
       status.hidden = message === "";
     }
 
@@ -2098,11 +2103,12 @@
     cancelHeadlessReads();
     // The owners of the previous workspace's listing are not the owners of this
     // one's, so the filter's options start over with it.
-    seenOwners.clear();
+    completeOwners = []; ownerError = "";
     requestList({ force: true });
   }
 
   function disconnect() {
+    ++ownerGeneration;
     ++selectionGeneration;
     ++detailGeneration;
     recordRefreshRequired = true;

@@ -26,6 +26,8 @@ function loadAssetsModule() {
 
   const sandbox = {
     console,
+    setTimeout,
+    clearTimeout,
     TextEncoder,
     TextDecoder,
     Uint8Array,
@@ -68,6 +70,38 @@ function loadAssetsModule() {
     sandbox,
   };
 }
+
+test("indexed people RPCs stage UTF-8 chunks, match scope/correlation, and share errors and reset", async () => {
+  const { assets, packets } = loadAssetsModule();
+  function reply(opcode, id, values, more = false, room = 0n) {
+    const bytes = values.map(value => new TextEncoder().encode(value));
+    const view = new DataView(new ArrayBuffer(17 + bytes.reduce((n, b) => n + 2 + b.length, 0)));
+    view.setUint16(0, opcode + 106); view.setBigUint64(2, room); view.setUint16(10, bytes.length);
+    let offset = 12;
+    for (const b of bytes) { view.setUint16(offset, b.length); offset += 2; new Uint8Array(view.buffer, offset, b.length).set(b); offset += b.length; }
+    view.setUint8(offset++, Number(more)); view.setUint32(offset, id);
+    assets.handlePersonList(view);
+  }
+  for (const opcode of [65, 66, 67]) {
+    let published = false;
+    const result = assets.requestPersonList(opcode).then(values => { published = true; return values; });
+    const request = new DataView(packets.at(-1)), id = request.getUint32(10);
+    assert.equal(request.byteLength, 14); assert.equal(request.getUint16(0), opcode); assert.equal(request.getBigUint64(2), 0n);
+    reply(opcode, id + 99, ['wrong']); reply(opcode, id, ['wrong'], false, 2n);
+    reply(opcode, id, ['Zoë', '李'], true); await Promise.resolve(); assert.equal(published, false);
+    reply(opcode, id, ['outside loaded pages']);
+    assert.deepEqual(Array.from(await result), ['Zoë', '李', 'outside loaded pages']);
+  }
+  const failed = assets.requestPersonList(65);
+  assets.handleAssetErrorResponse(65, new DataView(packets.at(-1)).getUint32(10), 'denied');
+  await assert.rejects(failed, /denied/);
+  let cancelled = false;
+  const stale = assets.requestPersonList(66, { isCancelled: () => cancelled });
+  const id = new DataView(packets.at(-1)).getUint32(10); cancelled = true;
+  reply(66, id, ['stale']); await assert.rejects(stale, /cancelled/);
+  const reset = assets.requestPersonList(67); assets.clearPendingAssetRpc();
+  await assert.rejects(reset);
+});
 
 test("asset create optionally appends a positive big-endian parent version after correlation", () => {
   const { assets, packets } = loadAssetsModule();

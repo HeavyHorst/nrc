@@ -524,6 +524,9 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 		// Assignee metadata uses the same scope/correlation request as projects.
 		req, parse_err := pr.parseListTaskProjectsRequest(frame_data[2:])
 		if parse_err == nil {process_list_task_assignees(c, req)} else {send_error_response(c, .C_ListTaskAssignees, "Failed to parse request")}
+	case .C_ListSliceOwners, .C_ListTicketAssignees, .C_ListCalendarPeople:
+		req, parse_err := pr.parseListTaskProjectsRequest(frame_data[2:])
+		if parse_err == nil {process_list_people(c, req, opcode)} else {send_error_response(c, opcode, "Failed to parse request")}
 	case .C_QueryCalendar:
 		req, parse_err := pr.parseCalendarRequest(frame_data[2:])
 		if parse_err == nil {process_calendar_query(c, req)} else {send_error_response(c, .C_QueryCalendar, "Failed to parse request")}

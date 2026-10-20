@@ -251,15 +251,20 @@
     } catch (error) { if (!cancelled()) { state.detailLoading = false; state.error = error.message; renderStatus(); } }
     finally { if (!cancelled()) renderStatus(); }
   }
+  let peopleGeneration = 0;
   async function reload({ preserve = false } = {}) {
     const scope = generation;
+    const peopleScope = ++peopleGeneration;
+    let people;
+    const peopleRead = window.NRCAssets.requestPersonList(66, { isCancelled: () => scope !== generation || peopleScope !== peopleGeneration })
+      .then(values => { people = values; })
+      .catch(error => { if (scope === generation && peopleScope === peopleGeneration) { state.error = error.message; renderStatus(); } });
     const list = String(state.filters.search || '').trim() ? updateSearch({ preserve }) : loadPage(true, preserve);
-    await Promise.all([list, refreshAttention(), loadDetail()]);
+    await Promise.all([list, refreshAttention(), loadDetail(), peopleRead]);
     if (scope !== generation) return;
     const assigneeSelect = document.getElementById('ticketAssigneeFilter');
-    if (assigneeSelect) {
-      const cachedTickets = [...(window.NRCAssets.roomAssets?.get(0n)?.values() || [])].filter(a => a.assetType === 13);
-      const names = [...new Set([...(typeof userDirectory === 'function' ? userDirectory() : []), ...cachedTickets.map(a => metadata(a).assignee), ...state.tickets.map(a => metadata(a).assignee), state.filters.owner].filter(Boolean))].sort();
+    if (assigneeSelect && people && peopleScope === peopleGeneration) {
+      const names = [...new Set([...people, state.filters.owner].filter(Boolean))].sort();
       const options = '<option value="">ALL ASSIGNEES</option>' + names.map(name => `<option value="${esc(name)}">${esc(name)}</option>`).join('');
       if (assigneeSelect.innerHTML !== options) assigneeSelect.innerHTML = options;
       assigneeSelect.value = state.filters.owner || '';

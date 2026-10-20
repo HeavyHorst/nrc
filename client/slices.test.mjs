@@ -16,6 +16,7 @@ function loadSlices(overrides = {}) {
   const sent = [];
   const baseWindow = {
     NRCAssets: {
+      requestPersonList: async () => [],
       generateCorrelationId: () => 7,
       roomAssets: new Map(),
       sendListAssetsPagedByProject: () => 1,
@@ -1684,6 +1685,29 @@ test("a listing replaces the record unless the reader has unsaved work in it", a
 // assignee; without an identity the request names nobody. The register is only
 // reachable with a session, so this is the request's shape and not a filter the
 // reader can choose.
+test("owner choices come from the complete index, retain selection, and discard cancelled scopes", async () => {
+  const select = { innerHTML: '', value: '' }, reads = [];
+  const slices = loadSlices({ myNickname: 'rene',
+    document: { getElementById: id => id === 'sliceOwnerFilter' ? select : null, addEventListener() {}, querySelectorAll: () => [] },
+    window: { NRCAssets: { requestPersonList(opcode, options) {
+      assert.equal(opcode, 65);
+      return new Promise(resolve => reads.push({ resolve, options }));
+    } } },
+  });
+  slices.requestList({ force: true });
+  reads[0].resolve(['rene', 'outside page']); await settleMicrotasks();
+  assert.match(select.innerHTML, /outside page/);
+  assert.match(select.innerHTML, /MY SLICES/); assert.match(select.innerHTML, /UNASSIGNED/);
+  slices.setOwnerFilter('selected missing');
+  reads.at(-1).resolve(['new owner']); await settleMicrotasks();
+  assert.match(select.innerHTML, /new owner/); assert.match(select.innerHTML, /selected missing/);
+  assert.doesNotMatch(select.innerHTML, /outside page/);
+  slices.requestList({ force: true }); const stale = reads.at(-1);
+  slices.disconnect(); assert.equal(stale.options.isCancelled(), true);
+  stale.resolve(['wrong workspace']); await settleMicrotasks();
+  assert.doesNotMatch(select.innerHTML, /wrong workspace/);
+});
+
 test("MY SLICES without an identity names nobody", async () => {
   const slices = loadSlices();
   slices.requestList({ force: true });

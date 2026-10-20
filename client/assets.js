@@ -1025,6 +1025,42 @@ function requestTicketPage(query = {}, options = {}) {
   return result;
 }
 
+// Complete indexed metadata, sharing asset RPC errors and disconnect cleanup.
+const personListDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
+function requestPersonList(opcode, { isCancelled } = {}) {
+  if (![65, 66, 67].includes(opcode)) return Promise.reject(new Error("Unknown person list"));
+  return new Promise((resolve, reject) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !serverReady) return reject(new Error("Not connected"));
+    const correlationId = generateCorrelationId();
+    const buffer = new ArrayBuffer(14), view = new DataView(buffer);
+    view.setUint16(0, opcode); view.setBigUint64(2, 0n); view.setUint32(10, correlationId);
+    const timer = setTimeout(() => settlePendingAssetRpc(correlationId, false, { message: "Person list timed out" }), 15000);
+    registerPendingAssetRpc(correlationId, {
+      kind: "person_list", originOpcode: opcode, convId: 0n, values: [], isCancelled,
+      onSuccess: values => { clearTimeout(timer); resolve(values); },
+      onError: detail => { clearTimeout(timer); reject(new Error(detail.message || "Person list failed")); },
+    });
+    sendPacket(buffer);
+  });
+}
+
+function handlePersonList(view) {
+  const id = view.getUint32(view.byteLength - 4), request = pendingAssetRpcByCorrelation.get(id);
+  if (!request || request.kind !== "person_list" || view.getUint16(0) !== request.originOpcode + 106 || view.getBigUint64(2) !== 0n) return;
+  if (request.isCancelled?.()) { settlePendingAssetRpc(id, false, { message: "Person list cancelled" }); return; }
+  try {
+    let offset = 12;
+    for (let i = 0; i < view.getUint16(10); i++) {
+      const size = view.getUint16(offset); offset += 2;
+      if (offset + size > view.byteLength - 5) throw new Error("Invalid person list");
+      request.values.push(personListDecoder.decode(new Uint8Array(view.buffer, view.byteOffset + offset, size)));
+      offset += size;
+    }
+    if (offset !== view.byteLength - 5) throw new Error("Invalid person list");
+    if (!view.getUint8(offset)) settlePendingAssetRpc(id, true, request.values);
+  } catch (error) { settlePendingAssetRpc(id, false, { message: error.message }); }
+}
+
 function sendTicketPage(query, { isCancelled } = {}) {
   return new Promise((resolve, reject) => {
     const bytes = assetTextEncoder.encode(JSON.stringify(query));
@@ -1973,6 +2009,10 @@ function handleNoteTagList(dataView) {
 }
 
 function handleAssetErrorResponse(originOpcode, correlationId, errorMsg = "") {
+  if ([65, 66, 67].includes(originOpcode)) {
+    settlePendingAssetRpc(correlationId, false, { message: errorMsg });
+    return true;
+  }
   const kind = getAssetRequestKindFromOriginOpcode(originOpcode);
   if (!kind) {
     return false;
@@ -2240,6 +2280,8 @@ function generateCorrelationId() {
 
 // Export for use in app.js
 window.NRCAssets = {
+  requestPersonList,
+  handlePersonList,
   // Handlers
   handleAssetCreated,
   handleAssetUpdated,

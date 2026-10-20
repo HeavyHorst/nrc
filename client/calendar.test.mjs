@@ -40,6 +40,12 @@ function harness({ ready = true } = {}) {
   const document = { activeElement: null, hidden: false, getElementById: id => elements[id] || null,
     querySelectorAll: () => [], addEventListener: (name, fn) => { listeners[name] = fn; } };
   const window = { NRCViewManager: { getActiveView: () => "calendar" }, NRCInspector: { openEntity: ref => opened.push(ref) } };
+  let publishPeople;
+  window.NRCAssets = { requestPersonList(opcode) {
+    assert.equal(opcode, 67);
+    const view = new DataView(new ArrayBuffer(14)); view.setUint16(0, opcode); sent.push(view);
+    return { then(callback) { publishPeople = callback; return { catch() {} }; } };
+  } };
   const detachedTimeout = (fn, delay) => { const timer = setTimeout(fn, delay); timer.unref?.(); return timer; };
   const context = { window, document, TextEncoder, TextDecoder, ArrayBuffer, DataView, Uint8Array, Date, Intl, BigInt, Number,
     String, Math, Array, Object, Set, Map, JSON, WebSocket: { OPEN: 1 }, serverReady: ready,
@@ -53,7 +59,8 @@ function harness({ ready = true } = {}) {
   const requests = opcode => sent.filter(view => view.getUint16(0) === opcode);
   return { calendar: window.NRCCalendar, elements, sent, requests, opened,
     metadata: () => {
-      for (const opcode of [29, 57]) {
+      publishPeople(["rene", "outside-owner", "alex", "override participant"]);
+      for (const opcode of [29]) {
         const request = requests(opcode).at(-1);
         const values = opcode === 29 ? ["NRC", "OUTSIDE MONTH"] : ["rene", "outside-owner"];
         const bytes = values.map(value => new TextEncoder().encode(value));
@@ -79,7 +86,7 @@ const appointment = (id, overrides = {}) => ({ id: BigInt(id), kind: 2, title: `
 
 test("range request uses opcodes 58/166, local grid bounds, filters, and workspace metadata", () => {
   const h = harness(); h.calendar.refresh();
-  assert.deepEqual(h.sent.slice(0, 3).map(view => view.getUint16(0)), [29, 57, 58]);
+  assert.deepEqual(h.sent.slice(0, 3).map(view => view.getUint16(0)), [29, 67, 58]);
   assert.equal(h.sent[0].getBigUint64(2), 0n); assert.equal(h.sent[1].getBigUint64(2), 0n);
   const request = h.requests(58)[0];
   assert.equal(request.getBigUint64(2), 0n); assert.equal(request.getBigInt64(10), ns("2026-09-01T00:00:00"));
@@ -89,6 +96,7 @@ test("range request uses opcodes 58/166, local grid bounds, filters, and workspa
   assert.equal(h.calendar.getState().status, "loading", "metadata must finish too");
   h.metadata(); assert.equal(h.calendar.getState().status, "ready");
   assert.match(h.elements.calendarPerson.innerHTML, /outside-owner/);
+  assert.match(h.elements.calendarPerson.innerHTML, /override participant/);
   assert.match(h.elements.calendarProject.innerHTML, /OUTSIDE MONTH/);
 
   h.calendar.getState().mode = "month"; h.elements.calendarPerson.value = "me";

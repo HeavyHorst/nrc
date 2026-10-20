@@ -85,6 +85,9 @@ Opcode :: enum u16 {
 	C_ListHistory = 62,
 	C_QueryTickets = 63,
 	C_ListTaskDependents = 64,
+	C_ListSliceOwners = 65,
+	C_ListTicketAssignees = 66,
+	C_ListCalendarPeople = 67,
 
 	// Tasks/Kanban (Server -> Client)
 	S_TaskCreated = 130,
@@ -103,6 +106,9 @@ Opcode :: enum u16 {
 	S_WorkspaceOverview = 167,
 	S_HistoryPage = 168,
 	S_TaskDependentsPage = 170,
+	S_SliceOwners = 171,
+	S_TicketAssignees = 172,
+	S_CalendarPeople = 173,
 
 	// Assets (Client -> Server)
 	C_CreateAsset = 30,

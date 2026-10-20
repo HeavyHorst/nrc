@@ -21,6 +21,7 @@ function fixture(uploadFile = async () => { throw new Error('upload unavailable'
   const window = {
     NRCViewManager: { setActiveView() {} },
     NRCAssets: {
+      requestPersonList: async () => [],
       requestAllAssets: async (room, type, options) => { pages.push([room, type, options]); return { assets: type === 13 ? records : entries }; },
       requestTicketPage: async query => {
         pages.push(query);
@@ -52,6 +53,19 @@ function fixture(uploadFile = async () => { throw new Error('upload unavailable'
     event: (name, detail) => listeners.get(name)?.forEach(callback => callback({ detail })),
     edit: (name, value) => controls.get(name).save(value), ack: value => success(value), fail: message => failure({ message }) };
 }
+
+test('ticket assignee filter uses the complete index rather than cached tickets and retains selection', async () => {
+  const f = fixture();
+  const select = { innerHTML: '', value: '' }; f.elements.set('ticketAssigneeFilter', select);
+  f.api.state.filters.owner = 'Selected missing';
+  f.window.NRCAssets.requestPersonList = async opcode => { assert.equal(opcode, 66); return ['Outside page']; };
+  await f.api.reload();
+  assert.match(select.innerHTML, /Outside page/); assert.match(select.innerHTML, /Selected missing/);
+  assert.doesNotMatch(select.innerHTML, /Sam/); assert.equal(select.value, 'Selected missing');
+  f.window.NRCAssets.requestPersonList = async () => { throw new Error('metadata denied'); };
+  const previous = select.innerHTML; await f.api.reload();
+  assert.equal(select.innerHTML, previous); assert.match(f.api.state.error, /metadata denied/);
+});
 
 test('connected tickets poll server attention, refresh on visibility, and stop on disconnect', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });

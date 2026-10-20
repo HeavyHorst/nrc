@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261020notify1";
+const CACHE_NAME = "nrc-terminal-20261020people1";
 
 const APP_SHELL = [
   "./",
@@ -24,7 +24,7 @@ const APP_SHELL = [
   "./custom-picker.js?v=20260927appointment2",
   "./custom-select.js?v=20261019customerwidth1",
   "./attachments.js?v=20261008files1",
-  "./assets.js?v=20261019ticketpages1",
+  "./assets.js?v=20261020people1",
   "./transactions.js?v=20260925inline1",
   "./edges.js?v=20260924slicelive1",
   "./files.js?v=20261018visuals1",
@@ -35,7 +35,7 @@ const APP_SHELL = [
   "./virtual-list.js?v=20260908a",
   "./loading-indicator.js?v=20261013loading1",
   "./page-loader.js?v=20261013loading1",
-  "./task-state.js?v=20261019registers1",
+  "./task-state.js?v=20261020people1",
   "./query-controller.js?v=20260914workspace1",
   "./workspace-search.js?v=20261018inspectors5",
   "./task-search.js?v=20260917taskscroll1",
@@ -44,12 +44,12 @@ const APP_SHELL = [
   "./record-activity.js?v=20261019ticketpages1",
   "./tasks.js?v=20261020notify1",
   "./attention.js?v=20261019followupattention1",
-  "./calendar.js?v=20261019recurrence1",
+  "./calendar.js?v=20261020people1",
   "./appointments.js?v=20261019recurrence2",
   "./appointment-notify.js?v=20261019recurrence1",
   "./reminder-notify.js?v=20260923attention7",
   "./task-query.js?v=20261019workorder1",
-  "./slices.js?v=20261019workorder1",
+  "./slices.js?v=20261020people1",
   "./overview.js?v=20261013overviewactions2",
   "./history.js?v=20261019ticketschedule1",
   "./note-html.js?v=20261007fragments1",
@@ -58,11 +58,11 @@ const APP_SHELL = [
   "./ai.js?v=20261018visuals1",
   "./retained-messages.js?v=20260902a",
   "./chat.js?v=20261015copy3",
-  "./app.js?v=20261020notify1",
+  "./app.js?v=20261020people1",
   "./calls.js?v=20261019recurrence2",
   "./newsletter.js?v=20261019newslettertabs2",
   "./customers.js?v=20261019loading1",
-  "./tickets.js?v=20261019ticketsort2",
+  "./tickets.js?v=20261020people1",
   "./mobile-shell.js?v=20261019registers1",
   "./latency-worker.js",
 ];

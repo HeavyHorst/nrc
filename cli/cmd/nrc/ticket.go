@@ -584,6 +584,7 @@ func ticketSearchCommand() *cobra.Command {
 
 func init() {
 	c := &cobra.Command{Use: "ticket", Short: "Staff tickets: original bodies are read-only; replies default internal"}
+	c.AddCommand(metadataListCommand("assignees", "ASSIGNEE", p.C_ListTicketAssignees, p.S_TicketAssignees))
 	for _, action := range []string{"list", "get", "create", "update", "reply", "internal-note", "attachments", "delete"} {
 		c.AddCommand(ticketCommand(action))
 	}

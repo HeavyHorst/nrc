@@ -415,4 +415,19 @@ test_task_assignee_metadata_protocol :: proc(t: ^testing.T) {
 	testing.expect_value(t, buffer[23], u8(0))
 	testing.expect_value(t, buffer[26], u8(1))
 	testing.expect_value(t, buffer[27], u8(65))
+	// Calendar participants can use the full username length, beyond the
+	// project codec's old cap. All person facets reuse its frame layout.
+	long_name: [pr.MAX_USERNAME_LENGTH]byte
+	for &b in long_name do b = 'x'
+	people := [?]string{string(long_name[:])}
+	msg.projects = people[:]
+	person_buffer: [512]byte
+	for pair in ([?][2]pr.Opcode{{.C_ListSliceOwners, .S_SliceOwners}, {.C_ListTicketAssignees, .S_TicketAssignees}, {.C_ListCalendarPeople, .S_CalendarPeople}}) {
+		person_request := [?]byte{0, u8(pair[0])}
+		testing.expect_value(t, pr.get_opcode(person_request[:]), pair[0])
+		testing.expect(t, is_workspace_data_opcode(pair[0]))
+		n := pr.serializeTaskProjects(msg, person_buffer[:], pair[1])
+		testing.expect_value(t, n, 274)
+		testing.expect_value(t, pr.get_opcode(person_buffer[:n]), pair[1])
+	}
 }
