@@ -3002,18 +3002,19 @@ function renderTaskList() {
 
   window.NRCColumnResize?.init({
     root: "#taskListView .task-table", headers: "thead th", storageKey: "nrc.task.columns.v2",
-    defaults: [16, 48, 64, 280, 104, 86, 48, 64, 48, 48, 70, 72],
+    defaults: [16, 48, 64, null, 104, 86, 48, 64, 48, 48, 70, 72],
     minimums: [16, 48, 60, 160, 84, 72, 40, 48, 40, 40, 56, 56],
+    maximums: [640, 640, 640, 4096],
     locked: [0],
     apply: (table, widths) => {
       table.style.tableLayout = "fixed";
-      // Let TITLE absorb spare space instead of the native table distributing
-      // it across every column (which makes a 48px ID render wider than 48px).
-      // The hidden marker consumes no space; TITLE retains its resized minimum.
+      // TITLE fills spare space until explicitly resized. A manual table width
+      // prevents native table layout from redistributing the freed space.
       const fixedWidth = widths.reduce((sum, width, index) => sum + (index === 0 || index === 3 ? 0 : width), 0);
+      table.style.setProperty("--task-table-width", widths[3] == null ? "100%" : `${fixedWidth + widths[3]}px`);
       table.querySelectorAll("thead th").forEach((cell, index) => {
-        if (widths[index]) cell.style.width = index === 3
-          ? `max(${widths[index]}px, calc(100% - ${fixedWidth}px))`
+        cell.style.width = index === 3 && widths[3] == null
+          ? `max(160px, calc(100% - ${fixedWidth}px))`
           : `${widths[index]}px`;
       });
     },

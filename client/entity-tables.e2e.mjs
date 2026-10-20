@@ -121,17 +121,41 @@ try {
           await page.keyboard.press("Home");
           assert.equal(await handle.getAttribute("aria-valuenow"), "48");
           assert.ok(Math.abs(await header.locator(":scope > :nth-child(2)").evaluate(cell => cell.getBoundingClientRect().width) - 48) < 1, `${view} rendered ID width follows reset`);
-          if (view === 'notes') {
+          if (view === 'notes' || view === 'tasks') {
             const titleHandle = header.getByRole('separator', { name: 'Resize TITLE column', exact: true });
-            const titleCell = header.locator(':scope > :nth-child(3)');
+            const titleCell = header.locator(`:scope > :nth-child(${view === 'tasks' ? 4 : 3})`);
             const before = (await titleCell.boundingBox()).width;
+            const handleBox = await titleHandle.boundingBox();
+            const cellBox = await titleCell.boundingBox();
+            assert.ok(Math.abs(handleBox.height - cellBox.height) <= 1, `${view} title handle spans the header height`);
+            assert.ok(Math.abs(handleBox.x + handleBox.width / 2 - (cellBox.x + cellBox.width)) <= 1, `${view} title handle sits on the column boundary`);
+            if (view === 'tasks') {
+              await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+              await page.mouse.down();
+              await page.mouse.move(handleBox.x + handleBox.width / 2 - 37, handleBox.y + handleBox.height / 2);
+              await page.mouse.up();
+              assert.equal((await titleCell.boundingBox()).width, before - 37, 'first drag starts at the automatic rendered width');
+              await titleHandle.dblclick();
+              assert.equal((await titleCell.boundingBox()).width, before, 'double-click restores automatic width');
+            }
             await titleHandle.focus(); await page.keyboard.press('ArrowRight');
             assert.equal((await titleCell.boundingBox()).width, before + 8, 'keyboard resize moves the actual title boundary');
             const box = await titleHandle.boundingBox();
             await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-            await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2); await page.mouse.up();
-            assert.equal((await titleCell.boundingBox()).width, before + 88, 'pointer resize moves the actual title boundary');
+            await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 - 137, box.y + box.height / 2); await page.mouse.up();
+            assert.equal((await titleCell.boundingBox()).width, before - 129, 'pointer resize narrows the actual title boundary');
+            await header.screenshot({ path: `.amp/in/artifacts/resize-${view}-${theme}-manual.png` });
+            if (view === 'tasks') {
+              await page.setViewportSize({ width: 390, height: 1000 });
+              assert.equal(await page.locator('#taskListView').evaluate(host => host.scrollWidth <= host.clientWidth + 1), true, 'manual desktop widths do not overflow the mobile register');
+              await page.setViewportSize({ width: 1000, height: 1000 });
+              assert.equal(await page.locator('#taskListView').evaluate(host => host.scrollWidth <= host.clientWidth + 1), true, 'manual desktop widths do not overflow the compact register');
+              await page.setViewportSize({ width, height: 1000 });
+              assert.equal((await titleCell.boundingBox()).width, before - 129, 'desktop width survives responsive layout changes');
+            }
             await titleHandle.focus(); await page.keyboard.press('Home');
+            assert.equal((await titleCell.boundingBox()).width, before, 'reset restores automatic/default title width');
+            await header.screenshot({ path: `.amp/in/artifacts/resize-${view}-${theme}-default.png` });
           }
         }
         if (width <= 768 && view === "tasks") {
@@ -325,6 +349,25 @@ try {
   });
   assert.deepEqual(restored, [0, 112, 333]);
   assert.deepEqual(errors, []);
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.evaluate(() => { setTaskGrouping("flat"); showKanban(); });
+  const persistedTitle = page.locator('#taskListView th.col-title');
+  const persistedHandle = persistedTitle.getByRole('separator');
+  await persistedHandle.focus();
+  await page.keyboard.press('ArrowLeft');
+  const savedTitleWidth = (await persistedTitle.boundingBox()).width;
+  await page.reload();
+  await page.waitForFunction(() => window.NRCAssets && window.NRCViewManager);
+  await page.evaluate(() => {
+    currentRoomId = 7n;
+    currentWorkspaceId = "table-test";
+    window.NRCTaskQuery = undefined;
+    setTaskGrouping("flat"); showKanban(); renderCurrentTaskView();
+  });
+  await persistedTitle.waitFor({ state: 'visible' });
+  assert.equal((await persistedTitle.boundingBox()).width, savedTitleWidth, 'manual title width survives page reload');
+  await persistedHandle.focus();
+  await page.keyboard.press('Home');
   // An asymmetric token override catches a family reverting to panel/content
   // borders even when those happen to look alike in a particular theme.
   await page.goto("http://nrc.test/design-system/index.html");

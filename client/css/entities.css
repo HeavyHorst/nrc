@@ -1633,7 +1633,7 @@ body.sullivan-share-focused .chat-header {
 }
 
 .task-table {
-    width: 100%;
+    width: var(--task-table-width, 100%);
     border-collapse: collapse;
     font-size: var(--font-sm);
     border-spacing: 0;
@@ -1730,6 +1730,10 @@ body.sullivan-share-focused .chat-header {
     text-overflow: ellipsis;
     white-space: nowrap;
     font-weight: 500;
+}
+
+.task-table th.col-title {
+    overflow: visible;
 }
 
 .task-table .col-status {
@@ -5774,7 +5778,7 @@ nrc-inline-field {
     max-width: calc(100% - 4.5rem);
     vertical-align: middle;
 }
-.task-table .col-title > span {
+.task-table td.col-title > span {
     position: absolute;
     inset-inline-end: 0.625rem;
     top: 50%;

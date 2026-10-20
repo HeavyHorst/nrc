@@ -1,13 +1,14 @@
 (function () {
   "use strict";
 
-  function init({ root, headers, storageKey, defaults, minimums = [], locked = [], apply }) {
+  function init({ root, headers, storageKey, defaults, minimums = [], maximums = [], locked = [], apply }) {
     const container = document.querySelector(root);
     if (!container || container.dataset.columnResizeReady) return;
     container.dataset.columnResizeReady = "true";
     const lockedColumns = new Set(locked);
     const minimumWidth = (index) => Number(minimums[index]) || Math.min(36, Number(defaults[index]) || 36);
-    const clampWidth = (value, index) => Math.max(minimumWidth(index), Math.min(value, 640));
+    const maximumWidth = (index) => Number(maximums[index]) || 640;
+    const clampWidth = (value, index) => Math.max(minimumWidth(index), Math.min(value, maximumWidth(index)));
     const normalizeWidths = (values) => values.map((value, index) => {
       if (lockedColumns.has(index)) return defaults[index];
       const width = Number(value);
@@ -25,13 +26,15 @@
       localStorage.removeItem(storageKey);
     }
     const handles = [];
+    const headerCells = Array.from(container.querySelectorAll(headers));
+    // A null default leaves a column automatic until the user resizes it.
+    const currentWidth = (index) => widths[index] ?? headerCells[index].getBoundingClientRect().width;
     const commit = () => {
       apply(container, widths);
-      handles.forEach(({ handle, index }) => handle.setAttribute("aria-valuenow", String(Math.round(widths[index]))));
+      handles.forEach(({ handle, index }) => handle.setAttribute("aria-valuenow", String(Math.round(currentWidth(index)))));
     };
     commit();
 
-    const headerCells = Array.from(container.querySelectorAll(headers));
     headerCells.forEach((header, index) => {
       if (index >= widths.length - 1 || lockedColumns.has(index)) return;
       const nextHeader = headerCells[index + 1];
@@ -43,8 +46,8 @@
       handle.setAttribute("aria-orientation", "vertical");
       handle.setAttribute("aria-label", `Resize ${header.textContent.trim() || "column"} column`);
       handle.setAttribute("aria-valuemin", String(minimumWidth(index)));
-      handle.setAttribute("aria-valuemax", "640");
-      handle.setAttribute("aria-valuenow", String(Math.round(widths[index])));
+      handle.setAttribute("aria-valuemax", String(maximumWidth(index)));
+      handle.setAttribute("aria-valuenow", String(Math.round(currentWidth(index))));
       handles.push({ handle, index });
 
       let dragging = false;
@@ -72,7 +75,7 @@
         }
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault(); event.stopPropagation();
-        widths[index] = clampWidth(widths[index] + (event.key === "ArrowRight" ? 8 : -8), index);
+        widths[index] = clampWidth(currentWidth(index) + (event.key === "ArrowRight" ? 8 : -8), index);
         commit(); localStorage.setItem(storageKey, JSON.stringify(widths));
       });
       handle.addEventListener("pointerdown", (event) => {
@@ -80,7 +83,7 @@
         event.preventDefault(); event.stopPropagation();
         const pointerId = event.pointerId;
         const startX = event.clientX;
-        const start = widths[index];
+        const start = currentWidth(index);
         dragging = true;
         handle.classList.add("column-resize-handle-dragging");
         container.classList.add("column-resize-dragging");

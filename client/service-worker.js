@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261020people1";
+const CACHE_NAME = "nrc-terminal-20261020resize1";
 
 const APP_SHELL = [
   "./",
@@ -11,10 +11,10 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261019registers1",
+  "./css/main.css?v=20261020resize1",
   "./css/foundation.css?v=20261019registers1",
   "./css/workspace.css?v=20261018inspectors3",
-  "./css/entities.css?v=20261019registers1",
+  "./css/entities.css?v=20261020resize1",
   "./css/ledger.css?v=20261018inspectors5",
   "./css/mobile-tasks.css?v=20261019registers1",
   "./css/mobile.css?v=20261017subsystems1",
@@ -40,9 +40,9 @@ const APP_SHELL = [
   "./workspace-search.js?v=20261018inspectors5",
   "./task-search.js?v=20260917taskscroll1",
   "./detail-ui.js?v=20261019ticketschedule1",
-  "./column-resize.js?v=20260913tables2",
+  "./column-resize.js?v=20261020resize1",
   "./record-activity.js?v=20261019ticketpages1",
-  "./tasks.js?v=20261020notify1",
+  "./tasks.js?v=20261020resize1",
   "./attention.js?v=20261019followupattention1",
   "./calendar.js?v=20261020people1",
   "./appointments.js?v=20261019recurrence2",
