@@ -806,6 +806,9 @@ function createNoteCard(note) {
   
   const card = document.createElement("div");
   card.className = "note-card";
+  card.tabIndex = 0;
+  card.setAttribute("role", "group");
+  card.setAttribute("aria-label", `Open note ${note.assetId}: ${title || "No title"}`);
   const isSelected = isSelectedNote(note.convId, note.assetId);
   if (isSelected) {
     card.classList.add("note-selected");
@@ -832,7 +835,7 @@ function createNoteCard(note) {
 
   const titleEl = document.createElement("div");
   titleEl.className = "note-title";
-  titleEl.innerHTML = `<button type="button" class="task-row-open">${escapeHtml(title || "(No title)")}</button>${noteFieldControl(note, "title", { label: "", rename: true })}`;
+  titleEl.innerHTML = noteFieldControl(note, "title", { label: "" });
   titleEl.title = title || "(No title)";
   header.appendChild(titleEl);
   const metadata = document.createElement("div");
@@ -895,6 +898,12 @@ function createNoteCard(note) {
       if (wasDirty) setNoteDetailDirty(false);
       selectNote(note);
     }
+  });
+  card.addEventListener("keydown", (e) => {
+    if (e.target !== card || !["Enter", " "].includes(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    card.click();
   });
 
   return card;

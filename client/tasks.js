@@ -3083,6 +3083,8 @@ function createTaskRow(task, { draggable = true } = {}) {
   row.dataset.taskId = task.id.toString();
   row.dataset.convId = task.convId.toString();
   row.draggable = draggable;
+  row.tabIndex = 0;
+  row.setAttribute("aria-label", `Open task ${task.id}: ${task.title || "untitled"}`);
   const isSelected = selectedTaskId === task.id && selectedTaskConvId === task.convId;
   if (isSelected) {
     row.classList.add("task-row-selected");
@@ -3121,14 +3123,7 @@ function createTaskRow(task, { draggable = true } = {}) {
   // Title
   const titleTd = document.createElement("td");
   titleTd.className = "col-title";
-  const titleButton = document.createElement("button");
-  titleButton.type = "button";
-  titleButton.className = "task-row-open";
-  titleButton.textContent = task.title || "(untitled)";
-  titleTd.appendChild(titleButton);
-  const renameControl = document.createElement("span");
-  renameControl.innerHTML = fieldControl(task, "title", { label: "", rename: true });
-  titleTd.appendChild(renameControl);
+  titleTd.innerHTML = fieldControl(task, "title", { label: "" });
   const metadata = document.createElement("div");
   metadata.className = "register-row-meta";
   metadata.innerHTML = `${fieldControl(task, "project", { label: "" })}<span aria-hidden="true">·</span>${fieldControl(task, "assignee", { label: "" })}`;
@@ -3139,14 +3134,8 @@ function createTaskRow(task, { draggable = true } = {}) {
   // Status
   const statusTd = document.createElement("td");
   statusTd.className = "col-status";
-  const statusName = TaskStatusNames[task.status] || "??";
   statusTd.appendChild(createTaskStatusControl(task));
   row.appendChild(statusTd);
-
-  titleButton.setAttribute(
-    "aria-label",
-    `Open task ${task.id}: ${task.title || "untitled"}. Status ${statusName}. Priority ${priValue}. Assignee ${task.assignee || "unassigned"}`,
-  );
 
   // Due date
   const dueTd = document.createElement("td");
@@ -3248,6 +3237,12 @@ function createTaskRow(task, { draggable = true } = {}) {
   row.addEventListener("click", async (e) => {
     if (e.target.closest("button, input, select, textarea") && !e.target.closest(".task-row-open")) return;
     await openTask();
+  });
+  row.addEventListener("keydown", (e) => {
+    if (e.target !== row || !["Enter", " "].includes(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openTask();
   });
 
   return row;

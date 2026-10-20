@@ -96,17 +96,10 @@ try {
           const longId = page.locator(selector).locator(".col-id, .note-id, .reminder-id").filter({ hasText: "1234567890" });
           assert.deepEqual(await longId.evaluate(el => ({ overflow: getComputedStyle(el).overflowX, ellipsis: getComputedStyle(el).textOverflow, title: el.title.includes(el.textContent) })), { overflow: "hidden", ellipsis: "ellipsis", title: true }, `${view} long IDs stay inside their column and expose the full value`);
           if (view === "notes") assert.equal(await longId.evaluate(el => getComputedStyle(el).display), "block", "Flex text clips the ID suffix without an ellipsis");
-          if (view === "tasks") {
-            const renameOffsets = await page.locator(`${selector} .col-title`).evaluateAll(cells => cells.map(cell => {
-              const cellRight = cell.getBoundingClientRect().right - parseFloat(getComputedStyle(cell).paddingRight);
-              const renameRight = cell.querySelector("nrc-inline-field").getBoundingClientRect().right;
-              return Math.abs(cellRight - renameRight);
-            }));
-            assert.ok(renameOffsets.every(offset => offset < 1), `Task rename controls align at the title column end: ${renameOffsets.join(", ")}`);
-          }
-          if (view === "notes") {
-            const renameRights = await page.locator(`${selector} .note-title nrc-inline-field`).evaluateAll(fields => fields.map(field => field.getBoundingClientRect().right));
-            assert.ok(Math.max(...renameRights) - Math.min(...renameRights) < 1, `Note rename controls share one column position: ${renameRights.join(", ")}`);
+          if (view === "tasks" || view === "notes") {
+            const titles = page.locator(`${selector} nrc-inline-field[data-control$="-title"] button`);
+            assert.equal(await titles.count(), 3);
+            assert.ok((await titles.allTextContents()).every(title => title && title !== "RENAME"), "the title itself is the edit control");
           }
           const handle = header.getByRole("separator", { name: "Resize ID column", exact: true });
           await handle.focus();
@@ -157,14 +150,6 @@ try {
             assert.equal((await titleCell.boundingBox()).width, before, 'reset restores automatic/default title width');
             await header.screenshot({ path: `.amp/in/artifacts/resize-${view}-${theme}-default.png` });
           }
-        }
-        if (width <= 768 && view === "tasks") {
-          const renameRights = await page.locator(`${selector} .col-title > span nrc-inline-field`).evaluateAll(fields => fields.map(field => field.getBoundingClientRect().right));
-          assert.ok(Math.max(...renameRights) - Math.min(...renameRights) < 1, `Mobile task rename controls share one position: ${renameRights.join(", ")}`);
-        }
-        if (width <= 768 && view === "notes") {
-          const renameRights = await page.locator(`${selector} .note-title nrc-inline-field`).evaluateAll(fields => fields.map(field => field.getBoundingClientRect().right));
-          assert.ok(Math.max(...renameRights) - Math.min(...renameRights) < 1, `Mobile note rename controls share one position: ${renameRights.join(", ")}`);
         }
         assert.equal(await page.locator(selector).getByRole("button", { name: /delete/i }).count(), 0);
         await page.screenshot({ path: `.amp/in/artifacts/entity-${view}-${theme}-${width}.png` });
@@ -262,7 +247,7 @@ try {
     assert.ok((await row.boundingBox()).height >= 50, `${view} makes space for title, metadata and operational fields`);
     assert.equal(await row.evaluate(el => getComputedStyle(el).borderBottomWidth), "1px", `${view} compact row retains its shared divider`);
     const compact = await row.evaluate((element, view) => {
-      const title = element.querySelector('.task-row-open').getBoundingClientRect();
+      const title = element.querySelector('nrc-inline-field[data-control$="-title"] button').getBoundingClientRect();
       const metadata = element.querySelector('.register-row-meta').getBoundingClientRect();
       return {
         titleAboveMetadata: title.bottom <= metadata.top + 1,
@@ -319,7 +304,7 @@ try {
   await noteTitleHandle.focus(); await page.keyboard.press('Home');
   await noteHost.evaluate(el => { el.style.width = '380px'; el.scrollLeft = 0; });
   const narrowNote = page.locator('#notesList .note-card').first();
-  assert.ok((await narrowNote.locator('.task-row-open').boundingBox()).width > 100, 'title remains usable in a 380px desktop register');
+  assert.ok((await narrowNote.locator('.note-title button').boundingBox()).width > 100, 'title remains usable in a 380px desktop register');
   assert.equal(await page.locator('.notes-list-header').evaluate(header => {
     const bounds = header.getBoundingClientRect();
     const title = header.children[2].getBoundingClientRect();

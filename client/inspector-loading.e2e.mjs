@@ -203,7 +203,7 @@ try {
   const latency = await page.evaluate(async ({ id, title }) => {
     const requests = prefetchProbe.requests.length;
     const start = performance.now();
-    document.querySelector(`.note-card[data-note-id="${id}"] .task-row-open`).click();
+    document.querySelector(`.note-card[data-note-id="${id}"] .note-id`).click();
     for (let frame = 0; frame < 60; frame++) {
       await new Promise(requestAnimationFrame);
       if (NRCInspector.current()?.id === BigInt(id) && !NRCInspector.isLoading()) {

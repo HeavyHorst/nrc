@@ -407,6 +407,7 @@
     const el = document.getElementById('ticketsList'); if (!el) return;
     const rows = (searchState.mode === 'loading' ? [] : state.rows).map(asset => ({ asset, ...activity(asset) }));
     const focused = el.contains?.(document.activeElement) ? document.activeElement.closest('[data-ticket]')?.dataset.ticket : null;
+    const titleFocused = !!document.activeElement?.closest('nrc-inline-field');
     el.innerHTML = rows.map(({ asset: a, unread, waiting, timestamp, followUpDue }) => {
       const m = metadata(a), selected = state.selected === String(a.assetId);
       const context = [customerName(m.company_id), m.assignee || 'UNASSIGNED'].filter(Boolean).join(' · ');
@@ -414,8 +415,18 @@
       const scheduled = !!m.follow_up_at, validDate = Number.isFinite(date.getTime());
       const dateLabel = !scheduled ? '' : validDate ? date.toLocaleString(undefined, { day: 'numeric', month: 'short', ...(date.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}), hour: '2-digit', minute: '2-digit' }) : 'OUT OF DATE RANGE';
       const due = followUpDue ?? (scheduled && Number(m.follow_up_at) <= Date.now());
-      return `<tr data-ticket="${a.assetId}" class="${selected ? 'task-row-selected' : ''}" aria-selected="${selected}"><td class="col-id">#${a.assetId}</td><td class="col-title"><button class="task-row-open" type="button" title="${esc(m.title)}">${esc(m.title)}</button><span class="customer-meta" title="${esc(context)}">${esc(context)}</span></td><td class="col-status">${esc(statusLabels[m.status] || m.status)}${waiting ? '<span class="customer-meta">CUSTOMER WAITING</span>' : ''}</td><td class="col-priority" data-priority="${esc(m.priority)}">${esc(m.priority.toUpperCase())}</td><td class="col-follow-up${due ? ' ticket-follow-up-due' : ''}" title="${esc(scheduled ? followUpLabel(m.follow_up_at, due) : 'No follow-up scheduled')}">${due ? '<span>DUE</span>' : ''}<span class="customer-meta">${esc(dateLabel)}</span></td><td class="col-activity" title="${esc(window.NRCDetailUI.formatHeaderDate(timestamp))}">${timestamp ? esc(typeof formatRelativeAge === 'function' ? formatRelativeAge(timestamp) : window.NRCDetailUI.formatHeaderDate(timestamp)) : ''}${unread ? `<span class="col-unread">${unread} UNREAD</span>` : ''}</td></tr>`;
+      const identity = session, selection = state.selected;
+      const title = window.NRCDetailUI.inlineField({
+        key: `ticket-row-${a.assetId}-title`, name: 'TITLE', label: '', value: m.title,
+        required: true, maxBytes: 256,
+        save: value => saveMetadata(a, { title: value.trim() }, identity, selection),
+      });
+      return `<tr data-ticket="${a.assetId}" class="${selected ? 'task-row-selected' : ''}" aria-selected="${selected}"><td class="col-id">#${a.assetId}</td><td class="col-title">${title}<span class="customer-meta" title="${esc(context)}">${esc(context)}</span></td><td class="col-status">${esc(statusLabels[m.status] || m.status)}${waiting ? '<span class="customer-meta">CUSTOMER WAITING</span>' : ''}</td><td class="col-priority" data-priority="${esc(m.priority)}">${esc(m.priority.toUpperCase())}</td><td class="col-follow-up${due ? ' ticket-follow-up-due' : ''}" title="${esc(scheduled ? followUpLabel(m.follow_up_at, due) : 'No follow-up scheduled')}">${due ? '<span>DUE</span>' : ''}<span class="customer-meta">${esc(dateLabel)}</span></td><td class="col-activity" title="${esc(window.NRCDetailUI.formatHeaderDate(timestamp))}">${timestamp ? esc(typeof formatRelativeAge === 'function' ? formatRelativeAge(timestamp) : window.NRCDetailUI.formatHeaderDate(timestamp)) : ''}${unread ? `<span class="col-unread">${unread} UNREAD</span>` : ''}</td></tr>`;
     }).join('') || `<tr><td colspan="6" class="customer-empty">${searchState.mode === 'loading' ? 'Searching tickets…' : 'No matching tickets.'}</td></tr>`;
+    el.querySelectorAll('[data-ticket]').forEach(row => {
+      row.tabIndex = 0;
+      row.setAttribute('aria-label', `Open ticket ${row.dataset.ticket}: ${row.querySelector('nrc-inline-field button').textContent}`);
+    });
     document.querySelectorAll('#ticketsTable th[data-sort]').forEach(th => {
       const active = th.dataset.sort === state.sort;
       th.classList.toggle('sorted-asc', active && state.direction === 'asc');
@@ -424,7 +435,7 @@
     });
     const sort = document.getElementById('ticketsSort');
     if (sort) sort.value = `${state.sort}:${state.direction}`;
-    if (focused) el.querySelector(`[data-ticket="${focused}"] .task-row-open`)?.focus({ preventScroll: true });
+    if (focused) el.querySelector(`[data-ticket="${focused}"]${titleFocused ? ' nrc-inline-field button' : ''}`)?.focus({ preventScroll: true });
     window.NRCColumnResize?.init({
       root: '#ticketsTable', headers: 'thead th', storageKey: 'nrc.ticket.columns.v3',
       defaults: [56, 280, 160, 104, 160, 100], minimums: [48, 160, 110, 88, 130, 88],
@@ -466,14 +477,20 @@
       if (assets[index]) article.insertAdjacentHTML('beforeend', attachmentHtml(assets[index], `ticket-attachments-${assets[index].assetId}`));
     });
   }
-  async function saveMetadata(base, patch, identity = session) {
+  async function saveMetadata(base, patch, identity = session, selection = String(base.assetId)) {
     if (state.pending) throw new Error('Another save is pending. Retry when it finishes.');
     if (identity !== session) throw new Error('Session changed. Reopen the ticket.');
-    if (state.selected !== String(base.assetId)) throw new Error('Ticket changed. Reopen this field.');
+    if (state.selected !== selection) throw new Error('Ticket changed. Reopen this field.');
     const preview = JSON.stringify({ ...metadata(base), ...patch });
     const token = generation;
     state.pending = true; state.error = ''; renderStatus();
     try {
+      if (base.payload == null) {
+        const { asset } = await write(options => window.NRCAssets.sendGetAsset(0n, base.assetId, options));
+        if (token !== generation || identity !== session || state.selected !== selection) throw new Error('Session changed. Reopen this field.');
+        if (asset.updatedAt !== base.updatedAt || asset.preview !== base.preview) throw new Error('Ticket changed. Reopen this field.');
+        base = asset;
+      }
       await write(options => window.NRCTransactions.sendAssetMetadataPatch(base, preview, null, options));
       if (token !== generation) throw new Error('Connection changed. Save not confirmed; refresh and reopen this field.');
       const { asset } = await write(options => window.NRCAssets.sendGetAsset(0n, base.assetId, options));
@@ -853,6 +870,10 @@
     document.getElementById('ticketsRefresh').onclick = () => { state.error = ''; reload(); };
     document.getElementById('ticketsPager')?.addEventListener('nrc:load-more', () => loadPage(!state.cursor));
     document.getElementById('ticketsList').onclick = e => { const row = e.target.closest('[data-ticket]'); if (row) selectTicket(row.dataset.ticket); };
+    document.getElementById('ticketsList').onkeydown = e => {
+      if (!e.target.matches('[data-ticket]') || !['Enter', ' '].includes(e.key)) return;
+      e.preventDefault(); e.stopPropagation(); selectTicket(e.target.dataset.ticket);
+    };
     document.getElementById('ticketsSort')?.addEventListener('change', e => {
       [state.sort, state.direction] = e.target.value.split(':');
       loadPage(true);

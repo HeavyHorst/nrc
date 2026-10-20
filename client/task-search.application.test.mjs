@@ -237,8 +237,7 @@ test("indexed unloaded Done projection renders, opens Inspector, and hydrates vi
 
   const row = elements.get("taskListBody").children.find((candidate) => candidate.dataset.taskId === "99");
   assert.ok(row, "the actual task-list renderer includes the unloaded indexed projection");
-  assert.equal(row.children[3].children[0].tagName, "BUTTON");
-  assert.equal(row.children[3].children[0].textContent, "Indexed completed task");
+  assert.equal(row.children[3].title, "Indexed completed task");
   assert.equal(window.NRCTasks.roomTasks.get(0n)?.has(99n) || false, false);
 
   await row.dispatch("click");

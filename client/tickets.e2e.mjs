@@ -166,7 +166,7 @@ try {
   await page.waitForFunction(id => NRCInspector.current()?.type === 'ticket' && String(NRCInspector.current().id) === id, id);
   await page.click('#ticketsBtn');
   await page.waitForFunction(() => !NRCTickets.state.loading && !NRCTickets.state.detailLoading);
-  if (!(await page.locator('#ticketMetadata').count())) await page.locator(`#ticketsList [data-ticket="${id}"] button`).click();
+  if (!(await page.locator('#ticketMetadata').count())) await page.locator(`#ticketsList [data-ticket="${id}"] .col-status`).click();
   await page.locator('.ticket-customer-details summary').click();
   const savedOriginal = await page.evaluate(async id => (await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0].payload, id);
   assert.equal(savedOriginal, 'Original request', 'inline metadata save preserves original request');
@@ -248,7 +248,7 @@ try {
   await page.waitForFunction(() => serverReady);
   await page.click('#ticketsBtn');
   await page.waitForSelector(`[data-ticket="${id}"]`);
-  await page.click(`[data-ticket="${id}"]`);
+  await page.click(`[data-ticket="${id}"] .col-status`);
   await page.waitForFunction(() => !NRCTickets.state.detailLoading);
   assert.match(await page.textContent('#ticketConversation'), /Private diagnosis/);
   await page.waitForFunction(() => document.querySelector('#ticketWork')?.textContent.includes('Login regression'));
@@ -417,7 +417,7 @@ try {
   const checkTicketGeometry = () => page.waitForFunction(() => {
     const register = document.querySelector('#ticketsRegister');
     const row = register.querySelector('#ticketsList tr[data-ticket]');
-    const title = row.querySelector('.col-title .task-row-open').getBoundingClientRect();
+    const title = row.querySelector('.col-title nrc-inline-field button').getBoundingClientRect();
     const metadata = row.querySelector('.col-title .customer-meta').getBoundingClientRect();
     return register.scrollWidth <= register.clientWidth && title.height > 0 && metadata.height > 0 &&
       metadata.top >= title.bottom && metadata.bottom <= row.getBoundingClientRect().bottom;
@@ -500,7 +500,7 @@ try {
   assert.equal(searchRequests.at(-1).query, 'semantic synonym');
   assert.deepEqual(searchRequests.at(-1).filters, { entity_types: ['asset'], asset_types: [13], ticket: { status: 'open', assignee: 'Other staff member', company_id: customer.b, priority: '' } });
   assert.equal(searchRequests.at(-1).top_n, 100);
-  await page.locator(`#ticketsList [data-ticket="${id}"] button`).click();
+  await page.locator(`#ticketsList [data-ticket="${id}"] .col-status`).click();
   await page.waitForSelector('#inspectorEntityHost #ticketEditor');
   await page.waitForFunction(() => !NRCTickets.state.detailLoading);
   assert.match(await page.textContent('#ticketConversation'), /Public answer/);
@@ -518,14 +518,14 @@ try {
   if (process.env.NRC_TICKETS_SCREENSHOTS) {
     await page.evaluate(() => setTheme('lupine', false));
     await page.screenshot({ path: `${process.env.NRC_TICKETS_SCREENSHOTS}/ticket-register.png` });
-    await page.locator(`#ticketsList [data-ticket="${id}"] button`).click();
+    await page.locator(`#ticketsList [data-ticket="${id}"] .col-status`).click();
     for (const theme of ['lupine', 'light', 'matte-black']) {
       await page.evaluate(theme => setTheme(theme, false), theme);
       await page.screenshot({ path: `${process.env.NRC_TICKETS_SCREENSHOTS}/ticket-inspector-${theme}.png` });
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => setTheme('lupine', false));
-    await page.locator(`#ticketsList [data-ticket="${id}"] button`).click();
+    await page.locator(`#ticketsList [data-ticket="${id}"] .col-status`).click();
     await page.waitForFunction(() => document.body.classList.contains('inspector-open'));
     assert.equal(await page.locator('#inspector').getAttribute('aria-modal'), 'true');
     assert.ok(await page.locator('.note-preview-attachment-name').filter({ hasText: publicFilename }).evaluate(el => {
@@ -574,10 +574,10 @@ try {
   await page.waitForFunction(() => !NRCTickets.state.loading && NRCTickets.state.rows.length === 61);
   assert.deepEqual(await page.locator('#ticketsList [data-ticket]').evaluateAll(rows => rows.map(r => r.dataset.ticket)), pagingIds);
   assert.equal(await page.locator('#ticketsPager').isVisible(), false);
-  await page.locator(`#ticketsList [data-ticket="${pagingIds.at(-1)}"] button`).click();
+  await page.locator(`#ticketsList [data-ticket="${pagingIds.at(-1)}"] .col-status`).click();
   await page.waitForFunction(() => !NRCTickets.state.detailLoading);
   assert.match(await page.textContent('#ticketConversation'), /Original body 0/);
-  await page.getByRole('button', { name: /^Edit TITLE:/ }).click();
+  await page.locator('#ticketMetadata').getByRole('button', { name: /^Edit TITLE:/ }).click();
   await page.locator('.inline-field-editor input').fill('Paging match edited');
   await page.locator('.inline-field-editor input').press('Enter');
   await page.waitForFunction(() => !NRCTickets.state.pending && !NRCTickets.state.loading && !document.querySelector('.inline-field-editor'));
@@ -610,6 +610,28 @@ try {
     if (NRCTickets.state.error) throw new Error(NRCTickets.state.error);
   });
   assert.equal(await page.evaluate(() => NRCTickets.state.total), 61, 'historical read state larger than 64 KiB still permits filtered queries');
+  await page.evaluate(() => NRCInspector.close());
+  const tableTitle = page.locator(`#ticketsList [data-ticket="${pagingIds[0]}"] nrc-inline-field button`);
+  await tableTitle.click();
+  assert.equal(await page.evaluate(() => NRCInspector.hasEntity()), false, 'title edit does not open the Inspector');
+  await page.locator('.inline-field-editor input').fill('Cancelled title');
+  await page.keyboard.press('Escape');
+  assert.notEqual(await tableTitle.textContent(), 'Cancelled title');
+  await tableTitle.click();
+  await page.locator('.inline-field-editor input').fill('Paging match renamed inline');
+  await page.locator('.inline-field-editor input').press('Enter');
+  await page.waitForFunction(() => !NRCTickets.state.pending && !document.querySelector('.inline-field-editor'));
+  assert.equal(await tableTitle.textContent(), 'Paging match renamed inline');
+  assert.equal(await page.evaluate(() => NRCInspector.hasEntity()), false, 'saving leaves the Inspector closed');
+  const savedTicket = await page.evaluate(async id => (await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0], pagingIds[0]);
+  assert.equal(JSON.parse(savedTicket.preview).title, 'Paging match renamed inline');
+  assert.equal(savedTicket.payload, 'Original body 120', 'header-only title edit preserves the request');
+  const titleBounds = await tableTitle.boundingBox();
+  await page.mouse.click(titleBounds.x + titleBounds.width + 12, titleBounds.y + titleBounds.height / 2);
+  await page.waitForFunction(id => String(NRCInspector.current()?.id) === id, pagingIds[0]);
+  await page.evaluate(() => NRCInspector.close());
+  await page.locator(`#ticketsList [data-ticket="${pagingIds[0]}"]`).press('Enter');
+  await page.waitForFunction(id => String(NRCInspector.current()?.id) === id, pagingIds[0]);
   assert.deepEqual(errors, []);
   console.log('Paging fixture:', page.url());
   console.log('PASS: ticket register sorting/filtering, arrow navigation/boundaries, keyboard resizing, draft retention, shared Inspector; company/contact picks, attachments, stale-write rejection, task/slice links and navigation');

@@ -5765,12 +5765,29 @@ nrc-inline-field {
 }
 .inline-title > button, .note-title > .task-row-open { min-width: 0; flex: 1; }
 .inline-title > nrc-inline-field,
-.note-title > nrc-inline-field,
 .col-title > span,
 .note-preview-title > nrc-inline-field {
     flex: none;
     font: var(--font-xs) var(--font-mono);
     color: var(--text-dim);
+}
+.note-title > nrc-inline-field,
+.task-table .col-title > nrc-inline-field {
+    display: block;
+    width: fit-content;
+    min-width: 0;
+    max-width: 100%;
+    font: inherit;
+    color: inherit;
+}
+.note-title > nrc-inline-field > button,
+.task-table .col-title > nrc-inline-field > button {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
 }
 .task-table .col-title > .task-row-open {
     display: inline;

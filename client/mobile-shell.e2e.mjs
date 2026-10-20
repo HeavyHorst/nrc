@@ -262,7 +262,7 @@ try {
   const taskRow = page.locator('#taskListBody tr[data-task-id="42"]');
   await page.evaluate(() => document.getElementById("taskListBody").virtualList.ensure(0));
   assert.equal(await taskRow.getAttribute("role"), null, "task rows retain table semantics");
-  await taskRow.locator(".task-row-open").press("Enter");
+  await taskRow.press("Enter");
   await page.waitForFunction(() => document.body.classList.contains("inspector-open"));
   await page.locator("#mobileInspectorBack").tap();
   await page.locator('[data-mobile-view="chat"]').tap();
