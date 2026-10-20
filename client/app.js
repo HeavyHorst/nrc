@@ -174,7 +174,7 @@ const Opcode = {
   S_MessagePage: 159,
 };
 
-const EXPECTED_PROTOCOL_VERSION = 9;
+const EXPECTED_PROTOCOL_VERSION = 10;
 
 const ContentType = {
   PlainText: 0,
@@ -1451,6 +1451,7 @@ async function connectWebSocket() {
     window.NRCTickets?.disconnect();
     window.NRCCustomers?.onDisconnect();
     window.NRCNewsletter?.disconnect();
+    window.NRCCalls?.disconnect();
     pendingInitialization = null; // Clear any pending initialization
     retainedRoomStates.clear();
     retainedSubscriptionRequests.clear();
@@ -1821,6 +1822,7 @@ function handleBinaryMessage(arrayBuffer) {
         serverReady = true;
         window.NRCCustomers?.refreshAccess();
         window.NRCNewsletter?.refreshAccess();
+        window.NRCCalls?.refreshAccess();
         // Start ping interval for latency measurement
         startPingInterval();
         // Retry any pending asset requests (agenda via assets)
@@ -4881,12 +4883,14 @@ function switchToWorkspace(workspaceId) {
   logSystem(`SWITCHING TO WORKSPACE ${workspaceId}`, "workspace");
   window.location.hash = `workspace=${encodeURIComponent(workspaceId)}`;
   window.NRCNewsletter?.clear();
+  window.NRCCalls?.disconnect();
   window.location.reload();
 
   return true;
 }
 
 function updateRoomUI() {
+  window.NRCCalls?.render();
   if (window.NRCAI?.onRoomChanged) {
     window.NRCAI.onRoomChanged(currentRoomId);
   }

@@ -5852,6 +5852,12 @@ nrc-inline-field {
     overflow-wrap: anywhere;
     justify-self: start;
 }
+.appointment-detail-panel [hidden] {
+    display: none !important;
+}
+.inspector .panel-header.inspector-matrix-header > .inspector-mode-row > :is(#appointmentEdit, #appointmentSave):first-child {
+    margin-left: 0.5rem;
+}
 .record-document .record-format .custom-select {
     min-width: 0;
     max-width: 100%;

@@ -33,7 +33,7 @@ All messages use big-endian byte order and have the following structure:
 
 ## Protocol Version
 
-- Current protocol version: `9`
+- Current protocol version: `10`
 - Server advertises this in `S_ServerReady`
 - Clients should reject or warn on mismatches
 
@@ -49,6 +49,7 @@ Version history:
 | 7 | Move flags on `C_MoveTask`: `Append` asks for the end of the target column |
 | 8 | Calendar kind 2 appointment rows append actual start and optional end instants |
 | 9 | Slice rows append an independent `Tickets` u16 counter after `Files` |
+| 10 | Calendar kind 3 series occurrences append original `occurrence_at:i64` after the kind 2 interval fields |
 
 For server-side error return policy (generic vs domain-specific channels), see `docs/ERROR_HANDLING.md`.
 
@@ -1131,6 +1132,8 @@ For v2 correlation-enabled RPC requests, missing trailing `CorrelationID` is tre
    `[start,end)`, at most 62 days; limit is 1–100. Empty filters mean all.
    `str16` is a byte-length-prefixed UTF-8 string. Cursor fields must be zero
    without a cursor, otherwise identify the previous page's final row.
+   The person filter accepts up to 255 bytes (full participant usernames),
+   while stored task/appointment assignee fields remain limited to 32 bytes.
 
    `S_CalendarPage` (166), after the opcode:
    `scope:u64=0, count:u16, has_more:u8, cursor_at:i64, cursor_kind:u8,
@@ -1138,10 +1141,14 @@ For v2 correlation-enabled RPC requests, missing trailing `CorrelationID` is tre
    `kind:u8, id:u64, at:i64, blocked:u8, title:str16, assignee:str16, project:str16`.
    Kind 0 is an open dated task; kind 1 is a reminder deadline. Kind 2 is an
    appointment and appends `actual_start_at:i64, end_at:i64` after the three
-   strings (`end_at=0` means a point appointment); kinds 0 and 1 retain the
-   original row layout. Rows are ordered
+   strings (`end_at=0` means a point appointment). Kind 3 is a recurring
+   appointment occurrence: it appends the same interval fields followed by
+   `occurrence_at:i64`, the original start before any rescheduling. Kinds 0 and 1
+   retain the original row layout. Cursor kinds allow 0–3. Rows are ordered
    by `(at,kind,id)`, with exclusive continuation. Task filters intersect and
-   exclude reminders and match appointment assignee/project. Summary rows omit descriptions, attachments and payloads;
+   exclude reminders and match appointment project. For v2 appointments, the
+   person filter matches assignee, organizer or effective occurrence participants;
+   v1 matches assignee only. Summary rows omit descriptions, attachments and payloads;
    use existing direct entity reads for details. Ordinary entity broadcasts
    invalidate the view; pages are live reads, not an isolated snapshot.
    Reminder JSON is validated by a nonrecursive token reader with a fixed
@@ -1167,6 +1174,27 @@ For v2 correlation-enabled RPC requests, missing trailing `CorrelationID` is tre
    point. Start must be positive and a present end greater than start. Existing
    task bounds apply to title, assignee and project; description and URL are at
    most 2048 bytes each. Owner remains the creator, distinct from `assignee`.
+
+   Version 2 retains these fields and adds required `timezone` (IANA name),
+   `repeat` (`""`, `daily`, `weekly`, `monthly`), `weekdays` (unique ISO 1–7 for
+   weekly, otherwise empty), `until` (inclusive YYYY-MM-DD or empty),
+   `participants` (unique usernames, at most 64), `conference` (`none`, `external`,
+   `nrc`) and `exceptions` (at most 32). Exceptions are objects with original
+   `at` (nanosecond string), `cancelled` (boolean), optional `start_at`, `end_at`
+   and `participants`. Absent values inherit; empty `end_at` makes a point,
+   empty participants removes additional participants. Cancellation cannot carry
+   overrides. Unknown v2 keys, invalid timezones/dates and nonexistent exception
+   identities are rejected. All fields together must fit the 4096-byte preview.
+   Only the creator may mutate/delete v2 or upgrade v1 to v2, including cascades
+   and transactions. Read visibility remains workspace-wide.
+
+   Series preserve the start's local wall time and elapsed duration. Monthly
+   missing days and DST gaps are skipped; folds choose the first instant.
+   Recurring intervals may last at most 24 hours and must not overlap another
+   occurrence of that series. Kind 3 keys use effective start, clamped to the
+   query start, while `occurrence_at` stays stable. Indexed envelopes cover the
+   series and moved exceptions; expansion is bounded by the requested range.
+   Update server and web client together for protocol 10.
 
    The time index is built lazily once per workspace, then maintained on entity
    mutations. Warm queries seek into the requested range and scan its entries,

@@ -12,7 +12,7 @@
   const viewContextHost = () => document.getElementById("inspectorViewContextHost");
   const entityHost = () => document.getElementById("inspectorEntityHost");
   const current = () => state.stack[state.stack.length - 1] || null;
-  const key = (ref) => ref ? `${ref.roomId}:${ref.type}:${ref.id}` : "";
+  const key = (ref) => ref ? `${ref.roomId}:${ref.type}:${ref.id}${ref.occurrenceAt ? `:${ref.occurrenceAt}` : ""}` : "";
   const roomName = (roomId) => typeof getRoomName === "function" ? getRoomName(BigInt(roomId)) : String(roomId);
 
   function rememberDocumentScroll(ref) {
@@ -360,10 +360,11 @@
   function entityDeleted(input) {
     const ref = normalize(input);
     if (!ref) return false;
-    const deletedKey = key(ref);
-    const wasCurrent = key(current()) === deletedKey;
+    // Deleting a series invalidates every occurrence in inspector history.
+    const matches = entry => entry && entry.roomId === ref.roomId && entry.type === ref.type && entry.id === ref.id;
+    const wasCurrent = matches(current());
     const previousLength = state.stack.length;
-    state.stack = state.stack.filter((entry) => key(entry) !== deletedKey);
+    state.stack = state.stack.filter((entry) => !matches(entry));
     if (state.stack.length === previousLength) return false;
     state.intentVersion += 1;
     if (wasCurrent) {

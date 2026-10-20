@@ -20,7 +20,18 @@ const appointmentPageSize = 100
 
 var appointmentTimePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.[0-9]{1,9})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$`)
 
+type appointmentRecurrence struct {
+	Timezone     string            `json:"timezone,omitempty"`
+	Repeat       string            `json:"repeat,omitempty"`
+	Weekdays     []int             `json:"weekdays,omitempty"`
+	Until        string            `json:"until,omitempty"`
+	Participants []string          `json:"participants,omitempty"`
+	Conference   string            `json:"conference,omitempty"`
+	Exceptions   []json.RawMessage `json:"exceptions,omitempty"`
+}
+
 type appointmentPreview struct {
+	appointmentRecurrence
 	Version     int    `json:"version"`
 	Title       string `json:"title"`
 	StartAt     string `json:"start_at"`
@@ -32,17 +43,20 @@ type appointmentPreview struct {
 }
 
 type appointmentRecord struct {
-	ID          uint64 `json:"id"`
-	Title       string `json:"title"`
-	StartAt     string `json:"start_at"`
-	EndAt       string `json:"end_at,omitempty"`
-	Description string `json:"description,omitempty"`
-	Assignee    string `json:"assignee,omitempty"`
-	Project     string `json:"project,omitempty"`
-	URL         string `json:"url,omitempty"`
-	Owner       string `json:"owner,omitempty"`
-	CreatedAt   int64  `json:"created_at,omitempty"`
-	UpdatedAt   int64  `json:"updated_at,omitempty"`
+	appointmentRecurrence
+	Version      int    `json:"version,omitempty"`
+	OccurrenceAt string `json:"occurrence_at,omitempty"`
+	ID           uint64 `json:"id"`
+	Title        string `json:"title"`
+	StartAt      string `json:"start_at"`
+	EndAt        string `json:"end_at,omitempty"`
+	Description  string `json:"description,omitempty"`
+	Assignee     string `json:"assignee,omitempty"`
+	Project      string `json:"project,omitempty"`
+	URL          string `json:"url,omitempty"`
+	Owner        string `json:"owner,omitempty"`
+	CreatedAt    int64  `json:"created_at,omitempty"`
+	UpdatedAt    int64  `json:"updated_at,omitempty"`
 }
 
 func parseAppointmentTime(raw string) (int64, error) {
@@ -64,8 +78,8 @@ func parseAppointmentTime(raw string) (int64, error) {
 }
 
 func validateAppointment(p appointmentPreview) error {
-	if p.Version != 1 {
-		return fmt.Errorf("appointment version must be 1")
+	if p.Version != 1 && p.Version != 2 {
+		return fmt.Errorf("appointment version must be 1 or 2")
 	}
 	if strings.TrimSpace(p.Title) == "" || len(p.Title) > protocol.MaxTaskTitleLength {
 		return fmt.Errorf("title is required and must be at most %d bytes", protocol.MaxTaskTitleLength)
@@ -87,7 +101,9 @@ func validateAppointment(p appointmentPreview) error {
 }
 
 func appointmentPreviewJSON(p appointmentPreview) (string, error) {
-	p.Version = 1
+	if p.Version == 0 {
+		p.Version = 1
+	}
 	p.Title = strings.TrimSpace(p.Title)
 	start, err := parseAppointmentTime(p.StartAt)
 	if err != nil {
@@ -108,6 +124,30 @@ func appointmentPreviewJSON(p appointmentPreview) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if p.Version == 2 {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(b, &fields); err != nil {
+			return "", err
+		}
+		for key, value := range map[string]any{"timezone": p.Timezone, "repeat": p.Repeat, "weekdays": p.Weekdays, "until": p.Until, "participants": p.Participants, "conference": p.Conference, "exceptions": p.Exceptions} {
+			if value == nil {
+				fields[key] = json.RawMessage(`[]`)
+				continue
+			}
+			encoded, e := json.Marshal(value)
+			if e != nil {
+				return "", e
+			}
+			if string(encoded) == "null" {
+				encoded = []byte(`[]`)
+			}
+			fields[key] = encoded
+		}
+		b, err = json.Marshal(fields)
+		if err != nil {
+			return "", err
+		}
+	}
 	if len(b) > protocol.MaxPreviewLength {
 		return "", fmt.Errorf("appointment record exceeds %d bytes", protocol.MaxPreviewLength)
 	}
@@ -125,7 +165,7 @@ func decodeAppointment(a protocol.Asset) (appointmentRecord, appointmentPreview,
 	if err := validateAppointment(p); err != nil {
 		return appointmentRecord{}, p, err
 	}
-	return appointmentRecord{ID: a.AssetID, Title: p.Title, StartAt: p.StartAt, EndAt: p.EndAt, Description: p.Description, Assignee: p.Assignee, Project: p.Project, URL: p.URL, Owner: a.Owner, CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt}, p, nil
+	return appointmentRecord{appointmentRecurrence: p.appointmentRecurrence, Version: p.Version, ID: a.AssetID, Title: p.Title, StartAt: p.StartAt, EndAt: p.EndAt, Description: p.Description, Assignee: p.Assignee, Project: p.Project, URL: p.URL, Owner: a.Owner, CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt}, p, nil
 }
 
 func appointmentAsset(s *conn.Session, id uint64) (protocol.Asset, error) {
@@ -181,8 +221,12 @@ var appointmentListCmd = &cobra.Command{Use: "list", Short: "List appointments o
 			conn.Fatal("Error parsing calendar: %v", e)
 		}
 		for _, r := range page.Rows {
-			if r.Kind == protocol.CalendarKindAppointment {
-				rows = append(rows, appointmentRecord{ID: r.ID, Title: r.Title, StartAt: strconv.FormatInt(r.ActualStartAt, 10), EndAt: func() string {
+			if r.Kind == protocol.CalendarKindAppointment || r.Kind == protocol.CalendarKindOccurrence {
+				occurrence := ""
+				if r.Kind == protocol.CalendarKindOccurrence {
+					occurrence = strconv.FormatInt(r.OccurrenceAt, 10)
+				}
+				rows = append(rows, appointmentRecord{OccurrenceAt: occurrence, ID: r.ID, Title: r.Title, StartAt: strconv.FormatInt(r.ActualStartAt, 10), EndAt: func() string {
 					if r.EndAt == 0 {
 						return ""
 					}

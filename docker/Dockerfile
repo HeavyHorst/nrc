@@ -34,6 +34,7 @@ FROM ubuntu:24.04
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    tzdata \
     libopus0 \
     libzstd1 \
     && rm -rf /var/lib/apt/lists/*

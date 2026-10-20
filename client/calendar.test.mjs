@@ -12,7 +12,7 @@ const ns = value => BigInt(Date.parse(value)) * 1000000n;
 function response(request, rows, { more = false, cursor = null, correlation = null } = {}) {
   const encoder = new TextEncoder();
   const encoded = rows.map(row => ({ ...row, strings: [row.title, row.assignee || "", row.project || ""].map(value => encoder.encode(value)) }));
-  const size = 34 + encoded.reduce((total, row) => total + 18 + row.strings.reduce((n, value) => n + 2 + value.length, 0) + (row.kind === 2 ? 16 : 0), 0);
+  const size = 34 + encoded.reduce((total, row) => total + 18 + row.strings.reduce((n, value) => n + 2 + value.length, 0) + (row.kind >= 2 ? 16 : 0) + (row.kind === 3 ? 8 : 0), 0);
   const view = new DataView(new ArrayBuffer(size));
   view.setUint16(0, 166); view.setBigUint64(2, 0n); view.setUint16(10, rows.length); view.setUint8(12, more ? 1 : 0);
   const last = cursor || rows.at(-1) || { at: 0n, kind: 0, id: 0n };
@@ -22,7 +22,8 @@ function response(request, rows, { more = false, cursor = null, correlation = nu
     view.setUint8(offset++, row.kind || 0); view.setBigUint64(offset, row.id); offset += 8;
     view.setBigInt64(offset, row.at); offset += 8; view.setUint8(offset++, row.blocked ? 1 : 0);
     for (const bytes of row.strings) { view.setUint16(offset, bytes.length); offset += 2; new Uint8Array(view.buffer, offset, bytes.length).set(bytes); offset += bytes.length; }
-    if (row.kind === 2) { view.setBigInt64(offset, row.actualStartAt); offset += 8; view.setBigInt64(offset, row.endAt || 0n); offset += 8; }
+    if (row.kind >= 2) { view.setBigInt64(offset, row.actualStartAt); offset += 8; view.setBigInt64(offset, row.endAt || 0n); offset += 8; }
+    if (row.kind === 3) { view.setBigInt64(offset, row.occurrenceAt); offset += 8; }
   }
   view.setUint32(offset, correlation ?? request.getUint32(request.byteLength - 4));
   return view;
@@ -204,9 +205,22 @@ test("appointment rows decode their appended interval, span local days, expose f
   h.calendar.getState().mode = "agenda";
   row.day = "2026-09-01";
   h.calendar.getState().person = "alex"; h.calendar.render(); assert.match(h.elements.calendarBody.innerHTML, /Appointment 12/);
-  h.calendar.getState().person = "rene"; h.calendar.render(); assert.doesNotMatch(h.elements.calendarBody.innerHTML, /Appointment 12/);
+  h.calendar.getState().person = "rene"; h.calendar.render(); assert.match(h.elements.calendarBody.innerHTML, /Appointment 12/, "server person filter includes participants and organizer, not only assignee");
   h.elements.calendarPanel.listeners.click({ target: { closest: selector => selector === "[data-calendar-row]" ? { dataset: { calendarRow: "appointment:12" } } : null } });
-  assert.deepEqual(Array.from(Object.values(h.opened.at(-1))), [0n, "appointment", 12n]);
+  assert.deepEqual(Array.from(Object.values(h.opened.at(-1))), [0n, "appointment", 12n, row.actualStartAt, row.actualStartAt, row.endAt]);
+});
+
+test("recurring wire rows preserve original identity independently of rescheduled start", () => {
+  const h = harness(); h.calendar.refresh(); const request = h.requests(58)[0]; h.metadata();
+  h.reply(request, [
+    { ...appointment(12), kind: 3, occurrenceAt: ns("2026-09-01T10:00:00Z") },
+    { ...appointment(12), kind: 3, occurrenceAt: ns("2026-09-08T10:00:00Z") },
+  ]);
+  const rows = h.calendar.getState().rows;
+  assert.equal(rows[0].kind, "appointment");
+  assert.notEqual(rows[0].key, rows[1].key);
+  assert.equal(rows[0].occurrenceAt, ns("2026-09-01T10:00:00Z"));
+  assert.notEqual(rows[0].occurrenceAt, rows[0].actualStartAt);
 });
 
 test("disconnect clears a pending snapshot and renders offline", () => {

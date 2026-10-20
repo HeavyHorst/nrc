@@ -83,6 +83,10 @@ func buildNRCAuthToken(username, subject, workspace string, now time.Time) (stri
 }
 
 func buildProxyAuthToken(username, subject, workspace, audience string, now time.Time) (string, error) {
+	return buildProxyAuthTokenWithTTL(username, subject, workspace, audience, now, jwtTTL)
+}
+
+func buildProxyAuthTokenWithTTL(username, subject, workspace, audience string, now time.Time, ttl time.Duration) (string, error) {
 	headerJSON, err := json.Marshal(proxyJWTHeader{Alg: "HS256", Typ: "JWT"})
 	if err != nil {
 		return "", fmt.Errorf("marshal jwt header: %w", err)
@@ -95,7 +99,7 @@ func buildProxyAuthToken(username, subject, workspace, audience string, now time
 		Iss:       jwtIssuer,
 		Aud:       audience,
 		Nbf:       now.Unix() - 2,
-		Exp:       now.Add(jwtTTL).Unix(),
+		Exp:       now.Add(ttl).Unix(),
 	}
 
 	claimsJSON, err := json.Marshal(claims)
@@ -1042,7 +1046,7 @@ func taggedNodeLogin(node *tailcfg.Node) (string, error) {
 
 func injectIdentityHeaders(r *http.Request, localClient whoIsClient) (string, error) {
 	// These headers are assertions by this boundary, never by its callers.
-	for _, header := range []string{"X-Tailscale-Login", "X-Tailscale-User", "X-Tailscale-Node", "X-NRC-Auth", "X-NRC-Publish-Auth", "X-NRC-Newsletter-Auth", "X-NRC-User-Type", "X-NRC-Bot-Secret", "X-NRC-Bot-Nickname", "X-NRC-Denied-Workspaces"} {
+	for _, header := range []string{"X-Tailscale-Login", "X-Tailscale-User", "X-Tailscale-Node", "X-NRC-Auth", "X-NRC-Publish-Auth", "X-NRC-Newsletter-Auth", "X-NRC-Calls-Auth", "X-NRC-User-Type", "X-NRC-Bot-Secret", "X-NRC-Bot-Nickname", "X-NRC-Denied-Workspaces"} {
 		r.Header.Del(header)
 	}
 	remoteIP := extractRemoteIP(r)
@@ -1130,12 +1134,14 @@ func handleFeatures(allowed customerUsers, localClient whoIsClient) http.Handler
 		if !newsletter {
 			workspace = ""
 		}
+		_, calls := callsBackend(os.Getenv("NRC_CALLS_BACKEND"))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
 			Customers           bool   `json:"customers"`
+			Calls               bool   `json:"calls,omitempty"`
 			Newsletter          bool   `json:"newsletter,omitempty"`
 			NewsletterWorkspace string `json:"newsletter_workspace,omitempty"`
-		}{Customers: customers, Newsletter: newsletter, NewsletterWorkspace: workspace})
+		}{Customers: customers, Calls: calls, Newsletter: newsletter, NewsletterWorkspace: workspace})
 	}
 }
 
@@ -1159,6 +1165,7 @@ func proxyHandler(proxy http.Handler, localClient tailscaleClient, policy worksp
 	mux.HandleFunc("/exports", handleExport)
 	mux.Handle("/publish/api/", publishGateway(os.Getenv("NRC_PUBLISH_BACKEND"), os.Getenv("NRC_PUBLISH_WORKSPACE")))
 	mux.Handle("/newsletter/api/", newsletterGateway(os.Getenv("NRC_NEWSLETTER_BACKEND"), os.Getenv("NRC_NEWSLETTER_WORKSPACE")))
+	mux.Handle("/calls/ws/", callsGateway(os.Getenv("NRC_CALLS_BACKEND")))
 	mux.Handle("/", proxy)
 	return workspaceBoundary(mux, localClient, policy)
 }

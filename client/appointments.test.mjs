@@ -43,3 +43,19 @@ test("editor validation enforces field sizes, timestamps and safe meeting URLs",
   assert.match(api.validate({ ...valid, url: "javascript:alert(1)" }), /HTTP/);
   assert.deepEqual(JSON.parse(api.serialize(valid)), { version: 1, title: "Review", start_at: "100", end_at: "", description: "", assignee: "rene", project: "", url: "" });
 });
+
+test("IANA wall times skip DST gaps and choose the earliest folded instant", () => {
+  assert.equal(api.zonedNanos("2026-03-29T02:30", "Europe/Berlin"), 0n);
+  assert.equal(api.zonedNanos("2026-10-25T02:30", "Europe/Berlin"), BigInt(Date.parse("2026-10-25T00:30Z")) * 1000000n);
+  const instant = api.zonedNanos("2026-10-20T11:00", "Asia/Kathmandu");
+  assert.equal(api.zonedValue(instant, "Asia/Kathmandu"), "2026-10-20T11:00");
+});
+
+test("v2 serialization retains recurrence, participants and sparse exceptions", () => {
+  const data = { version: 2, title: "Standup", start_at: "1792486800000000000", end_at: "", description: "", assignee: "", project: "", url: "", timezone: "Europe/Berlin", repeat: "weekly", weekdays: [1, 3], until: "2026-12-31", participants: ["alex"], conference: "nrc", exceptions: [{ at: "1792486800000000000", cancelled: false, participants: [] }] };
+  const parsed = api.parse({ assetType: 12, preview: JSON.stringify(data) });
+  assert.deepEqual(JSON.parse(api.serialize(parsed)), data);
+  assert.equal(api.validate(parsed), "");
+  assert.match(api.validate({ ...parsed, endAt: parsed.startAt + 86400000000001n }), /24 HOURS/);
+  assert.match(api.validate({ ...parsed, weekdays: [] }), /WEEKDAY/);
+});

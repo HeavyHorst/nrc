@@ -309,6 +309,18 @@ test("deleted entities are removed from Inspector history", async () => {
   assert.equal(inspector.entityDeleted({ roomId: 1n, type: "task", id: 20n }), false);
 });
 
+test("occurrences have distinct inspector history but deleting their series removes all", async () => {
+  const { inspector } = loadInspector();
+  await inspector.openEntity({ roomId: 0n, type: "appointment", id: 42n, occurrenceAt: 100n });
+  await inspector.openEntity({ roomId: 0n, type: "appointment", id: 42n, occurrenceAt: 200n });
+  assert.equal(inspector.current().occurrenceAt, 200n);
+  await inspector.back();
+  assert.equal(inspector.current().occurrenceAt, 100n);
+  await inspector.openEntity({ roomId: 0n, type: "appointment", id: 42n, occurrenceAt: 200n });
+  assert.equal(inspector.entityDeleted({ roomId: 0n, type: "appointment", id: 42n }), true);
+  assert.equal(inspector.current(), null);
+});
+
 test("customer types participate in inspector history, disposal guards and deletion", async () => {
   for (const type of ["company", "contact", "activity"]) {
     const { inspector, window, cleared } = loadInspector();

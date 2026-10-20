@@ -177,6 +177,8 @@ func workspaceBoundary(next http.Handler, whois whoIsClient, policy workspacePol
 				}
 				r.Body = io.NopCloser(bytes.NewReader(body))
 				workspace, needsWorkspace = scope.Workspace, true
+			case strings.HasPrefix(r.URL.Path, "/calls/ws/"):
+				workspace, needsWorkspace = callsWorkspace(r), true
 			case isWebSocketUpgrade(r):
 				workspace = strings.TrimPrefix(r.URL.Path, "/")
 				needsWorkspace = true

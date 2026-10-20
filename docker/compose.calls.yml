@@ -1,0 +1,27 @@
+# Optional DM and scheduled calls. Jitsi is hosted separately and must enforce JWT access.
+services:
+  tailscale-proxy:
+    environment:
+      NRC_CALLS_BACKEND: http://calls:8090
+  calls:
+    build:
+      context: ..
+      dockerfile: services/calls/Dockerfile
+    environment:
+      NRC_SERVER: ws://websocket-server:8080
+      CALLS_DATA_DIR: /data
+      NRC_JWT_SECRET: ${NRC_JWT_SECRET:?set NRC_JWT_SECRET}
+      NRC_JWT_ISSUER: ${NRC_JWT_ISSUER:-nrc-tailscale-proxy}
+      NRC_JWT_AUDIENCE: ${NRC_JWT_AUDIENCE:-nrc}
+      JITSI_URL: ${JITSI_URL:?set JITSI_URL}
+      JITSI_APP_ID: ${JITSI_APP_ID:?set JITSI_APP_ID}
+      JITSI_SECRET: ${JITSI_SECRET:?set JITSI_SECRET}
+    volumes: [calls-data:/data]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on: [websocket-server]
+    restart: unless-stopped
+    networks: [orion-network]
+volumes:
+  calls-data:

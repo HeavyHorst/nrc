@@ -10,6 +10,7 @@ const (
 	CalendarKindTask        uint8 = 0
 	CalendarKindReminder    uint8 = 1
 	CalendarKindAppointment uint8 = 2
+	CalendarKindOccurrence  uint8 = 3
 	CalendarMaxRange              = int64(62 * 24 * 60 * 60 * 1_000_000_000)
 )
 
@@ -36,6 +37,7 @@ type CalendarRow struct {
 	Assignee             string `json:"assignee"`
 	Project              string `json:"project"`
 	ActualStartAt, EndAt int64  `json:"-"`
+	OccurrenceAt         int64  `json:"occurrence_at,omitempty"`
 }
 
 type CalendarPage struct {
@@ -46,6 +48,25 @@ type CalendarPage struct {
 	CorrelationID uint32
 }
 
+// IsAppointment includes both standalone appointments and recurring occurrences.
+func (r CalendarRow) IsAppointment() bool {
+	return r.Kind == CalendarKindAppointment || r.Kind == CalendarKindOccurrence
+}
+
+// MatchesAppointmentOccurrence matches the stable conference identity. For a
+// recurring row use the ORIGINAL occurrence start, not At (the clamped paging
+// key) or ActualStartAt (which changes on reschedule). A matching row alone is
+// not authorization: callers must also check the authoritative asset metadata.
+func (r CalendarRow) MatchesAppointmentOccurrence(assetID uint64, occurrenceAt int64) bool {
+	if r.ID != assetID || occurrenceAt <= 0 {
+		return false
+	}
+	if r.Kind == CalendarKindOccurrence {
+		return r.OccurrenceAt == occurrenceAt
+	}
+	return r.Kind == CalendarKindAppointment && r.ActualStartAt == occurrenceAt
+}
+
 func EncodeCalendarQuery(q CalendarQuery) ([]byte, error) {
 	if q.Start < 0 || q.End <= q.Start || q.End-q.Start > CalendarMaxRange {
 		return nil, fmt.Errorf("calendar range must be positive, increasing, and at most 62 days")
@@ -53,7 +74,7 @@ func EncodeCalendarQuery(q CalendarQuery) ([]byte, error) {
 	if q.Limit < 1 || q.Limit > 100 {
 		return nil, fmt.Errorf("calendar limit must be 1-100")
 	}
-	if len(q.Assignee) > MaxAssigneeLength || len(q.Project) > MaxProjectLength || !utf8.ValidString(q.Assignee) || !utf8.ValidString(q.Project) {
+	if len(q.Assignee) > MaxUsernameLength || len(q.Project) > MaxProjectLength || !utf8.ValidString(q.Assignee) || !utf8.ValidString(q.Project) {
 		return nil, fmt.Errorf("invalid calendar filter")
 	}
 	buf := make([]byte, 52+len(q.Assignee)+len(q.Project))
@@ -62,7 +83,7 @@ func EncodeCalendarQuery(q CalendarQuery) ([]byte, error) {
 	binary.BigEndian.PutUint64(buf[16:], uint64(q.End))
 	binary.BigEndian.PutUint16(buf[24:], q.Limit)
 	if q.Cursor != nil {
-		if q.Cursor.At < q.Start || q.Cursor.At >= q.End || q.Cursor.Kind > CalendarKindAppointment || q.Cursor.ID == 0 {
+		if q.Cursor.At < q.Start || q.Cursor.At >= q.End || q.Cursor.Kind > CalendarKindOccurrence || q.Cursor.ID == 0 {
 			return nil, fmt.Errorf("invalid calendar cursor")
 		}
 		buf[26] = 1
@@ -109,7 +130,7 @@ func DecodeCalendarPage(data []byte) (*CalendarPage, error) {
 		}
 		r := CalendarRow{Kind: data[o], ID: binary.BigEndian.Uint64(data[o+1:]), At: int64(binary.BigEndian.Uint64(data[o+9:])), Blocked: data[o+17] == 1}
 		o += 18
-		if r.Kind > CalendarKindAppointment || data[o-1] > 1 {
+		if r.Kind > CalendarKindOccurrence || data[o-1] > 1 {
 			return nil, fmt.Errorf("invalid calendar row")
 		}
 		var err error
@@ -122,13 +143,20 @@ func DecodeCalendarPage(data []byte) (*CalendarPage, error) {
 		if r.Project, err = readText(); err != nil {
 			return nil, err
 		}
-		if r.Kind == CalendarKindAppointment {
+		if r.Kind == CalendarKindAppointment || r.Kind == CalendarKindOccurrence {
 			if o+16 > len(data) {
 				return nil, fmt.Errorf("truncated appointment interval")
 			}
 			r.ActualStartAt = int64(binary.BigEndian.Uint64(data[o:]))
 			r.EndAt = int64(binary.BigEndian.Uint64(data[o+8:]))
 			o += 16
+		}
+		if r.Kind == CalendarKindOccurrence {
+			if o+8 > len(data) {
+				return nil, fmt.Errorf("truncated occurrence identity")
+			}
+			r.OccurrenceAt = int64(binary.BigEndian.Uint64(data[o:]))
+			o += 8
 		}
 		p.Rows = append(p.Rows, r)
 	}

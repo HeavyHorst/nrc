@@ -48,7 +48,7 @@ window.NRCAppointmentNotify = (() => {
       for (const [id, start] of Object.entries(sent)) {
         try { if (BigInt(start) <= time) delete sent[id]; } catch { delete sent[id]; }
       }
-      const identity = `${row.id}:${row.actualStartAt}`;
+      const identity = `${row.id}:${row.occurrenceAt ?? row.actualStartAt}:${row.actualStartAt}`;
       if (sent[identity]) return;
       const minutes = Math.ceil(Number(row.actualStartAt - time) / 60000000000);
       const startLabel = new Date(Number(row.actualStartAt / 1000000n)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -59,7 +59,7 @@ window.NRCAppointmentNotify = (() => {
         }, () => {
           if (scope() !== batch.scope) return;
           window.focus();
-          window.NRCInspector?.openEntity?.({ roomId: 0n, type: "appointment", id: row.id });
+          window.NRCInspector?.openEntity?.({ roomId: 0n, type: "appointment", id: row.id, occurrenceAt: row.occurrenceAt, actualStartAt: row.actualStartAt, endAt: row.endAt });
         });
         if (!delivered) return;
       } catch { return; } // Unsupported Notification constructors must not consume the alert.
@@ -81,7 +81,7 @@ window.NRCAppointmentNotify = (() => {
     let page;
     try { page = window.NRCCalendar.decodePage(view); }
     catch { disconnect(); return; }
-    scan.rows.push(...page.rows.filter(row => row.kind === "appointment" && row.assignee === scan.person));
+    scan.rows.push(...page.rows.filter(row => row.kind === "appointment"));
     if (page.more) {
       const c = page.cursor;
       if (!page.rows.length || previous && (c.at < previous.at || c.at === previous.at &&

@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20261013fold1">
     <link rel="icon" type="image/png" href="favicon.png?v=20261013fold1">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=20261013fold1">
-    <link rel="stylesheet" href="css/main.css?v=20261019review1">
+    <link rel="stylesheet" href="css/main.css?v=20261020appointment-spacing1">
     <link rel="stylesheet" href="css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 </head>
@@ -158,6 +158,8 @@
                             <div class="chat-header panel-header header-register metadata-header-register">
                                 <div class="header-register-identity-row">
                                     <span id="chatHeaderTitle" class="chat-header-title header-register-title">MESSAGES</span>
+                                    <button id="callStart" class="btn header-operation" type="button" hidden>VIDEO CALL</button>
+                                    <button id="callHistory" class="btn header-operation" type="button" hidden>CONFERENCES (0)</button>
                                     <button id="mobileChatTools" class="btn header-operation mobile-only" type="button" aria-controls="chatTools" aria-expanded="false">TOOLS</button>
                                     <span id="chatSearchCount" class="header-register-state" role="status" hidden></span>
                                     <span class="chat-header-right">
@@ -658,7 +660,7 @@
     <script src="edges.js?v=20260924slicelive1"></script>
     <script src="files.js?v=20261018visuals1"></script>
     <script src="links-ui.js?v=20261018ticketregister1"></script>
-    <script src="inspector.js?v=20261018inspectors3"></script>
+    <script src="inspector.js?v=20261019recurrence1"></script>
     <script src="view-manager.js?v=20261017history5"></script>
     <script src="list-navigation.js?v=20260805b"></script>
     <script src="virtual-list.js?v=20260908a"></script>
@@ -673,9 +675,9 @@
     <script src="record-activity.js?v=20261019ticketpages1"></script>
     <script src="tasks.js?v=20261019workorder1"></script>
     <script src="attention.js?v=20261017attention1"></script>
-    <script src="calendar.js?v=20261013loading1"></script>
-    <script src="appointments.js?v=20261018inspectors5"></script>
-    <script src="appointment-notify.js?v=20260927appointment2"></script>
+    <script src="calendar.js?v=20261019recurrence1"></script>
+    <script src="appointments.js?v=20261019recurrence2"></script>
+    <script src="appointment-notify.js?v=20261019recurrence1"></script>
     <script src="reminder-notify.js?v=20260923attention7"></script>
     <script src="task-query.js?v=20261019workorder1"></script>
     <script src="slices.js?v=20261019workorder1"></script>
@@ -687,7 +689,22 @@
     <script src="ai.js?v=20261018visuals1"></script>
     <script src="retained-messages.js?v=20260902a"></script>
     <script src="chat.js?v=20261015copy3"></script>
-    <script src="app.js?v=20261019subsystems2"></script>
+    <script src="app.js?v=20261019recurrence2"></script>
+    <section id="callPanel" class="call-panel" aria-label="Video call" hidden>
+        <header class="panel-header"><div><span id="callPeer">VIDEO INVITATION</span><button id="callDismiss" class="btn btn--danger task-detail-close" type="button" aria-label="Hide panel" title="Hide · reopen from Conferences">×</button></div></header>
+        <p id="callInvitationPeer" class="call-invitation-peer"></p>
+        <p id="callStatus" class="call-status" role="status" aria-live="polite"></p>
+        <p id="callExpiry" class="call-hint" role="status" hidden></p>
+        <div class="call-actions">
+            <button id="callAccept" class="btn btn--primary" type="button" hidden>ACCEPT</button>
+            <button id="callDecline" class="btn btn--danger" type="button" hidden>DECLINE</button>
+            <a id="callJoin" class="btn btn--primary" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" hidden>JOIN ↗</a>
+            <button id="callInvite" class="btn" type="button" hidden>INVITE PERSON</button>
+            <button id="callEnd" class="btn btn--danger" type="button" hidden>CANCEL CALL</button>
+        </div>
+        <p id="callExternalHint" class="call-hint" hidden>Opens in a new tab · end audio/video there.</p>
+    </section>
+    <script src="calls.js?v=20261019recurrence2"></script>
     <script src="newsletter.js?v=20261019newslettertabs2"></script>
     <script src="customers.js?v=20261019loading1"></script>
     <script src="tickets.js?v=20261019loading1"></script>

@@ -284,6 +284,7 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 					conv := get_conversation(ws, r.conv_id)
 					old := conv == nil ? nil : conv.assets[pr.AssetID(r.entity.value)]
 					if !asset_visible_to(old, get_connection_nickname(c)) {failed = u16(i); break planning}
+					if !appointment_mutation_allowed(old, nil, get_connection_nickname(c)) {failed = u16(i); break planning}
 				}
 				if r.if_updated_at !=
 				   0 {conv := get_conversation(ws, r.conv_id); updated_at: i64; if conv != nil {if expected == .Task {old := conv.tasks[pr.TaskID(r.entity.value)]; if old != nil do updated_at = old.updated_at} else {old := conv.assets[pr.AssetID(r.entity.value)]; if old != nil do updated_at = old.updated_at}}; if updated_at != r.if_updated_at {failed = u16(i); break planning}}
@@ -322,6 +323,7 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 		}
 		for &item in p.delete_assets {
 			asset := get_conversation(ws, item.conv_id).assets[pr.AssetID(item.id)]
+			if !appointment_mutation_allowed(asset, nil, get_connection_nickname(c)) do break planning
 			if reminder_is_personal(asset) do item.personal_owner = strings.clone(string(asset.owner))
 		}
 		for item in p.delete_tasks {conv := get_conversation(ws, item.conv_id); plan: Edge_Delete_Plan; edge_delete_plan_init(&plan); collect_edges_for_entity_delete(conv, &plan, .Task, item.id); for id in plan.edge_ids do if !transaction_delete_add(&p.delete_edges, item.conv_id, u64(id)) {edge_delete_plan_destroy(&plan); break planning}; edge_delete_plan_destroy(&plan)}
@@ -476,7 +478,8 @@ process_apply_transaction :: proc(c: ^NRC_Connection, req: pr.ApplyTransactionRe
 					   encoding > max(pr.PayloadEncoding) ||
 					   encoding == .Plain && raw_len != u32(len(payload)) {failed = u16(i)
 						break planning}}
-				if !validate_appointment_asset(old.asset_type, encoding, raw_len, preview, payload) {failed = u16(i); break planning}
+				if !appointment_mutation_allowed(old, preview, get_connection_nickname(c)) ||
+				   !validate_appointment_asset(old.asset_type, encoding, raw_len, preview, payload) {failed = u16(i); break planning}
 				if !validate_ticket_asset(
 					old.asset_type,
 					old.parent_type,

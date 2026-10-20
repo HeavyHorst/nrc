@@ -81,12 +81,14 @@ window.NRCCalendar = (() => {
       const at = view.getBigInt64(offset); offset += 8;
       const blocked = view.getUint8(offset++) === 1;
       const title = text(), assignee = text(), project = text();
-      const actualStartAt = wireKind === 2 ? view.getBigInt64(offset) : at;
-      if (wireKind === 2) offset += 8;
-      const endAt = wireKind === 2 ? view.getBigInt64(offset) : 0n;
-      if (wireKind === 2) offset += 8;
+      const actualStartAt = wireKind >= 2 ? view.getBigInt64(offset) : at;
+      if (wireKind >= 2) offset += 8;
+      const endAt = wireKind >= 2 ? view.getBigInt64(offset) : 0n;
+      if (wireKind >= 2) offset += 8;
+      const occurrenceAt = wireKind === 3 ? view.getBigInt64(offset) : actualStartAt;
+      if (wireKind === 3) offset += 8;
       const date = new Date(Number(actualStartAt / 1000000n));
-      rows.push({ id, kind, at, actualStartAt, endAt, blocked, title, assignee, project, key: `${kind}:${id}`,
+      rows.push({ id, kind, at, actualStartAt, endAt, occurrenceAt, serverFiltered: true, blocked, title, assignee, project, key: wireKind === 3 ? `${kind}:${id}:${occurrenceAt}` : `${kind}:${id}`,
         day: dayKey(new Date(Number(at / 1000000n))), time: `${pad(date.getHours())}:${pad(date.getMinutes())}` });
     }
     return { rows, more, cursor };
@@ -200,7 +202,7 @@ window.NRCCalendar = (() => {
     const focusDay = focus?.dataset?.calendarDay;
     const focusRecord = focus?.dataset?.calendarRecord;
     const person = state.person === "me" ? myNickname : state.person;
-    const filtered = state.rows.filter(row => (!state.person || (row.kind !== "reminder" && person && row.assignee === person)) &&
+    const filtered = state.rows.filter(row => (!state.person || row.kind === "appointment" && row.serverFiltered || (row.kind !== "reminder" && person && row.assignee === person)) &&
       (!state.project || row.project === state.project));
     const monthRange = visibleRange(state.month, "agenda");
     const monthRows = filtered.filter(row => row.kind === "appointment"
@@ -234,7 +236,7 @@ window.NRCCalendar = (() => {
       const record = event.target.closest("[data-calendar-row]");
       if (record) {
         const row = state.rows.find(row => row.key === record.dataset.calendarRow);
-        if (row) window.NRCInspector?.openEntity({ roomId: 0n, type: row.kind, id: row.id });
+        if (row) window.NRCInspector?.openEntity({ roomId: 0n, type: row.kind, id: row.id, occurrenceAt: row.occurrenceAt, actualStartAt: row.actualStartAt, endAt: row.endAt });
         return;
       }
       const button = event.target.closest("button");

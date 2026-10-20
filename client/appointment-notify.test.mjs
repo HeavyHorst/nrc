@@ -59,9 +59,10 @@ test("queries own next 15 minutes without loading or opening Calendar; exact bou
   assert.equal(new TextDecoder().decode(new Uint8Array(q.buffer, 48, q.getUint16(46))), "rene");
   h.reply([row(1, -1, { endAt: nanos(20) }), row(2, 0), row(3, 15), row(4, 16),
     row(5, 5, { assignee: "alex" }), row(6, 6, { kind: 0 }), row(7, 7, { kind: 1 }), row(8, 8, { assignee: "" })]);
-  assert.deepEqual(h.delivered.map(d => d.title), ["Meeting 3"]);
+  // Person matching is authoritative on the server (owner or participant too).
+  assert.deepEqual(h.delivered.map(d => d.title), ["Meeting 3", "Meeting 5", "Meeting 8"]);
   assert.match(h.delivered[0].options.body, /IN 15 MIN/);
-  h.delivered[0].click(); assert.equal(h.opened[0].type, "appointment"); assert.equal(h.opened[0].id, 3n);
+  h.delivered[0].click(); assert.equal(h.opened[0].type, "appointment"); assert.equal(h.opened[0].id, 3n); assert.equal(h.opened[0].occurrenceAt, nanos(15));
 });
 test("pages completely, rejects unrelated replies, and deduplicates polls, reloads and reschedules", () => {
   const h = harness(); h.api.refresh();

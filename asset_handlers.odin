@@ -198,7 +198,8 @@ handle_update_asset :: proc(c: ^NRC_Connection, req: pr.UpdateAssetRequest) {
 		send_error_response(c, .C_UpdateAsset, "Invalid ticket record", req.correlation_id)
 		return
 	}
-	if !validate_appointment_asset(existing.asset_type, req.payload_encoding, req.payload_raw_len, req.preview, req.payload) {
+	if !appointment_mutation_allowed(existing, req.preview, get_connection_nickname(c)) ||
+	   !validate_appointment_asset(existing.asset_type, req.payload_encoding, req.payload_raw_len, req.preview, req.payload) {
 		send_error_response(c, .C_UpdateAsset, "Invalid appointment record", req.correlation_id)
 		return
 	}
@@ -314,6 +315,10 @@ handle_delete_asset :: proc(c: ^NRC_Connection, req: pr.DeleteAssetRequest) {
 		send_error_response(c, .C_DeleteAsset, "Asset not found", req.correlation_id)
 		return
 	}
+	if !appointment_mutation_allowed(asset, nil, get_connection_nickname(c)) {
+		send_error_response(c, .C_DeleteAsset, "Only the organizer may delete this appointment", req.correlation_id)
+		return
+	}
 	if asset.asset_type == .RoomMapping {
 		send_error_response(c, .C_DeleteAsset, "Room mappings are immutable", req.correlation_id)
 		return
@@ -323,6 +328,12 @@ handle_delete_asset :: proc(c: ^NRC_Connection, req: pr.DeleteAssetRequest) {
 	defer delete(assets_to_delete)
 	collect_child_asset_delete_ids(conv, req.asset_id, &assets_to_delete)
 
+	for id in assets_to_delete {
+		if !appointment_mutation_allowed(conv.assets[id], nil, get_connection_nickname(c)) {
+			send_error_response(c, .C_DeleteAsset, "Deletion contains another organizer's appointment", req.correlation_id)
+			return
+		}
+	}
 	child_edges_to_delete: Edge_Delete_Plan
 	edge_delete_plan_init(&child_edges_to_delete)
 	defer edge_delete_plan_destroy(&child_edges_to_delete)

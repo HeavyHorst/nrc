@@ -56,3 +56,31 @@ func TestAppointmentTimeRejectsOverflow(t *testing.T) {
 		t.Fatalf("max time: %d %v", got, err)
 	}
 }
+
+func TestAppointmentV2EditPreservesRecurrenceAndExceptions(t *testing.T) {
+	a := protocol.Asset{AssetType: protocol.AssetTypeAppointment, PayloadEncoding: protocol.AssetPayloadEncodingPlain, Preview: `{"version":2,"title":"Before","start_at":"1792404000000000000","timezone":"Europe/Berlin","repeat":"weekly","weekdays":[1,3],"until":"","participants":["bob"],"conference":"nrc","exceptions":[{"at":"1792404000000000000","cancelled":false,"participants":[]}]}`}
+	r, p, err := decodeAppointment(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Timezone != "Europe/Berlin" || r.Conference != "nrc" {
+		t.Fatalf("record=%+v", r)
+	}
+	p.Title = "After"
+	raw, err := appointmentPreviewJSON(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(a.Preview), &before); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(raw), &after); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"version", "timezone", "repeat", "weekdays", "until", "participants", "conference", "exceptions"} {
+		if string(before[key]) != string(after[key]) {
+			t.Fatalf("%s changed: %s -> %s", key, before[key], after[key])
+		}
+	}
+}

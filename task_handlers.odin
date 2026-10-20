@@ -252,6 +252,12 @@ process_delete_task :: proc(c: ^NRC_Connection, req: pr.DeleteTaskRequest) {
 	conv := get_conversation(ws, req.conv_id)
 	collect_task_asset_delete_ids(conv, req.task_id, &assets_to_delete)
 
+	for id in assets_to_delete {
+		if !appointment_mutation_allowed(conv.assets[id], nil, get_connection_nickname(c)) {
+			send_task_list_error(c, req.conv_id, "Deletion contains another organizer's appointment", req.correlation_id)
+			return
+		}
+	}
 	asset_edges_to_delete: Edge_Delete_Plan
 	edge_delete_plan_init(&asset_edges_to_delete)
 	defer edge_delete_plan_destroy(&asset_edges_to_delete)

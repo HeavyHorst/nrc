@@ -5,7 +5,7 @@ import "core:unicode/utf8"
 
 CalendarKey :: struct {
 	at:   i64,
-	kind: u8, // 0 task, 1 reminder, 2 appointment; IDs are independent namespaces.
+	kind: u8, // 0 task, 1 reminder, 2 appointment, 3 recurring occurrence.
 	id:   u64,
 }
 CalendarRequest :: struct {
@@ -22,6 +22,7 @@ CalendarRow :: struct {
 	blocked:                  bool,
 	title, assignee, project: []byte,
 	actual_start_at, end_at:  i64, // Appointment-only; end_at=0 is a point appointment.
+	occurrence_at:            i64, // Kind 3 only: original start, unchanged by rescheduling.
 }
 parseCalendarRequest :: proc(data: []byte) -> (r: CalendarRequest, err: ProtocolParseError) {
 	if len(data) < 52 do return r, .TooShort
@@ -35,13 +36,13 @@ parseCalendarRequest :: proc(data: []byte) -> (r: CalendarRequest, err: Protocol
 	r.cursor.at, _ = endian.get_i64(data[27:], .Big); r.cursor.kind = data[35]
 	r.cursor.id, _ = endian.get_u64(data[36:], .Big)
 	if r.has_cursor {
-		if r.cursor.kind > 2 || r.cursor.at < r.start || r.cursor.at >= r.end || r.cursor.id == 0 do return r, .InvalidValue
+		if r.cursor.kind > 3 || r.cursor.at < r.start || r.cursor.at >= r.end || r.cursor.id == 0 do return r, .InvalidValue
 	} else if r.cursor != (CalendarKey{}) do return r, .InvalidValue
 	offset := 44
 	for field, i in ([?]^[]byte{&r.assignee, &r.project}) {
 		length, ok := endian.get_u16(data[offset:], .Big); if !ok do return r, .TooShort
 		offset += 2
-		if int(length) > (i == 0 ? MAX_ASSIGNEE_LENGTH : MAX_PROJECT_LENGTH) || offset + int(length) > len(data) do return r, .InvalidValue
+		if int(length) > (i == 0 ? MAX_USERNAME_LENGTH : MAX_PROJECT_LENGTH) || offset + int(length) > len(data) do return r, .InvalidValue
 		field^ = data[offset:offset + int(length)]; offset += int(length)
 		if !utf8.valid_string(string(field^)) do return r, .InvalidValue
 	}
@@ -49,7 +50,14 @@ parseCalendarRequest :: proc(data: []byte) -> (r: CalendarRequest, err: Protocol
 	r.correlation_id, _ = endian.get_u32(data[offset:], .Big)
 	return r, nil
 }
-calendar_row_size :: proc(row: CalendarRow) -> int {return 24 + len(row.title) + len(row.assignee) + len(row.project) + (row.key.kind == 2 ? 16 : 0)}
+calendar_row_size :: proc(row: CalendarRow) -> int {return(
+		24 +
+		len(row.title) +
+		len(row.assignee) +
+		len(row.project) +
+		(row.key.kind >= 2 ? 16 : 0) +
+		(row.key.kind == 3 ? 8 : 0) \
+	)}
 serializeCalendarPage :: proc(rows: []CalendarRow, more: bool, correlation: u32, buf: []byte) -> int {
 	size := 34
 	for row in rows do size += calendar_row_size(row)
@@ -73,10 +81,11 @@ serializeCalendarPage :: proc(rows: []CalendarRow, more: bool, correlation: u32,
 			endian.put_u16(buf[offset:], .Big, u16(len(text))); offset += 2
 			copy(buf[offset:], text); offset += len(text)
 		}
-		if row.key.kind == 2 {
+		if row.key.kind >= 2 {
 			endian.put_i64(buf[offset:], .Big, row.actual_start_at); offset += 8
 			endian.put_i64(buf[offset:], .Big, row.end_at); offset += 8
 		}
+		if row.key.kind == 3 {endian.put_i64(buf[offset:], .Big, row.occurrence_at); offset += 8}
 	}
 	endian.put_u32(buf[offset:], .Big, correlation)
 	return size

@@ -1,9 +1,31 @@
 @import url("foundation.css?v=20261012slicebars1");
 @import url("workspace.css?v=20261018inspectors3");
-@import url("entities.css?v=20261019sortsize1");
+@import url("entities.css?v=20261020appointment-spacing1");
 @import url("ledger.css?v=20261018inspectors5");
 @import url("mobile-tasks.css?v=20261016sliceinspector1");
 @import url("mobile.css?v=20261017subsystems1");
+
+.call-panel { position: fixed; z-index: 1000; right: 1rem; bottom: 1rem; width: min(25rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: var(--frame-border); background: var(--surface-content); color: var(--text-primary); box-shadow: 0 0.5rem 2rem var(--overlay-backdrop); }
+.call-panel[hidden], .call-panel [hidden], #callStart[hidden], #callHistory[hidden] { display: none !important; }
+.call-panel > .panel-header > div { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.call-panel > .panel-header > div > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-panel .task-detail-close:hover { color: var(--on-danger); }
+.call-status { margin: 0; padding: 0.4rem 0.75rem 0.6rem; font-size: var(--font-base); overflow-wrap: anywhere; }
+.call-status:empty, .call-invitation-peer:empty { display: none; }
+.call-invitation-peer { margin: 0; padding: 0.5rem 0.75rem 0; color: var(--text-dim); font-size: var(--font-base); overflow-wrap: anywhere; }
+.call-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0.75rem; }
+.call-actions:not(:has(:is(button, a):not([hidden]))) { display: none; }
+.call-actions > a { display: inline-flex; align-items: center; text-decoration: none; }
+.call-hint { margin: 0; padding: 0.5rem 0.75rem; font-size: var(--font-base); color: var(--text-dim); line-height: 1.4; overflow-wrap: anywhere; }
+.call-library { display: grid; gap: 0.5rem; max-height: 60dvh; overflow: auto; }
+.call-library-entry { display: grid; gap: 0.35rem; text-align: left; white-space: normal; overflow-wrap: anywhere; padding: 0.6rem; }
+.call-library-entry span { font-weight: normal; }
+@media (max-width: 768px) {
+    .call-panel { right: 0.5rem; bottom: max(0.5rem, env(safe-area-inset-bottom)); width: calc(100vw - 1rem); }
+    .call-status, .call-hint, .call-invitation-peer, .call-library-entry { font-size: var(--mobile-font-base); }
+    .call-panel .btn { min-height: 44px; }
+    .call-panel > .panel-header { height: auto; }
+}
 
 .chat-attachment {
     display: flex;

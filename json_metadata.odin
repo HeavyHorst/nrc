@@ -54,7 +54,16 @@ json_metadata_string :: proc(token: json.Token, allocator: mem.Allocator) -> str
 // Duplicate selected fields are rejected, ignored-field duplicates have no effect.
 // This is the existing metadata contract, not a general JSON decoder: nesting
 // is capped at 64 and every integer token (even ignored ones) must fit i64.
-json_metadata_fields :: proc(data: []byte, names: [$N]string, allocator: mem.Allocator) -> (fields: [N]json.Token, object: bool, valid: bool) {
+json_metadata_fields :: proc(
+	data: []byte,
+	names: [$N]string,
+	allocator: mem.Allocator,
+	strict := false,
+) -> (
+	fields: [N]json.Token,
+	object: bool,
+	valid: bool,
+) {
 	tok := json.make_tokenizer(string(data), .JSON, true)
 	stack: [65]JSON_Metadata_State
 	depth, end, field := 0, 0, -1
@@ -103,6 +112,7 @@ json_metadata_fields :: proc(data: []byte, names: [$N]string, allocator: mem.All
 					for name, i in names {if key == name {field = i; break}}
 					if strings.contains(token.text, "\\") do delete(key, allocator)
 				}
+				if strict && field < 0 do return
 			}
 			stack[depth] = .Object_Colon
 			continue
@@ -146,6 +156,11 @@ json_metadata_fields :: proc(data: []byte, names: [$N]string, allocator: mem.All
 }
 
 Appointment_Record :: struct {
+	version:                             int,
+	timezone, repeat, until, conference: string,
+	weekdays:                            []int,
+	participants:                        []string,
+	exceptions:                          []Appointment_Exception,
 	title:                               []byte,
 	start_at, end_at:                    i64,
 	description, assignee, project, url: []byte,
@@ -155,6 +170,8 @@ Appointment_Record :: struct {
 // write validation and the calendar index so replay and live mutations agree.
 parse_appointment_preview :: proc(data: []byte, allocator: mem.Allocator) -> (r: Appointment_Record, ok: bool) {
 	names := [?]string{"version", "title", "start_at", "end_at", "description", "assignee", "project", "url"}
+	v, _, _ := json_metadata_fields(data, [?]string{"version"}, allocator)
+	if v[0].text == "2" do return parse_appointment_v2(data, allocator)
 	f, object, valid := json_metadata_fields(data, names, allocator)
 	if !valid || !object || f[0].kind != .Integer || f[0].text != "1" || f[1].kind != .String || f[2].kind != .String do return
 	r.title = transmute([]byte)json_metadata_string(f[1], allocator)
@@ -177,6 +194,7 @@ parse_appointment_preview :: proc(data: []byte, allocator: mem.Allocator) -> (r:
 		outs[i]^ = transmute([]byte)json_metadata_string(token, allocator)
 		if len(outs[i]^) > limits[i] do return r, false
 	}
+	r.version = 1
 	return r, true
 }
 

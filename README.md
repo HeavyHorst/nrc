@@ -43,6 +43,11 @@ listener for approved articles; its administration must stay private.
 Optional [Tickets](docs/TICKETS.md) provides a separate customer portal with
 private, account-scoped requests. Staff work on the same durable records in
 NRC's ticket register and customer view; internal notes never enter the portal.
+Optional [video conferences](services/calls/README.md) add DM calling and scheduled
+meetings through an adapter-based Go service and external, JWT-authenticated Jitsi.
+Calendar series support timezone-aware recurrence and editable participants per
+series or occurrence. NRC authorizes invitations and entry; the provider handles
+audio/video. Scheduled room identities persist in the calls service's data volume.
 
 Start the services and check their logs:
 

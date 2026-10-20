@@ -7,6 +7,7 @@ import "core:mem/virtual"
 import "core:slice"
 import "core:strconv"
 import "core:strings"
+import tz "core:time/timezone"
 import pr "protocol"
 
 foreign import calendar_zstd "system:zstd"
@@ -109,7 +110,8 @@ calendar_index_asset :: proc(conv: ^Conversation_State, asset: ^pr.Asset, remove
 		defer virtual.arena_destroy(&arena)
 		record, valid := parse_appointment_preview(asset.preview, virtual.arena_allocator(&arena))
 		if valid {
-			key := appointment_index_key(record.start_at, record.end_at, asset.asset_id)
+			start, end := appointment_envelope(record)
+			key := appointment_index_key(start, end, asset.asset_id)
 			_, _ = btree.set(&conv.calendar_appointments, key)
 			state_map_set(&conv.calendar_appointment_keys, asset.asset_id, key)
 		}
@@ -197,12 +199,35 @@ collect_calendar_page :: proc(
 			if ik.start_at >= req.end do continue
 			if ik.end_at != 0 && ik.end_at <= req.start do continue
 			if ik.end_at == 0 && ik.start_at < req.start do continue
-			key := pr.CalendarKey{max(ik.start_at, req.start), 2, u64(ik.id)}
-			if req.has_cursor && calendar_key_compare(key, req.cursor) <= 0 do continue
 			asset := conv.assets[ik.id]; if asset == nil do continue
 			record, valid := parse_appointment_preview(asset.preview, allocator); if !valid do continue
-			if len(req.assignee) > 0 && string(req.assignee) != string(record.assignee) do continue
 			if len(req.project) > 0 && string(req.project) != string(record.project) do continue
+			if record.repeat != "" {
+				zone, loaded := appointment_zone(record.timezone, allocator); if !loaded do continue
+				occurrences := appointment_expand(record, req.start, req.end, zone, allocator)
+				if zone != nil do tz.region_destroy(zone, allocator)
+				for occurrence in occurrences {
+					if !appointment_person_matches(record, asset.owner, occurrence.participants, req.assignee) do continue
+					key := pr.CalendarKey{max(occurrence.start_at, req.start), 3, u64(ik.id)}
+					if req.has_cursor && calendar_key_compare(key, req.cursor) <= 0 do continue
+					append(
+						rows,
+						pr.CalendarRow {
+							key = key,
+							title = record.title,
+							assignee = record.assignee,
+							project = record.project,
+							actual_start_at = occurrence.start_at,
+							end_at = occurrence.end_at,
+							occurrence_at = occurrence.at,
+						},
+					)
+				}
+				continue
+			}
+			if !appointment_person_matches(record, asset.owner, record.participants, req.assignee) do continue
+			key := pr.CalendarKey{max(record.start_at, req.start), 2, u64(ik.id)}
+			if req.has_cursor && calendar_key_compare(key, req.cursor) <= 0 do continue
 			append(
 				rows,
 				pr.CalendarRow {

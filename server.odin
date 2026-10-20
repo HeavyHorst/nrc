@@ -312,7 +312,7 @@ Server_Thread :: struct {
 }
 
 BUILD_VERSION :: "dev-2026-10:91d94ec"
-PROTOCOL_VERSION :: 9 // Slice rows carry an independent Ticket member counter.
+PROTOCOL_VERSION :: 10 // Calendar kind 3 carries a stable series occurrence identity.
 
 jwt_auth_secret: string
 jwt_expected_issuer: string
