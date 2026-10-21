@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261021taskslice1";
+const CACHE_NAME = "nrc-terminal-20261021contents1";
 
 const APP_SHELL = [
   "./",
@@ -11,10 +11,10 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261021taskslice1",
+  "./css/main.css?v=20261021contents1",
   "./css/foundation.css?v=20261020fill2",
   "./css/workspace.css?v=20261021context2",
-  "./css/entities.css?v=20261020fill2",
+  "./css/entities.css?v=20261021contents1",
   "./css/ledger.css?v=20261021chat1",
   "./css/mobile-tasks.css?v=20261019registers1",
   "./css/mobile.css?v=20261021taskslice1",

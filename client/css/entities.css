@@ -5842,6 +5842,10 @@ nrc-inline-field {
     margin: 0.5rem 0.75rem 0;
     border: 1px solid var(--border-subtle);
 }
+.record-document > .note-section-jumps {
+    width: calc(100% - 1.5rem);
+    margin-inline: 0.75rem;
+}
 .record-document > .detail-read-register > :is(nrc-inline-field, div) {
     display: grid;
     grid-template-columns: 4.75rem minmax(0, 1fr);

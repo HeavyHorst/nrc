@@ -291,6 +291,10 @@ try {
   assert.ok(await page.locator('.note-section-jumps a').first().isHidden());
   await page.locator('.note-sections-toggle').click();
   const tocHeight = (await geometry('.note-section-jumps')).height;
+  const contents = await geometry('.note-section-jumps');
+  const metadata = await geometry('.note-inline-metadata');
+  assert.ok(Math.abs(contents.x - metadata.x) < 1, 'contents align with the metadata inset');
+  assert.ok(Math.abs(contents.width - metadata.width) < 1, 'contents use the metadata width, not the full panel');
   await page.locator('.note-sections-toggle').click();
   assert.ok(await page.locator('.note-section-jumps a').first().isHidden());
   assert.ok((await geometry('.note-section-jumps')).height < tocHeight, 'collapsed contents reclaim vertical space');
