@@ -258,6 +258,22 @@ body {
         --sidebar-icon: var(--icon-carbon-chat);
     }
 
+    & #overviewBtn {
+        --sidebar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3 3h11v11H3zm2 2v7h7V5zM18 3h11v11H18zm2 2v7h7V5zM3 18h11v11H3zm2 2v7h7v-7zM18 18h11v11H18zm2 2v7h7v-7z'/%3E%3C/svg%3E");
+    }
+
+    & #historyBtn {
+        --sidebar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3A13 13 0 0 0 5 9V4H3v9h9v-2H6.2A11 11 0 1 1 5 16H3A13 13 0 1 0 16 3z'/%3E%3Cpath d='M15 8h2v7.6l5.7 5.7-1.4 1.4-6.3-6.3z'/%3E%3C/svg%3E");
+    }
+
+    & #ticketsBtn {
+        --sidebar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='none' stroke='black' stroke-width='2' d='M3 6h26v7a3 3 0 0 0 0 6v7H3v-7a3 3 0 0 0 0-6zM21 6v4m0 4v4m0 4v4'/%3E%3C/svg%3E");
+    }
+
+    & #newsletterBtn {
+        --sidebar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='none' stroke='black' stroke-width='2' d='M3 6h26v20H3zM3 7l13 10L29 7'/%3E%3C/svg%3E");
+    }
+
     & #sullivanBtn {
         --sidebar-icon: var(--icon-carbon-ai);
 

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261021chat1">
+    <link rel="stylesheet" href="../css/main.css?v=20261021icons1">
     <link rel="stylesheet" href="../css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -352,9 +352,17 @@
                                 <nav class="sidebar-section" aria-label="Workspace views">
                                     <div class="sidebar-section-label">VIEWS / <span id="sidebarViewRoomName">WORKSPACE</span></div>
                                     <div class="sidebar-nav view-tabs">
+                                        <div class="sidebar-nav" role="group" aria-labelledby="workspaceViewsLabel">
+                                            <div id="workspaceViewsLabel" class="sidebar-section-label">WORKSPACE</div>
+                                            <button id="overviewBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">OVERVIEW</button>
+                                            <button id="historyBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">HISTORY</button>
+                                            <button id="attentionBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">ATTENTION</button>
+                                        </div>
                                         <div class="sidebar-nav" role="group" aria-labelledby="workViewsLabel">
                                             <div id="workViewsLabel" class="sidebar-section-label">WORK</div>
+                                            <button id="calendarBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">CALENDAR</button>
                                             <button id="tasksBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">TASKS</button>
+                                            <button id="ticketsBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">TICKETS</button>
                                             <button id="remindersBtn" class="btn nav-tab sidebar-nav-item" type="button" aria-pressed="false">REMINDERS</button>
                                         </div>
                                         <div class="sidebar-nav" role="group" aria-labelledby="knowledgeViewsLabel">
@@ -1491,7 +1499,7 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
                             <tr><td>TABS</td><td>Shared overlapping register tabs, raised and tinted selection, compact header and taller customer sizing, single-line horizontal overflow, fixed count slot: tasks, attention, calendar, reminders, customers, link target type</td><td><code>.nav-tab</code>, <code>.tab-count</code>, <code>.tab-group</code>, <code>.task-detail-tabs</code>, <code>.note-link-picker-types</code></td><td>css/ledger.css</td><td><b>CORE</b></td></tr>
                             <tr><td>LINK PICKER</td><td>NOTE, TASK and FILE target modes; server paging, search, loaded count, retry, keyboard selection; per-instance state and portal cleanup</td><td><code>&lt;nrc-link-picker&gt;</code>, <code>.note-link-picker*</code></td><td>links-ui.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>PANEL HEADER</td><td>Compact identity/state band above local modes; INFO reveals labelled provenance in a native keyboard-accessible popover, HISTORY remains separate; compact filter registers and output plates</td><td><code>.panel-header</code>, <code>.inspector-info</code>, <code>.header-register*</code>, <code>.metadata-header-register</code></td><td>css/main.css / index.html / detail-ui.js / view-manager.js</td><td><b>CORE</b></td></tr>
-                            <tr><td>SIDEBAR NAVIGATION</td><td>Rooms, DMs, always-visible view groups (Work, Knowledge, Tools), customer building icon, unread state</td><td><code>.sidebar-*</code>, <code>.view-tabs [role="group"]</code>, <code>.dm-*</code></td><td>index.html / css/workspace.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>SIDEBAR NAVIGATION</td><td>Rooms, DMs, always-visible view groups (Workspace, Work, Knowledge, Tools), customer building icon, unread state</td><td><code>.sidebar-*</code>, <code>.view-tabs [role="group"]</code>, <code>.dm-*</code></td><td>index.html / css/workspace.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>FILTER BAR</td><td>Register cells, label, input, select, checkbox, result state; the GROUP toggle swaps the flat-list filters for the slice filters in the same row</td><td><code>.filter-*</code>, <code>.header-filter-cell</code></td><td>css/main.css / index.html</td><td><b>CORE</b></td></tr>
                             <tr><td>CUSTOM SELECT</td><td>Native select, trigger, search, options, portal; automatic mount/cleanup, value and form-reset synchronization</td><td><code>&lt;nrc-select&gt;</code>, <code>.custom-select*</code></td><td>custom-select.js / css/custom-select.css</td><td><b>CORE</b></td></tr>
                             <tr><td>CUSTOM PICKER</td><td>Searchable multivalue selection</td><td><code>NRCCustomPicker</code></td><td>custom-picker.js</td><td><b>CORE</b></td></tr>

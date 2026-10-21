@@ -80,6 +80,9 @@ try {
   assert.equal(await page.evaluate(() => !!(window.marked && window.katex && window.DOMPurify && window.zstdCodec?.ZstdInit)), true);
   assert.equal(await loadFonts(), true);
   assert.deepEqual(errors, [], "production initialization must not throw");
+  assert.deepEqual(await page.locator(".app-sidebar .sidebar-nav-item.nav-tab").evaluateAll((items) =>
+    items.filter((item) => getComputedStyle(item, "::before").maskImage === "none").map((item) => item.id)),
+  [], "every sidebar navigation item must render an icon rather than a solid square");
   assert.equal(await page.evaluate(() => window.NRCTasks.createTaskFromPalette !== createTaskFromPalette), true,
     "task API must retain its implementation, not capture app.js's forwarding wrapper");
   assert.ok(await page.locator(`link[href="${first.css}"]`).count());
