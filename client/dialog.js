@@ -22,7 +22,7 @@ const NRCModal = (() => {
     root.append(panel);
     document.body.append(root);
 
-    const focusable = () => [...panel.querySelectorAll("input, textarea, select, button, a[href], [tabindex], [contenteditable='true']")]
+    const focusable = () => [...root.querySelectorAll("input, textarea, select, button, a[href], [tabindex], [contenteditable='true']")]
       .filter(el => el.tabIndex >= 0 && !el.matches(":disabled") && !el.closest("[inert]") && el.checkVisibility({ visibilityProperty: true }));
     const view = {
       root, panel, actions,

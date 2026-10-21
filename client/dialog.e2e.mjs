@@ -147,6 +147,116 @@ try {
       await page.waitForFunction(() => !document.querySelector("dialog[open]"));
     }
   }
+  // New-task slice choice is optional, context-aware, and uses the real shared picker.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.evaluate(() => {
+    window.taskCreates = [];
+    window.taskEdges = [];
+    window.sliceView = false;
+    window.NRCSlices.isActive = () => sliceView;
+    window.NRCSlices.selectedSlice = () => ({ sliceId: 51n, name: "Release planning" });
+    window.NRCAssets.roomAssets.set(0n, new Map([[72n, {
+      assetId: 72n, assetType: NRCAssets.AssetType.Slice,
+      preview: JSON.stringify({ name: "Customer follow-up" }),
+    }]]));
+    window.NRCAssets.sendListAssetsPaged = (...args) => {
+      window.slicePage = args.at(-1);
+      slicePage.onSuccess({ hasMore: false, totalCount: 1 }); return 1;
+    };
+    sendCreateTask = (...args) => { taskCreates.push(args); return 1; };
+    window.NRCEdges.sendCreateEdge = (...args) => { taskEdges.push(args); return 2; };
+    promptNewTask();
+  });
+  assert.equal(await dialog.getByRole("button", { name: "Choose slice…" }).count(), 1, "inactive retained slice is not a default");
+  await dialog.getByLabel("Task title").fill("No slice");
+  await page.keyboard.press("Enter");
+  await page.evaluate(() => taskCreates.at(-1).at(-1).onSuccess({ task: { id: 91n } }));
+  assert.equal(await dialog.count(), 0);
+  assert.equal(await page.evaluate(() => taskEdges.length), 0);
+  await page.evaluate(() => { sliceView = true; promptNewTask(); });
+  assert.equal(await dialog.getByRole("button", { name: "#51 · Release planning", exact: true }).count(), 1);
+  await dialog.getByRole("button", { name: "Clear slice" }).click();
+  await dialog.getByRole("button", { name: "Choose slice…" }).click();
+  for (const more of [false, true]) {
+    if (more) await page.evaluate(() => slicePage.onSuccess({ hasMore: true, totalCount: 2, nextCursorUpdatedAt: 1n, nextCursorAssetId: 72n }));
+    const last = more ? page.getByRole("button", { name: "MORE", exact: true }) : page.getByRole("textbox", { name: "Search link targets" });
+    await dialog.getByLabel("Task title").focus();
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await last.evaluate(el => el === document.activeElement), true, "backward wrap includes modal portal");
+    await page.keyboard.press("Tab");
+    assert.equal(await dialog.getByLabel("Task title").evaluate(el => el === document.activeElement), true, "forward wrap includes modal portal");
+  }
+  await page.getByRole("textbox", { name: "Search link targets" }).click();
+  await page.getByRole("textbox", { name: "Search link targets" }).fill("follow-up");
+  await page.locator(".note-link-picker-item").filter({ hasText: "Customer follow-up" }).click();
+  assert.equal(await dialog.getByRole("button", { name: "#72 · Customer follow-up", exact: true }).count(), 1);
+  await dialog.getByLabel("Task title").fill("Check selected membership");
+  for (const theme of ["light", "dark"]) {
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      const bounds = await dialog.locator(".nrc-dialog").boundingBox();
+      assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width);
+      await dialog.locator(".nrc-dialog").screenshot({ path: `.amp/in/artifacts/new-task-${theme}-${width}.png` });
+      if (width === 390) {
+        assert.equal(await dialog.getByLabel("Task title").evaluate(el => getComputedStyle(el).fontSize), "16px");
+        await dialog.getByRole("button", { name: "#72 · Customer follow-up", exact: true }).click();
+        const search = page.getByRole("textbox", { name: "Search link targets" });
+        await search.click();
+        assert.equal(await search.evaluate(el => getComputedStyle(el).fontSize), "16px");
+        await page.screenshot({ path: `.amp/in/artifacts/new-task-picker-${theme}-${width}.png` });
+        await page.keyboard.press("Escape");
+        assert.equal(await dialog.count(), 1, "Escape closes only the picker");
+      }
+    }
+  }
+  await dialog.getByRole("button", { name: "Create Task", exact: true }).click();
+  await page.keyboard.press("Escape");
+  assert.equal(await dialog.count(), 1, "pending create cannot be dismissed");
+  await page.evaluate(() => taskCreates.at(-1).at(-1).onSuccess({ task: { id: 93n } }));
+  assert.deepEqual(await page.evaluate(() => taskEdges.at(-1).slice(0, 6).map(String)), ["0", "2", "93", "1", "72", "7"]);
+  await page.evaluate(() => taskEdges.at(-1).at(-1).onError({ message: "Slice unavailable" }));
+  assert.match(await dialog.getByRole("status").textContent(), /Task #93 was created/);
+  assert.equal(await dialog.getByRole("button", { name: "Create Task", exact: true }).isDisabled(), true);
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await page.evaluate(() => promptNewTask());
+  await dialog.getByLabel("Task title").fill("Default slice");
+  await dialog.getByRole("button", { name: "Create Task", exact: true }).click();
+  await page.evaluate(() => taskCreates.at(-1).at(-1).onSuccess({ task: { id: 94n } }));
+  assert.equal(await page.evaluate(() => String(taskEdges.at(-1)[4])), "51");
+  await page.evaluate(() => taskEdges.at(-1).at(-1).onSuccess());
+  assert.equal(await dialog.count(), 0);
+  await page.evaluate(() => { serverReady = true; promptNewTask(); });
+  await dialog.getByLabel("Task title").fill("Retain rejected draft");
+  await dialog.getByRole("button", { name: "Create Task", exact: true }).click();
+  await page.evaluate(() => taskCreates.at(-1).at(-1).onError({ message: "Permission denied" }));
+  assert.equal(await dialog.getByLabel("Task title").inputValue(), "Retain rejected draft");
+  assert.equal(await dialog.getByRole("button", { name: "Create Task", exact: true }).isEnabled(), true);
+  await dialog.getByRole("button", { name: "Create Task", exact: true }).click();
+  await page.evaluate(() => { serverReady = false; taskCreates.at(-1).at(-1).onError({ message: "Connection closed" }); });
+  assert.match(await dialog.getByRole("status").textContent(), /Creation may have succeeded/);
+  assert.equal(await dialog.getByRole("button", { name: "Create Task", exact: true }).isDisabled(), true);
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await page.clock.install();
+  for (const phase of ["create", "membership"]) {
+    await page.evaluate(() => { serverReady = true; promptNewTask(); });
+    await dialog.getByLabel("Task title").fill("Unacknowledged request");
+    await dialog.getByRole("button", { name: "Create Task", exact: true }).click();
+    if (phase === "membership") await page.evaluate(() => taskCreates.at(-1).at(-1).onSuccess({ task: { id: 95n } }));
+    const counts = await page.evaluate(() => [taskCreates.length, taskEdges.length]);
+    await page.clock.fastForward(30001);
+    assert.match(await dialog.getByRole("status").textContent(), /outcome is unknown/);
+    if (phase === "membership") assert.match(await dialog.getByRole("status").textContent(), /Task #95 was created/);
+    assert.equal(await dialog.getByRole("button", { name: "Create Task", exact: true }).isDisabled(), true);
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await page.evaluate(phase => {
+      if (phase === "create") taskCreates.at(-1).at(-1).onSuccess({ task: { id: 96n } });
+      else taskEdges.at(-1).at(-1).onSuccess();
+    }, phase);
+    assert.deepEqual(await page.evaluate(() => [taskCreates.length, taskEdges.length]), counts, "late acknowledgements cannot advance abandoned requests");
+    assert.equal(await dialog.count(), 0);
+  }
+  console.log("PASS: optional task slice, active-view default, clear/search/change, acknowledged membership, partial failure prevents duplicate creation");
   assert.deepEqual(errors, []);
   console.log("PASS: native modal isolation, focus/Tab/restore, confirm/prompt results, replacement, nested file dialog, busy write guard; both themes and widths");
 } finally { await browser.close(); }

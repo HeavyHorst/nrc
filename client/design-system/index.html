@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261021context2">
+    <link rel="stylesheet" href="../css/main.css?v=20261021taskslice1">
     <link rel="stylesheet" href="../css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -647,6 +647,15 @@
                         <div class="catalog-subhead"><h3>CONFIRMATION DIALOG</h3><code>.nrc-dialog</code></div>
                         <button class="btn" type="button" id="catalogOpenDialog">OPEN NATIVE DIALOG</button>
                         <p>Shared <code>NRCModal</code> shell: native modal isolation and focus return; callers own content, results and cancellation guards.</p>
+                        <div class="nrc-dialog new-task-dialog">
+                            <div class="nrc-dialog-title">NEW TASK</div>
+                            <div class="detail-edit-grid">
+                                <label class="detail-edit-field"><span class="detail-edit-label">Task title</span><input class="task-detail-input" placeholder="Enter task title"></label>
+                                <div class="detail-edit-field"><span class="detail-edit-label">Slice (optional)</span><div><button type="button" class="btn">#51 · Release planning</button> <button type="button" class="btn btn--row">Clear slice</button></div></div>
+                            </div>
+                            <div class="nrc-dialog-actions"><button class="btn" type="button">Cancel</button><button class="btn btn--primary" type="button">Create Task</button></div>
+                        </div>
+                        <p class="catalog-usage">NEW TASK reuses the shared slice link picker. Only the active slice view supplies a default; CLEAR SLICE makes membership optional. Wait for task and membership acknowledgements. If assignment fails after creation, show the created task ID and do not offer duplicate creation.</p>
                         <div class="nrc-dialog-backdrop catalog-dialog-stage">
                             <div class="nrc-dialog" role="dialog" aria-labelledby="catalogDialogTitle">
                                 <div class="nrc-dialog-title" id="catalogDialogTitle">CONFIRM ACTION</div>
@@ -1509,7 +1518,7 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
                             <tr><td>CHAT LOG</td><td>Avatar-free grouped messages with timestamps at group starts; selection/keyboard-triggered Markdown copy, formatted copy and reply; inline live feedback; quotes, mentions, search, unread, AI run; attachment download rows with type/size, PDF tab, lazy audio/video players</td><td><code>.log-row</code>, <code>.chat-attachment</code>, <code>.message-meta</code>, <code>.message-copy-actions</code>, <code>.chat-tools</code>, <code>.chat-unread-divider</code></td><td>app.js / attachments.js / chat.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>COMPOSER</td><td>Shared chat/comment command rail, byte state, send, stop; collapsed to one line inside a record panel and expanded on demand; chat file upload (100 MB/file), multiple selection and paste</td><td><code>.input-controls</code>, <code>.task-comment-input-area</code></td><td>index.html / detail-ui.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>TOAST</td><td>Transient actionable notification</td><td><code>.toast</code></td><td>app.js / css/main.css</td><td><b>FEEDBACK</b></td></tr>
-                            <tr><td>DIALOG</td><td>Shared native modal shell, focus return, cancellation guard; confirm/prompt and file forms</td><td><code>NRCModal</code>, <code>NRCDialog</code>, <code>.nrc-dialog*</code></td><td>dialog.js / app.js / files.js / css/main.css</td><td><b>FEEDBACK</b></td></tr>
+                            <tr><td>DIALOG</td><td>Shared native modal shell, focus return, cancellation guard; confirm/prompt, file forms and new task with optional shared slice picker, active-view default and explicit clear</td><td><code>NRCModal</code>, <code>NRCDialog</code>, <code>.nrc-dialog*</code></td><td>dialog.js / app.js / files.js / css/main.css</td><td><b>FEEDBACK</b></td></tr>
                             <tr><td>DM VIDEO CALL</td><td>Optional invitations with separate recipient/status; stable conference entries, hide/reopen, authenticated restore, visible expiry, person search and external join</td><td><code>.call-panel</code>, <code>.call-library</code>, <code>.call-actions</code>, <code>NRCCalls</code>, <code>NRCModal</code>, <code>nrc-select</code></td><td>calls.js / app.js / css/main.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>COMMAND PALETTE</td><td>Search, grouped commands, arguments</td><td><code>.command-palette*</code>, <code>.palette-*</code></td><td>app.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>TASK TABLE</td><td>Title with quiet project/assignee second line; inline metadata edits. Server-filtered paging and field/direction sorting including project and assignee, loaded/matching counts, retry, resize/persistence, priority, badges, references, drag. Status changes in place. Always fills the register; TITLE absorbs spare width and saved widths remain minima, with horizontal scrolling for wider tables. Below 1040px register width, operational fields move below identity.</td><td><code>.task-table</code>, <code>.register-row-meta</code>, <code>.task-list-view</code>, <code>.column-resize-handle</code>, <code>.task-row-status</code></td><td>tasks.js / task-query.js / column-resize.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
@@ -1544,8 +1553,8 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
     </div>
 
     <footer class="catalog-footer"><span>nrc</span><span>DESIGN SYSTEM CATALOGUE</span><span>THEME / <span data-catalog-theme-status>LUPINE</span></span><span>GEOMETRY / SQUARE</span><span id="catalogTimestamp">UPDATED 2026-09-01</span></footer>
-    <script src="../dialog.js?v=20260925document17"></script>
-    <script src="../portal.js?v=20260803a"></script>
+    <script src="../dialog.js?v=20261021taskslice1"></script>
+    <script src="../portal.js?v=20261021modal1"></script>
     <script src="../custom-picker.js?v=20260927appointment2"></script>
     <script src="../custom-select.js?v=20261019customerwidth1"></script>
     <script src="../note-html.js?v=20261007fragments1"></script>

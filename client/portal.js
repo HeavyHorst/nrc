@@ -128,7 +128,10 @@ const Portal = {
                     }
                     wrapper.appendChild(content);
                 }
-                Portal.getContainer().appendChild(wrapper);
+                // Keep controls inside their native modal's non-inert top layer.
+                const modal = anchor.closest('dialog[open]');
+                wrapper.style.position = modal ? 'fixed' : 'absolute';
+                (modal || Portal.getContainer()).appendChild(wrapper);
                 instance.isVisible = true;
                 setupResizeObserver();
                 instance.reposition();
@@ -237,8 +240,9 @@ const Portal = {
                 left = Math.max(4, Math.min(left, viewportWidth - contentRect.width - 4));
                 top = Math.max(4, Math.min(top, viewportHeight - contentRect.height - 4));
 
-                wrapper.style.left = (left + window.scrollX) + 'px';
-                wrapper.style.top = (top + window.scrollY) + 'px';
+                const fixed = wrapper.style.position === 'fixed';
+                wrapper.style.left = (left + (fixed ? 0 : window.scrollX)) + 'px';
+                wrapper.style.top = (top + (fixed ? 0 : window.scrollY)) + 'px';
 
                 // Add position class for styling (e.g., arrow direction)
                 wrapper.dataset.position = actualPosition;

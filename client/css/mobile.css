@@ -6,6 +6,9 @@
 
 @media (max-width: 768px) {
     body { padding: 0; }
+    .new-task-dialog .detail-edit-field > .task-detail-input,
+    dialog:has(.new-task-dialog) .note-link-picker-search { font-size: var(--mobile-font-lg); min-height: 44px; }
+    .new-task-dialog .btn { min-height: 44px; font-size: var(--mobile-font-sm); }
     .retro-container {
         position: fixed;
         inset: var(--mobile-viewport-top, 0px) 0 auto;

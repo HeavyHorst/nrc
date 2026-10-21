@@ -8131,15 +8131,116 @@ function handleGlobalKeydown(e) {
 }
 
 async function promptNewTask() {
-  const title = await window.NRCDialog.prompt("Task title:", {
-    title: "NEW TASK",
-    placeholder: "Enter task title",
-    submitLabel: "Create Task",
+  if (document.querySelector(".new-task-dialog")) return;
+  const current = window.NRCSlices?.isActive() ? window.NRCSlices.selectedSlice() : null;
+  let slice = current ? { id: current.sliceId, title: current.name } : null;
+  let pending = false;
+  let acknowledgementTimer;
+  let requestVersion = 0;
+  const view = window.NRCModal.create({ title: "NEW TASK", className: "new-task-dialog" });
+  view.canClose = () => !pending;
+  const fields = document.createElement("div");
+  fields.className = "detail-edit-grid";
+  fields.innerHTML = `
+    <label class="detail-edit-field"><span class="detail-edit-label">Task title</span>
+      <input class="task-detail-input" name="title" placeholder="Enter task title"></label>
+    <div class="detail-edit-field"><span class="detail-edit-label">Slice (optional)</span>
+      <div><button type="button" class="btn" data-slice aria-haspopup="dialog" aria-expanded="false"></button>
+      <button type="button" class="btn btn--row" data-clear>Clear slice</button></div></div>
+    <p class="nrc-dialog-message" role="status" hidden></p>`;
+  view.panel.insertBefore(fields, view.actions);
+  const input = fields.querySelector("input");
+  const choose = fields.querySelector("[data-slice]");
+  const clear = fields.querySelector("[data-clear]");
+  const message = fields.querySelector("[role=status]");
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "btn";
+  cancel.textContent = "Cancel";
+  cancel.onclick = () => view.cancel();
+  const submit = document.createElement("button");
+  submit.type = "button";
+  submit.className = "btn btn--primary";
+  submit.textContent = "Create Task";
+  view.actions.append(cancel, submit);
+  const renderSlice = () => {
+    choose.textContent = slice ? `#${slice.id} · ${slice.title}` : "Choose slice…";
+    clear.hidden = !slice;
+  };
+  clear.onclick = () => { slice = null; renderSlice(); choose.focus(); };
+  choose.onclick = () => window.NRCLinksUI.openEntityPicker({
+    anchor: choose,
+    container: fields,
+    sourceType: window.NRCEdges.TargetType.Task,
+    sourceEntity: { convId: 0n, id: 0n },
+    kinds: ["slice"],
+    relation: { value: window.NRCEdges.RelationType.MemberOf, label: "member-of" },
+    onSelect: item => { slice = { id: item.id, title: item.title }; renderSlice(); },
   });
-
-  if (title) {
-    sendCreateTask(0n, title, "", 128);
-  }
+  const setPending = value => {
+    pending = value;
+    for (const control of [input, choose, clear, cancel, submit]) control.disabled = value;
+  };
+  const fail = detail => {
+    clearTimeout(acknowledgementTimer);
+    requestVersion++;
+    setPending(false);
+    message.hidden = false;
+    message.textContent = detail?.message || "Request was not sent. Check your connection.";
+  };
+  const waitForAcknowledgement = (callbacks, timeoutMessage) => {
+    const version = ++requestVersion;
+    const settle = callback => detail => {
+      if (version !== requestVersion) return;
+      clearTimeout(acknowledgementTimer);
+      requestVersion++;
+      callback(detail);
+    };
+    acknowledgementTimer = setTimeout(() => {
+      fail({ message: timeoutMessage });
+      input.disabled = choose.disabled = clear.disabled = submit.disabled = true;
+      cancel.textContent = "Close";
+    }, 30000);
+    return { onSuccess: settle(callbacks.onSuccess), onError: settle(callbacks.onError) };
+  };
+  submit.onclick = () => {
+    const title = input.value.trim();
+    if (pending || !title) { input.focus(); return; }
+    fields.querySelector("nrc-link-picker")?.close();
+    setPending(true);
+    message.hidden = true;
+    const sent = sendCreateTask(0n, title, "", 128, 0, "", 0n, [], TaskStatus.Backlog, 0, "", waitForAcknowledgement({
+      onError: detail => {
+        fail(detail);
+        if (!serverReady) {
+          message.textContent += " Creation may have succeeded. Check the task list before retrying.";
+          submit.disabled = true;
+          cancel.textContent = "Close";
+        }
+      },
+      onSuccess: ({ task }) => {
+        if (!slice) { view.close(); return; }
+        const assignmentFailed = detail => {
+          fail({ message: `Task #${task.id} was created, but slice assignment was not confirmed. Check its links before assigning it again. ${detail?.message || ""}` });
+          // Do not offer another create after a partial success or uncertain edge outcome.
+          input.disabled = choose.disabled = clear.disabled = submit.disabled = true;
+          cancel.textContent = "Close";
+        };
+        const edge = window.NRCEdges.sendCreateEdge(0n,
+          window.NRCEdges.TargetType.Task, task.id,
+          window.NRCEdges.TargetType.Asset, slice.id, window.NRCEdges.RelationType.MemberOf,
+          waitForAcknowledgement({ onSuccess: () => view.close(), onError: assignmentFailed },
+            `Task #${task.id} was created, but slice assignment timed out. Its outcome is unknown. Check its links before assigning it again.`));
+        if (edge == null) assignmentFailed();
+      },
+    }, "Task creation timed out. Its outcome is unknown. Check the task list before retrying."));
+    if (sent == null && pending) fail();
+  };
+  input.addEventListener("keydown", event => {
+    if (event.key === "Enter") { event.preventDefault(); submit.click(); }
+  });
+  renderSlice();
+  view.show();
 }
 
 async function promptNewNote() {
