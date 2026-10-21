@@ -1942,7 +1942,7 @@ body.sullivan-workbench #logOutput .ai-run-row .message-meta {
 /* Only the conversation changes; headers, tools and composer keep NRC's chrome. */
 #chatDialog #logOutput .log-row { position: relative; width: min(100%, 760px); padding: 10px 12px; margin-top: 12px; border-left: 2px solid transparent; }
 #chatDialog #logOutput .log-row:first-child { margin-top: 0; }
-#chatDialog #logOutput .message-own { background: color-mix(in srgb, var(--chat-own-bg) 50%, var(--surface-content)); border-left-color: var(--chat-own-accent); }
+#chatDialog #logOutput .message-own { background: color-mix(in srgb, var(--chat-own-bg) 50%, var(--surface-content)); }
 #chatDialog #logOutput .message-continuation:not(:first-child) { margin-top: 0; padding-top: 0; }
 #chatDialog #logOutput .ledger-ai-answer { padding-right: 72px; }
 #chatDialog #logOutput .message-meta { align-items: center; gap: 8px; padding-bottom: 3px; font: 12px/1.5 var(--font-sans); }
