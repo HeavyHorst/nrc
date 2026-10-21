@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261021contents1";
+const CACHE_NAME = "nrc-terminal-20261021fit1";
 
 const APP_SHELL = [
   "./",
@@ -40,9 +40,9 @@ const APP_SHELL = [
   "./workspace-search.js?v=20261018inspectors5",
   "./task-search.js?v=20260917taskscroll1",
   "./detail-ui.js?v=20261020composer1",
-  "./column-resize.js?v=20261020fill1",
+  "./column-resize.js?v=20261021fit1",
   "./record-activity.js?v=20261019ticketpages1",
-  "./tasks.js?v=20261020fill2",
+  "./tasks.js?v=20261021fit1",
   "./attention.js?v=20261019followupattention1",
   "./calendar.js?v=20261020people1",
   "./appointments.js?v=20261019recurrence2",
@@ -53,7 +53,7 @@ const APP_SHELL = [
   "./overview.js?v=20261013overviewactions2",
   "./history.js?v=20261019ticketschedule1",
   "./note-html.js?v=20261007fragments1",
-  "./notes.js?v=20261020fill2",
+  "./notes.js?v=20261021fit1",
   "./task-references.js?v=20260914workspace1",
   "./ai.js?v=20261021context2",
   "./retained-messages.js?v=20260902a",
@@ -62,7 +62,7 @@ const APP_SHELL = [
   "./calls.js?v=20261019recurrence2",
   "./newsletter.js?v=20261019newslettertabs2",
   "./customers.js?v=20261019loading1",
-  "./tickets.js?v=20261020titles1",
+  "./tickets.js?v=20261021fit1",
   "./mobile-shell.js?v=20261019registers1",
   "./latency-worker.js",
 ];

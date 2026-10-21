@@ -438,7 +438,9 @@
     if (focused) el.querySelector(`[data-ticket="${focused}"]${titleFocused ? ' nrc-inline-field button' : ''}`)?.focus({ preventScroll: true });
     window.NRCColumnResize?.init({
       root: '#ticketsTable', headers: 'thead th', storageKey: 'nrc.ticket.columns.v3',
+      viewport: '#ticketsRegister', flexible: 1,
       defaults: [56, 280, 160, 104, 160, 100], minimums: [48, 160, 110, 88, 130, 88],
+      maximums: [640, 4096],
       apply: (table, widths) => {
         table.style.tableLayout = 'fixed';
         const fixed = widths.reduce((sum, width, i) => sum + (i === 1 ? 0 : width), 0);

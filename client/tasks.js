@@ -987,6 +987,7 @@ function renderReminderQueue() {
 
   window.NRCColumnResize?.init({
     root: ".reminder-list-header", headers: ":scope > span", storageKey: "nrc.reminder.columns.v1",
+    viewport: "#reminderQueueBody", flexible: 2,
     // Keep the hidden slot so saved data-column widths retain their indexes.
     defaults: [0, 48, 320, 160, 130, 130, 180],
     minimums: [16, 48, 160, 150, 110, 110, 120],
@@ -3003,14 +3004,14 @@ function renderTaskList() {
 
   window.NRCColumnResize?.init({
     root: "#taskListView .task-table", headers: "thead th", storageKey: "nrc.task.columns.v2",
-    defaults: [16, 48, 64, null, 104, 86, 48, 64, 48, 48, 70, 72],
+    viewport: "#taskListView", flexible: 3,
+    defaults: [0, 48, 64, null, 104, 86, 48, 64, 48, 48, 70, 72],
     minimums: [16, 48, 60, 160, 84, 72, 40, 48, 40, 40, 56, 56],
     maximums: [640, 640, 640, 4096],
     locked: [0],
     apply: (table, widths) => {
       table.style.tableLayout = "fixed";
-      // Saved widths are a minimum, not a cap on the register. TITLE absorbs
-      // spare space when the viewport grows or the Inspector closes.
+      // Fitted widths respect the register; TITLE absorbs any spare space.
       const fixedWidth = widths.reduce((sum, width, index) => sum + (index === 0 || index === 3 ? 0 : width), 0);
       table.style.setProperty("--task-table-width", `max(100%, ${fixedWidth + (widths[3] ?? 160)}px)`);
       table.querySelectorAll("thead th").forEach((cell, index) => {
