@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261020fill2">
+    <link rel="stylesheet" href="../css/main.css?v=20261021composer2">
     <link rel="stylesheet" href="../css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -273,22 +273,23 @@
                     <div class="catalog-grid-2">
                         <div class="input-panel">
                             <div class="input-controls">
+                                <button class="btn composer-attach" type="button" aria-label="Attach files">+</button>
                                 <label class="input-container">
-                                    <textarea class="composer-input" rows="2" aria-label="Message composer example" placeholder="Write a message…"></textarea>
+                                    <textarea class="composer-input" rows="1" aria-label="Message composer example" placeholder="Write a message…"></textarea>
                                 </label>
-                                <div class="composer-meta"><button class="btn" type="button" title="Send files (up to 100 MB each)">+ FILE</button><span><b>ENTER</b> SEND</span><span><b>SHIFT+ENTER</b> NEW LINE</span><span class="composer-byte-count">0 B / 51,200 B</span></div>
-                                <button class="btn composer-send" type="button">SEND ↵</button>
+                                <div class="composer-meta"><span class="composer-byte-count" hidden>0 B / 51,200 B</span></div>
+                                <button class="btn composer-send" type="button">SEND</button>
                             </div>
                         </div>
                         <div class="task-comment-input-area">
                             <label class="task-comment-input-container">
-                                <textarea class="task-comment-input" rows="2" aria-label="Comment composer example" placeholder="Write a message…"></textarea>
+                                <textarea class="task-comment-input" rows="1" aria-label="Comment composer example" placeholder="Write a message…"></textarea>
                             </label>
-                            <div class="task-comment-composer-meta"><span><b>ENTER</b> SEND</span><span class="task-comment-byte-count">0 B / 65,535 B</span></div>
-                            <button class="btn task-comment-send" type="button">SEND ↵</button>
+                            <div class="task-comment-composer-meta"><span class="task-comment-byte-count" hidden>0 B / 65,535 B</span></div>
+                            <button class="btn task-comment-send" type="button">SEND</button>
                         </div>
                     </div>
-                    <p class="catalog-usage"><b>CONTRACT</b> Chat and comments use a full-width multiline field above a compact footer with keyboard hints, byte-limit state and a neutral SEND ↵ button at right. The writing surface uses the shared control background and inset border; empty inputs show “Write a message…” (“Ask Sullivan…” in AI chat). Accessible labels remain present when the hint disappears while typing. Touch controls retain a 44px target. Over-limit drafts remain visible and cannot be submitted.</p>
+                    <p class="catalog-usage"><b>CONTRACT</b> Chat and task/note comments share a compact single-row input with SEND at right. Text and bottom-aligned buttons sit inside one shared control surface, including when the draft grows. Only chat has an attachment button. Fields grow with wrapped or multiline drafts up to a bounded scroll area; sending clears and shrinks them. Enter sends, Shift+Enter inserts a newline, and touch keyboards keep Enter for newlines. Hints live in the input tooltip, not a permanent footer. Byte counts appear at 90% of the UTF-8 limit; over-limit drafts stay visible and cannot be submitted. Touch controls retain 44px targets and 16px input text. A reply strip shows the author and cancel control, not a duplicate quote.</p>
                 </div>
             </section>
 
@@ -826,6 +827,19 @@
                         <p class="catalog-usage">Ein breiter Record-Panel wird zur Dokumentfläche: Das Dokument behält seine Spalte und seinen Scroll, die Nachrichten stehen dauerhaft daneben, getrennt durch einen ziehbaren Trenner (Doppelklick oder <code>Home</code> setzt die Breite zurück). Eine HTML-Notiz füllt ihre Spalte im Sandbox-Frame. Unterhalb der Schwelle stapelt dieselbe Komposition, und der Block schließt auf eine Registerzeile.</p>
                     </div>
 
+                <div class="catalog-subsection">
+                    <div class="catalog-subhead"><h3>CONVERSATION · OPEN / OWN</h3><code>.message-own / .message-continuation</code></div>
+                    <div id="chatDialog">
+                        <div id="logOutput" class="log-body">
+                            <div class="log-row type-message"><div class="message-meta"><span class="col-tag identity-actor">Anna</span><time class="col-time">09:00</time></div><div class="col-message message-content"><p>Ist für den Workshop am Freitag schon alles vorbereitet?</p></div></div>
+                            <div class="log-row type-message"><div class="message-meta"><span class="col-tag identity-actor">Mika</span><time class="col-time">09:01</time></div><div class="col-message message-content"><p>Die Agenda ist abgestimmt. Start ist um <strong>10:00 Uhr</strong>.</p></div></div>
+                            <div class="log-row type-message message-continuation"><div class="message-meta"><span class="col-tag identity-actor">Mika</span><time class="col-time">09:02</time></div><div class="col-message message-content"><p>Ich warte noch auf die finale Teilnehmerzahl.</p></div></div>
+                            <div class="log-row type-sent message-own"><div class="message-meta"><span class="col-tag identity-actor">Du</span><time class="col-time">09:03</time></div><div class="col-message message-content"><p>Danke! Anna, kannst du noch Kamera und Mikrofon testen?</p></div></div>
+                            <div class="log-row type-message"><div class="message-meta"><span class="col-tag identity-actor">Anna</span><time class="col-time">09:04</time></div><div class="col-message message-content"><p>Mache ich. Ich prüfe:</p><ul><li>Kamera und Mikrofon</li><li>Bildschirmfreigabe</li></ul></div></div>
+                        </div>
+                    </div>
+                    <p class="catalog-usage">Open received messages and softly tinted own messages share a bounded reading column. A narrow accent edge identifies own contributions, including Sullivan questions. Speaker groups are separated by space, not rules; continuations stay together. No avatars, bubbles or permanent message actions.</p>
+                </div>
                 <div class="catalog-grid-2">
                     <div class="catalog-subsection">
                         <div class="catalog-subhead"><h3>CHAT MARKDOWN</h3><code>.message-content</code></div>
@@ -844,6 +858,7 @@
                 </div>
                 <div class="catalog-subsection">
                     <div class="catalog-subhead"><h3>SULLIVAN RESPONSE / EVIDENCE</h3><code>.ai-answer-body / .ai-response-evidence / .ai-source-panel</code></div>
+                    <p class="catalog-usage">Selection actions float beside the selection endpoint, above its line or below it near the top edge. They stay inside the transcript, follow scrolling and resizing, and never shift the messages. Backwards selections anchor at the starting side of the selected text. Keyboard focus without a selection retains the message-local action row.</p>
                     <div class="catalog-grid-2">
                         <div class="log-row ledger-ai-answer"><div class="message-meta"><span class="col-tag">Sullivan</span><time class="col-time">12:29</time><div class="message-copy-actions" role="group" aria-label="Nachrichtenaktionen"><button class="btn btn--row" type="button" aria-label="Kopieren" title="Als Markdown kopieren"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></svg></button><button class="btn btn--row" type="button" aria-label="Mit Formatierung kopieren" title="Mit Formatierung kopieren"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h11l5 5v13H4zM14 3v6h6M7 17l3-6 3 6m-5-2h4M15 13h2v4h-2z"/></svg></button></div></div><div class="message-content ai-answer-body">
                             <p>Jochen Keil gehört zum <strong>Kreismedienzentrum Esslingen</strong>. <span class="task-reference" role="link" tabindex="0" aria-label="Quelle: Jochen Keil">[1]</span></p>
@@ -856,7 +871,7 @@
                             <div class="ai-source-body"><section class="ai-source-card"><p class="ai-source-id">asset:1517</p><h2>Jochen Keil</h2><p>CRM-Kontakt im Workspace.</p><dl class="ai-source-facts"><div><dt>Typ</dt><dd>CRM Kontakt</dd></div><div><dt>ID</dt><dd>asset:1517</dd></div></dl><button class="btn" type="button">Datensatz öffnen ↗</button></section><h3>Quellen dieser Antwort (2)</h3><button class="ai-source-item" type="button" aria-pressed="true"><span>1  Jochen Keil</span><small>asset:1517</small></button><button class="ai-source-item" type="button" aria-pressed="false"><span>2  Kreismedienzentrum Esslingen</span><small>asset:1515</small></button></div>
                         </aside>
                     </div>
-                    <p class="catalog-usage"><b>CONTRACT</b> Content-only conversation modernization: initial avatars, a bounded reading column, numbered inline citations and accessible answer actions. Every text message, own message and Sullivan answer has two directly visible copy icons beside its timestamp: Markdown and formatted copy. People chat adds the reply arrow to the same action group, exposed on hover/focus or persistently on touch. Consecutive messages keep their timestamp and controls in the metadata row without overlaying prose. Tooltips and accessible names distinguish actions; inline live feedback below the body reports success or failure. Formatted copy writes sanitized HTML with Markdown as the plain-text fallback, preserving headings, emphasis, lists, tables, code and links without action controls or the research disclosure. Desktop controls are compact; narrow screens retain 44px touch targets. Headers, tools, composer and rectangular controls retain NRC's shared components and theme tokens. Source cards show supplied previews and cached record fields only; unavailable CRM details are never invented. Completed run steps join the collapsed research disclosure; errors and cancellation stay explicit. Sources appear beside the transcript, or as a closable sheet on narrow screens. Escape returns focus to its citation. The shared people chat groups consecutive messages by author within five minutes while preserving each timestamp.</p>
+                    <p class="catalog-usage"><b>CONTRACT</b> Conversations have no avatars: names and spacing identify speakers. Consecutive people-chat messages from the same author within five minutes omit repeated names and timestamps; the first visible message always retains both. Selecting text within one message reveals its Markdown copy, formatted copy and (in people chat) reply actions. Hover alone does not reveal them; keyboard focus also exposes the controls, including for messages without selectable text. Selecting across messages does not pick an arbitrary reply target. The actions apply to the whole message and preserve the selection while clicked. This catalogue shows the exposed action group. Tooltips and accessible names distinguish actions; inline live feedback below the body reports success or failure. Formatted copy writes sanitized HTML with Markdown as the plain-text fallback, preserving headings, emphasis, lists, tables, code and links without action controls or the research disclosure. Desktop controls are compact; narrow screens retain 44px touch targets. Headers, tools, composer and rectangular controls retain NRC's shared components and theme tokens. Source cards show supplied previews and cached record fields only; unavailable CRM details are never invented. Completed run steps join the collapsed research disclosure; errors and cancellation stay explicit. Sources appear beside the transcript, or as a closable sheet on narrow screens. Escape returns focus to its citation.</p>
                 </div>
                 <div class="catalog-grid-2">
                     <div class="catalog-subsection">
@@ -1483,7 +1498,7 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
                             <tr><td>PORTAL</td><td>Anchored overlay positioning</td><td><code>Portal</code></td><td>portal.js</td><td><b>UTILITY</b></td></tr>
                             <tr><td>INLINE TABLE TITLE</td><td>Task, Note and Ticket titles are inline edit controls; Enter saves, Escape cancels. Clicking the rest of the row opens the Inspector; rows are also Tab-reachable and open with Enter/Space. No separate table RENAME action.</td><td><code>nrc-inline-field</code>, <code>.inline-field-value</code></td><td>tasks.js / notes.js / tickets.js / detail-ui.js</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>PRESENCE</td><td>Online, connecting, offline, unread</td><td><code>.dm-status</code></td><td>css/main.css</td><td><b>CORE</b></td></tr>
-                            <tr><td>CHAT LOG</td><td>Metadata, quotes, mentions, search, unread, AI run; direct Markdown/formatted copy icons with inline live feedback on own, received and Sullivan text messages; attachment download rows with type/size, PDF tab, lazy audio/video players</td><td><code>.log-row</code>, <code>.chat-attachment</code>, <code>.message-meta</code>, <code>.message-copy-actions</code>, <code>.chat-tools</code>, <code>.chat-unread-divider</code></td><td>app.js / attachments.js / chat.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
+                            <tr><td>CHAT LOG</td><td>Avatar-free grouped messages with timestamps at group starts; selection/keyboard-triggered Markdown copy, formatted copy and reply; inline live feedback; quotes, mentions, search, unread, AI run; attachment download rows with type/size, PDF tab, lazy audio/video players</td><td><code>.log-row</code>, <code>.chat-attachment</code>, <code>.message-meta</code>, <code>.message-copy-actions</code>, <code>.chat-tools</code>, <code>.chat-unread-divider</code></td><td>app.js / attachments.js / chat.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>COMPOSER</td><td>Shared chat/comment command rail, byte state, send, stop; collapsed to one line inside a record panel and expanded on demand; chat file upload (100 MB/file), multiple selection and paste</td><td><code>.input-controls</code>, <code>.task-comment-input-area</code></td><td>index.html / detail-ui.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>TOAST</td><td>Transient actionable notification</td><td><code>.toast</code></td><td>app.js / css/main.css</td><td><b>FEEDBACK</b></td></tr>
                             <tr><td>DIALOG</td><td>Shared native modal shell, focus return, cancellation guard; confirm/prompt and file forms</td><td><code>NRCModal</code>, <code>NRCDialog</code>, <code>.nrc-dialog*</code></td><td>dialog.js / app.js / files.js / css/main.css</td><td><b>FEEDBACK</b></td></tr>

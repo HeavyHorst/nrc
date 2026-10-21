@@ -79,15 +79,9 @@
     #chatTools .filter-input { font-size: var(--mobile-font-lg); }
     #logOutput.log-body { padding: 1rem 0.875rem; }
     .input-panel { padding-bottom: 0; }
-    .input-controls { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 0; padding: 0; align-items: end; }
-    .input-container { grid-column: 1 / -1; grid-row: 1; padding: 16px 8px; min-height: 60px; }
-    #messageInput.composer-input { field-sizing: content; font-size: var(--mobile-font-lg); min-height: 28px; max-height: 25dvh; }
-    .composer-meta { display: contents; }
-    .composer-meta > span { display: none; }
-    #chatAttach { grid-column: 1; grid-row: 2; margin: 0; }
-    .composer-send, .sullivan-submit-controls { grid-column: 3; grid-row: 2; align-self: stretch; margin: 0; }
-    .task-comment-input-area { grid-template-rows: auto minmax(44px, auto); }
-    .task-comment-send { min-height: 44px; min-width: 44px; }
+    .input-container, .task-comment-input-container { min-height: 44px; padding: 10px 8px; }
+    #messageInput.composer-input, .task-comment-input, .task-detail-panel-editable .task-comment-input { font-size: var(--mobile-font-lg); min-height: 24px; }
+    .task-comment-send, .task-detail-panel-editable .task-comment-send { min-height: 44px; min-width: 44px; }
     .composer-send small, .sullivan-submit-controls small { display: none; }
     .input-panel .btn { min-height: 44px; min-width: 44px; }
     /* A row action is a tap target on a phone, not a footnote in a table. */

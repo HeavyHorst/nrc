@@ -34,6 +34,7 @@ function updateMessageByteCount() {
   if (!messageByteCount) return 0;
   const byteLength = new TextEncoder().encode(messageInput.value).length;
   messageByteCount.textContent = `${byteLength.toLocaleString()} B / ${MAX_MESSAGE_CONTENT_BYTES.toLocaleString()} B`;
+  messageByteCount.hidden = byteLength < MAX_MESSAGE_CONTENT_BYTES * 0.9;
   messageByteCount.classList.toggle("composer-byte-count--invalid", byteLength > MAX_MESSAGE_CONTENT_BYTES);
   return byteLength;
 }
@@ -6179,8 +6180,6 @@ function displayMessage(messageData) {
 
   colTag.textContent = tagText;
   colTag.title = tagText;
-  logRow.dataset.avatar = logRow.classList.contains("ledger-ai-answer") ? "AI" :
-    logRow.classList.contains("ledger-ai-query") ? "DU" : tagText.slice(0, 2).toUpperCase();
   if (logRow.classList.contains("ledger-ai-answer")) colTag.textContent = "Sullivan";
   if (logRow.classList.contains("ledger-ai-query")) colTag.textContent = "Du";
 

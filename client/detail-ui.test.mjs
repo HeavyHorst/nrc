@@ -215,8 +215,7 @@ test("the messages block renders closed with its count, preview, and composer ba
   assert.match(html, /data-composer-open="false"/);
   assert.match(html, /id="taskCommentInput"/);
   assert.match(html, /id="taskCommentSend"/);
-  assert.match(html, /<b>ENTER<\/b> SEND/);
-  assert.match(html, /<b>SHIFT\+ENTER<\/b> NEW LINE/);
+  assert.match(html, /title="Enter to send · Shift\+Enter for a new line"/);
 });
 
 test("a restored draft fills the composer and stays escaped", () => {
@@ -347,6 +346,13 @@ test("composer displays its byte limit and submits valid text", () => {
     onDelete() {},
   });
 
+  assert.equal(dom.byteCount.hidden, true);
+  dom.input.value = "ää";
+  dom.input.oninput();
+  assert.equal(dom.byteCount.hidden, true, "four UTF-8 bytes stay below 90% of five");
+  dom.input.value = "ääa";
+  dom.input.oninput();
+  assert.equal(dom.byteCount.hidden, false);
   dom.input.value = "hello";
   dom.input.oninput();
   assert.equal(dom.byteCount.textContent, "5 B / 5 B");
@@ -354,6 +360,7 @@ test("composer displays its byte limit and submits valid text", () => {
   dom.send.onclick();
   assert.deepEqual(submitted, ["hello"]);
   assert.equal(dom.input.value, "");
+  assert.equal(dom.byteCount.hidden, true, "sending hides the counter again");
 });
 
 test("state changes report the draft so a re-render can restore it", () => {

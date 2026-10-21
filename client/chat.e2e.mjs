@@ -9,6 +9,16 @@ const context = await browser.newContext({ serviceWorkers: "block", viewport: { 
 const page = await context.newPage();
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
+async function selectMessage(row) {
+  await row.scrollIntoViewIfNeeded();
+  await row.locator(".col-message").evaluate(body => {
+    const range = document.createRange();
+    range.selectNodeContents(body.querySelector("p") || body);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+  });
+  await row.page().waitForFunction(() => document.querySelector("#logOutput .message-selected"));
+}
 try {
   await page.routeWebSocket("**/*", (socket) => socket.onMessage(() => {}));
   await page.goto(process.env.NRC_CLIENT_URL || "http://localhost:8000");
@@ -69,8 +79,21 @@ try {
 
   const input = page.locator("#messageInput");
   assert.ok(await page.locator("#chatSearchCount").isHidden(), "no idle search label");
+  const emptyComposer = await page.locator('.input-controls').boundingBox();
+  assert.ok(emptyComposer.height <= 44, 'idle desktop composer occupies one row');
+  assert.ok(await page.locator('#messageByteCount').isHidden());
+  await input.fill('First line\nSecond line\nThird line');
+  const expandedComposer = await page.locator('.input-controls').boundingBox();
+  assert.ok(expandedComposer.height > emptyComposer.height, 'multiline chat grows');
+  assert.equal(expandedComposer.y + expandedComposer.height, emptyComposer.y + emptyComposer.height, 'chat grows upward');
+  await input.fill('ä'.repeat(23039));
+  assert.ok(await page.locator('#messageByteCount').isHidden(), 'below 90% of UTF-8 limit');
+  await input.fill('ä'.repeat(23040));
+  assert.ok(await page.locator('#messageByteCount').isVisible(), 'counter appears at 90%');
+  await input.fill('');
+  assert.equal((await page.locator('.input-controls').boundingBox()).height, emptyComposer.height, 'clearing shrinks chat');
   await input.fill("Draft");
-  await page.locator("#logOutput .log-row .col-message").last().hover();
+  await selectMessage(page.locator("#logOutput .log-row").last());
   await page.locator(".chat-reply-action").last().click();
   assert.match(await input.inputValue(), /^> anna:\n> Status 179: running checks\n\nDraft$/);
   await input.press("Escape");
@@ -172,7 +195,7 @@ try {
 
   // Exercise the existing send path, capture the outgoing wire frame rather than
   // depending on a running Odin server. Failed sends must keep the draft.
-  await page.locator("#logOutput .log-row .col-message").last().hover();
+  await selectMessage(page.locator("#logOutput .log-row").last());
   await page.locator(".chat-reply-action").last().click();
   const draft = await input.inputValue();
   await page.evaluate(() => { ws = { readyState: 3 }; });
@@ -206,15 +229,42 @@ try {
       await input.fill("");
       await page.mouse.move(0, 0);
       const reply = page.locator(".chat-reply-action").last();
-      assert.equal(await reply.evaluate((node) => getComputedStyle(node).opacity), "0", "reply hidden at rest");
+      const actions = page.locator("#logOutput .message-copy-actions").last();
+      assert.equal(await actions.evaluate((node) => getComputedStyle(node).opacity), "0", "actions hidden at rest");
       if (width === 1440) await page.screenshot({ path: `.amp/in/artifacts/chat-reply-rest-${theme}.png` });
       await reply.focus();
-      assert.equal(await reply.evaluate((node) => getComputedStyle(node).opacity), "1", "reply exposed by keyboard focus");
+      assert.equal(await actions.evaluate((node) => getComputedStyle(node).opacity), "1", "actions exposed by keyboard focus");
       await input.focus();
       await page.locator("#logOutput .log-row .col-message").last().hover();
-      assert.equal(await reply.evaluate((node) => getComputedStyle(node).opacity), "1", "hovering message text exposes reply");
-      assert.equal(await page.locator(".chat-reply-action").first().evaluate((node) => getComputedStyle(node).opacity), "0", "other replies remain hidden");
-      if (width === 1440) await page.screenshot({ path: `.amp/in/artifacts/chat-reply-hover-${theme}.png` });
+      assert.equal(await actions.evaluate((node) => getComputedStyle(node).opacity), "0", "hover alone does not expose actions");
+      const beforeSelection = await page.locator("#logOutput .log-row").last().boundingBox();
+      await selectMessage(page.locator("#logOutput .log-row").last());
+      assert.equal(await actions.evaluate((node) => getComputedStyle(node).opacity), "1", "selection exposes actions");
+      assert.equal(await page.locator("#logOutput .message-copy-actions").first().evaluate((node) => getComputedStyle(node).opacity), "0", "other actions remain hidden");
+      assert.equal((await page.locator("#logOutput .log-row").last().boundingBox()).height, beforeSelection.height, "selection does not shift messages");
+      for (const backwards of [false, true]) {
+        if (backwards) {
+          await page.evaluate(() => {
+            const s = getSelection();
+            s.setBaseAndExtent(s.focusNode, s.focusOffset, s.anchorNode, s.anchorOffset);
+          });
+          await page.waitForFunction(() => {
+            const r = getSelection().getRangeAt(0).getClientRects()[0];
+            const a = document.querySelector(".message-selected .message-copy-actions").getBoundingClientRect();
+            return Math.abs(a.left + a.width / 2 - r.left) <= a.width / 2 + 4;
+          });
+        }
+        const end = await page.evaluate(backwards => {
+          const rects = [...getSelection().getRangeAt(0).getClientRects()];
+          return rects[backwards ? 0 : rects.length - 1].toJSON();
+        }, backwards);
+        const a = await actions.boundingBox();
+        assert.ok(Math.abs(a.x + a.width / 2 - (backwards ? end.left : end.right)) <= a.width / 2 + 4, "toolbar stays near the active selection endpoint");
+        assert.ok(a.y + a.height <= end.top || a.y >= end.bottom, "toolbar does not cover the endpoint line");
+        const bounds = await page.locator("#logOutput").boundingBox();
+        assert.ok(a.x >= bounds.x && a.x + a.width <= bounds.x + bounds.width, "toolbar stays inside transcript");
+      }
+      if (width === 1440) await page.screenshot({ path: `.amp/in/artifacts/chat-reply-selected-${theme}.png` });
       await page.locator(".chat-reply-action").last().click();
       await page.keyboard.insertText("I'll check the release now.");
       if (width === 390 && await page.locator("#chatSearch").isHidden()) {
@@ -240,7 +290,8 @@ try {
     for (const theme of ["light", "dark"]) {
       await touchPage.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, theme);
       const reply = touchPage.locator(".chat-reply-action").last();
-      assert.equal(await reply.evaluate((node) => getComputedStyle(node).opacity), "1", "touch action visible without hover");
+      await selectMessage(touchPage.locator("#logOutput .log-row").last());
+      assert.equal(await touchPage.locator(".message-copy-actions").last().evaluate((node) => getComputedStyle(node).opacity), "1", "touch selection exposes actions");
       await touchPage.screenshot({ path: `.amp/in/artifacts/chat-reply-touch-${theme}.png` });
       await reply.tap();
       assert.ok(await touchPage.locator("#chatCancelReply").isVisible());
@@ -378,6 +429,7 @@ try {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.evaluate(() => logMessage("Sent", "Eigene **Nachricht** mit [task:123].", 2n, { author: "ben" }));
   const ownCopy = page.locator("#logOutput .log-row").last();
+  await selectMessage(ownCopy);
   await ownCopy.getByRole("button", { name: "Kopieren", exact: true }).click();
   await ownCopy.getByText("Kopiert", { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "Eigene **Nachricht** mit [task:123].");
@@ -470,6 +522,23 @@ try {
   assert.equal(await page.locator(".col-tag").filter({ hasText: "anna" }).nth(1).isVisible(), false, "consecutive messages share their author label");
   assert.ok(await page.locator(".col-tag").filter({ hasText: "anna" }).nth(2).isVisible(), "five-minute boundary begins a new group");
   assert.ok(await page.locator(".col-tag").filter({ hasText: "mika" }).isVisible(), "changing author begins a new group");
+  const times = page.locator("#logOutput .col-time");
+  assert.ok(await times.nth(0).isVisible(), "group starts with a timestamp");
+  assert.ok(await times.nth(1).isHidden(), "continuation omits its timestamp");
+  assert.ok(await times.nth(2).isVisible(), "five-minute boundary restores the timestamp");
+  assert.ok(await times.nth(3).isVisible(), "different author restores the timestamp");
+  assert.equal(await page.locator("#logOutput [data-avatar]").count(), 0);
+  await selectMessage(page.locator("#logOutput .log-row").nth(1));
+  await page.evaluate(() => {
+    const bodies = document.querySelectorAll("#logOutput .col-message");
+    const range = document.createRange();
+    range.setStart(bodies[0].firstChild, 0);
+    range.setEndAfter(bodies[1].lastChild);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+  });
+  await page.waitForFunction(() => !document.querySelector("#logOutput .message-selected"));
+  await page.evaluate(() => window.getSelection().removeAllRanges());
   for (const text of ["**QUERY** SELECT * FROM tasks", "**ASK**\nKeep this second line", "**QUERY · PLAN · CONTEXT WORKSPACE**\nNot an AI turn"]) {
     await page.evaluate(text => logMessage("Sent", text, 2n), text);
     const sent = page.locator("#logOutput .log-row").last();
@@ -512,6 +581,7 @@ try {
   assert.equal(await answer.locator("code").innerText(), "#123");
   assert.equal(await answer.locator('a[href="https://example.org"]').innerText(), "#123");
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await selectMessage(answer);
   await answer.getByRole("button", { name: "Kopieren", exact: true }).click();
   await answer.getByText("Kopiert", { exact: true }).waitFor();
   const markdownCopy = await page.evaluate(() => navigator.clipboard.readText());
@@ -554,6 +624,7 @@ try {
     navigator.clipboard.write = async () => { throw new Error("clipboard denied"); };
   });
   try {
+    await selectMessage(answer);
     await answer.getByRole("button", { name: "Mit Formatierung kopieren", exact: true }).click();
     await answer.getByText("Kopieren fehlgeschlagen: clipboard denied", { exact: true }).waitFor();
   } finally { await page.evaluate(() => { navigator.clipboard.write = window.__originalClipboardWrite; }); }
@@ -598,6 +669,7 @@ try {
   await page.evaluate(() => logMessage("Message", "**AI RESPONSE · CONTEXT WORKSPACE**\n**FOLLOW-UP CONTEXT:** LAST 1 TURN(S)\n\nHistorische Antwort. [note:91]\n\n**SOURCES (1)**\n- [note:91] Gesprächsnotiz", NRCAI.getDisplayConvId(), { author: "sullivan-ai", aiContextRoomId: 0n }));
   const historical = page.locator(".ledger-ai-answer").last();
   assert.equal(await historical.getByRole("link", { name: "Quelle: Gesprächsnotiz" }).innerText(), "[1]");
+  await selectMessage(historical);
   await historical.getByRole("button", { name: "Kopieren", exact: true }).click();
   await historical.getByText("Kopiert", { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "Historische Antwort. [note:91]", "historical copies omit transport envelopes");

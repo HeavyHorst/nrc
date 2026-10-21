@@ -70,7 +70,7 @@ try {
     const send = await page.locator("#chatSend").boundingBox();
     const attach = await page.locator("#chatAttach").boundingBox();
     assert.equal(send.y, attach.y, "Send and File share the footer row");
-    assert.equal(send.y + send.height, composer.y + composer.height, "Send stays at the composer bottom");
+    assert.equal(send.y + send.height, composer.y + composer.height - 4, "Send stays at the composer bottom inset");
     assert.equal(send.height, 44, "Send retains its touch target without growing with the draft");
   }
   await draft.fill("Release draft");
@@ -87,6 +87,10 @@ try {
   await page.locator("#mobileRoomSwitch").tap();
   await page.locator('[data-room="2"]').tap();
   assert.equal(await draft.inputValue(), "Release draft\n");
+  await page.locator('#chatDialog .col-message').last().evaluate(body => {
+    const range = document.createRange(); range.selectNodeContents(body);
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+  });
   await page.locator('#chatDialog .chat-reply-action').last().tap();
   const quotedDraft = await draft.inputValue();
   await page.locator("#mobileRoomSwitch").tap();

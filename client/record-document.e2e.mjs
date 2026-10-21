@@ -135,12 +135,16 @@ try {
         assert.equal(await page.locator(title).evaluate(el => getComputedStyle(el).textTransform), "none");
         assert.equal(await page.locator('.document-resources [data-resource-open="true"]').count(), 0, "no resource tab is selected by default");
         const send = await geometry('.task-comment-send');
-        const footer = await geometry('.task-comment-composer-meta');
         const input = await geometry('.task-comment-input-container');
-        assert.ok(send.y >= footer.y && send.y + send.height <= footer.y + footer.height, 'send button fits inside footer');
-        const inset = await page.locator('.task-comment-composer-meta').evaluate(el => parseFloat(getComputedStyle(el).paddingLeft));
-        assert.equal(input.x + input.width - send.x - send.width, inset, 'send has the same right inset as the footer left inset');
-        assert.equal(await page.locator('.task-comment-send').textContent(), 'SEND ↵');
+        assert.ok(await page.locator('.task-comment-composer-meta').isHidden(), 'short drafts have no footer');
+        assert.ok(send.x >= input.x + input.width, 'send sits beside the field');
+        assert.ok(Math.abs(send.y + send.height - input.y - input.height) <= 1, 'send aligns with the bottom of the field');
+        assert.ok((await geometry('.task-comment-input-area')).height <= 56, 'empty composer is one compact row');
+        await page.locator('.task-comment-input').fill('First line\nSecond line\nThird line');
+        assert.ok((await geometry('.task-comment-input-container')).height > input.height, 'comment grows with a multiline draft');
+        await page.locator('.task-comment-input').fill('');
+        assert.equal((await geometry('.task-comment-input-container')).height, input.height, 'clearing shrinks the composer');
+        assert.equal(await page.locator('.task-comment-send').textContent(), 'SEND');
         if (width === 2200) {
           const styles = await page.locator('#chatAttach, #chatSend, .task-comment-send').evaluateAll(elements => elements.map(el => {
             const style = getComputedStyle(el);
@@ -148,10 +152,6 @@ try {
           }));
           assert.deepEqual(styles[1], styles[0], 'chat send shares the global file button typography and sizing');
           assert.deepEqual(styles[2], styles[0], 'comment send shares the global file button typography and sizing');
-          const dock = await geometry('.document-resources');
-          const commentsFooter = await geometry('.task-comment-composer-meta');
-          assert.equal(dock.height, commentsFooter.height, 'resource and comment footers include the same border-box height');
-          assert.equal(dock.y, commentsFooter.y, 'adjacent footer top borders align');
         }
         await page.locator('[data-resource="links"] [data-resource-toggle]').click();
         assert.ok(await page.locator('[data-resource="links"] .record-resource-body').isVisible(), `${type}/${width}/${theme}: links opened`);

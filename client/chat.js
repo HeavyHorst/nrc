@@ -156,6 +156,8 @@ window.NRCChat = (() => {
     actions.className = "message-copy-actions";
     actions.setAttribute("role", "group");
     actions.setAttribute("aria-label", "Nachrichtenaktionen");
+    // Keep the text selection while a pointer activates one of its actions.
+    actions.addEventListener("mousedown", (event) => event.preventDefault());
     const feedback = document.createElement("span");
     feedback.className = "message-copy-feedback";
     feedback.setAttribute("role", "status");
@@ -218,8 +220,8 @@ window.NRCChat = (() => {
       const author = message.author === "YOU" ? myNickname || "YOU" : message.author || "UNKNOWN";
       quote = quoteText(author, plain.textContent.trim());
       messageInput.value = quote + messageInput.value;
-      el("chatReplyText").textContent = `REPLY TO ${author}: ${plain.textContent.trim().slice(0, 120)}`;
-      el("chatReplyText").title = el("chatReplyText").textContent;
+      el("chatReplyText").textContent = `REPLY TO ${author}`;
+      el("chatReplyText").title = plain.textContent.trim().slice(0, 120);
       el("chatReply").hidden = false;
       messageInput.focus();
       messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
@@ -371,6 +373,44 @@ window.NRCChat = (() => {
     logOutput.addEventListener("scroll", markRead);
     document.addEventListener("visibilitychange", markRead);
     window.addEventListener("focus", markRead);
+    function updateSelectionActions() {
+      const selection = window.getSelection();
+      const bodyFor = (node) => (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest(".col-message");
+      const body = bodyFor(selection?.anchorNode);
+      const selectedRow = selection && !selection.isCollapsed && selection.toString().trim() &&
+        body && body === bodyFor(selection.focusNode) && logOutput.contains(body)
+        ? body.closest(".log-row") : null;
+      logOutput.querySelectorAll(".message-selected").forEach((row) => {
+        if (row !== selectedRow) row.classList.remove("message-selected");
+      });
+      const actions = selectedRow?.querySelector(".message-copy-actions");
+      if (!actions) return;
+      const range = selection.getRangeAt(0);
+      const backwards = selection.focusNode === range.startContainer && selection.focusOffset === range.startOffset;
+      const caret = range.cloneRange();
+      caret.collapse(backwards);
+      const rects = Array.from(range.getClientRects());
+      const caretRect = caret.getBoundingClientRect();
+      const end = caretRect.height ? caretRect : rects[backwards ? 0 : rects.length - 1];
+      const bounds = logOutput.getBoundingClientRect();
+      if (!end || end.bottom < bounds.top || end.top > bounds.bottom) {
+        selectedRow.classList.remove("message-selected");
+        return;
+      }
+      const origin = selectedRow.getBoundingClientRect();
+      const width = actions.offsetWidth;
+      const height = actions.offsetHeight;
+      const endX = caretRect.height || backwards ? end.left : end.right;
+      const left = Math.max(bounds.left + 4, Math.min(endX - width / 2, bounds.right - width - 4));
+      const above = end.top - height - 8;
+      const top = Math.max(bounds.top + 4, Math.min(above >= bounds.top + 4 ? above : end.bottom + 8, bounds.bottom - height - 4));
+      actions.style.setProperty("--selection-left", `${left - origin.left}px`);
+      actions.style.setProperty("--selection-top", `${top - origin.top}px`);
+      selectedRow.classList.add("message-selected");
+    }
+    document.addEventListener("selectionchange", updateSelectionActions);
+    logOutput.addEventListener("scroll", updateSelectionActions);
+    window.addEventListener("resize", updateSelectionActions);
   }
 
   // The register needs the detail behind an unread count: how many of the

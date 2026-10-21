@@ -490,14 +490,12 @@
         </button>
         <div class="task-comment-input-area">
           <label class="task-comment-input-container" for="${escapeHtml(inputId)}">
-            <textarea class="task-comment-input" id="${escapeHtml(inputId)}" rows="3" aria-label="Write a message" placeholder="Write a message…">${escapeHtml(draft)}</textarea>
+            <textarea class="task-comment-input" id="${escapeHtml(inputId)}" rows="1" aria-label="Write a message" title="Enter to send · Shift+Enter for a new line" placeholder="Write a message…">${escapeHtml(draft)}</textarea>
           </label>
           <div class="task-comment-composer-meta" aria-live="polite">
-            <span><b>ENTER</b> SEND</span>
-            <span><b>SHIFT+ENTER</b> NEW LINE</span>
-            <span class="task-comment-byte-count">0 B / ${MAX_COMMENT_BYTES.toLocaleString()} B</span>
+            <span class="task-comment-byte-count" hidden>0 B / ${MAX_COMMENT_BYTES.toLocaleString()} B</span>
           </div>
-          <button class="btn task-comment-send" id="${escapeHtml(sendId)}" type="button">SEND ↵</button>
+          <button class="btn task-comment-send" id="${escapeHtml(sendId)}" type="button">SEND</button>
         </div>
       </div>`;
   }
@@ -714,6 +712,7 @@
         const invalid = bytes > MAX_COMMENT_BYTES;
         if (byteCount) {
           byteCount.textContent = `${bytes.toLocaleString()} B / ${MAX_COMMENT_BYTES.toLocaleString()} B`;
+          byteCount.hidden = bytes < MAX_COMMENT_BYTES * 0.9;
           byteCount.classList.toggle("composer-byte-count--invalid", invalid);
         }
         input.setAttribute("aria-invalid", String(invalid));
