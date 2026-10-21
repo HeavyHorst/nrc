@@ -229,7 +229,7 @@
           companyHasMore = data.has_more === true;
           companySearchOffset = data.next_offset;
           searchMode = "results";
-          searchNotice = data.stale ? "Search results may be outdated. Refresh to retry reconciliation." : "";
+          searchNotice = "";
           if (!metadata(records.get(selected))) automaticSelection = companyIds.values().next().value ?? null;
           return;
         } catch (failure) {

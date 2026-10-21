@@ -103,8 +103,15 @@ try {
     }
   }
   response = { ...response, stale: true };
-  await page.locator("#customersRefresh").click();
-  await page.waitForFunction(() => document.getElementById("customersStatus").textContent.includes("outdated"));
+  const beforeStale = requests.length;
+  await Promise.all([
+    page.waitForResponse(response => response.url().endsWith("/search")),
+    page.locator("#customersRefresh").click(),
+  ]);
+  await waitRegister();
+  assert.ok(requests.length > beforeStale);
+  assert.equal(await page.locator("#customersStatus").textContent(), "", "routine background reconciliation is not a customer search error");
+  assert.match(await page.locator("#customersList").textContent(), /Nordwerk/);
   await capture("register-stale");
   await page.locator("label:has(#customersArchived)").click();
   await page.waitForFunction(() => document.getElementById("customersState").textContent.includes("RESULTS"));
