@@ -86,10 +86,6 @@
       const control = document.getElementById(id);
       if (control) control.disabled = busy;
     });
-    const contextSelect = document.getElementById("askContextChip");
-    if (contextSelect) contextSelect.disabled = true;
-    if (busy) closeAskContextPicker();
-    document.getElementById("sullivanComposerBar")?.setAttribute("aria-busy", String(busy));
     document.querySelectorAll(".ai-response-actions [data-requires-idle=true]").forEach((control) => {
       control.disabled = isWorkbenchBusy();
     });
@@ -100,13 +96,12 @@
   function renderEmptyState() {
     const output = document.getElementById("logOutput");
     if (!output || output.children.length || !isSullivanView() || sullivanDisplayConvId == null) return;
-    const { contextConvId } = resolveAskContextForDisplay(sullivanDisplayConvId);
     const state = document.createElement("section");
     state.className = "sullivan-empty";
     const heading = document.createElement("strong");
     heading.textContent = "SULLIVAN / WORKBENCH READY";
     const context = document.createElement("div");
-    context.textContent = `CONTEXT: ${getRoomName(contextConvId)} · MODE: PLAN · HISTORY: EPHEMERAL`;
+    context.textContent = "MODE: PLAN · HISTORY: EPHEMERAL";
     const guidance = document.createElement("div");
     guidance.textContent = "Sullivan may propose changes; nothing is applied without explicit approval.";
     const examples = document.createElement("ul");
@@ -122,9 +117,6 @@
   function updateWorkbenchUI() {
     const active = isSullivanView() && sullivanDisplayConvId != null;
     document.body.classList.toggle("sullivan-workbench", active);
-    const bar = document.getElementById("sullivanComposerBar");
-    if (!bar) return;
-    bar.hidden = !active;
     if (!active) {
       closeSourcePanel(false);
       messageInput.placeholder = "Write a message…";
@@ -133,8 +125,6 @@
     }
     const title = document.getElementById("chatHeaderTitle");
     if (title) title.textContent = "SULLIVAN / AI WORKBENCH";
-    const context = resolveAskContextForDisplay(sullivanDisplayConvId).contextConvId;
-    document.getElementById("sullivanComposerContext").textContent = `CONTEXT / ${getRoomName(context)}`;
     messageInput.placeholder = "Ask Sullivan…";
     setRunBusy(activeAskRun);
     document.querySelector("#logOutput > .sullivan-empty")?.remove();
@@ -227,77 +217,6 @@
 
   function resolveAskContextForDisplay(displayConvId) {
     return { contextConvId: 0n, source: "workspace" };
-  }
-
-  function buildContextPickerOptions() {
-    const options = [];
-
-    const roomIDs = Array.from(subscribedRooms || [])
-      .filter((id) => !(typeof isDMConversation === "function" && isDMConversation(id)))
-      .sort((a, b) => {
-        if (a === 1n) return -1;
-        if (b === 1n) return 1;
-        return Number(a - b);
-      });
-    roomIDs.forEach((id) => {
-      options.push({ convId: id, label: getRoomName(id) });
-    });
-
-    const dmEntries = Array.from(activeDMs || [])
-      .filter(([, dm]) => dm && !dm.optimistic)
-      .sort((a, b) => {
-        const an = (a[1]?.username || "").toLowerCase();
-        const bn = (b[1]?.username || "").toLowerCase();
-        return an.localeCompare(bn);
-      });
-    dmEntries.forEach(([convId]) => {
-      options.push({ convId: BigInt(convId), label: getRoomName(BigInt(convId)) });
-    });
-
-    return options;
-  }
-
-  function closeAskContextPicker() {
-    const select = document.getElementById("askContextChip");
-    if (select) CustomSelect.close(select);
-  }
-
-  function ensureAskContextChip() {
-    let chip = document.getElementById("askContextChip");
-    if (chip) return chip;
-
-    const container = document.getElementById("chatHeaderAIControls");
-    if (!container) return null;
-
-    const cell = document.createElement("div");
-    cell.className = "header-filter-cell ask-context-chip";
-    const label = document.createElement("label");
-    label.className = "filter-label";
-    label.htmlFor = "askContextChip";
-    label.textContent = "CONTEXT";
-    chip = document.createElement("select");
-    chip.id = "askContextChip";
-    chip.className = "filter-select";
-    chip.setAttribute("data-custom-select", "");
-    chip.setAttribute("data-custom-select-portal", "");
-    chip.setAttribute("data-custom-select-search-placeholder", "FILTER CONTEXT...");
-    chip.title = "Choose Sullivan context";
-    chip.addEventListener("change", () => {
-      if (chip.disabled || sullivanDisplayConvId == null) return;
-      const displayConvId = BigInt(sullivanDisplayConvId);
-      const convId = BigInt(chip.value);
-      setAskContext(displayConvId, convId, true);
-      updateAskContextChip();
-      if (typeof updateRoomUI === "function") updateRoomUI();
-      loadRoomHistory(displayConvId, { aiContextRoomId: convId });
-      logSystem(`SULLIVAN CONTEXT SET: ${getRoomName(convId)}`, "ai");
-    });
-
-    const control = document.createElement("nrc-select");
-    control.append(chip);
-    cell.append(label, control);
-    container.appendChild(cell);
-    return chip;
   }
 
   function ensureAskResetButton() {
@@ -412,15 +331,13 @@
   }
 
   function updateAskContextChip() {
-    const chip = ensureAskContextChip();
     const resetButton = ensureAskResetButton();
     const shareButton = ensureSullivanShareButton();
     const openNrcButton = ensureSullivanOpenNrcButton();
     const container = document.getElementById("chatHeaderAIControls");
-    if (!chip || !resetButton || !shareButton || !openNrcButton || !container) return;
+    if (!resetButton || !shareButton || !openNrcButton || !container) return;
 
     if (!isSullivanView() || sullivanDisplayConvId == null) {
-      closeAskContextPicker();
       container.style.display = "none";
       resetButton.style.display = "none";
       shareButton.style.display = "none";
@@ -431,7 +348,6 @@
 
     const displayConvId = BigInt(sullivanDisplayConvId);
     if (typeof isAIDMConversation !== "function" || !isAIDMConversation(displayConvId)) {
-      closeAskContextPicker();
       container.style.display = "none";
       resetButton.style.display = "none";
       shareButton.style.display = "none";
@@ -440,12 +356,6 @@
       return;
     }
 
-    const { contextConvId } = resolveAskContextForDisplay(displayConvId);
-    const options = [{ convId: 0n, label: "WORKSPACE" }];
-    chip.replaceChildren(...options.map((option) => new Option(option.label, String(option.convId))));
-    chip.value = String(contextConvId);
-    chip.disabled = true;
-    chip.title = "Sullivan uses durable workspace content";
     container.style.display = "inline-flex";
     resetButton.style.display = "inline-flex";
     shareButton.style.display = "inline-flex";

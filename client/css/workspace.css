@@ -1475,27 +1475,6 @@ input[type="checkbox"]:focus {
     word-wrap: break-word;
 }
 
-.sullivan-composer-bar {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.375rem 0.75rem;
-    border-bottom: 1px solid var(--border-primary);
-    font-family: var(--font-mono);
-}
-
-.sullivan-composer-bar[hidden] {
-    display: none;
-}
-
-.sullivan-composer-context {
-    margin-right: auto;
-    font-size: var(--font-xs);
-    font-weight: 700;
-    white-space: normal;
-    overflow-wrap: anywhere;
-}
-
 .chat-send-btn {
     flex: 0 0 auto;
     margin-right: 0.5rem;
@@ -1587,7 +1566,6 @@ body.sullivan-workbench .sullivan-submit-controls {
 }
 
 @media (max-width: 600px) {
-    .sullivan-composer-bar,
     body.sullivan-workbench .chat-header {
         flex-wrap: wrap;
         height: auto;
@@ -1597,10 +1575,6 @@ body.sullivan-workbench .sullivan-submit-controls {
         flex: 1 1 100%;
         flex-wrap: nowrap;
         width: 100%;
-    }
-
-    .sullivan-composer-context {
-        flex: 1 1 100%;
     }
 
     .ai-workbench-run,

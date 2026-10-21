@@ -102,8 +102,8 @@ try {
     for (const theme of ["light", "dark"]) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
       await stack.locator(".header-register-control-row, .header-control-scroll").evaluateAll(rows => rows.forEach(row => row.scrollLeft = 0));
-      // Reminders has right-aligned actions rather than a leading filter/parameter.
-      for (const band of await stack.locator(".header-register:not(.reminder-queue-header) > .header-register-identity-row").all()) {
+      // Action-only registers have right-aligned buttons rather than a leading filter/parameter.
+      for (const band of await stack.locator(".header-register:not(.reminder-queue-header):has(.header-filter-cell) > .header-register-identity-row").all()) {
         const alignment = await band.evaluate(row => {
           const title = row.querySelector(".header-register-title");
           const cell = row.parentElement.querySelector(".header-register-control-row :is(.header-filter-cell, .header-register-control)");
@@ -643,7 +643,7 @@ try {
   }
 
   // A populated production workbench has a more specific mobile cascade than
-  // the catalogue. Exercise both action sets with an actual context selector.
+  // the catalogue. Exercise both action sets with fixed workspace context.
   await page.route("**/ask/ready", route => route.fulfill({ json: { ai_username: "sullivan-headers" } }));
   await page.evaluate(() => {
     myNickname = "header-test";
@@ -664,28 +664,14 @@ try {
         await page.evaluate(focused => NRCAI.openSullivanWithContext(7n, { focused }), focused);
         const row = page.locator("#chatHeaderAIControls");
         await row.evaluate(el => el.scrollLeft = 0);
-        const cell = row.locator(".ask-context-chip");
-        assert.ok(await cell.evaluate(el => el.getBoundingClientRect().width >= 8 * parseFloat(getComputedStyle(document.documentElement).fontSize)),
-          `${width}/${theme}/${focused}: context does not collapse`);
-        const label = cell.locator("label");
-        const trigger = cell.locator(".custom-select__trigger");
-        const labelBox = await label.boundingBox();
-        const triggerBox = await trigger.boundingBox();
-        if (width > 768) {
-          assert.ok(Math.abs((labelBox.y + labelBox.height / 2) - (triggerBox.y + triggerBox.height / 2)) < 1,
-            `${width}/${theme}/${focused}: CONTEXT reads on the selector's baseline in its register cell`);
-        } else {
-          assert.ok(labelBox.y + labelBox.height <= triggerBox.y, "CONTEXT stays above the selector");
-        }
-        assert.equal(await trigger.evaluate(el => el.scrollWidth > el.clientWidth + 1), false, "selected room fits");
+        assert.equal(await row.locator("select, nrc-select").count(), 0, "fixed workspace context has no selector");
+        assert.equal(await page.locator("#sullivanComposerBar").count(), 0, "fixed context needs no composer row");
         const titleStyle = await page.locator("#chatHeaderTitle").evaluate(el => {
           const css = getComputedStyle(el);
           return [css.display, css.textOverflow, css.overflowX];
         });
         assert.deepEqual(titleStyle, ["block", "ellipsis", "hidden"], "title uses real text ellipsis, not flex clipping");
         await capture(`headers-${width}-${theme}-sullivan${focused ? "-share" : ""}`, page.locator(".chat-header"));
-        assert.equal(await trigger.isDisabled(), true, "workspace context is fixed at narrow widths too");
-        assert.equal(await cell.locator("select").inputValue(), "0");
         const lastAction = row.locator("button.header-register-control:visible").last();
         await lastAction.focus();
         const geometry = await lastAction.evaluate(el => {
