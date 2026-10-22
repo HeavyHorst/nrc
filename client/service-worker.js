@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261021stale1";
+const CACHE_NAME = "nrc-terminal-20261022overview1";
 
 const APP_SHELL = [
   "./",
@@ -11,7 +11,7 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261021contents1",
+  "./css/main.css?v=20261022overview1",
   "./css/foundation.css?v=20261020fill2",
   "./css/workspace.css?v=20261021context2",
   "./css/entities.css?v=20261021contents1",
@@ -61,7 +61,7 @@ const APP_SHELL = [
   "./app.js?v=20261021taskslice1",
   "./calls.js?v=20261019recurrence2",
   "./newsletter.js?v=20261019newslettertabs2",
-  "./customers.js?v=20261021stale1",
+  "./customers.js?v=20261022overview1",
   "./tickets.js?v=20261021fit1",
   "./mobile-shell.js?v=20261019registers1",
   "./latency-worker.js",

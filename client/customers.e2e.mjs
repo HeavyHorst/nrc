@@ -125,12 +125,16 @@ try {
     }));
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const emptyGrid = await overviewBoxes();
-  assert.equal(emptyGrid.length, 4);
-  assert.equal(emptyGrid[0].y, emptyGrid[1].y, "top quadrants align");
-  assert.equal(emptyGrid[2].y, emptyGrid[3].y, "bottom quadrants align");
-  assert.equal(emptyGrid[0].height, emptyGrid[2].height, "both rows share the available height");
+  assert.equal(emptyGrid.length, 5, "tickets, contacts, activities, work and files are present");
+  assert.equal(emptyGrid[0].y, emptyGrid[1].y, "first-row sections align");
+  assert.equal(emptyGrid[2].y, emptyGrid[3].y, "second-row sections align");
+  for (const index of [2, 4]) {
+    assert.ok(Math.abs(emptyGrid[0].height - emptyGrid[index].height) <= 1, "all three rows share the available height");
+    assert.ok(emptyGrid[index].y >= emptyGrid[index - 2].y + emptyGrid[index - 2].height, "rows do not overlap");
+  }
   const recordBox = await page.locator("#customerRecord").boundingBox();
-  assert.ok(recordBox.y + recordBox.height - (emptyGrid[3].y + emptyGrid[3].height) < 50,
+  const bottomInset = recordBox.y + recordBox.height - (emptyGrid[4].y + emptyGrid[4].height);
+  assert.ok(bottomInset >= 0 && bottomInset < 50,
     "overview fills the record down to its bottom inset");
   await page.click("#customerContactNew");
   await assertInspector();
@@ -194,7 +198,7 @@ try {
   await page.selectOption("#customerHistoryFilter", "Call", { force: true });
   assert.equal(await page.locator("[data-activity]:visible").count(), 1);
   await page.locator('nav [data-customer-tab="overview"]').click();
-  assert.deepEqual(await overviewBoxes(), emptyGrid, "contacts and activities do not move the overview quadrants");
+  assert.deepEqual(await overviewBoxes(), emptyGrid, "contacts and activities do not move the overview sections");
 
   // A second real WebSocket session observes acknowledged updates without reload.
   const peer = await context.newPage();
@@ -272,10 +276,10 @@ try {
   await page.fill('[name="city"]', "Hamburg-Altona");
   // Inject a rejected RPC without a server write, then retry through the real RPC.
   await page.evaluate(() => {
-    const send = NRCAssets.sendUpdateAsset;
-    NRCAssets.sendUpdateAsset = (...args) => {
-      NRCAssets.sendUpdateAsset = send;
-      queueMicrotask(() => args[6].onError({ message: "Test rejection" }));
+    const send = NRCTransactions.sendAssetMetadataPatch;
+    NRCTransactions.sendAssetMetadataPatch = (...args) => {
+      NRCTransactions.sendAssetMetadataPatch = send;
+      queueMicrotask(() => args[3].onError({ message: "Test rejection" }));
       return 999;
     };
   });
@@ -312,6 +316,12 @@ try {
   await capture("customers-dark");
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  const narrowGrid = await overviewBoxes();
+  assert.equal(narrowGrid.length, 5);
+  for (let index = 1; index < narrowGrid.length; index++) {
+    assert.equal(narrowGrid[index].height, narrowGrid[0].height, "every narrow section has the same reserved height, including files");
+    assert.ok(narrowGrid[index].y >= narrowGrid[index - 1].y + narrowGrid[index - 1].height, "narrow sections stack without overlap");
+  }
   await capture("customers-narrow");
   await page.locator("#customerLinkAdd").scrollIntoViewIfNeeded();
   const linkBox = await page.locator("#customerLinkAdd").boundingBox();
@@ -417,7 +427,12 @@ try {
   await page.click(`[data-contact="${ids.contact}"]`);
   await page.waitForFunction(() => document.querySelectorAll("[data-unlink-company]").length === 2);
   assert.equal(await page.locator(".contact-facts > div").filter({ has: page.locator("dt", { hasText: /^PHONE$/ }) }).locator("dd").textContent(), "—");
-  assert.equal(await page.locator("[data-service-company]:disabled").count(), 2, "service roles are read-only outside editing");
+  assert.equal(await page.locator("[data-service-company]").count(), 0, "read mode shows service status, not disabled edit controls");
+  assert.equal(await page.locator(".contact-company-service").count(), 2);
+  assert.equal(await page.locator("#inspectorHeader #customerDelete").count(), 1, "delete shares the inspector action row");
+  assert.equal(await page.locator("#customerForm #customerDelete").count(), 0);
+  assert.equal(await page.locator("#contactCardCompany").isHidden(), true, "multiple companies do not imply a primary company");
+  assert.doesNotMatch(await page.locator("#customerForm").textContent(), /SOURCE \/|REVIEW \/ —/);
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.click('[data-copy-contact="email"]');
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "anna@nordwerk.example");
@@ -445,9 +460,9 @@ try {
   await save();
   await page.click(`[data-contact="${ids.contact}"]`);
   assert.match(await page.locator("#customerForm").textContent(), /anna.updated@nordwerk.example/);
-  await page.waitForSelector(`[data-service-company="${companyId}"]`);
-  assert.equal(await page.locator(`[data-service-company="${companyId}"]`).isChecked(), true, "service designation persists after acknowledged save");
-  assert.equal(await page.locator(`[data-service-company="${ids.second}"]`).isChecked(), false);
+  await page.waitForSelector(".contact-company-service");
+  assert.equal(await page.locator("tr").filter({ has: page.locator(`[data-open-company="${companyId}"]`) }).locator(".contact-company-service").textContent(), "SERVICE INFORMATION / ENABLED", "service designation persists after acknowledged save");
+  assert.equal(await page.locator("tr").filter({ has: page.locator(`[data-open-company="${ids.second}"]`) }).locator(".contact-company-service").textContent(), "SERVICE INFORMATION / NOT ENABLED");
   assert.equal(await page.locator('.contact-facts a[href^="tel:"]').getAttribute("href"), "tel:+495221132206");
   await page.click('[data-copy-contact="phone"]');
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "+49 5221 132206");
