@@ -4768,7 +4768,7 @@ nrc-link-picker {
 
 .slice-create-row {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     gap: 0.375rem;
     padding: 0.5rem 0.625rem;
     border-bottom: var(--content-border);

@@ -660,7 +660,7 @@ function showReminderDetailPanel(reminder) {
     <span class="inspector-cell-label">STATE</span>
     ${window.NRCDetailUI.renderSaveState(editing ? "EDITING" : "READ")}
   </div><div class="inspector-mode-row">
-    ${editing ? window.NRCDetailUI.renderHeaderAction({ id: "reminderDetailSaveHeader", label: "SAVE", command: "s", title: "Save reminder (S)", className: "btn--primary" }) + window.NRCDetailUI.renderHeaderAction({ id: "reminderDetailView", label: "CANCEL", command: "v", title: "Return to reminder (V)" }) : window.NRCDetailUI.renderHeaderAction({ id: "reminderDetailEdit", label: "EDIT", command: "e", title: "Edit reminder (E)" })}
+    ${editing ? window.NRCDetailUI.renderHeaderAction({ id: "reminderDetailSaveHeader", label: "SAVE", command: "s", title: "Save reminder (S)", className: "btn--primary" }) + window.NRCDetailUI.renderHeaderAction({ id: "reminderDetailView", label: "CANCEL", command: "v", title: "Return to reminder (V)", className: "btn--ghost" }) : window.NRCDetailUI.renderHeaderAction({ id: "reminderDetailEdit", label: "EDIT", command: "e", title: "Edit reminder (E)" })}
     <button class="btn btn--danger header-operation inspector-matrix-control" id="reminderDetailDelete" title="Delete reminder">DELETE</button>
     ${window.NRCDetailUI.renderCloseControl("reminderDetailClose")}
   </div>`;
@@ -1041,7 +1041,7 @@ async function createReminder() {
     for (const [label, value] of [["CANCEL", null], ["NEXT", true]]) {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = value ? "btn btn--primary" : "btn";
+      button.className = value ? "btn btn--primary" : "btn btn--ghost";
       button.textContent = label;
       button.onclick = () => {
         const selected = value ? field.querySelector("input:checked").value : null;
@@ -1104,7 +1104,7 @@ async function createReminder() {
     for (const [label, create] of [["CANCEL", false], ["CREATE", true]]) {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = create ? "btn btn--primary" : "btn";
+      button.className = create ? "btn btn--primary" : "btn btn--ghost";
       button.textContent = label;
       button.onclick = () => {
         const selected = create ? BigInt(field.querySelector("select").value || "0") : null;
@@ -4314,7 +4314,7 @@ function showTaskDetailPanel(task, { view = true } = {}) {
     ${view || descriptionFocusMode ? '<span class="inspector-state-value">READ</span>' : window.NRCDetailUI.renderSaveState("EDITING")}
   </div><div class="inspector-mode-row">
     <button class="btn btn--primary header-operation inspector-matrix-control save" id="taskDetailSave" title="Save description (Ctrl+Enter)">SAVE</button>
-    ${window.NRCDetailUI.renderHeaderAction({ id: "taskDetailToggleFocus", label: view || descriptionFocusMode ? "EDIT" : "CANCEL", command: view || descriptionFocusMode ? "e" : "v", title: view || descriptionFocusMode ? "Edit description (E)" : "Discard description edits (V)" })}
+    ${window.NRCDetailUI.renderHeaderAction({ id: "taskDetailToggleFocus", label: view || descriptionFocusMode ? "EDIT" : "CANCEL", command: view || descriptionFocusMode ? "e" : "v", title: view || descriptionFocusMode ? "Edit description (E)" : "Discard description edits (V)", className: view || descriptionFocusMode ? "" : "btn--ghost" })}
     <button class="btn btn--danger header-operation inspector-matrix-control" id="taskDetailDelete" title="Delete task">DELETE</button>
     ${window.NRCDetailUI.renderCloseControl("taskDetailClose")}</div>`;
 
@@ -4568,7 +4568,7 @@ function exitDescriptionFocus() {
   }
   descriptionFocusMode = false;
   const focusBtn = document.getElementById("taskDetailToggleFocus");
-  window.NRCDetailUI.setHeaderAction(focusBtn, { label: "CANCEL", command: "v" });
+  window.NRCDetailUI.setHeaderAction(focusBtn, { label: "CANCEL", command: "v", className: "btn--ghost" });
   // Re-render the full edit panel (stay in edit mode — do not auto-enter view).
   if (currentDetailTask) {
     showTaskDetailPanel(currentDetailTask, { view: false });

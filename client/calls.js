@@ -154,7 +154,7 @@
     view.panel.insertBefore(hint, view.actions);
     for (const [label, submit] of [['CANCEL',false],['INVITE',true]]) {
       const button = document.createElement('button');
-      button.type = 'button'; button.className = submit ? 'btn btn--primary' : 'btn'; button.textContent = label;
+      button.type = 'button'; button.className = submit ? 'btn btn--primary' : 'btn btn--ghost'; button.textContent = label;
       button.disabled = submit && !select.options.length;
       button.onclick = () => {
         view.close(); invitePicker = null;

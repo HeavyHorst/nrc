@@ -3059,7 +3059,7 @@ const NRCDialog = (() => {
         title,
         message,
         actionsBuilder(actions) {
-          const cancelBtn = createButton(cancelLabel, "", () =>
+          const cancelBtn = createButton(cancelLabel, "btn--ghost", () =>
             closeActiveDialog(false),
           );
           const confirmBtn = createButton(confirmLabel, "btn--danger", () =>
@@ -3096,7 +3096,7 @@ const NRCDialog = (() => {
           return { input };
         },
         actionsBuilder(actions, bodyResult) {
-          const cancelBtn = createButton(cancelLabel, "", () =>
+          const cancelBtn = createButton(cancelLabel, "btn--ghost", () =>
             closeActiveDialog(null),
           );
           const submitBtn = createButton(submitLabel, "btn--primary", () => {
@@ -8155,7 +8155,7 @@ async function promptNewTask() {
   const message = fields.querySelector("[role=status]");
   const cancel = document.createElement("button");
   cancel.type = "button";
-  cancel.className = "btn";
+  cancel.className = "btn btn--ghost";
   cancel.textContent = "Cancel";
   cancel.onclick = () => view.cancel();
   const submit = document.createElement("button");

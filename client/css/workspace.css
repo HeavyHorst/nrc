@@ -1665,14 +1665,14 @@ body.sullivan-workbench .sullivan-submit-controls {
     border-color: var(--border-light);
 }
 
-.btn--ghost {
+.btn.btn--ghost {
     background: transparent;
     color: var(--text-dim);
     border-color: transparent;
     box-shadow: none;
 }
 
-.btn--ghost:hover {
+.btn.btn--ghost:hover:not(:disabled) {
     background: transparent;
     color: var(--text-primary);
     border-color: var(--border-light);

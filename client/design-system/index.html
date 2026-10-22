@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261022overview1">
+    <link rel="stylesheet" href="../css/main.css?v=20261022cancel1">
     <link rel="stylesheet" href="../css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
@@ -325,7 +325,7 @@
                             <div class="agenda-resize-handle" role="separator" aria-label="Resize Inspector" tabindex="0"></div>
                             <div class="panel-header inspector-matrix-header">
                                 <div class="inspector-identity-row"><span class="header-text identity-reference">TASK #184</span><span class="inspector-cell-label">STATE</span><span class="detail-save-state" data-save-state="SAVING">SAVING</span></div>
-                                <div class="inspector-mode-row"><button class="btn btn--primary header-operation inspector-matrix-control" data-inspector-command="s" type="button"><span>SAVE</span></button><button class="btn header-operation inspector-matrix-control" data-inspector-command="v" type="button"><span>CANCEL</span></button><button class="btn header-operation task-detail-close inspector-matrix-control" data-inspector-command="escape" type="button" aria-label="Close"><span>CLOSE</span><b aria-hidden="true">×</b></button></div>
+                                <div class="inspector-mode-row"><button class="btn btn--primary header-operation inspector-matrix-control" data-inspector-command="s" type="button"><span>SAVE</span></button><button class="btn btn--ghost header-operation inspector-matrix-control" data-inspector-command="v" type="button"><span>CANCEL</span></button><button class="btn header-operation task-detail-close inspector-matrix-control" data-inspector-command="escape" type="button" aria-label="Close"><span>CLOSE</span><b aria-hidden="true">×</b></button></div>
                             </div>
                             <div class="catalog-panel-body">
                                 <p><b>EDIT CONTRACT</b> — Exactly one SAVE/CANCEL pair in the mode row. STATE describes reading, editing or persistence, never domain status or urgency. Destructive actions remain separate; company archive semantics are unchanged. Slice keeps its live-field SAVE without an artificial read/edit mode.</p>
@@ -620,7 +620,7 @@
                             <div class="chat-unread-divider">NEW MESSAGES</div>
                             <div class="log-row type-message chat-mentioned"><div class="message-meta"><span class="col-tag">ANNA</span><time class="col-time">09:44</time><span class="chat-mention-label">@ YOU</span><button class="btn btn--row chat-reply-action" type="button" aria-label="Reply to ANNA" title="Antworten"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l-6 6 6 6M3 11h10a7 7 0 0 1 7 7"/></svg></button></div><div class="col-message message-content"><blockquote><p>BEN: Ready for testing?</p></blockquote><p>@ben The build is ready.</p></div></div>
                         </div>
-                        <div class="chat-tools"><span class="filter-label chat-reply-preview">REPLY TO ANNA: The build is ready.</span><button class="btn btn--danger" type="button">CANCEL · ESC</button></div>
+                        <div class="chat-tools"><span class="filter-label chat-reply-preview">REPLY TO ANNA: The build is ready.</span><button class="btn btn--ghost" type="button">CANCEL · ESC</button></div>
                         <div class="log-row type-message"><div class="message-meta"><span class="col-tag">ANNA</span><time class="col-time">09:45</time><div class="message-copy-actions" role="group" aria-label="Nachrichtenaktionen"><button class="btn btn--row" type="button" aria-label="Kopieren" title="Als Markdown kopieren"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></svg></button><button class="btn btn--row" type="button" aria-label="Mit Formatierung kopieren" title="Mit Formatierung kopieren"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h11l5 5v13H4zM14 3v6h6M7 17l3-6 3 6m-5-2h4M15 13h2v4h-2z"/></svg></button><button class="btn btn--row chat-reply-action" type="button" aria-label="Reply to ANNA" title="Antworten"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l-6 6 6 6M3 11h10a7 7 0 0 1 7 7"/></svg></button></div></div><div class="col-message message-content"><p>See <span class="task-reference" data-nrc-reference data-reference-type="task" title="TASK #123" role="link" tabindex="0">Release checklist</span> and <span class="task-reference" data-nrc-reference data-reference-type="note" title="NOTE #456" role="link" tabindex="0">Release notes</span>.</p><span class="message-copy-feedback" role="status"></span></div></div>
                         <div class="portal-wrapper">
                             <div class="autocomplete-dropdown entity-mode" role="listbox" aria-label="Task and note title selection example">
@@ -653,14 +653,14 @@
                                 <label class="detail-edit-field"><span class="detail-edit-label">Task title</span><input class="task-detail-input" placeholder="Enter task title"></label>
                                 <div class="detail-edit-field"><span class="detail-edit-label">Slice (optional)</span><div><button type="button" class="btn">#51 · Release planning</button> <button type="button" class="btn btn--row">Clear slice</button></div></div>
                             </div>
-                            <div class="nrc-dialog-actions"><button class="btn" type="button">Cancel</button><button class="btn btn--primary" type="button">Create Task</button></div>
+                            <div class="nrc-dialog-actions"><button class="btn btn--ghost" type="button">Cancel</button><button class="btn btn--primary" type="button">Create Task</button></div>
                         </div>
                         <p class="catalog-usage">NEW TASK reuses the shared slice link picker. Only the active slice view supplies a default; CLEAR SLICE makes membership optional. Wait for task and membership acknowledgements. If assignment fails after creation, show the created task ID and do not offer duplicate creation.</p>
                         <div class="nrc-dialog-backdrop catalog-dialog-stage">
                             <div class="nrc-dialog" role="dialog" aria-labelledby="catalogDialogTitle">
                                 <div class="nrc-dialog-title" id="catalogDialogTitle">CONFIRM ACTION</div>
                                 <div class="nrc-dialog-message">Archive selected task? This changes persistent workspace state.</div>
-                                <div class="nrc-dialog-actions"><button class="btn" type="button">CANCEL</button><button class="btn btn--danger" type="button">ARCHIVE</button></div>
+                                <div class="nrc-dialog-actions"><button class="btn btn--ghost" type="button">CANCEL</button><button class="btn btn--danger" type="button">ARCHIVE</button></div>
                             </div>
                         </div>
                     </div>
@@ -1460,7 +1460,7 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
                         <div class="nrc-dialog-title">INVITE PERSON</div>
                         <label class="detail-edit-field"><span class="detail-edit-label">PERSON</span><nrc-select><select class="task-detail-select" data-custom-select-wrap data-custom-select-search-placeholder="SEARCH PEOPLE..."><option>alice</option><option>charlie</option></select></nrc-select></label>
                         <p class="call-hint">Conference: alice · bob. Choose a person from your DM contacts.</p>
-                        <div class="nrc-dialog-actions"><button class="btn" type="button">CANCEL</button><button class="btn btn--primary" type="button">INVITE</button></div>
+                        <div class="nrc-dialog-actions"><button class="btn btn--ghost" type="button">CANCEL</button><button class="btn btn--primary" type="button">INVITE</button></div>
                     </div>
                     <div class="call-library"><button type="button" class="btn call-library-entry"><strong>alice · bob</strong><span>Links valid until 15:30</span></button><button type="button" class="btn call-library-entry"><strong>alice · charlie</strong><span>Links expired · the conference may still be running</span></button></div>
                     <p class="catalog-usage">DM CALL: VIDEO CALL starts an invitation; CONFERENCES reopens available conferences. Closing hides the panel without forgetting its entry. The stable conference title is separate from the latest invitation's recipient/status. Reconnect restores unexpired personal links from the authenticated service, never browser storage. Expiry hides JOIN and disables INVITE PERSON without claiming media has ended. Incoming invitations preserve keyboard focus. The person picker searches existing DM contacts and explains empty results. Acceptance releases both users. No live attendance or provider hangup is inferred.</p>
@@ -1570,7 +1570,7 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
     <script src="catalog.js?v=20261016registertabs1"></script>
     <script src="../attachments.js?v=20261008files1"></script>
     <script>window.NRCAssets = { MAX_PAYLOAD_LENGTH: 65535 };</script>
-    <script src="../detail-ui.js?v=20261019ticketschedule1"></script>
+    <script src="../detail-ui.js?v=20261022cancel1"></script>
     <script>
         const ticketResources = document.getElementById("catalogTicketResources");
         ticketResources.innerHTML = [
@@ -1621,7 +1621,7 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
             view.panel.insertBefore(message, view.actions);
             for (const label of ["CANCEL", "ARCHIVE"]) {
                 const button = document.createElement("button");
-                button.className = label === "ARCHIVE" ? "btn btn--danger" : "btn";
+                button.className = label === "ARCHIVE" ? "btn btn--danger" : "btn btn--ghost";
                 button.textContent = label;
                 button.onclick = view.cancel;
                 view.actions.append(button);

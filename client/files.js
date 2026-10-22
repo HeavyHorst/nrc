@@ -120,7 +120,7 @@
     panel.insertBefore(box, actions);
     view.box = box;
     root.nrcClose = view.close;
-    if (closeLabel) actions.append(button(closeLabel, view.cancel));
+    if (closeLabel) actions.append(button(closeLabel, view.cancel, "btn btn--ghost"));
     queueMicrotask(() => view.show());
     return view;
   }
@@ -234,7 +234,7 @@
         form.reset(); form.hidden = true; saveButton.hidden = true; editButton.hidden = false; cancelEdit.hidden = true;
         body.querySelector(".file-assets-metadata").hidden = false;
         editButton.focus();
-      });
+      }, "btn btn--ghost");
       cancelEdit.hidden = true;
       view.actions.prepend(editButton, saveButton, cancelEdit);
       form.onsubmit = event => {

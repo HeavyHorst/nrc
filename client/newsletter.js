@@ -356,7 +356,7 @@
     const form = document.createElement('form'); form.id = 'nlDialogForm'; form.className = 'nl-fields';
     form.innerHTML = `<p class="nrc-dialog-message" id="nlDialogMessage">${esc(explanation)}</p>${label ? field('nlConfirmation',esc(label)) : ''}<p role="status" id="nlDialogStatus"></p>`;
     view.root.setAttribute('aria-describedby','nlDialogMessage'); view.panel.insertBefore(form,view.actions);
-    view.actions.innerHTML = `<button class="btn" type="button">Abbrechen</button><button class="btn btn--primary" type="submit" form="nlDialogForm">${esc(title)}</button>`;
+    view.actions.innerHTML = `<button class="btn btn--ghost" type="button">Abbrechen</button><button class="btn btn--primary" type="submit" form="nlDialogForm">${esc(title)}</button>`;
     view.actions.querySelector('[type=button]').onclick = () => view.cancel();
     form.onsubmit = async event => {
       event.preventDefault(); const value = $('nlConfirmation')?.value || '';

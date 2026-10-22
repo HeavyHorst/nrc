@@ -20,9 +20,10 @@
     return `<button class="btn header-operation task-detail-close inspector-matrix-control" id="${escapeHtml(id)}" data-inspector-command="escape" title="Close (Esc)" aria-label="Close"><span>CLOSE</span><b aria-hidden="true">×</b></button>`;
   }
 
-  function setHeaderAction(button, { label, command }) {
+  function setHeaderAction(button, { label, command, className = "" }) {
     if (!button) return;
     button.dataset.inspectorCommand = command;
+    button.classList.toggle("btn--ghost", className.split(" ").includes("btn--ghost"));
     const text = button.querySelector("span");
     if (text) text.textContent = label;
   }
@@ -138,7 +139,7 @@
     save.textContent = "SAVE";
     const cancel = document.createElement("button");
     cancel.type = "button";
-    cancel.className = "btn";
+    cancel.className = "btn btn--ghost";
     cancel.textContent = "CANCEL";
     const actions = document.createElement("div");
     actions.className = "inline-field-actions";
@@ -295,7 +296,7 @@
     const body = document.createElement("div");
     body.innerHTML = `<label class="btn" for="taskDetailFileInput">+ ADD FILE</label><input type="file" id="taskDetailFileInput" hidden><span id="taskDetailAttachmentsCount"></span><div id="taskDetailAttachmentsList" class="task-detail-attachments-list"></div><span class="inline-field-state" role="status" aria-live="polite"></span>`;
     modal.actions.before(body);
-    modal.actions.innerHTML = '<button type="button" class="btn btn--primary">SAVE ATTACHMENTS</button><button type="button" class="btn">CANCEL</button>';
+    modal.actions.innerHTML = '<button type="button" class="btn btn--primary">SAVE ATTACHMENTS</button><button type="button" class="btn btn--ghost">CANCEL</button>';
     const [save, cancel] = modal.actions.querySelectorAll("button");
     const state = body.querySelector('[role="status"]');
     modal.canClose = () => !pending && !getAttachmentDraftState().pendingCount;

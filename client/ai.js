@@ -2042,7 +2042,7 @@
     applyAll.textContent = "APPLY ALL";
     const cancel = document.createElement("button");
     cancel.type = "button";
-    cancel.className = "btn btn--danger ai-action-cancel";
+    cancel.className = "btn btn--ghost ai-action-cancel";
     cancel.textContent = "CANCEL";
     actions.appendChild(applySelected);
     actions.appendChild(applyAll);

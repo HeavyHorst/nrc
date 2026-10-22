@@ -2455,7 +2455,7 @@ function showNoteEditPanel(note) {
     ${window.NRCDetailUI.renderSaveState("EDITING")}
   </div><div class="inspector-mode-row">
     <button class="btn btn--primary header-operation inspector-matrix-control save" id="noteDetailSave" title="Save content (Ctrl+Enter)">SAVE</button>
-    ${window.NRCDetailUI.renderHeaderAction({ id: "noteDetailToggleView", label: "CANCEL", command: "v", title: "Discard content edits (V)" })}
+    ${window.NRCDetailUI.renderHeaderAction({ id: "noteDetailToggleView", label: "CANCEL", command: "v", title: "Discard content edits (V)", className: "btn--ghost" })}
     ${window.NRCDetailUI.renderHeaderAction({ id: "noteShareLink", label: "SHARE", command: "s", title: "Copy read-only share link (S)" })}
     <button class="btn btn--danger header-operation inspector-matrix-control" id="noteDetailDelete" title="Delete note">DELETE</button>
     ${window.NRCDetailUI.renderCloseControl("noteDetailClose")}</div>`;
