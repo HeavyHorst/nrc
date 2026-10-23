@@ -59,6 +59,12 @@ test_history_wire_actor_fields_pagination_durability_and_checkpoint :: proc(t: ^
 	)
 	page := history_test_read(t, &c, 0, 0, 0)
 	testing.expect(t, strings.contains(string(page), "durability pending")); delete(page)
+	page = history_test_read(t, &c, 0, 0, 0, 0)
+	// A rejected filter keeps its own message while durability is pending:
+	// retrying a malformed request cannot succeed, so the durability hint must not
+	// hide the real problem.
+	testing.expect(t, strings.contains(string(page), "Invalid history filter or limit"))
+	testing.expect(t, !strings.contains(string(page), "durability pending")); delete(page)
 	conv := get_conversation(state, 0)
 	previous_dispatch := shard_protocol_dispatch_context
 	shard_protocol_dispatch_context.connection = &c

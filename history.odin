@@ -505,10 +505,10 @@ process_list_history :: proc(c: ^NRC_Connection, body: []byte) {
 	case parse_err == .InvalidValue:
 		error = "Invalid history filter or limit"
 	}
-	// The durability gate has always run after the filter check and overrides its
-	// message, so a rejected filter still reports pending durability. Only an
-	// unauthenticated or structurally invalid request skips it.
-	if authorized && (parse_err == nil || parse_err == .InvalidValue) {
+	// The durability gate only speaks for a request that parsed and was
+	// authorized. Letting it override a rejected filter told the client to retry
+	// a request that can never succeed and hid the real problem.
+	if error == "" {
 		writer := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)c.workspace_id)
 		if writer != nil &&
 		   (writer.poisoned ||
