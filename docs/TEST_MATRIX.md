@@ -299,6 +299,57 @@ expansion so it isolates the capacity cap from the global memory limit;
 `TestDecodeAssetPayloadAcceptsNonSingleSegmentWindow` cover the valid
 65535-byte boundary in both frame layouts.
 
+## JS client decoder fuzzing
+
+`client/protocol.js` holds the shared record decoders and `client/frames.js`
+holds the shared whole-frame decoders. Both are ordinary browser scripts; the
+client loads them before the handlers, and the handlers in `app.js`, `tasks.js`,
+`assets.js`, `edges.js`, `calendar.js`, `history.js`, `overview.js`, `slices.js`,
+`task-query.js` and `transactions.js` call them. `client/fuzz/protocol.fuzz.cjs`
+drives the same `decodeServerFrame` dispatcher, so a campaign exercises the
+production frame path rather than a parallel copy.
+
+`decodeServerFrame` covers every server-to-client response opcode the client
+handles: 53 opcodes from `S_ServerReady` (100) through `S_CalendarPeople` (173).
+`S_StatsResponse` (110) is deliberately excluded because the browser client
+ignores it; `S_AuthResponse` (111) is not in the client opcode table. Other
+opcodes return `null`.
+
+The committed corpus under `test/protocol_fuzz/corpus/` is reused directly,
+together with JS-only seeds under `client/fuzz/corpus/`:
+`client/fuzz/seed-corpus.cjs` copies every supported server frame and fails if a
+committed seed stops decoding or an opcode has no seed. Campaigns grow
+`client/fuzz/.build/corpus`; rerunning `--seeds` overwrites only the named
+seeds, so inputs discovered by earlier campaigns survive. The normal test
+tier replays every supported seed, every truncation and one trailing-byte
+mutation through `node --test client/protocol-fuzz.test.mjs`; it also checks the
+opcode-to-kind table. The coverage-guided campaign is opt-in because it installs
+Jazzer.js and its native addon.
+
+```bash
+# Seed replay; this is what node --test client/*.test.mjs runs.
+node --test client/protocol-fuzz.test.mjs
+
+# Bounded campaign (installs client/fuzz dependencies on first use).
+./test/run_js_protocol_fuzz.sh --seconds 60
+./test/run_js_protocol_fuzz.sh --runs 1000000
+
+# Rebuild the working corpus only.
+./test/run_js_protocol_fuzz.sh --seeds
+
+# Re-run one artifact.
+./test/run_js_protocol_fuzz.sh --replay client/fuzz/artifacts/crash-<hash>
+```
+
+A `ProtocolError` is a normal result for malformed input; a hang, OOM, or any
+other exception fails the run. JS has no AddressSanitizer, so the campaign
+looks for unbounded work and state-independent decoder faults rather than
+memory errors. Jazzer's prototype-pollution and path-traversal detectors are
+also active.
+
+`@jazzer.js/core` is pinned to 2.1.0 because the 4.0.0 prebuilt addon requires
+glibc 2.38 and Debian 12 ships 2.36. Bump the pin on a newer runner image.
+
 ## Full local
 
 Run both production and deterministic-simulation root suites before merging changes that cross handlers, persistence, protocol, connection lifetime, or worker boundaries:

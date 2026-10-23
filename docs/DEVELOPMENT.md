@@ -75,8 +75,12 @@ For frontend changes, also update the PWA cache contract.
 
 Coverage-guided protocol fuzzing is a separate, opt-in tier because it needs a
 clang toolchain in addition to Odin: `./test/run_protocol_fuzz.sh` builds a
-libFuzzer + AddressSanitizer binary from the Odin parsers. See
-[TEST_MATRIX.md](TEST_MATRIX.md#protocol-fuzzing-coverage-guided).
+libFuzzer + AddressSanitizer binary from the Odin parsers. The JS client's
+shared decoders (`client/protocol.js` and `client/frames.js`) have their own
+opt-in tier: `./test/run_js_protocol_fuzz.sh` drives every client-handled
+server-to-client frame through Jazzer.js from the same server-frame corpus. See
+[TEST_MATRIX.md](TEST_MATRIX.md#protocol-fuzzing-coverage-guided) and
+[TEST_MATRIX.md](TEST_MATRIX.md#js-client-decoder-fuzzing).
 
 ## Architecture
 
