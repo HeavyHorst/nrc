@@ -1943,6 +1943,7 @@ body.sullivan-workbench #logOutput .ai-run-row .message-meta {
 #chatDialog #logOutput .log-row { position: relative; width: min(100%, 760px); padding: 10px 12px; margin-top: 12px; border-left: 2px solid transparent; }
 #chatDialog #logOutput .log-row:first-child { margin-top: 0; }
 #chatDialog #logOutput .message-own { background: color-mix(in srgb, var(--chat-own-bg) 50%, var(--surface-content)); }
+#chatDialog #logOutput .log-row:has(+ .message-continuation) { padding-bottom: 2px; }
 #chatDialog #logOutput .message-continuation:not(:first-child) { margin-top: 0; padding-top: 0; }
 #chatDialog #logOutput .ledger-ai-answer { padding-right: 72px; }
 #chatDialog #logOutput .message-meta { align-items: center; gap: 8px; padding-bottom: 3px; font: 12px/1.5 var(--font-sans); }
@@ -1951,6 +1952,8 @@ body.sullivan-workbench #logOutput .ai-run-row .message-meta {
 #chatDialog #logOutput .col-time { flex-shrink: 0; color: var(--text-dim); font: 11px var(--font-sans); }
 #chatDialog #logOutput .col-message { font: 14px/1.6 var(--font-sans); color: var(--text-primary); }
 #chatDialog #logOutput .message-content :is(p, ul, ol) { margin-top: 0; margin-bottom: 6px; }
+#chatDialog #logOutput .message-content > :last-child,
+#chatDialog #logOutput .message-content > :has(+ .message-copy-feedback:empty) { margin-bottom: 0; }
 #chatDialog #logOutput .message-content strong { font-weight: 650; color: inherit; }
 #chatDialog #logOutput .message-continuation:not(:first-child) .col-time { display: none; }
 #chatDialog #logOutput .message-continuation:not(:first-child) .message-meta { min-height: 0; padding-bottom: 0; }

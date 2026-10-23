@@ -527,6 +527,13 @@ try {
   assert.ok(await times.nth(1).isHidden(), "continuation omits its timestamp");
   assert.ok(await times.nth(2).isVisible(), "five-minute boundary restores the timestamp");
   assert.ok(await times.nth(3).isVisible(), "different author restores the timestamp");
+  const messageGaps = await page.locator("#logOutput .log-row").evaluateAll(rows => {
+    const paragraphs = rows.map(row => row.querySelector(".col-message p").getBoundingClientRect());
+    return paragraphs.slice(1).map((paragraph, index) => paragraph.top - paragraphs[index].bottom);
+  });
+  assert.ok(messageGaps[0] <= 8, "consecutive messages stay compact, without accumulated paragraph/card spacing");
+  assert.ok(messageGaps[1] > messageGaps[0] + 16, "five-minute pause retains visible group separation");
+  assert.ok(messageGaps[2] > messageGaps[0] + 16, "speaker change retains visible group separation");
   assert.equal(await page.locator("#logOutput [data-avatar]").count(), 0);
   await selectMessage(page.locator("#logOutput .log-row").nth(1));
   await page.evaluate(() => {
