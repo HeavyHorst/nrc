@@ -17,6 +17,7 @@ import "core:container/queue"
 import "core:fmt"
 import "core:log"
 import "core:mem"
+import "core:mem/virtual"
 import "core:net"
 import "core:os"
 import "core:reflect"
@@ -256,6 +257,10 @@ Server_Thread :: struct {
 	// Thread-local send buffer pool
 	spool:                     ^byte_pool.BufferPool,
 
+	// Synchronous graph scratch only; response leases never borrow this memory.
+	graph_scratch:             virtual.Arena,
+	graph_scratch_in_use:      bool,
+
 	// Thread-local cache for batch writev metadata (reduces heap churn)
 	batch_state_pool:          Batch_State_Pool,
 	shared_fanout_depth:       int,
@@ -315,7 +320,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:f879786"
+BUILD_VERSION :: "dev-2026-10:86af088"
 PROTOCOL_VERSION :: 10 // Calendar kind 3 carries a stable series occurrence identity.
 
 jwt_auth_secret: string

@@ -1,6 +1,7 @@
 package main
 
 import "core:log"
+import "core:mem"
 import "core:mem/virtual"
 import "core:slice"
 
@@ -9,6 +10,31 @@ import pr "protocol"
 
 MAX_RESULT_NODES :: 500
 MAX_SHORTESTPATH_VISITED :: 2000
+GRAPH_SCRATCH_RETAIN_BYTES :: mem.Megabyte
+
+// Graph handlers run synchronously on their owning worker. Serialization copies
+// results into independently leased send buffers before the scope is released.
+graph_scratch_acquire :: proc() -> (^virtual.Arena, bool) {
+	assert(!td.graph_scratch_in_use, "nested graph scratch scope")
+	if td.graph_scratch.curr_block == nil {
+		if virtual.arena_init_growing(&td.graph_scratch, GRAPH_SCRATCH_RETAIN_BYTES) != nil do return nil, false
+	}
+	td.graph_scratch_in_use = true
+	return &td.graph_scratch, true
+}
+
+graph_scratch_release :: proc() {
+	assert(td.graph_scratch_in_use, "graph scratch released outside its scope")
+	// Growing arenas free burst blocks and zero only the retained first block.
+	virtual.arena_free_all(&td.graph_scratch)
+	td.graph_scratch_in_use = false
+}
+
+graph_scratch_destroy :: proc() {
+	assert(!td.graph_scratch_in_use, "worker teardown with active graph scratch")
+	virtual.arena_destroy(&td.graph_scratch)
+	td.graph_scratch = {}
+}
 
 graph_query_node_less :: proc(a, b: pr.GraphQueryNode) -> bool {
 	if a.depth != b.depth do return a.depth < b.depth
@@ -54,11 +80,12 @@ collect_graph_query :: proc(
 		depth: u8,
 	}
 
-	visited := make(map[Edge_Entity_Key]u8, MAX_RESULT_NODES, allocator = allocator)
+	initial_capacity := min(MAX_RESULT_NODES, len(conv.edges_by_entity) + 1)
+	visited := make(map[Edge_Entity_Key]u8, initial_capacity, allocator = allocator)
 	defer delete(visited)
-	queue := make([dynamic]BFS_Entry, 0, MAX_RESULT_NODES, allocator = allocator)
+	queue := make([dynamic]BFS_Entry, 0, initial_capacity, allocator = allocator)
 	defer delete(queue)
-	result_edges := make(map[pr.EdgeID]bool, MAX_RESULT_NODES, allocator = allocator)
+	result_edges := make(map[pr.EdgeID]bool, min(MAX_RESULT_NODES, len(conv.edges)), allocator = allocator)
 	defer delete(result_edges)
 
 	visited[start_key] = 0
@@ -148,13 +175,13 @@ handle_graph_query :: proc(c: ^NRC_Connection, req: pr.GraphQueryRequest) {
 		return
 	}
 
-	arena: virtual.Arena
-	if virtual.arena_init_growing(&arena) != nil {
+	arena, arena_ok := graph_scratch_acquire()
+	if !arena_ok {
 		send_graph_query_result(c, req.conv_id, req.start_type, req.start_id, false, nil, nil, req.correlation_id)
 		return
 	}
-	defer virtual.arena_destroy(&arena)
-	alloc := virtual.arena_allocator(&arena)
+	defer graph_scratch_release()
+	alloc := virtual.arena_allocator(arena)
 	nodes, edges, truncated := collect_graph_query(conv, req, alloc)
 
 	send_graph_query_result(c, req.conv_id, req.start_type, req.start_id, truncated, nodes[:], edges[:], req.correlation_id)
@@ -204,18 +231,19 @@ handle_shortest_path :: proc(c: ^NRC_Connection, req: pr.GraphShortestPathReques
 		return
 	}
 
-	arena: virtual.Arena
-	if virtual.arena_init_growing(&arena) != nil {
+	arena, arena_ok := graph_scratch_acquire()
+	if !arena_ok {
 		send_shortest_path_not_found(c, req)
 		return
 	}
-	defer virtual.arena_destroy(&arena)
-	alloc := virtual.arena_allocator(&arena)
+	defer graph_scratch_release()
+	alloc := virtual.arena_allocator(arena)
 
-	parent := make(map[Edge_Entity_Key]Edge_Entity_Key, MAX_SHORTESTPATH_VISITED, allocator = alloc)
-	parent_edge := make(map[Edge_Entity_Key]pr.EdgeID, MAX_SHORTESTPATH_VISITED, allocator = alloc)
-	depth_tracker := make(map[Edge_Entity_Key]u8, MAX_SHORTESTPATH_VISITED, allocator = alloc)
-	queue := make([dynamic]Edge_Entity_Key, 0, MAX_SHORTESTPATH_VISITED, allocator = alloc)
+	initial_capacity := min(MAX_SHORTESTPATH_VISITED, len(conv.edges_by_entity) + 1)
+	parent := make(map[Edge_Entity_Key]Edge_Entity_Key, initial_capacity, allocator = alloc)
+	parent_edge := make(map[Edge_Entity_Key]pr.EdgeID, initial_capacity, allocator = alloc)
+	depth_tracker := make(map[Edge_Entity_Key]u8, initial_capacity, allocator = alloc)
+	queue := make([dynamic]Edge_Entity_Key, 0, initial_capacity, allocator = alloc)
 
 	parent[from_key] = from_key
 	depth_tracker[from_key] = 0
@@ -323,13 +351,13 @@ handle_degree_query :: proc(c: ^NRC_Connection, req: pr.GraphDegreeRequest) {
 
 	top_n := normalize_graph_degree_top_n(req.top_n)
 
-	arena: virtual.Arena
-	if virtual.arena_init_growing(&arena) != nil {
+	arena, arena_ok := graph_scratch_acquire()
+	if !arena_ok {
 		send_degree_result(c, req.conv_id, nil, req.correlation_id)
 		return
 	}
-	defer virtual.arena_destroy(&arena)
-	alloc := virtual.arena_allocator(&arena)
+	defer graph_scratch_release()
+	alloc := virtual.arena_allocator(arena)
 
 	results := make([dynamic]pr.GraphDegreeEntry, 0, 64, allocator = alloc)
 
@@ -380,13 +408,13 @@ handle_common_neighbors :: proc(c: ^NRC_Connection, req: pr.GraphCommonNeighbors
 		return
 	}
 
-	arena: virtual.Arena
-	if virtual.arena_init_growing(&arena) != nil {
+	arena, arena_ok := graph_scratch_acquire()
+	if !arena_ok {
 		send_common_neighbors_result(c, req, nil, nil)
 		return
 	}
-	defer virtual.arena_destroy(&arena)
-	alloc := virtual.arena_allocator(&arena)
+	defer graph_scratch_release()
+	alloc := virtual.arena_allocator(arena)
 
 	a_key := Edge_Entity_Key {
 		target_type = req.a_type,
@@ -397,7 +425,8 @@ handle_common_neighbors :: proc(c: ^NRC_Connection, req: pr.GraphCommonNeighbors
 		target_id   = req.b_id,
 	}
 
-	a_neighbors := make(map[Edge_Entity_Key]bool, MAX_RESULT_NODES, allocator = alloc)
+	initial_capacity := min(MAX_RESULT_NODES, len(conv.edges_by_entity))
+	a_neighbors := make(map[Edge_Entity_Key]bool, initial_capacity, allocator = alloc)
 
 	a_edge_ids, a_ok := conv.edges_by_entity[a_key]
 	if a_ok {
@@ -419,8 +448,8 @@ handle_common_neighbors :: proc(c: ^NRC_Connection, req: pr.GraphCommonNeighbors
 		}
 	}
 
-	common := make(map[Edge_Entity_Key]bool, MAX_RESULT_NODES, allocator = alloc)
-	result_edge_ids := make(map[pr.EdgeID]bool, MAX_RESULT_NODES, allocator = alloc)
+	common := make(map[Edge_Entity_Key]bool, initial_capacity, allocator = alloc)
+	result_edge_ids := make(map[pr.EdgeID]bool, min(MAX_RESULT_NODES, len(conv.edges)), allocator = alloc)
 
 	b_edge_ids, b_ok := conv.edges_by_entity[b_key]
 	if b_ok {
@@ -591,6 +620,11 @@ send_common_neighbors_result :: proc(c: ^NRC_Connection, req: pr.GraphCommonNeig
 	}
 
 	protocol_size := pr.getSizeGraphCommonNeighborsResult(msg)
+	if protocol_size > MAX_PROTOCOL_PAYLOAD_SIZE {
+		// This response has no truncation flag: never send a successful subset.
+		send_error_response(c, .C_GraphCommonNeighbors, "Common-neighbor result exceeds protocol size limit; narrow the relation filter", req.correlation_id)
+		return
+	}
 	buf, header_len := allocate_websocket_frame_buffer(protocol_size, "common neighbors result")
 	if buf == nil do return
 

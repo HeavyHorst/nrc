@@ -157,6 +157,17 @@ not total TLSF heap usage. The 64 MiB buffer usage budget is a reporting
 denominator, not an allocation cap. TLSF growth caused by a transient burst is
 retained until worker exit; consider post-drain RSS as well as live buffer bytes.
 
+Graph handlers share a separate, lazily initialized worker scratch arena. Each
+synchronous handler resets it after serializing its response into an independently
+leased send buffer. Reset zeroes and retains the first 1 MiB block and releases
+additional growth blocks; worker teardown releases the retained block too. Scratch
+must never escape into workspace state, queued sends or callbacks, and graph
+scopes must not nest. Initial collection capacities scale down for small graphs;
+the existing traversal and protocol limits are unchanged. Common-neighbor results
+have no truncation flag, so results exceeding the protocol byte/count limits return
+a correlated error rather than a partial result or no response. Narrow the relation
+filter for these requests; larger complete results need a paginated protocol.
+
 Retained-message append batches use io_uring. The worker retains each immutable
 batch until write completion. ACKs still wait for fsync. Admission permits at
 most 512 live send contexts per store, including duplicate retries, and at most

@@ -57,13 +57,14 @@ graph_rank_collect_anchor :: proc(
 		depth: u8,
 	}
 	anchor := graph_rank_key(req.anchors[anchor_index])
-	visited := make(map[Edge_Entity_Key]u8, MAX_RESULT_NODES, allocator = allocator)
+	initial_capacity := min(MAX_RESULT_NODES, len(conv.edges_by_entity) + 1)
+	visited := make(map[Edge_Entity_Key]u8, initial_capacity, allocator = allocator)
 	defer delete(visited)
-	parent := make(map[Edge_Entity_Key]Edge_Entity_Key, MAX_RESULT_NODES, allocator = allocator)
+	parent := make(map[Edge_Entity_Key]Edge_Entity_Key, initial_capacity, allocator = allocator)
 	defer delete(parent)
-	parent_edge := make(map[Edge_Entity_Key]pr.EdgeID, MAX_RESULT_NODES, allocator = allocator)
+	parent_edge := make(map[Edge_Entity_Key]pr.EdgeID, initial_capacity, allocator = allocator)
 	defer delete(parent_edge)
-	queue := make([dynamic]BFS_Entry, 0, MAX_RESULT_NODES, allocator = allocator)
+	queue := make([dynamic]BFS_Entry, 0, initial_capacity, allocator = allocator)
 	defer delete(queue)
 
 	visited[anchor] = 0
@@ -114,7 +115,7 @@ graph_rank_collect_anchor :: proc(
 		if current != anchor || count == 0 do continue
 		edge_path := make([]pr.EdgeID, count, allocator = allocator)
 		for i := 0; i < count; i += 1 do edge_path[i] = reversed[count - i - 1]
-		if key not_in paths do paths[key] = make(Graph_Rank_Path_List, 0, pr.MAX_GRAPH_RANK_ANCHORS, allocator = allocator)
+		if key not_in paths do paths[key] = make(Graph_Rank_Path_List, 0, int(req.anchor_count), allocator = allocator)
 		append(&paths[key], pr.GraphRankPath{anchor_index = u8(anchor_index), depth = depth, edge_ids = edge_path})
 	}
 	return
@@ -211,17 +212,18 @@ handle_graph_rank :: proc(c: ^NRC_Connection, req: pr.GraphRankRequest) {
 		send_graph_rank_result(c, req.conv_id, false, nil, nil, req.correlation_id)
 		return
 	}
-	arena: virtual.Arena
-	if virtual.arena_init_growing(&arena) != nil {
+	arena, arena_ok := graph_scratch_acquire()
+	if !arena_ok {
 		send_graph_rank_result(c, req.conv_id, false, nil, nil, req.correlation_id)
 		return
 	}
-	defer virtual.arena_destroy(&arena)
-	alloc := virtual.arena_allocator(&arena)
-	union_nodes := make(map[Edge_Entity_Key]bool, MAX_GRAPH_RANK_UNION_NODES, allocator = alloc)
-	union_edges := make(map[pr.EdgeID]bool, MAX_GRAPH_RANK_UNION_NODES, allocator = alloc)
-	paths := make(map[Edge_Entity_Key]Graph_Rank_Path_List, MAX_GRAPH_RANK_UNION_NODES, allocator = alloc)
-	ordered_adjacency := make(Graph_Rank_Ordered_Adjacency, MAX_GRAPH_RANK_UNION_NODES, allocator = alloc)
+	defer graph_scratch_release()
+	alloc := virtual.arena_allocator(arena)
+	initial_capacity := min(MAX_GRAPH_RANK_UNION_NODES, len(conv.edges_by_entity) + int(req.anchor_count))
+	union_nodes := make(map[Edge_Entity_Key]bool, initial_capacity, allocator = alloc)
+	union_edges := make(map[pr.EdgeID]bool, min(MAX_GRAPH_RANK_UNION_NODES, len(conv.edges)), allocator = alloc)
+	paths := make(map[Edge_Entity_Key]Graph_Rank_Path_List, initial_capacity, allocator = alloc)
+	ordered_adjacency := make(Graph_Rank_Ordered_Adjacency, min(MAX_GRAPH_RANK_UNION_NODES, len(conv.edges_by_entity)), allocator = alloc)
 	truncated := false
 	for i := 0; i < int(req.anchor_count); i += 1 do truncated = graph_rank_collect_anchor(conv, req, i, &union_nodes, &union_edges, &paths, &ordered_adjacency, alloc) || truncated
 	ranks := graph_rank_scores(conv, req, union_nodes, union_edges, alloc)

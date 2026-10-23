@@ -6,9 +6,168 @@ package main
 import "core:testing"
 
 import pr "protocol"
+import ws "websocket"
 
 when !NRC_SIMULATION {
 	_ :: pr.Opcode
+}
+
+@(test)
+test_common_neighbors_payload_boundary_returns_complete_result_or_correlated_error :: proc(t: ^testing.T) {
+	previous := new(Server_Thread)
+	previous^ = td
+	td = {}
+	defer {td = previous^; free(previous)}
+	worker_state_init_core(nil, 0, 8)
+	defer worker_state_destroy_core_for_test()
+	c := connection_test_install_fake(
+		{sock = connection_test_fake_socket(1), state = .Idle, workspace_id = "common-neighbor-boundary", cache_workspace = true, init_send_queue = true},
+	)
+	assert(c != nil)
+	defer connection_test_uninstall(c)
+	c.is_sending = true
+	conv := get_or_create_conversation(c.workspace, pr.WORKSPACE_DATA_ID)
+	for i in 0 ..< 1236 {
+		slice_test_member_of(conv, .Task, u64(1000 + i), 1, .References)
+		slice_test_member_of(conv, .Task, u64(1000 + i), 2, .References)
+	}
+	req := pr.GraphCommonNeighborsRequest {
+		conv_id        = pr.WORKSPACE_DATA_ID,
+		a_type         = .Asset,
+		a_id           = 1,
+		b_type         = .Asset,
+		b_id           = 2,
+		direction      = .Both,
+		correlation_id = 0x12345678,
+	}
+	// Independently derived wire size: 38 header bytes + 1236 * (10 + 2 * 48)
+	// = 131054. Creator lengths 17/18/19 straddle the 131072-byte limit.
+	creator := transmute([]byte)string("1234567890123456789")
+	for creator_length in ([?]int{17, 18, 19, 0}) {
+		conv.edges[1].created_by = creator[:creator_length]
+		handle_common_neighbors(c, req)
+		if !testing.expect_value(t, send_queue_len(c), 1) do return
+		item := send_queue_pop_normal(c)
+		frame := frame_lease_data(item.lease)
+		_, header_size, frame_err := ws.readFrameHeader(frame)
+		testing.expect_value(t, frame_err, nil)
+		payload := frame[header_size:]
+		if creator_length == 19 {
+			response, err := pr.parseErrorResponseMessage(payload)
+			testing.expect_value(t, err, nil)
+			testing.expect_value(t, response.origin_opcode, pr.Opcode.C_GraphCommonNeighbors)
+			testing.expect_value(t, response.correlation_id, req.correlation_id)
+			testing.expect(t, len(response.error_msg) > 0)
+		} else {
+			nodes := make([]pr.GraphPathNode, 1236)
+			edges := make([]pr.Edge, 2472)
+			response, err := pr.parseGraphCommonNeighborsResult(payload, nodes, edges)
+			testing.expect_value(t, err, nil)
+			testing.expect_value(t, len(payload), 131054 + creator_length)
+			testing.expect_value(t, response.correlation_id, req.correlation_id)
+			testing.expect_value(t, len(response.nodes), 1236)
+			testing.expect_value(t, len(response.edges), 2472)
+			for node, i in response.nodes do testing.expect_value(t, node, pr.GraphPathNode{.Task, u64(1000 + i)})
+			delete(nodes)
+			delete(edges)
+		}
+		frame_lease_dispose(&item.lease)
+		req.correlation_id += 1
+	}
+}
+
+@(test)
+test_graph_queued_results_survive_other_queries_and_worker_restart :: proc(t: ^testing.T) {
+	previous := new(Server_Thread)
+	previous^ = td
+	td = {}
+	defer {td = previous^; free(previous)}
+	for _ in 0 ..< 2 {
+		worker_state_init_core(nil, 0, 8)
+		defer worker_state_destroy_core_for_test()
+		c := connection_test_install_fake(
+			{sock = connection_test_fake_socket(1), state = .Idle, workspace_id = "graph-queued-results", cache_workspace = true, init_send_queue = true},
+		)
+		assert(c != nil)
+		defer connection_test_uninstall(c)
+		c.is_sending = true
+		conv := get_or_create_conversation(c.workspace, pr.WORKSPACE_DATA_ID)
+		for i in 0 ..< 32 {
+			slice_test_member_of(conv, .Task, u64(1000 + i), 1, .References)
+			slice_test_member_of(conv, .Task, u64(1000 + i), 2, .References)
+		}
+		handle_graph_query(c, {conv_id = pr.WORKSPACE_DATA_ID, start_type = .Asset, start_id = 1, max_depth = 2, correlation_id = 11})
+		handle_shortest_path(
+			c,
+			{conv_id = pr.WORKSPACE_DATA_ID, from_type = .Asset, from_id = 1, to_type = .Asset, to_id = 2, max_depth = 2, correlation_id = 12},
+		)
+		rank := pr.GraphRankRequest {
+			conv_id      = pr.WORKSPACE_DATA_ID,
+			anchor_count = 2,
+			max_depth    = 2,
+			top_n        = 20,
+		}
+		rank.anchors[0] = {.Asset, 1}
+		rank.anchors[1] = {.Asset, 2}
+		handle_graph_rank(c, rank)
+		// Reuse the same worker scratch for a different, empty workspace.
+		populated := c.workspace
+		c.workspace = get_or_create_workspace("graph-empty-results")
+		_ = get_or_create_conversation(c.workspace, pr.WORKSPACE_DATA_ID)
+		handle_degree_query(c, {conv_id = pr.WORKSPACE_DATA_ID, top_n = 20, correlation_id = 13})
+		c.workspace = populated
+		handle_common_neighbors(
+			c,
+			{conv_id = pr.WORKSPACE_DATA_ID, a_type = .Asset, a_id = 1, b_type = .Asset, b_id = 2, direction = .Outgoing, correlation_id = 14},
+		)
+		if !testing.expect_value(t, send_queue_len(c), 5) do return
+		for index in 0 ..< 5 {
+			item := send_queue_pop_normal(c)
+			frame := frame_lease_data(item.lease)
+			_, header_size, frame_err := ws.readFrameHeader(frame)
+			testing.expect_value(t, frame_err, nil)
+			payload := frame[header_size:]
+			edges: [64]pr.Edge
+			switch index {
+			case 0:
+				nodes: [34]pr.GraphQueryNode
+				response, err := pr.parseGraphQueryResult(payload, nodes[:], edges[:])
+				testing.expect_value(t, err, nil)
+				testing.expect_value(t, response.correlation_id, u32(11))
+				testing.expect_value(t, len(response.nodes), 34)
+				testing.expect_value(t, len(response.edges), 64)
+				testing.expect(t, !response.truncated)
+				for node in response.nodes {
+					expected_depth := u8(1)
+					if node.target_type == .Asset do expected_depth = 0 if node.target_id == 1 else 2
+					testing.expect_value(t, node.depth, expected_depth)
+				}
+			case 1:
+				nodes: [3]pr.GraphPathNode
+				response, err := pr.parseGraphShortestPathResult(payload, nodes[:], edges[:])
+				testing.expect_value(t, err, nil)
+				testing.expect_value(t, response.correlation_id, u32(12))
+				testing.expect(t, response.found)
+				testing.expect_value(t, response.path_length, u8(2))
+				testing.expect_value(t, len(response.nodes), 3)
+				testing.expect_value(t, len(response.edges), 2)
+			case 2:
+				testing.expect_value(t, pr.get_opcode(payload), pr.Opcode.S_GraphRankResult)
+			case 3:
+				response, err := pr.parseGraphDegreeResult(payload, nil)
+				testing.expect_value(t, err, nil)
+				testing.expect_value(t, response.correlation_id, u32(13))
+				testing.expect_value(t, len(response.entries), 0)
+			case 4:
+				response, err := pr.parseGraphCommonNeighborsResult(payload, nil, nil)
+				testing.expect_value(t, err, nil)
+				testing.expect_value(t, response.correlation_id, u32(14))
+				testing.expect_value(t, len(response.nodes), 0)
+				testing.expect_value(t, len(response.edges), 0)
+			}
+			frame_lease_dispose(&item.lease)
+		}
+	}
 }
 
 when NRC_SIMULATION {
