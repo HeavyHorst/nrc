@@ -118,6 +118,12 @@ test_ticket_metadata_allocation_failure :: proc(t: ^testing.T) {
 @(test)
 test_ticket_reply_allocation_failure :: proc(t: ^testing.T) {
 	testing.expect_assert(t, "failed to grow ticket reply index")
+	// Expected assertions skip defers, including the decoder's scratch cleanup.
+	// Keep scratch on the stack; only the reply-index allocation should fail.
+	buffer: [8192]byte
+	blocks: mem.Arena
+	mem.arena_init(&blocks, buffer[:])
+	context.allocator = mem.arena_allocator(&blocks)
 	row: Ticket_Index_Row
 	row.customers.allocator = mem.Allocator {
 		procedure = json_metadata_failing_allocator,

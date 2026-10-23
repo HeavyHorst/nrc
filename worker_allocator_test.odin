@@ -42,7 +42,11 @@ test_worker_heap_growth_resize_alignment_and_reuse :: proc(t: ^testing.T) {
 	reused, err4 := mem.alloc_bytes(16385, 64, allocator)
 	assert(err4 == .None)
 	defer mem.free_bytes(reused, allocator)
-	testing.expect_value(t, raw_data(reused), old_pointer)
+	when tlsf.TLSF_ASAN_QUARANTINE {
+		testing.expect(t, raw_data(reused) != old_pointer, "quarantine delays reuse when free space is available")
+	} else {
+		testing.expect_value(t, raw_data(reused), old_pointer)
+	}
 	for b in reused do testing.expect_value(t, b, byte(0))
 	// Stdlib's fixed 64 MiB growth policy rejects this otherwise valid request.
 	large, err5 := mem.alloc_bytes(WORKER_HEAP_POOL_BYTES + 4097, 4096, allocator)

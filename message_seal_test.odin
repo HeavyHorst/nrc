@@ -215,6 +215,9 @@ test_message_seal_failure_and_shutdown_keep_source :: proc(t: ^testing.T) {
 		defer chan.destroy(server.shard_compaction_jobs)
 		server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
 		defer chan.destroy(server.storage_control_jobs)
+		// Recovery can enqueue source deletion; a channel owns queued job
+		// payloads until they are run or discarded, even without a service thread.
+		defer discard_queued_shard_compaction_jobs(&server)
 		dir := test_wal_path("message-seal-failure-shutdown")
 		_ = os.remove_all(dir); testing.expect(t, os.make_directory(dir) == nil); defer os.remove_all(dir)
 		workspace := "message-seal-failure"

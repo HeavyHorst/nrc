@@ -10,8 +10,12 @@
 package mem_tlsf
 
 import "base:intrinsics"
-// import "base:sanitizer"
+import "base:sanitizer"
 import "base:runtime"
+
+when .Address not_in ODIN_SANITIZER_FLAGS {
+	_ :: sanitizer.address_poison
+}
 
 // log2 of number of linear subdivisions of block sizes.
 // Larger values require more memory in the control structure.
@@ -20,6 +24,12 @@ TLSF_SL_INDEX_COUNT_LOG2 :: #config(TLSF_SL_INDEX_COUNT_LOG2, 5)
 
 // All allocation sizes and addresses are aligned to 4/8 bytes
 ALIGN_SIZE_LOG2 :: 3 when size_of(uintptr) == 8 else 2
+
+// ASan shadow bytes describe eight application bytes. TLSF metadata helpers
+// already bypass instrumentation because free-list links overlap free payloads.
+when .Address in ODIN_SANITIZER_FLAGS {
+	#assert(size_of(uintptr) == 8)
+}
 
 // We can increase this to support larger allocation sizes,
 // at the expense of more overhead in the TLSF structure
@@ -109,6 +119,9 @@ BLOCK_SIZE_MAX :: uint(1) << FL_INDEX_MAX
 // Clear control structure and point all empty lists at the null block
 @(private)
 free_all :: proc(control: ^Allocator) -> (err: Error) {
+	when TLSF_ASAN_QUARANTINE {
+		control.quarantine = {}
+	}
 	// Clear internal structures
 	control.block_null.next_free = &control.block_null
 	control.block_null.prev_free = &control.block_null
@@ -156,6 +169,9 @@ pool_add :: proc(control: ^Allocator, pool: []u8) -> (err: Error) {
 	block_set_used(next)
 	block_set_prev_free(next)
 
+	when .Address in ODIN_SANITIZER_FLAGS {
+		sanitizer.address_poison(pool)
+	}
 	return
 }
 
@@ -169,6 +185,9 @@ pool_remove :: proc(control: ^Allocator, pool: []u8) {
 
 	fl, sl := mapping_insert(block_size(block))
 	remove_free_block(control, block, fl, sl)
+	when .Address in ODIN_SANITIZER_FLAGS {
+		sanitizer.address_unpoison(pool)
+	}
 }
 
 @(private, require_results)
@@ -185,6 +204,13 @@ alloc_bytes_non_zeroed :: proc(control: ^Allocator, size: uint, align: uint) -> 
 	}
 
 	block := block_locate_free(control, aligned_size)
+	when TLSF_ASAN_QUARANTINE {
+		// Do not grow or fail merely because reusable storage is quarantined.
+		for aligned_size != 0 && block == nil && control.quarantine.count > 0 {
+			quarantine_release_oldest(control)
+			block = block_locate_free(control, aligned_size)
+		}
+	}
 	if block == nil {
 		// OOM: Couldn't find block of `aligned_size` bytes.
 		if control.new_pool_size > 0 && control.pool.allocator.procedure != nil {
@@ -209,8 +235,6 @@ alloc_bytes_non_zeroed :: proc(control: ^Allocator, size: uint, align: uint) -> 
 				delete(new_pool_buf, control.pool.allocator)
 				return nil, .Out_Of_Memory
 			}
-
-			// sanitizer.address_poison(new_pool_buf)
 
 			// Allocate a new link in the `control.pool` tracking structure.
 			new_pool, tracking_err := new_clone(Pool{
@@ -261,7 +285,17 @@ alloc_bytes_non_zeroed :: proc(control: ^Allocator, size: uint, align: uint) -> 
 		block = block_trim_free_leading(control, block, gap)
 	}
 
-	return block_prepare_used(control, block, adjust)
+	when .Address in ODIN_SANITIZER_FLAGS {
+		res, err = block_prepare_used(control, block, adjust)
+		if err == .None && res != nil {
+			// Keep rounding slack poisoned, including sub-eight-byte tails.
+			res = res[:size]
+			sanitizer.address_unpoison(res)
+		}
+		return
+	} else {
+		return block_prepare_used(control, block, adjust)
+	}
 }
 
 @(private, require_results)
@@ -284,13 +318,49 @@ free_with_size :: proc(control: ^Allocator, ptr: rawptr, size: uint) {
 
 	block := block_from_ptr(ptr)
 	assert(!block_is_free(block), "block already marked as free") // double free
-	// sanitizer.address_poison(ptr, block.size)
+	when TLSF_ASAN_QUARANTINE {
+		assert(!sanitizer.address_is_poisoned(ptr), "block already quarantined")
+	}
+	when .Address in ODIN_SANITIZER_FLAGS {
+		sanitizer.address_poison(ptr, block_size(block))
+	}
+	when TLSF_ASAN_QUARANTINE {
+		bytes := block_size(block) + BLOCK_HEADER_OVERHEAD
+		if bytes <= QUARANTINE_BYTES {
+			q := &control.quarantine
+			for q.count == QUARANTINE_CAPACITY || q.bytes + bytes > QUARANTINE_BYTES {
+				quarantine_release_oldest(control)
+			}
+			q.blocks[(q.head + q.count) % QUARANTINE_CAPACITY] = block
+			q.count += 1
+			q.bytes += bytes
+			// Keep the block physically used so neighbors cannot absorb it.
+			return
+		}
+	}
 	block_mark_as_free(block)
 	block = block_merge_prev(control, block)
 	block = block_merge_next(control, block)
 	block_insert(control, block)
 }
 
+when TLSF_ASAN_QUARANTINE {
+	@(private, no_sanitize_address)
+	quarantine_release_oldest :: proc(control: ^Allocator) {
+		q := &control.quarantine
+		assert(q.count > 0)
+		block := q.blocks[q.head]
+		q.blocks[q.head] = nil
+		q.head = (q.head + 1) % QUARANTINE_CAPACITY
+		q.count -= 1
+		q.bytes -= block_size(block) + BLOCK_HEADER_OVERHEAD
+		// Payload stays poisoned until a later allocation exposes it.
+		block_mark_as_free(block)
+		block = block_merge_prev(control, block)
+		block = block_merge_next(control, block)
+		block_insert(control, block)
+	}
+}
 
 @(private, require_results)
 resize :: proc(control: ^Allocator, ptr: rawptr, old_size, new_size: uint, alignment: uint) -> (res: []byte, err: runtime.Allocator_Error) {
@@ -302,6 +372,9 @@ resize :: proc(control: ^Allocator, ptr: rawptr, old_size, new_size: uint, align
 		return alloc_bytes(control, new_size, alignment)
 	}
 
+	when TLSF_ASAN_QUARANTINE {
+		assert(!sanitizer.address_is_poisoned(ptr), "block already quarantined")
+	}
 	block := block_from_ptr(ptr)
 	next := block_next(block)
 
@@ -321,6 +394,10 @@ resize :: proc(control: ^Allocator, ptr: rawptr, old_size, new_size: uint, align
 		}
 		return
 	}
+	when .Address in ODIN_SANITIZER_FLAGS {
+		// Shrinking must revoke the old tail before it becomes a free block.
+		sanitizer.address_poison(ptr, curr_size)
+	}
 	if adjust > curr_size {
 		_ = block_merge_next(control, block)
 		block_mark_as_used(block)
@@ -328,7 +405,9 @@ resize :: proc(control: ^Allocator, ptr: rawptr, old_size, new_size: uint, align
 
 	block_trim_used(control, block, adjust)
 	res = ([^]byte)(ptr)[:new_size]
-	// sanitizer.address_unpoison(res)
+	when .Address in ODIN_SANITIZER_FLAGS {
+		sanitizer.address_unpoison(res)
+	}
 
 	if min_size < new_size {
 		to_zero := ([^]byte)(ptr)[min_size:new_size]
@@ -347,6 +426,9 @@ resize_non_zeroed :: proc(control: ^Allocator, ptr: rawptr, old_size, new_size: 
 		return alloc_bytes_non_zeroed(control, new_size, alignment)
 	}
 
+	when TLSF_ASAN_QUARANTINE {
+		assert(!sanitizer.address_is_poisoned(ptr), "block already quarantined")
+	}
 	block := block_from_ptr(ptr)
 	next := block_next(block)
 
@@ -367,6 +449,9 @@ resize_non_zeroed :: proc(control: ^Allocator, ptr: rawptr, old_size, new_size: 
 		return
 	}
 
+	when .Address in ODIN_SANITIZER_FLAGS {
+		sanitizer.address_poison(ptr, curr_size)
+	}
 	if adjust > curr_size {
 		_ = block_merge_next(control, block)
 		block_mark_as_used(block)
@@ -374,6 +459,9 @@ resize_non_zeroed :: proc(control: ^Allocator, ptr: rawptr, old_size, new_size: 
 
 	block_trim_used(control, block, adjust)
 	res = ([^]byte)(ptr)[:new_size]
+	when .Address in ODIN_SANITIZER_FLAGS {
+		sanitizer.address_unpoison(res)
+	}
 	return
 }
 
@@ -796,7 +884,6 @@ block_prepare_used :: proc(control: ^Allocator, block: ^Block_Header, size: uint
 		block_trim_free(control, block, size)
 		block_mark_as_used(block)
 		res = ([^]byte)(block_to_ptr(block))[:size]
-		// sanitizer.address_unpoison(res)
 	}
 	return
 }

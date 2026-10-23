@@ -61,6 +61,82 @@ odin test . -o:speed -define:NRC_SIMULATION=true -define:HEGEL_REQUIRED=true -de
 
 `ODIN_TEST_NAMES` accepts a comma-separated list of fully qualified tests. A trailing comma is supported and makes copied failure commands easy to reuse.
 
+## AddressSanitizer detector and real I/O checks
+
+On 64-bit Linux with an ASan-capable Odin/linker toolchain and usable io_uring:
+
+```bash
+./test/run_asan_checks.sh
+```
+
+This opt-in check first runs a valid allocation/resize/release control, then
+requires five deliberately invalid accesses to fail with ASan `use-after-poison`
+and exit code 86: `byte_pool` use-after-free and one-byte overflow with another
+buffer still live, TLSF accesses past a shrunk allocation (both resize modes),
+and access after Free_All. A crash, compiler error or missing diagnostic is a
+failure, not evidence that the detector works. It then runs the TLSF contract
+tests and five existing Linux connection-close-barrier tests with ASan and fatal
+Odin memory checks. The lifecycle tests use one thread and exercise deferred
+send, writev and shutdown, partial sends/writes, terminal callbacks and FD reuse
+over real loopback sockets and io_uring. Compiler and tests run sequentially.
+
+The runner repeats this with `TLSF_ASAN_QUARANTINE=false` and `true`. An extra
+stale-pointer probe deliberately reallocates the same payload size after free:
+the no-quarantine control must reuse the address and exit normally, while the
+quarantine variant must retain the old poisoned block and fail in ASan. Allocator
+tests also exercise FIFO eviction at the entry/byte limits, reset and allocation
+pressure. Neither variant replaces the other.
+
+Both smoke variants enable `TLSF_CHECK_INVARIANTS=true`: physical blocks,
+neighbor links, coalescing, free lists, size classes, bitmaps and quarantine
+accounting are checked after allocator operations. Eight deliberate metadata
+corruptions must produce their exact invariant assertions. Double-free and
+resize of quarantined storage must also be refused. These assertion probes have
+a ten-second timeout; a hang or unrelated crash is a failure.
+
+All tests retain the real TLSF: ASan builds poison free pool storage, headers and
+rounding slack, unpoison requested payloads, and revoke access on free/shrink.
+The hooks are compile-time conditional; normal builds retain the original
+allocation path, layout and returned capacity. ASan builds return the requested
+length rather than rounded capacity. See `vendor/tlsf/README.md`.
+
+This is not complete memory-safety coverage: TLSF metadata helpers intentionally
+bypass ASan, and other suballocators need their own instrumentation. `byte_pool`
+headers/alignment padding remain inside a live TLSF allocation, so payload
+underruns into that storage are not covered. ASan does not instrument kernel
+io_uring accesses or detect stale handles after valid memory reuse. LeakSanitizer
+only sees whole backing pools, not leaked TLSF blocks. Lifecycle assertions,
+generation checks, ownership counters and normal allocator tests remain necessary.
+
+The runner fixes ASan options (including leak detection) rather than inheriting
+options that can suppress errors. It prints unexpected failure diagnostics and
+removes temporary binaries/logs on exit. It is separate from the default matrix
+because it requires sanitizer runtime support in addition to the usual tools.
+
+For the complete root suites, keep the normal runs and additionally run ASan
+with fatal allocator tracking (sequentially, never both root builds at once):
+
+```bash
+./test/run_odin_tests.sh . -sanitize:address -o:speed -define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true
+./test/run_odin_tests.sh . -sanitize:address -o:speed -define:NRC_SIMULATION=true -define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true
+```
+
+Repeat both commands with `-define:TLSF_ASAN_QUARANTINE=true` for delayed reuse.
+This opt-in mode is bounded to 128 blocks / 1 MiB per heap and releases oldest
+blocks early under pressure; it cannot guarantee detection after eventual reuse.
+Enabling it without ASan is a compile error. Ordinary builds retain the same
+allocator size and allocation path.
+
+For targeted structure validation without ASan:
+
+```bash
+./test/run_odin_tests.sh vendor/tlsf/ -define:TLSF_CHECK_INVARIANTS=true -define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true
+```
+
+The structure checker is opt-in and requires assertions enabled. Its per-operation
+heap walks and independently allocated scratch map are intentionally expensive;
+do not enable it for production or throughput measurements.
+
 ## Full local
 
 Run both production and deterministic-simulation root suites before merging changes that cross handlers, persistence, protocol, connection lifetime, or worker boundaries:

@@ -12,6 +12,29 @@ package mem_tlsf
 
 import "base:intrinsics"
 import "base:runtime"
+import "base:sanitizer"
+
+when .Address not_in ODIN_SANITIZER_FLAGS {
+	_ :: sanitizer.address_unpoison
+}
+
+TLSF_ASAN_QUARANTINE :: #config(TLSF_ASAN_QUARANTINE, false)
+TLSF_CHECK_INVARIANTS :: #config(TLSF_CHECK_INVARIANTS, false)
+when TLSF_ASAN_QUARANTINE || TLSF_CHECK_INVARIANTS {
+	#assert(!ODIN_DISABLE_ASSERT)
+}
+when TLSF_ASAN_QUARANTINE {
+	#assert(.Address in ODIN_SANITIZER_FLAGS)
+	QUARANTINE_CAPACITY :: 128
+	QUARANTINE_BYTES :: uint(1024 * 1024)
+	Quarantine :: struct {
+		blocks: [QUARANTINE_CAPACITY]^Block_Header,
+		head, count: int,
+		bytes: uint,
+	}
+} else {
+	Quarantine :: struct {}
+}
 
 Error :: enum byte {
 	None                      = 0,
@@ -43,8 +66,13 @@ Allocator :: struct {
 	// If we're expected to grow when we run out of memory,
 	// how much should we ask the backing allocator for?
 	new_pool_size: uint,
+	quarantine: Quarantine,
 }
 #assert(size_of(Allocator) % ALIGN_SIZE == 0)
+when !TLSF_ASAN_QUARANTINE {
+	// The empty quarantine adds neither storage nor alignment in normal builds.
+	#assert(size_of(Allocator) == offset_of(Allocator, new_pool_size) + size_of(uint))
+}
 
 @(require_results)
 allocator :: proc(t: ^Allocator) -> runtime.Allocator {
@@ -120,6 +148,10 @@ init :: proc{init_from_buffer, init_from_allocator}
 destroy :: proc(control: ^Allocator) {
 	if control == nil { return }
 
+	when .Address in ODIN_SANITIZER_FLAGS {
+		// Also restore caller-owned buffers before handing their storage back.
+		sanitizer.address_unpoison(control.pool.data)
+	}
 	if control.pool.allocator.procedure != nil {
 		runtime.delete(control.pool.data, control.pool.allocator)
 	}
@@ -130,6 +162,9 @@ destroy :: proc(control: ^Allocator) {
 		next := p.next
 
 		// Free the allocation on the backing allocator
+		when .Address in ODIN_SANITIZER_FLAGS {
+			sanitizer.address_unpoison(p.data)
+		}
 		runtime.delete(p.data, p.allocator)
 		free(p, p.allocator)
 
@@ -146,6 +181,9 @@ allocator_proc :: proc(allocator_data: rawptr, mode: runtime.Allocator_Mode,
 		return nil, .Invalid_Argument
 	}
 
+	when TLSF_CHECK_INVARIANTS {
+		defer check_invariants(control)
+	}
 	switch mode {
 	case .Alloc:
 		return alloc_bytes(control, uint(size), uint(alignment))
