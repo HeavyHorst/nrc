@@ -3,9 +3,12 @@ package protocol
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func buildFullAssetBinary(a Asset) []byte {
@@ -1095,5 +1098,56 @@ func TestDecodeAssetListResponseCorrelation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(decoded.Assets[0].Attachments, asset.Attachments) {
 		t.Fatalf("decoded list attachments = %#v, want %#v", decoded.Assets[0].Attachments, asset.Attachments)
+	}
+}
+
+func TestDecodeAssetPayloadBoundsZstdExpansion(t *testing.T) {
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	// A 4096-byte expansion isolates the destination cap: it stays below the
+	// decoder memory limit, so removing WithDecodeAllCapLimit changes the error.
+	compressed := encoder.EncodeAll(bytes.Repeat([]byte("a"), 4096), nil)
+
+	if _, err := DecodeAssetPayload(Asset{PayloadEncoding: AssetPayloadEncodingZstd, Payload: string(compressed), PayloadRawLen: 1}); !errors.Is(err, zstd.ErrDecoderSizeExceeded) {
+		t.Fatalf("expected ErrDecoderSizeExceeded for expansion beyond payload_raw_len, got %v", err)
+	}
+	if _, err := DecodeAssetPayload(Asset{PayloadEncoding: AssetPayloadEncodingZstd, Payload: string(compressed), PayloadRawLen: MaxPayloadLength + 1}); err == nil {
+		t.Fatal("expected payload_raw_len beyond the protocol limit to be rejected")
+	}
+}
+
+func TestDecodeAssetPayloadAcceptsZstdAtLimit(t *testing.T) {
+	raw := bytes.Repeat([]byte("a"), MaxPayloadLength)
+	compressed, rawLen, err := CompressAssetPayloadZstd(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeAssetPayload(Asset{PayloadEncoding: AssetPayloadEncodingZstd, Payload: compressed, PayloadRawLen: rawLen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded != string(raw) {
+		t.Fatal("decoded payload does not match the original")
+	}
+}
+
+func TestDecodeAssetPayloadAcceptsNonSingleSegmentWindow(t *testing.T) {
+	raw := bytes.Repeat([]byte("a"), MaxPayloadLength)
+	encoder, err := zstd.NewWriter(nil, zstd.WithSingleSegment(false), zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	compressed := encoder.EncodeAll(raw, nil)
+
+	decoded, err := DecodeAssetPayload(Asset{PayloadEncoding: AssetPayloadEncodingZstd, Payload: string(compressed), PayloadRawLen: MaxPayloadLength})
+	if err != nil {
+		t.Fatalf("valid non-single-segment payload rejected: %v", err)
+	}
+	if decoded != string(raw) {
+		t.Fatal("decoded payload does not match the original")
 	}
 }

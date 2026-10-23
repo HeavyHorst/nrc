@@ -753,9 +753,23 @@ func getAssetZstdEncoder() (*zstd.Encoder, error) {
 	return assetZstdEncoder, assetZstdEncoderErr
 }
 
+// maxAssetZstdMemory bounds the decoder's window and internal allocation. The
+// decoded output is bounded separately by WithDecodeAllCapLimit and the
+// destination capacity. It must stay above a valid non-single-segment window
+// (65536 for a 65535-byte payload), so it cannot be set to MaxPayloadLength:
+// zstd clamps the allowed window to the decoder memory limit.
+const maxAssetZstdMemory = 8 << 20
+
 func getAssetZstdDecoder() (*zstd.Decoder, error) {
 	assetZstdDecoderOnce.Do(func() {
-		assetZstdDecoder, assetZstdDecoderErr = zstd.NewReader(nil)
+		// The protocol caps payloads at MaxPayloadLength. The destination
+		// capacity and WithDecodeAllCapLimit bound the output; the larger memory
+		// limit only leaves room for a legitimate frame window.
+		assetZstdDecoder, assetZstdDecoderErr = zstd.NewReader(
+			nil,
+			zstd.WithDecoderMaxMemory(maxAssetZstdMemory),
+			zstd.WithDecodeAllCapLimit(true),
+		)
 	})
 	return assetZstdDecoder, assetZstdDecoderErr
 }
@@ -788,12 +802,21 @@ func DecodeAssetPayload(asset Asset) (string, error) {
 		}
 		return asset.Payload, nil
 	case AssetPayloadEncodingZstd:
+		if asset.PayloadRawLen > uint32(MaxPayloadLength) {
+			return "", fmt.Errorf("payload_raw_len %d exceeds maximum %d", asset.PayloadRawLen, MaxPayloadLength)
+		}
+		if len(asset.Payload) > MaxPayloadLength {
+			return "", fmt.Errorf("compressed payload too large: %d > %d", len(asset.Payload), MaxPayloadLength)
+		}
 		decoder, err := getAssetZstdDecoder()
 		if err != nil {
 			return "", fmt.Errorf("failed to initialize zstd decoder: %w", err)
 		}
 
-		decoded, err := decoder.DecodeAll([]byte(asset.Payload), nil)
+		// The destination capacity and WithDecodeAllCapLimit bound the decoded
+		// size to the declared raw length; a frame that expands further is
+		// rejected instead of being fully materialized first.
+		decoded, err := decoder.DecodeAll([]byte(asset.Payload), make([]byte, 0, int(asset.PayloadRawLen)))
 		if err != nil {
 			return "", fmt.Errorf("failed to decode zstd asset payload: %w", err)
 		}
