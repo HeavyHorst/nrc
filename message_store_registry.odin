@@ -68,6 +68,7 @@ message_store_for_workspace :: proc(registry: ^Message_Store_Registry, workspace
 
 maintain_message_store_registry :: proc(registry: ^Message_Store_Registry) -> (did_work, ok: bool) {
 	if registry == nil || !registry.enabled do return false, true
+	now := nrc_time_unix_nanos()
 	for &store in registry.stores {
 		// Read failures also poison stores. They must trigger fatal shutdown,
 		// not leave durability-gated outboxes waiting on an inactive store.
@@ -77,14 +78,14 @@ maintain_message_store_registry :: proc(registry: ^Message_Store_Registry) -> (d
 		if store.lifecycle_in_flight do continue
 		if store.frozen_published && store.frozen.async_readers == 0 do destroy_frozen_message_store(&store, true)
 		if store.frozen != nil && !store.frozen_published && !store.seal_in_flight {
-			if !enqueue_message_seal(&store, nrc_time_unix_nanos()) do return did_work, false
+			if !enqueue_message_seal(&store, now) do return did_work, false
 		}
 		if store.seal_ready || store.rotation_pending && store.frozen == nil && store.async_readers == 0 {
 			retained_message_schedule_store_flush(&store)
 			did_work = true
 		}
 		if schedule_retained_message_fsync(&store) do did_work = true
-		if !maintain_message_store(&store, sync_wal = false) do return did_work, false
+		if !maintain_message_store(&store, now_ns = now, sync_wal = false) do return did_work, false
 	}
 	return did_work, true
 }
