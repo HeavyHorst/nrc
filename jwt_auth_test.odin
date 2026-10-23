@@ -8,6 +8,7 @@ import "core:strings"
 import "core:sync"
 import "core:testing"
 
+import hgl "hegel"
 import pr "protocol"
 
 jwt_auth_test_mu: sync.Mutex
@@ -340,5 +341,174 @@ test_workspace_access_empty_policy :: proc(t: ^testing.T) {
 	non_empty := []string{"null", "[]", " ", "{}{}", `{"private":{"owner":"alice@example.com"}}`}
 	for config in non_empty {
 		testing.expect(t, workspace_access_config_enabled(config), "non-empty or malformed policy must not disable scoped authentication")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Hegel: generated and mutated tokens against the validation contract.
+// ---------------------------------------------------------------------------
+
+// The validator returns identity strings owned by the caller. A returned string
+// that still points into the token would dangle as soon as the request buffer is
+// reused, so the property checks the ownership boundary directly.
+jwt_test_borrows_token :: proc(token, value: string) -> bool {
+	if value == "" do return false
+	start := uintptr(raw_data(token))
+	ptr := uintptr(raw_data(value))
+	return ptr >= start && ptr < start + uintptr(len(token))
+}
+
+jwt_test_expected_signature :: proc(signing_input, secret: string) -> (string, bool) {
+	derived_tag: [hash.MAX_DIGEST_SIZE]byte
+	hmac.sum(hash.Algorithm.SHA256, derived_tag[:hash.DIGEST_SIZES[hash.Algorithm.SHA256]], transmute([]u8)signing_input, transmute([]u8)secret)
+	encoded, err := base64.encode(derived_tag[:hash.DIGEST_SIZES[hash.Algorithm.SHA256]], base64.ENC_URL_TABLE)
+	if err != nil do return "", false
+	return encoded, true
+}
+
+prop_generated_jwt_tokens_preserve_validation_contract :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.Body_Result {
+	mode, mode_err := hgl.draw_i64(tc, 0, 1)
+	if mode_err == .Stop_Test do return hgl.abort()
+	if mode_err != nil do return hgl.interesting("draw jwt token mode")
+
+	token: string
+	owned := false
+	must_reject := false
+	defer if owned do delete(token)
+
+	if mode == 0 {
+		raw, draw_err := hgl.draw_bytes(tc, 0, 512)
+		if draw_err == .Stop_Test do return hgl.abort()
+		if draw_err != nil do return hgl.interesting("draw jwt token bytes")
+		token = transmute(string)raw
+		owned = true
+	} else {
+		// A valid token reaches the claim checks; mutations then explore the
+		// header, payload and signature without losing the deep path entirely.
+		claim_case, claim_err := hgl.draw_i64(tc, 0, 2)
+		if claim_err == .Stop_Test do return hgl.abort()
+		if claim_err != nil do return hgl.interesting("draw jwt claim case")
+		now := i64(nrc_time_unix_seconds())
+		exp := now + 3600
+		nbf := i64(0)
+		if claim_case == 0 {
+			exp = now - 1
+			must_reject = true
+		}
+		if claim_case == 2 {
+			exp = now + 7200
+			nbf = now + 3600
+			must_reject = true
+		}
+
+		payload := fmt.aprintf(
+			`{{"sub":"user-1","username":"alice","exp":%d,"nbf":%d,"iss":"%s","aud":"%s"}}`,
+			exp,
+			nbf,
+			jwt_expected_issuer,
+			jwt_expected_audience,
+		)
+		defer delete(payload)
+		built, built_ok := build_test_jwt(payload, jwt_auth_secret)
+		if !built_ok do return hgl.interesting("build valid jwt")
+		token = built
+		owned = true
+
+		mutations, mutation_err := hgl.draw_i64(tc, 0, 4)
+		if mutation_err == .Stop_Test do return hgl.abort()
+		if mutation_err != nil do return hgl.interesting("draw jwt mutation count")
+		if len(token) > 0 {
+			mutable := transmute([]u8)token
+			for _ in 0 ..< mutations {
+				index, index_err := hgl.draw_i64(tc, 0, i64(len(token) - 1))
+				if index_err == .Stop_Test do return hgl.abort()
+				if index_err != nil do return hgl.interesting("draw jwt mutation index")
+				value, value_err := hgl.draw_u32(tc, 0, 255)
+				if value_err == .Stop_Test do return hgl.abort()
+				if value_err != nil do return hgl.interesting("draw jwt mutation value")
+				mutable[int(index)] = byte(value)
+			}
+		}
+	}
+
+	identity, ok, reason := validate_nrc_jwt(token, "", false)
+	identity_again, ok_again, reason_again := validate_nrc_jwt(token, "", false)
+	defer {
+		if len(identity.subject) > 0 && !jwt_test_borrows_token(token, identity.subject) do delete(identity.subject)
+		if len(identity.username) > 0 && !jwt_test_borrows_token(token, identity.username) do delete(identity.username)
+		if len(identity_again.subject) > 0 && !jwt_test_borrows_token(token, identity_again.subject) do delete(identity_again.subject)
+		if len(identity_again.username) > 0 && !jwt_test_borrows_token(token, identity_again.username) do delete(identity_again.username)
+	}
+
+	// Validation is a pure function of the token and the configured policy.
+	if ok != ok_again do return hgl.interesting("jwt validation is not deterministic")
+	if reason != reason_again do return hgl.interesting("jwt rejection reason is not deterministic")
+	if must_reject && ok do return hgl.interesting("accepted jwt that must be rejected")
+
+	if ok {
+		if reason != "" do return hgl.interesting("accepted jwt returned a reason")
+		if identity.subject != identity_again.subject || identity.username != identity_again.username {
+			return hgl.interesting("jwt identity is not deterministic")
+		}
+		if identity.subject == "" || identity.username == "" do return hgl.interesting("accepted jwt without identity")
+		if strings.count(token, ".") != 2 do return hgl.interesting("accepted jwt without two dots")
+
+		first := strings.index_byte(token, '.')
+		second_rel := strings.index_byte(token[first + 1:], '.')
+		second := first + 1 + second_rel
+		encoded, encoded_ok := jwt_test_expected_signature(token[:second], jwt_auth_secret)
+		if !encoded_ok do return hgl.interesting("encode expected jwt signature")
+		signature_matches := strings.trim_right(encoded, "=") == strings.trim_space(token[second + 1:])
+		delete(encoded)
+		if !signature_matches do return hgl.interesting("accepted jwt with wrong signature")
+
+		if jwt_test_borrows_token(token, identity.subject) do return hgl.interesting("jwt subject borrows the token")
+		if jwt_test_borrows_token(token, identity.username) do return hgl.interesting("jwt username borrows the token")
+	} else {
+		if identity.subject != "" || identity.username != "" do return hgl.interesting("rejected jwt returned identity")
+		if reason == "" do return hgl.interesting("rejected jwt returned no reason")
+	}
+	return hgl.valid()
+}
+
+@(test)
+test_hegel_generated_jwt_tokens_preserve_validation_contract :: proc(t: ^testing.T) {
+	when !NRC_SIMULATION {
+		return
+	} else {
+		if !hgl.can_run() do return
+
+		sync.mutex_lock(&jwt_auth_test_mu)
+		defer sync.mutex_unlock(&jwt_auth_test_mu)
+		old_secret := jwt_auth_secret
+		old_issuer := jwt_expected_issuer
+		old_audience := jwt_expected_audience
+		defer {
+			jwt_auth_secret = old_secret
+			jwt_expected_issuer = old_issuer
+			jwt_expected_audience = old_audience
+		}
+		jwt_auth_secret = "hegel-jwt-signing-key"
+		jwt_expected_issuer = "nrc-hegel"
+		jwt_expected_audience = "nrc-hegel-aud"
+
+		// The property's valid-token branch must be reachable; otherwise it would
+		// only exercise rejections and still pass.
+		fixture_payload := fmt.aprintf(
+			`{{"sub":"user-1","username":"alice","exp":%d,"iss":"%s","aud":"%s"}}`,
+			i64(nrc_time_unix_seconds()) + 3600,
+			jwt_expected_issuer,
+			jwt_expected_audience,
+		)
+		defer delete(fixture_payload)
+		fixture_token, fixture_built := build_test_jwt(fixture_payload, jwt_auth_secret)
+		defer if fixture_built do delete(fixture_token)
+		fixture_identity, fixture_ok, fixture_reason := validate_nrc_jwt(fixture_token, "", false)
+		if len(fixture_identity.subject) > 0 do delete(fixture_identity.subject)
+		if len(fixture_identity.username) > 0 do delete(fixture_identity.username)
+		testing.expectf(t, fixture_ok, "hegel jwt fixture must validate: %s", fixture_reason)
+
+		result, err := hgl.run(prop_generated_jwt_tokens_preserve_validation_contract, nil, {test_cases = 300})
+		testing.expectf(t, err == nil, "hegel jwt validation property failed: err=%v interesting=%v", err, result.interesting_test_cases)
 	}
 }
