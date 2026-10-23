@@ -491,18 +491,24 @@ history_page_json :: proc(ws: ^Workspace_State, kind: u8, entity, before: u64, l
 }
 
 process_list_history :: proc(c: ^NRC_Connection, body: []byte) {
-	correlation: u32
-	if len(body) >= 31 do correlation, _ = endian.get_u32(body[27:], .Big)
+	request, parse_err := pr.parseListHistoryRequest(body)
+	correlation := request.correlation_id
+	// A structurally invalid body reports the request error, a valid one still
+	// answers "Authentication required" before the filter is judged.
+	authorized := c.authenticated
 	error := ""
-	if len(body) != 31 || !workspace_data_scope_valid(body) {
+	switch {
+	case parse_err != nil && parse_err != .InvalidValue:
 		error = "Invalid history request"
-	} else if !c.authenticated {
+	case !authorized:
 		error = "Authentication required"
+	case parse_err == .InvalidValue:
+		error = "Invalid history filter or limit"
 	}
-	kind: u8; entity, before: u64; limit: u16
-	if error == "" {
-		kind = body[8]; entity, _ = endian.get_u64(body[9:], .Big); before, _ = endian.get_u64(body[17:], .Big); limit, _ = endian.get_u16(body[25:], .Big)
-		if kind > 3 || kind == 0 && entity != 0 || kind != 0 && entity == 0 || limit < 1 || limit > 100 do error = "Invalid history filter or limit"
+	// The durability gate has always run after the filter check and overrides its
+	// message, so a rejected filter still reports pending durability. Only an
+	// unauthenticated or structurally invalid request skips it.
+	if authorized && (parse_err == nil || parse_err == .InvalidValue) {
 		writer := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)c.workspace_id)
 		if writer != nil &&
 		   (writer.poisoned ||
@@ -522,7 +528,14 @@ process_list_history :: proc(c: ^NRC_Connection, body: []byte) {
 			error:       string,
 		}{{}, "0", error})
 	} else {
-		payload = history_page_json(get_workspace(c.workspace_id), kind, entity, before, int(limit), get_connection_nickname(c))
+		payload = history_page_json(
+			get_workspace(c.workspace_id),
+			request.kind,
+			request.entity,
+			request.before,
+			int(request.limit),
+			get_connection_nickname(c),
+		)
 	}
 	defer delete(payload)
 	buf, header := allocate_websocket_frame_buffer(6 + len(payload), "history page")
