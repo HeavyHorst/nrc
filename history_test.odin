@@ -35,7 +35,15 @@ history_test_read :: proc(t: ^testing.T, c: ^NRC_Connection, kind: u8, entity, b
 test_history_wire_actor_fields_pagination_durability_and_checkpoint :: proc(t: ^testing.T) {
 	workspace := "history-public-contract"
 	if !testing.expect(t, init_room_mapping_test_state("history_contract.log", workspace)) do return
-	defer cleanup_room_mapping_test_state()
+	// Exercise worker-owned scratch across writes, validation and checkpoint
+	// replay; the other history fixtures exercise standalone callers.
+	previous_backing := td.backing_allocator
+	td.backing_allocator = context.allocator
+	defer {
+		cleanup_room_mapping_test_state()
+		history_scratch_destroy()
+		td.backing_allocator = previous_backing
+	}
 	td.task_seq = 0
 	c := make_room_mapping_test_connection(workspace)
 	c.verified_subject = "subject-123"; c.verified_username = "Alice Display"

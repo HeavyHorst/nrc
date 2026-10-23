@@ -261,6 +261,10 @@ Server_Thread :: struct {
 	graph_scratch:             virtual.Arena,
 	graph_scratch_in_use:      bool,
 
+	// Synchronous history labels/validation; serialized records own their bytes.
+	history_scratch:           virtual.Arena,
+	history_scratch_in_use:    bool,
+
 	// Thread-local cache for batch writev metadata (reduces heap churn)
 	batch_state_pool:          Batch_State_Pool,
 	shared_fanout_depth:       int,

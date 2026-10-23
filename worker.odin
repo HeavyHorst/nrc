@@ -433,6 +433,7 @@ worker_thread :: proc(worker_data: Worker_Thread_Data) {
 	context.allocator = worker_heap_allocator(&heap)
 	defer jwt_validation_scratch_destroy()
 	defer graph_scratch_destroy()
+	defer history_scratch_destroy()
 	worker_state_init_core(worker_data.server, worker_data.thread_index)
 
 	// Pin only to CPUs permitted by the process affinity/cgroup. If a CPU is
@@ -605,6 +606,7 @@ worker_state_destroy_core_for_test :: proc() {
 	destroy_batch_state_pool()
 	connection_storage_destroy()
 	graph_scratch_destroy()
+	history_scratch_destroy()
 
 	if td.spool != nil {
 		byte_pool.destroy_buffer_pool(td.spool)

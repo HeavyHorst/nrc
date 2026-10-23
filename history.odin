@@ -14,6 +14,39 @@ import pr "protocol"
 // follows existing personal Reminder ACLs and survives deletion. JSON follows.
 HISTORY_HEADER_SIZE :: 37
 
+HISTORY_SCRATCH_RETAIN_BYTES :: 64 * mem.Kilobyte
+
+// History construction and validation are synchronous and never return scratch
+// memory. Standalone recovery/tooling has no worker teardown, so uses local arenas.
+history_scratch_acquire :: proc(local: ^virtual.Arena) -> (^virtual.Arena, bool) {
+	arena := local
+	if td.backing_allocator.procedure != nil {
+		assert(!td.history_scratch_in_use, "nested history scratch scope")
+		arena = &td.history_scratch
+	}
+	if arena.curr_block == nil {
+		if virtual.arena_init_growing(arena, HISTORY_SCRATCH_RETAIN_BYTES) != nil do return nil, false
+	}
+	if arena == &td.history_scratch do td.history_scratch_in_use = true
+	return arena, true
+}
+
+history_scratch_release :: proc(arena: ^virtual.Arena) {
+	if arena == &td.history_scratch {
+		assert(td.history_scratch_in_use, "history scratch released outside its scope")
+		virtual.arena_free_all(arena)
+		td.history_scratch_in_use = false
+	} else {
+		virtual.arena_destroy(arena)
+	}
+}
+
+history_scratch_destroy :: proc() {
+	assert(!td.history_scratch_in_use, "worker teardown with active history scratch")
+	virtual.arena_destroy(&td.history_scratch)
+	td.history_scratch = {}
+}
+
 history_private_owner :: proc(payload: []byte) -> string {
 	length, _ := endian.get_u16(payload[35:], .Big)
 	return string(payload[HISTORY_HEADER_SIZE:][:int(length)])
@@ -129,11 +162,12 @@ validate_history_payload :: proc(payload: []byte) -> bool {
 	id, _ := endian.get_u64(payload, .Big)
 	entity, _ := endian.get_u64(payload[9:], .Big)
 	if id == 0 || entity == 0 || payload[8] < 1 || payload[8] > 3 || payload[17] > 2 || payload[26] > 2 do return false
-	arena: virtual.Arena
-	if virtual.arena_init_growing(&arena) != nil do return false
-	defer virtual.arena_destroy(&arena)
+	local: virtual.Arena
+	arena, arena_ok := history_scratch_acquire(&local)
+	if !arena_ok do return false
+	defer history_scratch_release(arena)
 	event: History_Event
-	if json.unmarshal(history_json(payload), &event, allocator = virtual.arena_allocator(&arena)) != nil do return false
+	if json.unmarshal(history_json(payload), &event, allocator = virtual.arena_allocator(arena)) != nil do return false
 	if len(event.entity_label) > HISTORY_LABEL_MAX_BYTES || len(event.source_label) > HISTORY_LABEL_MAX_BYTES || len(event.target_label) > HISTORY_LABEL_MAX_BYTES do return false
 	timestamp, timestamp_ok := strconv.parse_i64(event.timestamp, 10)
 	if !timestamp_ok ||
@@ -302,10 +336,11 @@ build_history_mutations :: proc(tx: ^Shard_Transaction) -> (mutations: [dynamic]
 	// Standalone WAL tooling has no authoritative worker state or request. It
 	// writes supplied mutations verbatim rather than fabricating historical events.
 	if td.workspaces == nil || td.shard_writers.mode != .Active do return mutations, true
-	arena: virtual.Arena
-	if virtual.arena_init_growing(&arena) != nil do return mutations, false
-	defer virtual.arena_destroy(&arena)
-	labels := virtual.arena_allocator(&arena)
+	local: virtual.Arena
+	arena, arena_ok := history_scratch_acquire(&local)
+	if !arena_ok do return mutations, false
+	defer history_scratch_release(arena)
+	labels := virtual.arena_allocator(arena)
 	ws := get_workspace(string(tx.workspace))
 	next: u64
 	if ws != nil && len(ws.history) > 0 do next, _ = endian.get_u64(ws.history[len(ws.history) - 1], .Big)
