@@ -56,7 +56,7 @@ successfully from the repository root.
 odin build .
 odin build . -define:NRC_SIMULATION=true
 odin test . -o:speed -define:NRC_SIMULATION=true -define:HEGEL_REQUIRED=true -define:ODIN_TEST_LOG_LEVEL=error \
-  -define:ODIN_TEST_NAMES=main.test_generated_transactional_shard_semantic_replay_fixture,main.test_hegel_generated_transactional_shard_state_matches_replay,main.test_shard_checkpoint_preserves_floors_after_every_entity_is_deleted,main.test_shard_checkpoint_floor_witness_routes_to_every_logical_shard,main.test_hegel_simulation_generated_message_fanout_matches_model,main.test_hegel_simulation_delayed_send_completion_lifetime_choices,main.test_hegel_shard_compaction_manifest_roundtrip,
+  -define:ODIN_TEST_NAMES=main.test_generated_transactional_shard_semantic_replay_fixture,main.test_hegel_generated_transactional_shard_state_matches_replay,main.test_shard_checkpoint_preserves_floors_after_every_entity_is_deleted,main.test_shard_checkpoint_floor_witness_routes_to_every_logical_shard,main.test_hegel_simulation_generated_message_fanout_matches_model,main.test_hegel_simulation_delayed_send_completion_lifetime_choices,main.test_hegel_shard_compaction_manifest_roundtrip,main.test_hegel_generated_jwt_tokens_preserve_validation_contract,
 ```
 
 `ODIN_TEST_NAMES` accepts a comma-separated list of fully qualified tests. A trailing comma is supported and makes copied failure commands easy to reuse.
@@ -140,9 +140,10 @@ do not enable it for production or throughput measurements.
 ## Protocol fuzzing (coverage-guided)
 
 `test/run_protocol_fuzz.sh` builds a libFuzzer + AddressSanitizer binary whose
-target is the protocol request parsers, then runs a bounded campaign. It
-complements the Hegel properties: Hegel checks named invariants on generated
-requests, libFuzzer explores byte-level mutations of real client messages.
+target is the protocol request and response parsers, then runs a bounded
+campaign. It complements the Hegel properties: Hegel checks named invariants on
+generated messages, libFuzzer explores byte-level mutations of real client and
+server messages.
 
 Prerequisites are Odin plus clang 19 or newer with its sanitizer runtimes and
 the matching `llvm-link` (Debian/Ubuntu: `clang-19 libclang-rt-19-dev llvm-19`).
@@ -172,23 +173,33 @@ need version 15.
 
 The target covers every client-to-server opcode in `Opcode`: all task, asset,
 edge, graph, ticket, direct-message, legacy-chat, retained-message and history
-requests, and `C_ApplyTransaction` with its eight operation types. Each one is
-parsed through the same function the server dispatches to. A unit test in the
-package walks `Opcode` and fails if any `C_*` member has no dispatch case, so
-adding an opcode cannot silently shrink what the campaign reaches. The target
-starts no workers, sockets or files.
+requests, and `C_ApplyTransaction` with its eight operation types. It also covers
+every server-to-client response that has an Odin parser: handshake, chat,
+presence, stats, auth, direct messages, retained-chat pages, tasks, slices,
+assets, note lists, edges, and the graph result messages. Each one is parsed
+through the same function its caller dispatches to. A unit test in the package
+walks `Opcode` and fails if any `C_*` or parseable `S_*` member has no dispatch
+case, so adding an opcode cannot silently shrink what the campaign reaches. The
+handful of responses that only the Go CLI and the JS client decode are listed
+explicitly as a manual inventory; adding an Odin parser requires removing the
+opcode from that list and adding a dispatch case. The guard verifies the
+target's dispatch, not whether a parser exists in the protocol package. The
+target starts no workers, sockets or files.
 
 It dispatches on the real two-byte opcode, caps inputs at 128 KiB, runs with a
-nil allocator and nil logger, and asserts that every returned byte field borrows
-from the input slice instead of fabricated memory. A returned error is a normal
-result; only an assertion, a sanitizer finding, or a crash fails the run.
+nil logger, and asserts that every returned byte field borrows from the input
+slice instead of fabricated memory. Request parsers run with a nil allocator;
+response parsers that build lists get a per-input arena that is destroyed before
+the next input. A returned error is a normal result; only an assertion, a
+sanitizer finding, or a crash fails the run.
 
-`test/protocol_fuzz/corpus/` holds the committed seed set, one seed per opcode.
-Every seed is produced by a serializer in the protocol package — the client
-serializers for requests and the operation-body serializers for transactions —
-and the generator re-parses each one before writing it, so a serializer/parser
-drift fails regeneration instead of silently shrinking coverage. Adding a
-request format therefore means adding its serializer next to the others rather
+`test/protocol_fuzz/corpus/` holds the committed seed set, one seed per opcode
+and direction. Every seed is produced by a serializer or `write_*` helper in the
+protocol package — the client serializers for requests, the operation-body
+serializers for transactions, and the server serializers for responses — and the
+generator re-parses each one before writing it, so a serializer/parser drift
+fails regeneration instead of silently shrinking coverage. Adding a request or
+response format therefore means adding its serializer next to the others rather
 than encoding bytes in the fuzz tooling. `--check-seeds` rebuilds the corpus in
 a scratch directory and diffs it against the committed one; the full matrix runs
 that check, so a wire change cannot leave the corpus stale. Campaigns grow a
@@ -221,18 +232,72 @@ over-read in a parser is reported as
 
 Coverage figures come from 30- to 40-second campaigns on one x64 machine with
 `-max_len=8192`. They are indicative rather than stable, because the budget is
-wall-clock time rather than a run count. The committed seeds cover 849
-instrumented edges on load and a campaign reaches roughly 2,100 at
-134,000-160,000 executions per second. A fresh empty corpus starts at 16 edges
-and reaches 2,080 after 30 seconds. The corpus therefore buys a large head
-start, not reachability: the mutator and its auto-dictionary still find almost
-all of the same counters on their own within the same budget.
+wall-clock time rather than a run count. The committed seeds cover 1,412
+instrumented edges on load and a campaign reaches roughly 3,300 at about 65,000
+executions per second. The response direction costs roughly half the throughput
+of the request-only target because the allocating parsers get a fresh arena per
+input. The corpus buys a large head start, not reachability: the mutator and its
+auto-dictionary still find most of the same counters on their own within the same
+budget.
 
 This is not a substitute for the rest of the matrix. The target stops at the
-request parsers: it covers no handler state, persistence, or response
-serialization, and it finds memory errors reachable from a single request
-payload rather than logic errors that need workspace state. ASan still cannot
-see TLSF metadata helpers, which intentionally bypass it.
+parsers: it covers no handler state, persistence, or serialization, and it finds
+memory errors reachable from a single message payload rather than logic errors
+that need workspace state. ASan still cannot see TLSF metadata helpers, which
+intentionally bypass it.
+
+## Go client decoder fuzzing
+
+`protocol-go/fuzz_test.go` routes a server-to-client frame through the same
+decoders the CLI uses. It seeds from the Odin response corpus under
+`test/protocol_fuzz/corpus/`, so both implementations see the exact bytes the
+server serializers produce. A decoder error is a normal result; a panic, OOM or
+timeout fails the run. Opcodes without a Go decoder (`S_TaskAssignees`,
+`S_HistoryPage`, and the retired voice/screen-share range) are skipped.
+
+```bash
+cd protocol-go
+# Seeds only; this is what the full matrix runs.
+go test ./...
+
+# Bounded campaign.
+go test -run '^$' -fuzz '^FuzzDecodeServerFrame$' -fuzztime 60s .
+```
+
+The first campaign found two decoder bugs, both fixed with regression tests:
+`S_AllEdgeList` trusted a four-byte edge count before allocating, so a 16-byte
+frame could exhaust memory; and the graph query, shortest-path and
+common-neighbors decoders read the edge count without checking that the node
+list had left two bytes for it. Failing fuzz inputs are kept under
+`protocol-go/testdata/fuzz/FuzzDecodeServerFrame/` and therefore run as ordinary
+cases in every `go test`.
+
+A follow-up review hardened the remaining count-derived allocations: every
+decoder preallocates at most `recordCapacity` (256) records and grows the slice
+as records are actually parsed, so a claimed count cannot allocate the full
+slice before the first truncation error. Edges now go through
+`parseEdgeStrict`, which rejects a creator length that runs past the frame
+instead of letting missing creator bytes be read as the trailing correlation ID.
+`TestRecordCapacityCapsCountDerivedSlices`,
+`TestDecodeAllEdgeListRejectsTruncatedCreator` and
+`TestDecodeEdgeCreatedRejectsTruncatedCreator` cover those contracts. The
+`S_AllEdgeList` count is kept unsigned until the capacity check, so
+`0xffffffff` is rejected on 32-bit builds instead of becoming `-1` and panicking
+in `make`; `GOARCH=386 go test ./...` is part of the verification.
+
+Zstd asset payloads are bounded before decompression: `DecodeAssetPayload`
+rejects a `payload_raw_len` above `MaxPayloadLength` and a compressed payload
+above the same limit, then caps `DecodeAll` at the declared raw length through
+the destination capacity and `WithDecodeAllCapLimit`. The decoder memory limit
+is 8 MiB, not `MaxPayloadLength`: zstd clamps the allowed frame window to that
+limit, and a valid non-single-segment frame for 65535 bytes uses a 65536-byte
+window. A small compressed frame therefore cannot expand into a multi-megabyte
+allocation before the length check, while valid frames with a larger window are
+still accepted. `TestDecodeAssetPayloadBoundsZstdExpansion` uses a 4096-byte
+expansion so it isolates the capacity cap from the global memory limit;
+`TestDecodeAssetPayloadAcceptsZstdAtLimit` and
+`TestDecodeAssetPayloadAcceptsNonSingleSegmentWindow` cover the valid
+65535-byte boundary in both frame layouts.
 
 ## Full local
 
