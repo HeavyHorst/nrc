@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Coverage-guided fuzzing for the protocol request parsers.
+# Coverage-guided fuzzing for the protocol request and response parsers.
 #
 # Odin cannot drive libFuzzer directly, so the package is emitted as LLVM IR and
 # linked against clang's libFuzzer + AddressSanitizer runtimes. Odin's own

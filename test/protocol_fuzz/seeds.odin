@@ -5,11 +5,11 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 
-// The corpus is generated from the protocol package's own client serializers and
-// re-parsed before it is written. A serializer/parser drift therefore fails the
-// generator loudly instead of silently producing seeds that never reach a
-// handler. Every request and every transaction body below goes through a
-// serializer; this file carries no wire layout of its own.
+// The corpus is generated from the protocol package's own serializers and
+// write_* helpers and re-parsed before it is written. A serializer/parser drift
+// therefore fails the generator loudly instead of silently producing seeds that
+// never reach a handler. Every request, transaction body and response below goes
+// through a serializer; this file carries no wire layout of its own.
 
 SEED_DIR_FLAG :: "-nrc-write-seeds="
 MAX_SEED_BYTES :: 64 * 1024
@@ -535,6 +535,331 @@ build_request_seeds :: proc(seeds: ^[dynamic]Seed, buf: []byte) {
 	add_seed(seeds, "query_tickets", buf[:n])
 }
 
+build_response_seeds :: proc(seeds: ^[dynamic]Seed, buf: []byte) {
+	// The seed task/asset/edge are shared by every record-carrying response so
+	// the corpus exercises nested record parsing, not only empty lists.
+	seed_task := pr.Task {
+		id           = 7,
+		conv_id      = 42,
+		title        = bstr("Ship response fuzzing"),
+		description  = bstr("Exercise the response parsers"),
+		status       = .Todo,
+		order_index  = 1,
+		assignee     = bstr("alice"),
+		priority     = 2,
+		color        = .Gold,
+		created_by   = bstr("alice"),
+		created_at   = 1_700_000_000_000_000_000,
+		updated_at   = 1_700_000_100_000_000_000,
+		external_ref = bstr("NRC-400"),
+		project      = bstr("tooling"),
+	}
+	seed_asset := pr.Asset {
+		asset_type       = .Note,
+		asset_id         = 11,
+		parent_type      = .Task,
+		parent_id        = 7,
+		owner            = bstr("alice"),
+		created_at       = 1_700_000_000_000_000_000,
+		updated_at       = 1_700_000_100_000_000_000,
+		conv_id          = 42,
+		payload_encoding = .Plain,
+		payload_raw_len  = 4,
+		preview          = bstr(`{"title":"note"}`),
+		payload          = bstr("body"),
+	}
+	seed_edge := pr.Edge {
+		edge_id     = 3,
+		conv_id     = 42,
+		source_type = .Task,
+		source_id   = 7,
+		target_type = .Asset,
+		target_id   = 11,
+		relation    = .MemberOf,
+		created_at  = 1_700_000_000_000_000_000,
+		created_by  = bstr("alice"),
+	}
+
+	// Handshake, chat and presence.
+	n := pr.serializeServerReady(
+		{build_version = bstr("dev-test"), protocol_version = 1, cpu_model = bstr("cpu"), username = bstr("alice"), is_authenticated = true},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_server_ready", buf[:n])
+
+	n = pr.serializeNewMessageEvent(
+		{conv_id = 42, seq = 1, author_username = bstr("alice"), timestamp = 1_700_000_000_000_000_000, content_type = .PlainText, content = bstr("hello")},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_new_message", buf[:n])
+
+	n = pr.serializeAckSendMessage({client_req_id = 1, assigned_seq = 2, timestamp = 1_700_000_000_000_000_000}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_ack_send_message", buf[:n])
+
+	n = pr.serializeErrorResponse({origin_opcode = .C_CreateTask, error_msg = bstr("nope"), correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_error", buf[:n])
+
+	n = pr.serializeRoomPresenceUpdate(
+		{
+			conv_id = 42,
+			event_type = .UserListSync,
+			sequence = 1,
+			username = bstr("alice"),
+			is_authenticated = true,
+			user_type = .User,
+			old_username = bstr(""),
+			user_list = [][]byte{bstr("alice"), bstr("bob")},
+		},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_room_presence", buf[:n])
+
+	n = pr.serializeStatsResponse({timestamp = 1, server_timestamp = 2, total_threads = 1, connections = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_stats", buf[:n])
+
+	n = pr.serializeAuthenticateResponse({success = true, user_id = bstr("u1"), nickname = bstr("alice"), error_msg = bstr("")}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_auth", buf[:n])
+
+	// Direct messages use the protocol's write_* helpers instead of serializers.
+	pr.write_dm_started(buf, 42, "alice", true, true, true, 1)
+	add_seed(seeds, "response_dm_started", buf[:pr.dm_started_size("alice")])
+	pr.write_dm_list_header(buf, 1, 1)
+	_ = pr.write_dm_entry(buf[pr.dm_list_header_size():], {conv_id = 42, username = "alice", authenticated = true, online = true, last_seen = 123})
+	add_seed(seeds, "response_dm_list", buf[:pr.dm_list_header_size() + pr.dm_entry_size("alice")])
+	pr.write_dm_error(buf, .User_Not_Found, "bob", "not found", 1)
+	add_seed(seeds, "response_dm_error", buf[:pr.dm_error_size("bob", "not found")])
+	pr.write_dm_left(buf, 42, 1)
+	add_seed(seeds, "response_dm_left", buf[:pr.dm_left_size()])
+	pr.write_dm_partner_status(buf, 42, true, "alice", 123)
+	add_seed(seeds, "response_dm_partner_status", buf[:pr.dm_partner_status_size("alice")])
+
+	n = pr.serializePongResponse({timestamp = 1, server_timestamp = 2}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_pong", buf[:n])
+
+	n = pr.serializeAckUnsubscribeConvs({correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_ack_unsubscribe", buf[:n])
+
+	n = pr.serializeSubscriptionReady(
+		{correlation_id = 1, entries = []pr.SubscriptionReadyEntry{{conv_id = 42, high_water_seq = 10, retention_cutoff_seq = 0}}},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_subscription_ready", buf[:n])
+
+	n = pr.serializeMessagePage(
+		{
+			conv_id = 42,
+			ascending = true,
+			has_more = false,
+			truncated = false,
+			high_water_seq = 10,
+			retention_cutoff_seq = 0,
+			continuation_cursor = 0,
+			correlation_id = 1,
+			messages = []pr.MessageRecord {
+				{
+					conv_id = 42,
+					seq = 1,
+					author_username = bstr("alice"),
+					timestamp = 1_700_000_000_000_000_000,
+					content_type = .PlainText,
+					content = bstr("hello"),
+				},
+			},
+		},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_message_page", buf[:n])
+
+	// Tasks.
+	n = pr.serializeTaskCreated({task = seed_task, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_task_created", buf[:n])
+	n = pr.serializeTaskUpdated({task = seed_task, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_task_updated", buf[:n])
+	n = pr.serializeTaskDeleted({task_id = 7, conv_id = 42, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_task_deleted", buf[:n])
+	n = pr.serializeTaskMoved(
+		{
+			task_id = 7,
+			conv_id = 42,
+			status = .Done,
+			order_index = 1,
+			completed_at = 1_700_000_200_000_000_000,
+			completed_by = bstr("alice"),
+			correlation_id = 1,
+		},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_task_moved", buf[:n])
+	n = pr.serializeTaskListResponse({conv_id = 42, success = true, tasks = []pr.Task{seed_task}, error = bstr(""), correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_task_list", buf[:n])
+	n = pr.serializeTaskListPage(
+		{
+			conv_id = 42,
+			success = true,
+			tasks = []pr.Task{seed_task},
+			has_more = false,
+			next_cursor_sort_at = 0,
+			next_cursor_task_id = 0,
+			total_count = 1,
+			error = bstr(""),
+			correlation_id = 1,
+		},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_task_list_page", buf[:n])
+	n = pr.serializeTaskFull({conv_id = 42, success = true, has_task = true, task = seed_task, error = bstr(""), correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_task_full", buf[:n])
+	n = pr.serializeTaskSliceList(
+		{
+			conv_id = 42,
+			success = true,
+			slices = []pr.TaskSlice{{name = bstr("tooling"), slice_id = 11, owner = bstr("alice")}},
+			has_more = false,
+			next_cursor_closed = false,
+			next_cursor_sort_at = 0,
+			next_cursor_slice_id = 0,
+			total_count = 1,
+			assigned_tasks = 1,
+			unassigned_tasks = 0,
+			error = bstr(""),
+			correlation_id = 1,
+		},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_task_slice_list", buf[:n])
+
+	// Assets.
+	n = pr.serializeAssetCreatedMessage({asset = seed_asset, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_asset_created", buf[:n])
+	n = pr.serializeAssetUpdatedMessage({asset = seed_asset, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_asset_updated", buf[:n])
+	n = pr.serializeAssetDeletedMessage({conv_id = 42, asset_id = 11, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_asset_deleted", buf[:n])
+	n = pr.serializeAssetFullMessage({asset = seed_asset, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_asset_full", buf[:n])
+	n = pr.serializeAssetListMessage({conv_id = 42, assets = []pr.Asset{seed_asset}, full_content = true, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_asset_list", buf[:n])
+	n = pr.serializeAssetListPageMessage(
+		{
+			conv_id = 42,
+			assets = []pr.Asset{seed_asset},
+			full_content = true,
+			has_more = false,
+			next_cursor_updated_at = 0,
+			next_cursor_asset_id = 0,
+			total_count = 1,
+			correlation_id = 1,
+		},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_asset_list_page", buf[:n])
+	n = pr.serializeNoteProjectListMessage({conv_id = 42, projects = []string{"tooling"}, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_note_projects", buf[:n])
+	n = pr.serializeNoteTagListMessage({conv_id = 42, tags = []string{"fuzzing"}, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_note_tags", buf[:n])
+
+	// Edges.
+	n = pr.serializeEdgeCreatedMessage({edge = seed_edge, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_edge_created", buf[:n])
+	n = pr.serializeEdgeDeletedMessage({conv_id = 42, edge_id = 3, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_edge_deleted", buf[:n])
+	n = pr.serializeEdgeListMessage({conv_id = 42, target_type = .Task, target_id = 7, edges = []pr.Edge{seed_edge}, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_edge_list", buf[:n])
+	n = pr.serializeAllEdgeListMessage({conv_id = 42, edges = []pr.Edge{seed_edge}, correlation_id = 1}, buf)
+	assert(n > 0)
+	add_seed(seeds, "response_all_edge_list", buf[:n])
+	n = pr.serializeAllEdgeListPageMessage(
+		{conv_id = 42, has_more = false, next_edge_id = 0, total_count = 1, edges = []pr.Edge{seed_edge}, correlation_id = 1},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_all_edge_list_page", buf[:n])
+
+	// Graph queries.
+	n = pr.serializeGraphQueryResult(
+		{
+			conv_id = 42,
+			start_type = .Task,
+			start_id = 7,
+			truncated = false,
+			nodes = []pr.GraphQueryNode{{target_type = .Task, target_id = 7, depth = 0}},
+			edges = []pr.Edge{seed_edge},
+			correlation_id = 1,
+		},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_graph_query", buf[:n])
+	n = pr.serializeGraphShortestPathResult(
+		{
+			conv_id = 42,
+			from_type = .Task,
+			from_id = 7,
+			to_type = .Asset,
+			to_id = 11,
+			found = true,
+			path_length = 1,
+			nodes = []pr.GraphPathNode{{target_type = .Task, target_id = 7}, {target_type = .Asset, target_id = 11}},
+			edges = []pr.Edge{seed_edge},
+			correlation_id = 1,
+		},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_graph_shortest_path", buf[:n])
+	n = pr.serializeGraphDegreeResult(
+		{conv_id = 42, entries = []pr.GraphDegreeEntry{{target_type = .Task, target_id = 7, degree = 1}}, correlation_id = 1},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_graph_degree", buf[:n])
+	n = pr.serializeGraphCommonNeighborsResult(
+		{
+			conv_id = 42,
+			a_type = .Task,
+			a_id = 7,
+			b_type = .Task,
+			b_id = 9,
+			nodes = []pr.GraphPathNode{{target_type = .Task, target_id = 7}},
+			edges = []pr.Edge{seed_edge},
+			correlation_id = 1,
+		},
+		buf,
+	)
+	assert(n > 0)
+	add_seed(seeds, "response_graph_common_neighbors", buf[:n])
+}
+
 build_seeds :: proc() -> []Seed {
 	seeds: [dynamic]Seed
 	buf := make([]byte, MAX_SEED_BYTES, context.allocator)
@@ -544,6 +869,7 @@ build_seeds :: proc() -> []Seed {
 	build_message_seeds(&seeds, buf)
 	build_transaction_seeds(&seeds, buf)
 	build_request_seeds(&seeds, buf)
+	build_response_seeds(&seeds, buf)
 
 	return seeds[:]
 }
@@ -560,7 +886,7 @@ write_seeds :: proc(dir: string) -> bool {
 	}
 	ok := true
 	for seed in seeds {
-		if err := exercise(seed.bytes); err != nil {
+		if err := exercise_message(seed.bytes); err != nil {
 			fmt.eprintf("seed %q does not parse: %v\n", seed.name, err)
 			ok = false
 			continue

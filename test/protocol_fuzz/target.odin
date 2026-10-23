@@ -5,12 +5,14 @@ import "base:runtime"
 import "core:fmt"
 import "core:log"
 import "core:mem"
+import "core:mem/virtual"
 import "core:os"
 import "core:strings"
 
 // Wire input includes the real two-byte opcode. The target covers every
-// client-to-server opcode in Opcode; each one is parsed through the same
-// function the server dispatches to.
+// client-to-server opcode in Opcode plus every server-to-client response that
+// has an Odin parser; each one is parsed through the same function its caller
+// dispatches to.
 // All returned byte fields must borrow from the input, never fabricated memory.
 check_bytes :: proc(input, field: []byte) {
 	if len(field) == 0 do return
@@ -296,6 +298,259 @@ exercise :: proc(input: []byte) -> pr.ProtocolParseError {
 	return nil
 }
 
+check_task :: proc(input: []byte, task: pr.Task) {
+	check_bytes(input, task.title)
+	check_bytes(input, task.description)
+	check_bytes(input, task.assignee)
+	check_bytes(input, task.created_by)
+	check_bytes(input, task.completed_by)
+	check_bytes(input, task.project)
+	check_bytes(input, task.external_ref)
+	check_attachments(input, task.attachments)
+}
+
+check_asset :: proc(input: []byte, asset: pr.Asset) {
+	check_bytes(input, asset.owner)
+	check_bytes(input, asset.preview)
+	check_bytes(input, asset.payload)
+	check_attachments(input, asset.attachments)
+}
+
+check_edge :: proc(input: []byte, edge: pr.Edge) {
+	check_bytes(input, edge.created_by)
+}
+
+// Response parsers take the full message including its opcode, except the two
+// retained-chat parsers whose callers pass the payload behind the opcode.
+// Records are parsed into caller-provided slices, so the fixed capacities bound
+// how many records one input can reach; a larger count is a normal .TooMany.
+RESPONSE_RECORD_CAPACITY :: 64
+
+exercise_response :: proc(input: []byte) -> pr.ProtocolParseError {
+	if len(input) < 2 do return .TooShort
+	payload := input[2:]
+
+	// The allocating parsers own their result for the duration of this call.
+	arena: virtual.Arena
+	if virtual.arena_init_growing(&arena) != nil do return .InvalidValue
+	defer virtual.arena_destroy(&arena)
+	allocator := virtual.arena_allocator(&arena)
+
+	attachments: [pr.MAX_ATTACHMENTS_PER_TASK]pr.Attachment
+	tasks: [RESPONSE_RECORD_CAPACITY]pr.Task
+	edges: [RESPONSE_RECORD_CAPACITY]pr.Edge
+	dm_entries: [RESPONSE_RECORD_CAPACITY]pr.DMEntry
+	nodes: [RESPONSE_RECORD_CAPACITY]pr.GraphQueryNode
+	path_nodes: [RESPONSE_RECORD_CAPACITY]pr.GraphPathNode
+	degree_entries: [RESPONSE_RECORD_CAPACITY]pr.GraphDegreeEntry
+
+	#partial switch pr.get_opcode(input) {
+	// Handshake, chat and presence.
+	case .S_ServerReady:
+		r, err := pr.parseServerReadyMessage(input)
+		if err != nil do return err
+		check_bytes(input, r.build_version)
+		check_bytes(input, r.cpu_model)
+		check_bytes(input, r.username)
+	case .S_NewMessage:
+		r, err := pr.parseNewMessageEventMessage(input)
+		if err != nil do return err
+		check_bytes(input, r.author_username)
+		check_bytes(input, r.content)
+	case .S_AckSendMessage:
+		_, err := pr.parseAckSendMessageMessage(input)
+		return err
+	case .S_ErrorResponse:
+		r, err := pr.parseErrorResponseMessage(input)
+		if err != nil do return err
+		check_bytes(input, r.error_msg)
+	case .S_RoomPresenceUpdate:
+		r, err := pr.parseRoomPresenceUpdateMessage(input, allocator)
+		if err != nil do return err
+		check_bytes(input, r.username)
+		check_bytes(input, r.old_username)
+		for user in r.user_list do check_bytes(input, user)
+	case .S_StatsResponse:
+		_, err := pr.parseStatsResponseMessage(input)
+		return err
+	case .S_AuthResponse:
+		r, err := pr.parseAuthenticateResponseMessage(input)
+		if err != nil do return err
+		check_bytes(input, r.user_id)
+		check_bytes(input, r.nickname)
+		check_bytes(input, r.error_msg)
+
+	// Direct messages.
+	case .S_DMStarted:
+		r, err := pr.parseDMStartedMessage(input)
+		if err != nil do return err
+		check_string(input, r.username)
+	case .S_DMList:
+		r, err := pr.parseDMListMessage(input, dm_entries[:])
+		if err != nil do return err
+		for entry in r.entries do check_string(input, entry.username)
+	case .S_DMError:
+		r, err := pr.parseDMErrorMessage(input)
+		if err != nil do return err
+		check_string(input, r.target_username)
+		check_string(input, r.message)
+	case .S_DMLeft:
+		_, err := pr.parseDMLeftMessage(input)
+		return err
+	case .S_DMPartnerStatus:
+		r, err := pr.parseDMPartnerStatusMessage(input)
+		if err != nil do return err
+		check_string(input, r.username)
+	case .S_Pong:
+		_, err := pr.parsePongResponseMessage(input)
+		return err
+	case .S_AckUnsubscribeConvs:
+		_, err := pr.parseAckUnsubscribeConvsMessage(input)
+		return err
+
+	// Retained chat.
+	case .S_SubscriptionReady:
+		r, err := pr.parseSubscriptionReady(payload)
+		if err != nil do return err
+		assert(len(r.entries) <= pr.MAX_SUBSCRIBE_CONVS)
+	case .S_MessagePage:
+		r, err := pr.parseMessagePage(payload)
+		if err != nil do return err
+		for message in r.messages {
+			check_bytes(input, message.author_username)
+			check_bytes(input, message.content)
+		}
+
+	// Tasks.
+	case .S_TaskCreated:
+		r, err := pr.parseTaskCreated(input, attachments[:])
+		if err != nil do return err
+		check_task(input, r.task)
+	case .S_TaskUpdated:
+		r, err := pr.parseTaskUpdated(input, attachments[:])
+		if err != nil do return err
+		check_task(input, r.task)
+	case .S_TaskDeleted:
+		_, err := pr.parseTaskDeleted(input)
+		return err
+	case .S_TaskMoved:
+		r, err := pr.parseTaskMoved(input)
+		if err != nil do return err
+		check_bytes(input, r.completed_by)
+	case .S_TaskListResponse:
+		r, err := pr.parseTaskListResponse(input, tasks[:], attachments[:])
+		if err != nil do return err
+		for task in r.tasks do check_task(input, task)
+		check_bytes(input, r.error)
+	case .S_TaskListPage:
+		r, err := pr.parseTaskListPage(input, tasks[:], attachments[:])
+		if err != nil do return err
+		for task in r.tasks do check_task(input, task)
+		check_bytes(input, r.error)
+	case .S_TaskFull:
+		r, err := pr.parseTaskFull(input, attachments[:])
+		if err != nil do return err
+		if r.has_task do check_task(input, r.task)
+		check_bytes(input, r.error)
+	case .S_TaskSliceList:
+		r, err := pr.parseTaskSliceList(input, allocator)
+		if err != nil do return err
+		for slice in r.slices {
+			check_bytes(input, slice.name)
+			check_bytes(input, slice.owner)
+		}
+		check_bytes(input, r.error)
+
+	// Assets.
+	case .S_AssetCreated:
+		r, err := pr.parseAssetCreatedMessage(input, attachments[:])
+		if err != nil do return err
+		check_asset(input, r.asset)
+	case .S_AssetUpdated:
+		r, err := pr.parseAssetUpdatedMessage(input, attachments[:])
+		if err != nil do return err
+		check_asset(input, r.asset)
+	case .S_AssetDeleted:
+		_, err := pr.parseAssetDeletedMessage(input)
+		return err
+	case .S_AssetFull:
+		r, err := pr.parseAssetFullMessage(input, attachments[:])
+		if err != nil do return err
+		check_asset(input, r.asset)
+	case .S_AssetList:
+		r, err := pr.parseAssetListMessage(input, allocator, attachments[:])
+		if err != nil do return err
+		for asset in r.assets do check_asset(input, asset)
+	case .S_AssetListPage:
+		r, err := pr.parseAssetListPageMessage(input, allocator, attachments[:])
+		if err != nil do return err
+		for asset in r.assets do check_asset(input, asset)
+	case .S_NoteProjectList:
+		r, err := pr.parseNoteProjectListMessage(input, allocator)
+		if err != nil do return err
+		for project in r.projects do check_string(input, project)
+	case .S_NoteTagList:
+		r, err := pr.parseNoteTagListMessage(input, allocator)
+		if err != nil do return err
+		for tag in r.tags do check_string(input, tag)
+
+	// Edges.
+	case .S_EdgeCreated:
+		r, err := pr.parseEdgeCreatedMessage(input)
+		if err != nil do return err
+		check_edge(input, r.edge)
+	case .S_EdgeDeleted:
+		_, err := pr.parseEdgeDeletedMessage(input)
+		return err
+	case .S_EdgeList:
+		r, err := pr.parseEdgeListMessage(input, edges[:])
+		if err != nil do return err
+		for edge in r.edges do check_edge(input, edge)
+	case .S_AllEdgeList:
+		r, err := pr.parseAllEdgeListMessage(input, edges[:])
+		if err != nil do return err
+		for edge in r.edges do check_edge(input, edge)
+	case .S_AllEdgeListPage:
+		r, err := pr.parseAllEdgeListPageMessage(input, edges[:])
+		if err != nil do return err
+		for edge in r.edges do check_edge(input, edge)
+
+	// Graph queries.
+	case .S_GraphQueryResult:
+		r, err := pr.parseGraphQueryResult(input, nodes[:], edges[:])
+		if err != nil do return err
+		for edge in r.edges do check_edge(input, edge)
+	case .S_GraphShortestPathResult:
+		r, err := pr.parseGraphShortestPathResult(input, path_nodes[:], edges[:])
+		if err != nil do return err
+		for edge in r.edges do check_edge(input, edge)
+	case .S_GraphDegreeResult:
+		_, err := pr.parseGraphDegreeResult(input, degree_entries[:])
+		return err
+	case .S_GraphCommonNeighborsResult:
+		r, err := pr.parseGraphCommonNeighborsResult(input, path_nodes[:], edges[:])
+		if err != nil do return err
+		for edge in r.edges do check_edge(input, edge)
+
+	// Responses without an Odin parser: S_TransactionResult, S_TaskQueryPage,
+	// S_TaskProjects, S_TaskAssignees, S_CalendarPage, S_WorkspaceOverview,
+	// S_HistoryPage, S_TaskDependentsPage, S_SliceOwners, S_TicketAssignees,
+	// S_CalendarPeople, S_EdgeListPage, S_CustomerSearchPage, S_TicketPage and
+	// S_GraphRankResult are decoded by the Go CLI and the JS client.
+	case:
+		return .InvalidOpcode
+	}
+	return nil
+}
+
+// A seed or fuzz input is either a client request or a server response; the
+// opcode decides which direction's parser runs.
+exercise_message :: proc(input: []byte) -> pr.ProtocolParseError {
+	if len(input) < 2 do return .TooShort
+	if u16(pr.get_opcode(input)) >= 100 do return exercise_response(input)
+	return exercise(input)
+}
+
 // Keep the parse result observable even in optimized builds.
 @(export)
 last_error: pr.ProtocolParseError
@@ -311,7 +566,7 @@ LLVMFuzzerTestOneInput :: proc "c" (data: [^]u8, size: uint) -> i32 {
 	context.allocator = mem.nil_allocator()
 	context.temp_allocator = mem.nil_allocator()
 	if size > 128 * 1024 do return 0
-	last_error = exercise(data[:int(size)])
+	last_error = exercise_message(data[:int(size)])
 	return 0
 }
 
