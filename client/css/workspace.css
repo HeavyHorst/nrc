@@ -2307,14 +2307,14 @@ body.sullivan-workbench .sullivan-submit-controls {
     margin: 0.125rem 0;
     color: var(--text-primary);
 }
-.message-content a {
+.message-content a:not(.note-share-attachment-row) {
     color: var(--border-primary);
     text-decoration: underline;
     text-shadow: none;
     border-bottom: none;
     overflow-wrap: anywhere;
 }
-.message-content a:hover {
+.message-content a:not(.note-share-attachment-row):hover {
     color: var(--text-primary);
     text-shadow: none;
     border-bottom: 1px solid var(--text-primary);

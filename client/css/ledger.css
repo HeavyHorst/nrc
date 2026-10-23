@@ -338,8 +338,8 @@ body:not(:has(#chatDialog[style*="display: none"])) .agenda-panel:not(.inspector
     text-decoration: none;
 }
 
-#logOutput .message-content a { color: var(--link-text); }
-#logOutput .message-content a:hover { color: var(--link-hover-text); background: var(--link-hover-bg); }
+#logOutput .message-content a:not(.note-share-attachment-row) { color: var(--link-text); }
+#logOutput .message-content a:not(.note-share-attachment-row):hover { color: var(--link-hover-text); background: var(--link-hover-bg); }
 
 .input-panel {
     display: flex;

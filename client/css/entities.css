@@ -568,7 +568,7 @@
 
 .note-share-attachment-row:hover .note-share-attachment-name,
 .note-share-attachment-row:focus-visible .note-share-attachment-name {
-    color: var(--accent-highlight);
+    color: var(--text-primary);
     text-decoration: underline;
 }
 
