@@ -63,11 +63,11 @@ function buildMemoryPrompt(threadURL: string, title: string): string {
 		? `\`Source: [${title}](${threadURL})\``
 		: `a titled markdown link to ${threadURL} — this thread has no title yet, so name its subject as the link text`
 
-	return `Use the maintaining-room-memory skill.
+	return `Use the maintaining-room-memory skill to distill this thread into durable NRC notes. Update existing canonical notes where appropriate; create new notes for distinct durable concepts.
 
-Distill this thread into durable NRC notes. Prefer updating existing notes over creating duplicates. Create new notes only for stable concepts with distinct future retrieval intent. Keep the result compact: normally 1-3 notes. Do not create one note per implementation step, prompt tweak, or transient error. Give a distinct incident, decision, or troubleshooting conclusion its own canonical note instead of burying it late in a broader note.
+Preserve scope and meaning. Distinguish explicit rules from observations and inferences; never turn example inputs into prerequisites. Preserve applicable exceptions. Make the current guidance clear; retain older guidance only when it remains applicable or provides important decision context. Limit supersession to its stated scope.
 
-Make future retrieval deliberate: put stable identifiers and distinctive names people will search for—such as media/product numbers, ticket IDs, service names, producers, or customers—in the title when they identify the concept, otherwise in the opening metadata or finding. Add useful edges to existing and new notes. Record the thread as a titled markdown link in the note body, never as a bare URL: ${source}. NRC's Amp-thread ledger shows the link text, so the title is what future readers see.
+Preview the operations and check the draft against its sources before writing. Record this thread as a titled source link in the note body: ${source}.
 
-Preview the note and edge operations before writing anything. After writing, verify discoverability with at least one exact-identifier query when an identifier exists and one likely natural-language query. If either does not surface the canonical note near the top, improve the note rather than merely reporting the weak result.`
+After writing, verify content and discoverability with an exact identifier when available and a likely natural-language query. Treat search ranking and index freshness separately from factual correctness.`
 }

@@ -102,7 +102,7 @@ Do not store secrets, tokens, or incidental private data in notes.
 Use this workflow only after an explicit persistence request or clearly established standing authorization. A useful or durable finding alone is not permission to mutate workspace memory.
 
 1. Check whether a canonical note already exists.
-2. Update that note if the new information extends or corrects it.
+2. Update that note if the new information extends or corrects it. Make the current guidance clear; retain older guidance only when it remains applicable or provides important decision context.
 3. Create a new note only when the information is a separate durable concept.
 4. For project-specific memory, set `--project` to the canonical repo/project identifier.
 5. Do not add the project/repo identifier to the title when it is already available as the structured `project` field. Make the title specific by naming the durable concept, not by appending `[project]`.
@@ -115,6 +115,8 @@ Use this workflow only after an explicit persistence request or clearly establis
 12. Add edges so future retrieval can find the note by relationship, not just wording.
 
 Prefer one stable note per durable concept over many overlapping notes.
+
+Before writing, compare the draft with its sources. Distinguish explicit rules from observations and inferences; never turn example inputs into prerequisites. Preserve scope and applicable exceptions, and flag unresolved conflicts rather than inventing a resolution.
 
 ## Atomic Graph Writes
 
@@ -137,7 +139,7 @@ Use relation types deliberately:
 - `depends-on`: the source cannot complete without the target
 - `blocks`: the source prevents the target from progressing
 - `derived-from`: the source was synthesized from the target
-- `supersedes`: the source replaces the target as the canonical memory
+- `supersedes`: the source replaces the target as the canonical memory; for a partial replacement, use `references` and state the affected scope in the note instead of implying the entire target is obsolete
 - `member-of`: the source is an actual member of the target container
 
 For note memory, `references`, `derived-from`, and `supersedes` are usually the most valuable.
@@ -236,7 +238,7 @@ Use this exact flow for requests like "add a note about X":
    - Example: `nrc note create "Evidence: websocket trace" --content-file /tmp/nrc-note.md --attach "/tmp/trace.log,/tmp/screenshot.png"`
    - Example: `nrc note attach 123 /tmp/diagram.pdf /tmp/error.log`
    - For replacement, removal, download, and `att:N` rules, read `reference/operations.md`.
-6. Capture the note ID from the structured mutation result. Read it back only when you need to verify content or searchability.
+6. Capture the note ID from the structured mutation result. Verify the saved content against the intended change using a complete returned payload or a direct readback; search rank alone does not establish correctness.
    - Example: `nrc note get <new-note-id>`
 7. Add edges when the note should remain discoverable from related tasks or assets. If the note and its edges are all new and must appear together, create them with one atomic batch instead of separate commands.
 
@@ -255,4 +257,6 @@ Before finishing, make sure:
 - the note title is stable and specific
 - project-specific notes set the structured project field and do not duplicate that project in the title
 - important related tasks or assets are linked with edges
-- stale notes are updated or superseded instead of silently duplicated
+- outdated guidance is corrected or superseded within its stated scope instead of silently duplicated
+
+Treat factual correctness, discoverability, and index freshness as separate checks. Report stale or incomplete search results separately; do not rewrite correct content merely to clear an index warning. A fresh search response alone does not verify that the saved content or its indexed copy matches the intended change.
