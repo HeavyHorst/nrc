@@ -271,3 +271,35 @@ func TestDecodeEdgeDeleted(t *testing.T) {
 		t.Fatalf("unexpected decoded edge deleted payload: %+v", decoded)
 	}
 }
+
+func TestDecodeAllEdgeListRejectsCountBeyondPayload(t *testing.T) {
+	// The count is a u32 on the wire. It must be checked against the bytes that
+	// can actually hold edges before the slice is allocated: a small count
+	// otherwise fabricates zero-value edges, and a huge one exhausts memory.
+	for _, count := range []uint32{2, 0x30000000, 0xffffffff} {
+		payload := make([]byte, 16)
+		binary.BigEndian.PutUint32(payload[8:12], count)
+		if _, err := DecodeAllEdgeListResponse(payload); err == nil {
+			t.Fatalf("count %d was accepted with no edge bytes", count)
+		}
+	}
+}
+
+func TestDecodeAllEdgeListRejectsTruncatedCreator(t *testing.T) {
+	// The old decoder let ParseEdge consume the two-byte creator length, then
+	// treated the missing creator bytes as the trailing correlation ID.
+	payload := make([]byte, 64)
+	binary.BigEndian.PutUint32(payload[8:12], 1)
+	binary.BigEndian.PutUint16(payload[58:60], 5)
+	if _, err := DecodeAllEdgeListResponse(payload); err == nil {
+		t.Fatal("expected truncated edge creator to be rejected")
+	}
+}
+
+func TestDecodeEdgeCreatedRejectsTruncatedCreator(t *testing.T) {
+	payload := make([]byte, 52)
+	binary.BigEndian.PutUint16(payload[46:48], 5)
+	if _, err := DecodeEdgeCreated(payload); err == nil {
+		t.Fatal("expected truncated edge creator to be rejected")
+	}
+}

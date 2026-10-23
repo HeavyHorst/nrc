@@ -52,6 +52,11 @@ type AllEdgeListResponse struct {
 	CorrelationID uint32
 }
 
+// minEdgeWireSize is the fixed part of one edge record: edge_id(8) + conv_id(8)
+// + source_type(2) + source_id(8) + target_type(2) + target_id(8) + relation(2)
+// + created_at(8) + created_by_len(2).
+const minEdgeWireSize = 48
+
 // ParseEdge parses a single edge from binary data at offset.
 func ParseEdge(data []byte, offset int) (Edge, int) {
 	var e Edge
@@ -118,6 +123,25 @@ func ParseEdge(data []byte, offset int) (Edge, int) {
 	return e, offset
 }
 
+// parseEdgeStrict parses one edge and rejects truncated records. ParseEdge
+// remains the lenient variant for callers that only need best-effort offsets;
+// the response decoders must not consume missing creator bytes as the trailing
+// correlation ID.
+func parseEdgeStrict(data []byte, offset int) (Edge, int, error) {
+	if len(data)-offset < minEdgeWireSize {
+		return Edge{}, offset, fmt.Errorf("truncated edge header")
+	}
+	createdByLen := int(binary.BigEndian.Uint16(data[offset+46:]))
+	if createdByLen > len(data)-offset-minEdgeWireSize {
+		return Edge{}, offset, fmt.Errorf("truncated edge creator")
+	}
+	edge, next := ParseEdge(data, offset)
+	if next != offset+minEdgeWireSize+createdByLen {
+		return Edge{}, offset, fmt.Errorf("truncated edge record")
+	}
+	return edge, next, nil
+}
+
 // DecodeEdgeList decodes an S_EdgeList response.
 // Format: conv_id(8) + target_type(2) + target_id(8) + count(2) + edges...
 func DecodeEdgeList(data []byte) ([]Edge, error) {
@@ -144,11 +168,18 @@ func DecodeEdgeListResponse(data []byte) (*EdgeListResponse, error) {
 	count := int(binary.BigEndian.Uint16(data[18:20]))
 	offset := 20
 
-	resp.Edges = make([]Edge, 0, count)
+	if count > (len(data)-offset-4)/minEdgeWireSize {
+		return nil, fmt.Errorf("edge list count %d exceeds payload capacity", count)
+	}
+
+	resp.Edges = make([]Edge, 0, recordCapacity(count))
 	for i := 0; i < count; i++ {
-		var e Edge
-		e, offset = ParseEdge(data, offset)
-		resp.Edges = append(resp.Edges, e)
+		edge, next, err := parseEdgeStrict(data, offset)
+		if err != nil {
+			return nil, fmt.Errorf("edge list edge %d: %w", i, err)
+		}
+		offset = next
+		resp.Edges = append(resp.Edges, edge)
 	}
 
 	if len(data) < offset+4 {
@@ -181,14 +212,25 @@ func DecodeAllEdgeListResponse(data []byte) (*AllEdgeListResponse, error) {
 		return nil, fmt.Errorf("response too short")
 	}
 	resp := &AllEdgeListResponse{ConvID: binary.BigEndian.Uint64(data[0:8])}
-	count := int(binary.BigEndian.Uint32(data[8:12]))
+	count := uint64(binary.BigEndian.Uint32(data[8:12]))
 	offset := 12
 
-	resp.Edges = make([]Edge, 0, count)
-	for i := 0; i < count; i++ {
-		var e Edge
-		e, offset = ParseEdge(data, offset)
-		resp.Edges = append(resp.Edges, e)
+	// An edge occupies at least 48 wire bytes. Reject a count the payload cannot
+	// hold before allocating, so a corrupted or hostile frame cannot exhaust
+	// memory with a four-byte length. Keep the count unsigned: converting
+	// 0xffffffff to int is -1 on 32-bit builds and would panic in make.
+	if count > uint64(len(data)-offset-4)/minEdgeWireSize {
+		return nil, fmt.Errorf("all edge list count %d exceeds payload capacity", count)
+	}
+
+	resp.Edges = make([]Edge, 0, recordCapacity(int(count)))
+	for i := uint64(0); i < count; i++ {
+		edge, next, err := parseEdgeStrict(data, offset)
+		if err != nil {
+			return nil, fmt.Errorf("all edge list edge %d: %w", i, err)
+		}
+		offset = next
+		resp.Edges = append(resp.Edges, edge)
 	}
 
 	if len(data) < offset+4 {
@@ -207,7 +249,10 @@ func DecodeAllEdgeListResponse(data []byte) (*AllEdgeListResponse, error) {
 // DecodeEdgeCreated decodes an S_EdgeCreated payload.
 // Wire format: edge(...) + correlation_id(4)
 func DecodeEdgeCreated(data []byte) (*EdgeCreatedResponse, error) {
-	edge, offset := ParseEdge(data, 0)
+	edge, offset, err := parseEdgeStrict(data, 0)
+	if err != nil {
+		return nil, fmt.Errorf("edge created payload: %w", err)
+	}
 
 	resp := &EdgeCreatedResponse{Edge: edge}
 	if len(data) < offset+4 {
@@ -330,20 +375,16 @@ func DecodeAllEdgeListPage(data []byte) (*AllEdgeListPageResponse, error) {
 		CorrelationID: binary.BigEndian.Uint32(data[23:]),
 	}
 	count := int(binary.BigEndian.Uint16(data[21:]))
-	if count > (len(data)-27)/48 {
+	if count > (len(data)-27)/minEdgeWireSize {
 		return nil, fmt.Errorf("truncated edge page")
 	}
-	resp.Edges = make([]Edge, 0, count)
+	resp.Edges = make([]Edge, 0, recordCapacity(count))
 	offset := 27
 	for i := 0; i < count; i++ {
-		if len(data)-offset < 48 {
-			return nil, fmt.Errorf("truncated edge record")
+		edge, next, err := parseEdgeStrict(data, offset)
+		if err != nil {
+			return nil, fmt.Errorf("edge page edge %d: %w", i, err)
 		}
-		size := 48 + int(binary.BigEndian.Uint16(data[offset+46:]))
-		if size > len(data)-offset {
-			return nil, fmt.Errorf("truncated edge creator")
-		}
-		edge, next := ParseEdge(data, offset)
 		resp.Edges = append(resp.Edges, edge)
 		offset = next
 	}
@@ -381,16 +422,15 @@ func DecodeEdgeListPage(data []byte) (*EdgeListPageResponse, error) {
 	}
 	r := &EdgeListPageResponse{ConvID: binary.BigEndian.Uint64(data), TargetType: binary.BigEndian.Uint16(data[8:]), TargetID: binary.BigEndian.Uint64(data[10:]), HasMore: data[18] == 1, NextEdgeID: binary.BigEndian.Uint64(data[19:]), TotalCount: binary.BigEndian.Uint32(data[27:]), CorrelationID: binary.BigEndian.Uint32(data[33:])}
 	count, offset := int(binary.BigEndian.Uint16(data[31:])), 37
-	r.Edges = make([]Edge, 0, count)
+	if count > (len(data)-offset)/minEdgeWireSize {
+		return nil, fmt.Errorf("truncated incident edge page")
+	}
+	r.Edges = make([]Edge, 0, recordCapacity(count))
 	for i := 0; i < count; i++ {
-		if len(data)-offset < 48 {
-			return nil, fmt.Errorf("truncated edge record")
+		edge, next, err := parseEdgeStrict(data, offset)
+		if err != nil {
+			return nil, fmt.Errorf("incident edge page edge %d: %w", i, err)
 		}
-		size := 48 + int(binary.BigEndian.Uint16(data[offset+46:]))
-		if size > len(data)-offset {
-			return nil, fmt.Errorf("truncated edge creator")
-		}
-		edge, next := ParseEdge(data, offset)
 		r.Edges = append(r.Edges, edge)
 		offset = next
 	}

@@ -32,6 +32,22 @@ func ReadMessage(data []byte) (*Message, error) {
 	}, nil
 }
 
+// maxRecordPreallocation caps count-derived slice capacities. A malformed frame
+// can claim up to 65535 records while carrying almost no bytes; growing the
+// slice as records are actually parsed keeps the allocation proportional to the
+// input instead of the claimed count.
+const maxRecordPreallocation = 256
+
+func recordCapacity(count int) int {
+	if count < 0 {
+		return 0
+	}
+	if count > maxRecordPreallocation {
+		return maxRecordPreallocation
+	}
+	return count
+}
+
 func writeString(buf *bytes.Buffer, s string) {
 	binary.Write(buf, binary.BigEndian, uint16(len(s)))
 	buf.WriteString(s)

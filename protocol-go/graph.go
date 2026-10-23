@@ -169,7 +169,7 @@ func DecodeGraphQueryResult(data []byte) (*GraphQueryResult, error) {
 
 	nodeCount := int(binary.BigEndian.Uint16(data[offset:]))
 	offset += 2
-	resp.Nodes = make([]GraphNode, 0, nodeCount)
+	resp.Nodes = make([]GraphNode, 0, recordCapacity(nodeCount))
 	for i := 0; i < nodeCount; i++ {
 		if len(data) < offset+11 {
 			return nil, fmt.Errorf("graph query node %d truncated", i)
@@ -183,13 +183,22 @@ func DecodeGraphQueryResult(data []byte) (*GraphQueryResult, error) {
 		resp.Nodes = append(resp.Nodes, node)
 	}
 
+	if len(data) < offset+2 {
+		return nil, fmt.Errorf("graph query result missing edge count")
+	}
 	edgeCount := int(binary.BigEndian.Uint16(data[offset:]))
 	offset += 2
-	resp.Edges = make([]Edge, 0, edgeCount)
+	if len(data) < offset+4 {
+		return nil, fmt.Errorf("graph query result missing correlation_id")
+	}
+	if edgeCount > (len(data)-offset-4)/minEdgeWireSize {
+		return nil, fmt.Errorf("graph query edge count %d exceeds payload capacity", edgeCount)
+	}
+	resp.Edges = make([]Edge, 0, recordCapacity(edgeCount))
 	for i := 0; i < edgeCount; i++ {
-		edge, newOffset := ParseEdge(data, offset)
-		if newOffset == offset {
-			return nil, fmt.Errorf("graph query edge %d truncated", i)
+		edge, newOffset, err := parseEdgeStrict(data, offset)
+		if err != nil {
+			return nil, fmt.Errorf("graph query edge %d: %w", i, err)
 		}
 		offset = newOffset
 		resp.Edges = append(resp.Edges, edge)
@@ -234,7 +243,7 @@ func DecodeGraphShortestPathResult(data []byte) (*GraphShortestPathResult, error
 
 	nodeCount := int(binary.BigEndian.Uint16(data[offset:]))
 	offset += 2
-	resp.Nodes = make([]GraphShortestPathNode, 0, nodeCount)
+	resp.Nodes = make([]GraphShortestPathNode, 0, recordCapacity(nodeCount))
 	for i := 0; i < nodeCount; i++ {
 		if len(data) < offset+10 {
 			return nil, fmt.Errorf("graph shortest path node %d truncated", i)
@@ -247,13 +256,22 @@ func DecodeGraphShortestPathResult(data []byte) (*GraphShortestPathResult, error
 		resp.Nodes = append(resp.Nodes, node)
 	}
 
+	if len(data) < offset+2 {
+		return nil, fmt.Errorf("graph shortest path result missing edge count")
+	}
 	edgeCount := int(binary.BigEndian.Uint16(data[offset:]))
 	offset += 2
-	resp.Edges = make([]Edge, 0, edgeCount)
+	if len(data) < offset+4 {
+		return nil, fmt.Errorf("graph shortest path result missing correlation_id")
+	}
+	if edgeCount > (len(data)-offset-4)/minEdgeWireSize {
+		return nil, fmt.Errorf("graph shortest path edge count %d exceeds payload capacity", edgeCount)
+	}
+	resp.Edges = make([]Edge, 0, recordCapacity(edgeCount))
 	for i := 0; i < edgeCount; i++ {
-		edge, newOffset := ParseEdge(data, offset)
-		if newOffset == offset {
-			return nil, fmt.Errorf("graph shortest path edge %d truncated", i)
+		edge, newOffset, err := parseEdgeStrict(data, offset)
+		if err != nil {
+			return nil, fmt.Errorf("graph shortest path edge %d: %w", i, err)
 		}
 		offset = newOffset
 		resp.Edges = append(resp.Edges, edge)
@@ -287,7 +305,7 @@ func DecodeGraphDegreeResult(data []byte) (*GraphDegreeResult, error) {
 	count := int(binary.BigEndian.Uint16(data[offset:]))
 	offset += 2
 
-	resp.Entries = make([]GraphDegreeEntry, 0, count)
+	resp.Entries = make([]GraphDegreeEntry, 0, recordCapacity(count))
 	for i := 0; i < count; i++ {
 		if len(data) < offset+12 {
 			return nil, fmt.Errorf("graph degree entry %d truncated", i)
@@ -336,7 +354,7 @@ func DecodeGraphCommonNeighborsResult(data []byte) (*GraphCommonNeighborsResult,
 
 	nodeCount := int(binary.BigEndian.Uint16(data[offset:]))
 	offset += 2
-	resp.Nodes = make([]GraphShortestPathNode, 0, nodeCount)
+	resp.Nodes = make([]GraphShortestPathNode, 0, recordCapacity(nodeCount))
 	for i := 0; i < nodeCount; i++ {
 		if len(data) < offset+10 {
 			return nil, fmt.Errorf("graph common neighbors node %d truncated", i)
@@ -349,13 +367,22 @@ func DecodeGraphCommonNeighborsResult(data []byte) (*GraphCommonNeighborsResult,
 		resp.Nodes = append(resp.Nodes, node)
 	}
 
+	if len(data) < offset+2 {
+		return nil, fmt.Errorf("graph common neighbors result missing edge count")
+	}
 	edgeCount := int(binary.BigEndian.Uint16(data[offset:]))
 	offset += 2
-	resp.Edges = make([]Edge, 0, edgeCount)
+	if len(data) < offset+4 {
+		return nil, fmt.Errorf("graph common neighbors result missing correlation_id")
+	}
+	if edgeCount > (len(data)-offset-4)/minEdgeWireSize {
+		return nil, fmt.Errorf("graph common neighbors edge count %d exceeds payload capacity", edgeCount)
+	}
+	resp.Edges = make([]Edge, 0, recordCapacity(edgeCount))
 	for i := 0; i < edgeCount; i++ {
-		edge, newOffset := ParseEdge(data, offset)
-		if newOffset == offset {
-			return nil, fmt.Errorf("graph common neighbors edge %d truncated", i)
+		edge, newOffset, err := parseEdgeStrict(data, offset)
+		if err != nil {
+			return nil, fmt.Errorf("graph common neighbors edge %d: %w", i, err)
 		}
 		offset = newOffset
 		resp.Edges = append(resp.Edges, edge)

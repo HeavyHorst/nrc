@@ -326,3 +326,15 @@ func TestAssetTypesMatchOdin(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordCapacityCapsCountDerivedSlices(t *testing.T) {
+	if got := recordCapacity(65535); got != maxRecordPreallocation {
+		t.Fatalf("recordCapacity(65535) = %d, want %d", got, maxRecordPreallocation)
+	}
+	if got := recordCapacity(-1); got != 0 {
+		t.Fatalf("recordCapacity(-1) = %d, want 0", got)
+	}
+	if got := recordCapacity(10); got != 10 {
+		t.Fatalf("recordCapacity(10) = %d, want 10", got)
+	}
+}

@@ -101,3 +101,50 @@ func TestDecodeEmptyGraphDegreeResult(t *testing.T) {
 		t.Fatalf("decoded empty degree result = %#v", decoded)
 	}
 }
+
+func TestGraphResultDecodersRejectMissingEdgeCount(t *testing.T) {
+	// A node count that consumes every remaining byte leaves no room for the
+	// edge count. Each decoder must reject the frame instead of reading past it.
+	cases := []struct {
+		name    string
+		payload []byte
+		decode  func([]byte) error
+	}{
+		{
+			name:    "graph query",
+			payload: make([]byte, 33),
+			decode: func(p []byte) error {
+				_, err := DecodeGraphQueryResult(p)
+				return err
+			},
+		},
+		{
+			name:    "graph shortest path",
+			payload: make([]byte, 43),
+			decode: func(p []byte) error {
+				_, err := DecodeGraphShortestPathResult(p)
+				return err
+			},
+		},
+		{
+			name:    "graph common neighbors",
+			payload: make([]byte, 41),
+			decode: func(p []byte) error {
+				_, err := DecodeGraphCommonNeighborsResult(p)
+				return err
+			},
+		},
+	}
+	cases[0].payload[18] = 0 // truncated flag
+	binary.BigEndian.PutUint16(cases[0].payload[19:21], 1)
+	cases[1].payload[28] = 0 // found
+	cases[1].payload[29] = 0 // path length
+	binary.BigEndian.PutUint16(cases[1].payload[30:32], 1)
+	binary.BigEndian.PutUint16(cases[2].payload[28:30], 1)
+
+	for _, tc := range cases {
+		if err := tc.decode(tc.payload); err == nil {
+			t.Fatalf("%s: frame without an edge count was accepted", tc.name)
+		}
+	}
+}
