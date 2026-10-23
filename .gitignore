@@ -24,6 +24,8 @@ benchmark/bin/
 # Protocol fuzzing build output and crash artifacts
 /test/protocol_fuzz/.build/
 /test/protocol_fuzz/artifacts/
+/client/fuzz/.build/
+/client/fuzz/artifacts/
 
 # Benchmark results
 /.benchmark-results/

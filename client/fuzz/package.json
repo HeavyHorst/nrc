@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "description": "Opt-in Jazzer.js harness for client/protocol.js and client/frames.js",
+  "scripts": {
+    "fuzz": "jazzer protocol.fuzz.cjs"
+  },
+  "devDependencies": {
+    "@jazzer.js/core": "2.1.0"
+  }
+}
