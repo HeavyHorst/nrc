@@ -151,7 +151,7 @@ func DecodeCustomerSearchPage(data []byte) (*CustomerSearchPageResponse, error) 
 	}
 	r := &CustomerSearchPageResponse{ConvID: binary.BigEndian.Uint64(data), HasMore: data[8] == 1, NextCompanyID: binary.BigEndian.Uint64(data[9:]), TotalCount: binary.BigEndian.Uint32(data[17:]), CorrelationID: binary.BigEndian.Uint32(data[23:])}
 	count, offset := int(binary.BigEndian.Uint16(data[21:])), 27
-	r.Assets = make([]Asset, 0, count)
+	r.Assets = make([]Asset, 0, recordCapacity(count))
 	for i := 0; i < count; i++ {
 		asset, next, err := parseAssetHeaderStrict(data, offset)
 		if err != nil {
@@ -370,7 +370,7 @@ func parseAssetAttachmentsStrict(data []byte, offset int) ([]Attachment, int, er
 	}
 	count := int(binary.BigEndian.Uint16(data[offset:]))
 	offset += 2
-	attachments := make([]Attachment, 0, count)
+	attachments := make([]Attachment, 0, recordCapacity(count))
 	for i := 0; i < count; i++ {
 		if len(data) < offset+2 {
 			return nil, start, fmt.Errorf("response too short: missing attachment file_id length")
@@ -575,7 +575,7 @@ func DecodeAssetListResponse(data []byte) (*AssetListResponse, error) {
 	resp.CorrelationID = binary.BigEndian.Uint32(data[offset:])
 	offset += 4
 
-	resp.Assets = make([]Asset, 0, count)
+	resp.Assets = make([]Asset, 0, recordCapacity(count))
 	for i := 0; i < count; i++ {
 		var a Asset
 		var err error
@@ -636,7 +636,7 @@ func DecodeAssetListPage(data []byte) (*AssetListPageResponse, error) {
 	resp.CorrelationID = binary.BigEndian.Uint32(data[offset:])
 	offset += 4
 
-	resp.Assets = make([]Asset, 0, count)
+	resp.Assets = make([]Asset, 0, recordCapacity(count))
 	for i := 0; i < count; i++ {
 		var a Asset
 		var err error
@@ -682,7 +682,7 @@ func DecodeNoteProjectList(data []byte) (*NoteProjectListResponse, error) {
 	resp.CorrelationID = binary.BigEndian.Uint32(data[offset:])
 	offset += 4
 
-	resp.Projects = make([]string, 0, count)
+	resp.Projects = make([]string, 0, recordCapacity(count))
 	for i := 0; i < count; i++ {
 		if len(data) < offset+2 {
 			return nil, fmt.Errorf("note project list decode failed at index %d: missing project length", i)
@@ -723,7 +723,7 @@ func DecodeNoteTagList(data []byte) (*NoteTagListResponse, error) {
 	resp.CorrelationID = binary.BigEndian.Uint32(data[offset:])
 	offset += 4
 
-	resp.Tags = make([]string, 0, count)
+	resp.Tags = make([]string, 0, recordCapacity(count))
 	for i := 0; i < count; i++ {
 		if len(data) < offset+2 {
 			return nil, fmt.Errorf("note tag list decode failed at index %d: missing tag length", i)

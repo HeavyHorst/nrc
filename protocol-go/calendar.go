@@ -110,7 +110,7 @@ func DecodeCalendarPage(data []byte) (*CalendarPage, error) {
 	count := int(binary.BigEndian.Uint16(data[8:]))
 	p.Cursor = CalendarCursor{At: int64(binary.BigEndian.Uint64(data[11:])), Kind: data[19], ID: binary.BigEndian.Uint64(data[20:])}
 	o := 28
-	p.Rows = make([]CalendarRow, 0, count)
+	p.Rows = make([]CalendarRow, 0, recordCapacity(count))
 	readText := func() (string, error) {
 		if o+2 > len(data) {
 			return "", fmt.Errorf("truncated calendar string length")

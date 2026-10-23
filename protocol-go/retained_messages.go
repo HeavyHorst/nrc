@@ -112,7 +112,7 @@ func DecodeMessagePage(data []byte) (*MessagePage, error) {
 		return nil, fmt.Errorf("message count exceeds %d", MaxMessagePageCount)
 	}
 	p := &MessagePage{ConvID: binary.BigEndian.Uint64(data), Ascending: data[8] == 1, HasMore: data[9] == 1, Truncated: data[10] == 1,
-		HighWaterSeq: binary.BigEndian.Uint64(data[11:]), RetentionCutoffSeq: binary.BigEndian.Uint64(data[19:]), ContinuationCursor: binary.BigEndian.Uint64(data[27:]), CorrelationID: binary.BigEndian.Uint32(data[35:]), Messages: make([]RetainedMessage, 0, count)}
+		HighWaterSeq: binary.BigEndian.Uint64(data[11:]), RetentionCutoffSeq: binary.BigEndian.Uint64(data[19:]), ContinuationCursor: binary.BigEndian.Uint64(data[27:]), CorrelationID: binary.BigEndian.Uint32(data[35:]), Messages: make([]RetainedMessage, 0, recordCapacity(count))}
 	off := 41
 	for i := 0; i < count; i++ {
 		if len(data) < off+34 {

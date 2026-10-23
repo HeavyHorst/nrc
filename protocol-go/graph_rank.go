@@ -101,7 +101,7 @@ func DecodeGraphRankResult(data []byte) (*GraphRankResult, error) {
 	if entryCount > MaxGraphRankEntries {
 		return nil, fmt.Errorf("graph rank entry count %d exceeds maximum %d", entryCount, MaxGraphRankEntries)
 	}
-	result.Entries = make([]GraphRankEntry, 0, entryCount)
+	result.Entries = make([]GraphRankEntry, 0, recordCapacity(entryCount))
 	for i := 0; i < entryCount; i++ {
 		if len(data) < offset+19 {
 			return nil, fmt.Errorf("graph rank entry %d truncated", i)
@@ -119,7 +119,7 @@ func DecodeGraphRankResult(data []byte) (*GraphRankResult, error) {
 		if pathCount > MaxGraphRankPaths {
 			return nil, fmt.Errorf("graph rank entry %d path count exceeds maximum %d", i, MaxGraphRankPaths)
 		}
-		entry.Paths = make([]GraphRankPath, 0, pathCount)
+		entry.Paths = make([]GraphRankPath, 0, recordCapacity(pathCount))
 		for j := 0; j < pathCount; j++ {
 			if len(data) < offset+3 {
 				return nil, fmt.Errorf("graph rank entry %d path %d truncated", i, j)
@@ -147,7 +147,7 @@ func DecodeGraphRankResult(data []byte) (*GraphRankResult, error) {
 	if edgeCount > MaxGraphRankEdges {
 		return nil, fmt.Errorf("graph rank edge count %d exceeds maximum %d", edgeCount, MaxGraphRankEdges)
 	}
-	result.Edges = make([]Edge, 0, edgeCount)
+	result.Edges = make([]Edge, 0, recordCapacity(edgeCount))
 	for i := 0; i < edgeCount; i++ {
 		if len(data) < offset+30 {
 			return nil, fmt.Errorf("graph rank edge %d truncated", i)

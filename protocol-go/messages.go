@@ -518,7 +518,7 @@ func DecodeStatsResponse(data []byte) (*StatsResponse, error) {
 		return nil, fmt.Errorf("stats wal details truncated: need %d bytes, got %d", expectedBytes, buf.Len())
 	}
 
-	stats.WALDetails = make([]StatsWALDetail, 0, int(walDetailsCount))
+	stats.WALDetails = make([]StatsWALDetail, 0, recordCapacity(int(walDetailsCount)))
 	for i := 0; i < int(walDetailsCount); i++ {
 		detail := StatsWALDetail{}
 
@@ -680,7 +680,7 @@ func DecodePresenceUpdate(data []byte) (*PresenceUpdate, error) {
 		return nil, err
 	}
 
-	update.Users = make([]PresenceUser, 0, userListLen)
+	update.Users = make([]PresenceUser, 0, recordCapacity(int(userListLen)))
 	for i := 0; i < int(userListLen); i++ {
 		name, err := readString(buf)
 		if err != nil {

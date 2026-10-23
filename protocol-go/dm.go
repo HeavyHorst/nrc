@@ -162,7 +162,7 @@ func DecodeDMList(data []byte) (*DMList, error) {
 		return nil, fmt.Errorf("failed to read correlation_id: %w", err)
 	}
 
-	list.Entries = make([]DMEntry, 0, count)
+	list.Entries = make([]DMEntry, 0, recordCapacity(int(count)))
 	for i := 0; i < int(count); i++ {
 		entry := DMEntry{}
 

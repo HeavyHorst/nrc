@@ -46,7 +46,7 @@ func DecodeTaskDependentsPage(payload []byte) (*TaskDependentsPage, error) {
 	if binary.Read(buf, binary.BigEndian, &page.ConvID) != nil || binary.Read(buf, binary.BigEndian, &page.TaskID) != nil || binary.Read(buf, binary.BigEndian, &success) != nil || success > 1 || binary.Read(buf, binary.BigEndian, &count) != nil || count > MaxTaskPageSize {
 		return nil, fmt.Errorf("invalid task dependents header")
 	}
-	page.Tasks = make([]*Task, 0, count)
+	page.Tasks = make([]*Task, 0, recordCapacity(int(count)))
 	var lastID uint64
 	for i := 0; i < int(count); i++ {
 		task, err := DecodeTaskBinary(buf)

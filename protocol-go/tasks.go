@@ -618,7 +618,7 @@ func DecodeTaskListResponse(payload []byte) (*TaskListResponse, error) {
 		return nil, fmt.Errorf("failed to read task count: %w", err)
 	}
 
-	tasks := make([]*Task, 0, count)
+	tasks := make([]*Task, 0, recordCapacity(int(count)))
 	for i := 0; i < int(count); i++ {
 		task, err := DecodeTaskBinary(buf)
 		if err != nil {
@@ -691,7 +691,7 @@ func DecodeTaskQueryPage(payload []byte) (*TaskQueryPage, error) {
 	if binary.Read(buf, binary.BigEndian, &page.ConvID) != nil || binary.Read(buf, binary.BigEndian, &success) != nil || success > 1 || binary.Read(buf, binary.BigEndian, &count) != nil || count > MaxTaskPageSize {
 		return nil, fmt.Errorf("invalid task query page header")
 	}
-	page.Tasks = make([]*Task, 0, count)
+	page.Tasks = make([]*Task, 0, recordCapacity(int(count)))
 	for i := 0; i < int(count); i++ {
 		task, err := DecodeTaskBinary(buf)
 		if err != nil {
@@ -741,14 +741,15 @@ func DecodeTaskProjects(payload []byte) (*TaskProjects, error) {
 	if binary.Read(buf, binary.BigEndian, &result.ConvID) != nil || binary.Read(buf, binary.BigEndian, &count) != nil {
 		return nil, fmt.Errorf("invalid task projects header")
 	}
-	result.Projects = make([]string, count)
+	result.Projects = make([]string, 0, recordCapacity(int(count)))
 	previous := ""
-	for i := range result.Projects {
+	for i := 0; i < int(count); i++ {
 		value, err := readString(buf)
 		if err != nil || len(value) == 0 || len(value) > MaxProjectLength || i > 0 && value <= previous {
 			return nil, fmt.Errorf("invalid task project list")
 		}
-		result.Projects[i], previous = value, value
+		result.Projects = append(result.Projects, value)
+		previous = value
 	}
 	hasMore, err := buf.ReadByte()
 	if err != nil || hasMore > 1 {
@@ -779,7 +780,7 @@ func DecodeTaskListPage(payload []byte) (*TaskListPage, error) {
 	if count > MaxTaskPageSize {
 		return nil, fmt.Errorf("task page count %d exceeds maximum %d", count, MaxTaskPageSize)
 	}
-	page.Tasks = make([]*Task, 0, count)
+	page.Tasks = make([]*Task, 0, recordCapacity(int(count)))
 	for i := 0; i < int(count); i++ {
 		task, err := DecodeTaskBinary(buf)
 		if err != nil {
@@ -889,7 +890,7 @@ func DecodeAttachments(buf *bytes.Reader) ([]Attachment, error) {
 		return nil, err
 	}
 
-	attachments := make([]Attachment, 0, count)
+	attachments := make([]Attachment, 0, recordCapacity(int(count)))
 	for i := 0; i < int(count); i++ {
 		fileId, err := readString(buf)
 		if err != nil {
@@ -1077,7 +1078,7 @@ func DecodeTaskSliceList(payload []byte) (*TaskSliceList, error) {
 		return nil, fmt.Errorf("invalid slice list count")
 	}
 	result.Success = success == 1
-	result.Slices = make([]TaskSlice, 0, count)
+	result.Slices = make([]TaskSlice, 0, recordCapacity(int(count)))
 	for i := 0; i < int(count); i++ {
 		slice := TaskSlice{}
 		name, err := readString(buf)

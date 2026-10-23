@@ -39,13 +39,13 @@ func decodeStringList(payload []byte) (*StringList, error) {
 	if binary.Read(b, binary.BigEndian, &r.ConvID) != nil || binary.Read(b, binary.BigEndian, &count) != nil {
 		return nil, fmt.Errorf("invalid metadata list header")
 	}
-	r.Values = make([]string, count)
-	for i := range r.Values {
+	r.Values = make([]string, 0, recordCapacity(int(count)))
+	for i := 0; i < int(count); i++ {
 		v, err := readString(b)
 		if err != nil || v == "" || !utf8.ValidString(v) || i > 0 && v <= r.Values[i-1] {
 			return nil, fmt.Errorf("invalid metadata list value")
 		}
-		r.Values[i] = v
+		r.Values = append(r.Values, v)
 	}
 	more, err := b.ReadByte()
 	if err != nil || more > 1 || binary.Read(b, binary.BigEndian, &r.CorrelationID) != nil || b.Len() != 0 {
