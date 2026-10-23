@@ -108,7 +108,6 @@ window.NRCAttention = (() => {
         if (typeof sendPacket === "function") { sendPacket(buffer); return; }
         if (typeof ws !== "undefined" && ws?.readyState === WebSocket.OPEN) ws.send(buffer);
       },
-      parseTask: (view, offset) => parseTask(view, offset),
       // Counts must not seed the task register's cache or trigger its renders.
       cacheTasks: () => {},
       onProjects: () => {},

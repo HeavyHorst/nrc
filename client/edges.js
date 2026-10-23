@@ -459,17 +459,8 @@ function requestEdgePage(convId, targetType, targetId, options = {}) {
 }
 
 function handleEdgeListPage(view) {
-  const detail = {
-    convId: view.getBigUint64(2), targetType: view.getUint16(10), targetId: view.getBigUint64(12),
-    hasMore: view.getUint8(20) === 1, nextEdgeId: view.getBigUint64(21), totalCount: view.getUint32(29), edges: [],
-  };
-  let offset = 39;
-  for (let i = 0; i < view.getUint16(33); i++) {
-    const parsed = parseEdge(view, offset);
-    offset = parsed.newOffset;
-    detail.edges.push(parsed.edge);
-  }
-  settlePendingEdgeRpc(view.getUint32(35), true, detail);
+  const page = window.NRCFrames.decodeEdgeListPage(view);
+  settlePendingEdgeRpc(page.correlationId, true, page);
 }
 
 function sendGraphQuery(convId, startType, startId, maxDepth, relationMask, direction, flags, requestOptions = null) {
@@ -677,61 +668,9 @@ function sendCommonNeighbors(convId, aType, aId, bType, bId, relationMask, direc
 // WIRE PROTOCOL - RECEIVE
 // =============================================================================
 
-function parseEdge(dataView, offset) {
-  const edgeId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const sourceType = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const sourceId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const targetType = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const targetId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const relation = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const createdAt = dataView.getBigInt64(offset, false);
-  offset += 8;
-
-  const createdByLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const createdByBytes = new Uint8Array(dataView.buffer, offset, createdByLen);
-  const createdBy = new TextDecoder().decode(createdByBytes);
-  offset += createdByLen;
-
-  return {
-    edge: {
-      edgeId,
-      convId,
-      sourceType,
-      sourceId,
-      targetType,
-      targetId,
-      relation,
-      createdAt,
-      createdBy,
-    },
-    newOffset: offset,
-  };
-}
-
 function handleEdgeCreated(dataView) {
   console.log("[NRCEdges] handleEdgeCreated received");
-  const { edge, newOffset } = parseEdge(dataView, 2);
-  if (dataView.byteLength < newOffset + 4) {
-    console.error("S_EdgeCreated missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(newOffset, false);
+  const { edge, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
 
   settlePendingEdgeRpc(correlationId, true, {
     kind: "create",
@@ -749,13 +688,7 @@ function handleEdgeCreated(dataView) {
 }
 
 function handleEdgeDeleted(dataView) {
-  if (dataView.byteLength < 22) {
-    console.error("S_EdgeDeleted missing correlation_id");
-    return;
-  }
-  const convId = dataView.getBigUint64(2, false);
-  const edgeId = dataView.getBigUint64(10, false);
-  const correlationId = dataView.getUint32(18, false);
+  const { convId, edgeId, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
   markEdgeMutation(convId, edgeId);
 
   settlePendingEdgeRpc(correlationId, true, {
@@ -775,34 +708,9 @@ function handleEdgeDeleted(dataView) {
 
 function handleEdgeList(dataView) {
   console.log("[NRCEdges] handleEdgeList received");
-  let offset = 2;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const targetType = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const targetId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const count = dataView.getUint16(offset, false);
-  offset += 2;
-
+  const { convId, targetType, targetId, edges, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
+  const count = edges.length;
   console.log("[NRCEdges] EdgeList for convId:", convId, "targetType:", targetType, "targetId:", targetId, "count:", count);
-
-  const edges = [];
-  for (let i = 0; i < count; i++) {
-    const { edge, newOffset } = parseEdge(dataView, offset);
-    offset = newOffset;
-    edges.push(edge);
-  }
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_EdgeList missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
   const pending = pendingEdgeRpcByCorrelation.get(correlationId);
   for (const edge of edges) {
     const version = edgeMutationVersions.get(`${convId}:${edge.edgeId}`) ?? 0;
@@ -835,26 +743,8 @@ function handleEdgeList(dataView) {
 }
 
 function handleAllEdgeList(dataView) {
-  let offset = 2;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const count = dataView.getUint32(offset, false);
-  offset += 4;
-
-  const edges = [];
-  for (let i = 0; i < count; i++) {
-    const { edge, newOffset } = parseEdge(dataView, offset);
-    offset = newOffset;
-    edges.push(edge);
-  }
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_AllEdgeList missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
+  const { convId, edges, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
+  const count = edges.length;
   const pending = pendingEdgeRpcByCorrelation.get(correlationId);
   for (const edge of edges) {
     const version = edgeMutationVersions.get(`${convId}:${edge.edgeId}`) ?? 0;
@@ -881,20 +771,12 @@ function handleAllEdgeList(dataView) {
 }
 
 function handleAllEdgeListPage(dataView) {
-  let offset = 2;
-  const convId = dataView.getBigUint64(offset, false); offset += 8;
-  const hasMore = dataView.getUint8(offset) === 1; offset += 1;
-  const nextEdgeId = dataView.getBigUint64(offset, false); offset += 8;
-  const totalCount = dataView.getUint32(offset, false); offset += 4;
-  const count = dataView.getUint16(offset, false); offset += 2;
-  const correlationId = dataView.getUint32(offset, false); offset += 4;
+  const { convId, hasMore, nextEdgeId, totalCount, edges, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
+  const count = edges.length;
   const pending = pendingEdgeRpcByCorrelation.get(correlationId);
-  const edges = [];
-  for (let i = 0; i < count; i++) {
-    const parsed = parseEdge(dataView, offset); offset = parsed.newOffset;
-    edges.push(parsed.edge);
-    const version = edgeMutationVersions.get(`${convId}:${parsed.edge.edgeId}`) ?? 0;
-    if (pending?.snapshotStartVersion == null || version <= pending.snapshotStartVersion) storeEdge(parsed.edge);
+  for (const edge of edges) {
+    const version = edgeMutationVersions.get(`${convId}:${edge.edgeId}`) ?? 0;
+    if (pending?.snapshotStartVersion == null || version <= pending.snapshotStartVersion) storeEdge(edge);
   }
   settlePendingEdgeRpc(correlationId, true, {
     kind: "list_all_paged", convId, hasMore, nextEdgeId, totalCount,
@@ -906,122 +788,28 @@ function handleAllEdgeListPage(dataView) {
 }
 
 function handleGraphQueryResult(dataView) {
-  let offset = 2;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const startType = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const startId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const truncated = dataView.getUint8(offset);
-  offset += 1;
-
-  const nodeCount = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const nodes = [];
-  for (let i = 0; i < nodeCount; i++) {
-    const type = dataView.getUint16(offset, false);
-    offset += 2;
-
-    const id = dataView.getBigUint64(offset, false);
-    offset += 8;
-
-    const depth = dataView.getUint8(offset);
-    offset += 1;
-
-    nodes.push({ type, id, depth });
-  }
-
-  const edgeCount = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const edges = [];
-  for (let i = 0; i < edgeCount; i++) {
-    const { edge, newOffset } = parseEdge(dataView, offset);
-    offset = newOffset;
-    edges.push(edge);
-  }
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_GraphQueryResult missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
+  const { convId, startType, startId, truncated, nodes, edges, correlationId } =
+    window.NRCFrames.decodeServerFrame(dataView);
 
   settlePendingEdgeRpc(correlationId, true, {
     kind: "graph_query",
     convId,
     startType,
     startId,
-    truncated,
+    truncated: truncated ? 1 : 0,
     nodes,
     edges,
     correlationId,
   });
 
   for (const listener of graphQueryListeners) {
-    listener({ type: "bfs", convId, startType, startId, truncated, nodes, edges });
+    listener({ type: "bfs", convId, startType, startId, truncated: truncated ? 1 : 0, nodes, edges });
   }
 }
 
 function handleShortestPathResult(dataView) {
-  let offset = 2;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const fromType = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const fromId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const toType = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const toId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const found = dataView.getUint8(offset);
-  offset += 1;
-
-  const pathLength = dataView.getUint8(offset);
-  offset += 1;
-
-  const nodeCount = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const nodes = [];
-  for (let i = 0; i < nodeCount; i++) {
-    const type = dataView.getUint16(offset, false);
-    offset += 2;
-
-    const id = dataView.getBigUint64(offset, false);
-    offset += 8;
-
-    nodes.push({ type, id });
-  }
-
-  const edgeCount = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const edges = [];
-  for (let i = 0; i < edgeCount; i++) {
-    const { edge, newOffset } = parseEdge(dataView, offset);
-    offset = newOffset;
-    edges.push(edge);
-  }
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_GraphShortestPathResult missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
+  const { convId, fromType, fromId, toType, toId, found, pathLength, nodes, edges, correlationId } =
+    window.NRCFrames.decodeServerFrame(dataView);
 
   settlePendingEdgeRpc(correlationId, true, {
     kind: "graph_path",
@@ -1030,7 +818,7 @@ function handleShortestPathResult(dataView) {
     fromId,
     toType,
     toId,
-    found,
+    found: found ? 1 : 0,
     pathLength,
     nodes,
     edges,
@@ -1038,38 +826,12 @@ function handleShortestPathResult(dataView) {
   });
 
   for (const listener of graphQueryListeners) {
-    listener({ type: "path", convId, fromType, fromId, toType, toId, found, pathLength, nodes, edges });
+    listener({ type: "path", convId, fromType, fromId, toType, toId, found: found ? 1 : 0, pathLength, nodes, edges });
   }
 }
 
 function handleDegreeResult(dataView) {
-  let offset = 2;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const count = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const entries = [];
-  for (let i = 0; i < count; i++) {
-    const type = dataView.getUint16(offset, false);
-    offset += 2;
-
-    const id = dataView.getBigUint64(offset, false);
-    offset += 8;
-
-    const degree = dataView.getUint16(offset, false);
-    offset += 2;
-
-    entries.push({ type, id, degree });
-  }
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_GraphDegreeResult missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
+  const { convId, entries, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
 
   settlePendingEdgeRpc(correlationId, true, {
     kind: "graph_degree",
@@ -1084,52 +846,8 @@ function handleDegreeResult(dataView) {
 }
 
 function handleCommonNeighborsResult(dataView) {
-  let offset = 2;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const aType = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const aId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const bType = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const bId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const nodeCount = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const nodes = [];
-  for (let i = 0; i < nodeCount; i++) {
-    const type = dataView.getUint16(offset, false);
-    offset += 2;
-
-    const id = dataView.getBigUint64(offset, false);
-    offset += 8;
-
-    nodes.push({ type, id });
-  }
-
-  const edgeCount = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const edges = [];
-  for (let i = 0; i < edgeCount; i++) {
-    const { edge, newOffset } = parseEdge(dataView, offset);
-    offset = newOffset;
-    edges.push(edge);
-  }
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_GraphCommonNeighborsResult missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
+  const { convId, aType, aId, bType, bId, nodes, edges, correlationId } =
+    window.NRCFrames.decodeServerFrame(dataView);
 
   settlePendingEdgeRpc(correlationId, true, {
     kind: "graph_common",

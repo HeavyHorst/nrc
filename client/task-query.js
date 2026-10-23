@@ -3,12 +3,6 @@
 (function () {
   const sorts = ["priority", "status", "assignee", "dueAt", "createdAt", "title", "color", "project", "workOrder"];
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
-  function readQueryString(view, offset) {
-    const length = view.getUint16(offset, false);
-    return { value: decoder.decode(new Uint8Array(view.buffer, view.byteOffset + offset + 2, length)), newOffset: offset + 2 + length };
-  }
-
   function encodeTaskQuery(query, cursor, correlationId) {
     const assignee = encoder.encode(query.assignee ?? "");
     const project = encoder.encode(query.project ?? "");
@@ -136,49 +130,41 @@
       refreshTimer = setTimeout(() => update(), 100);
     }
     function handlePage(view) {
-      // Correlation is the final field, so superseded pages need not be parsed
-      // and cannot overwrite newer entities in the shared cache either.
-      const correlationId = view.getUint32(view.byteLength - 4, false);
+      const page = window.NRCFrames.decodeTaskQueryPage(view);
+      const correlationId = page.correlationId;
       const request = pageRequests.get(correlationId);
       if (!request && (!pending || pending.correlationId !== correlationId)) return;
-      const roomId = view.getBigUint64(2, false);
+      const roomId = page.convId;
       if (roomId !== (request ? 0n : pending.target.roomId)) return;
       const target = request ? { tasks: new Map() } : pending.target;
       if (request) { clearTimeout(request.timer); pageRequests.delete(correlationId); }
       else cancelPage();
-      let offset = 11;
-      const count = view.getUint16(offset, false); offset += 2;
-      const loaded = [];
-      for (let i = 0; i < count; i++) {
-        const parsed = options.parseTask(view, offset);
-        loaded.push(parsed.task); offset = parsed.newOffset;
+      if (!page.success) {
+        if (request) { request.reject(new Error(page.error || "Task query failed")); return; }
+        target.mode = "error"; target.error = page.error; notify(); return;
       }
-      const hasMore = view.getUint8(offset++) === 1;
-      const number = view.getBigInt64(offset, false); offset += 8;
-      const taskId = view.getBigUint64(offset, false); offset += 8;
-      const text = readQueryString(view, offset); offset = text.newOffset;
-      const total = view.getUint32(offset, false); offset += 4;
-      const error = readQueryString(view, offset);
-      if (!view.getUint8(10)) {
-        if (request) { request.reject(new Error(error.value || "Task query failed")); return; }
-        target.mode = "error"; target.error = error.value; notify(); return;
-      }
-      for (const task of loaded) target.tasks.set(task.id, task);
-      options.cacheTasks(roomId, loaded, { scopedPage: Boolean(request) });
-      Object.assign(target, { mode: "results", hasMore, total, cursor: { number, text: text.value, taskId } });
-      if (request) { request.resolve({ tasks: loaded, hasMore, total, cursor: target.cursor }); return; }
+      for (const task of page.tasks) target.tasks.set(task.id, task);
+      options.cacheTasks(roomId, page.tasks, { scopedPage: Boolean(request) });
+      Object.assign(target, {
+        mode: "results",
+        hasMore: page.hasMore,
+        total: page.totalCount,
+        cursor: {
+          number: page.nextCursorNumber,
+          text: page.nextCursorText,
+          taskId: page.nextCursorTaskId,
+        },
+      });
+      if (request) { request.resolve({ tasks: page.tasks, hasMore: page.hasMore, total: page.totalCount, cursor: target.cursor }); return; }
       notify();
     }
     function handleProjects(view) {
-      const correlationId = view.getUint32(view.byteLength - 4, false);
-      const roomId = view.getBigUint64(2, false);
+      const page = window.NRCFrames.decodeStringList(view);
+      const correlationId = page.correlationId;
+      const roomId = page.convId;
       if (projectRequest?.correlationId !== correlationId || projectRequest.roomId !== roomId) return;
-      const count = view.getUint16(10, false);
-      let offset = 12;
-      for (let i = 0; i < count; i++) {
-        const parsed = readQueryString(view, offset); projectRequest.values.push(parsed.value); offset = parsed.newOffset;
-      }
-      if (view.getUint8(offset) === 1) return;
+      projectRequest.values.push(...page.values);
+      if (page.hasMore) return;
       projects.set(roomId, projectRequest.values);
       clearTimeout(projectRequest.timer);
       projectRequest = null;
@@ -196,15 +182,10 @@
       options.send(buffer);
     }
     function handleAssignees(view) {
-      if (!assigneeRequest || view.getBigUint64(2, false) !== 0n ||
-          view.getUint32(view.byteLength - 4, false) !== assigneeRequest.correlationId) return;
-      const count = view.getUint16(10, false);
-      let offset = 12;
-      for (let i = 0; i < count; i++) {
-        const parsed = readQueryString(view, offset);
-        assigneeRequest.values.push(parsed.value); offset = parsed.newOffset;
-      }
-      if (view.getUint8(offset) === 1) return;
+      const page = window.NRCFrames.decodeStringList(view);
+      if (!assigneeRequest || page.convId !== 0n || page.correlationId !== assigneeRequest.correlationId) return;
+      assigneeRequest.values.push(...page.values);
+      if (page.hasMore) return;
       assignees = assigneeRequest.values;
       clearTimeout(assigneeRequest.timer); assigneeRequest = null;
       options.onAssignees();
@@ -237,7 +218,6 @@
     isReady: () => typeof serverReady !== "undefined" && serverReady && ws?.readyState === WebSocket.OPEN,
     nextId: () => getRpcCorrelationId(),
     send: (buffer) => { ws.send(buffer); localPacketsOut++; },
-    parseTask: (view, offset) => parseTask(view, offset),
     cacheTasks: (roomId, tasks, { scopedPage = false } = {}) => {
       if (!roomTasks.has(roomId)) roomTasks.set(roomId, new Map());
       for (const task of tasks) roomTasks.get(roomId).set(task.id, task);

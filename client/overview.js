@@ -21,19 +21,22 @@ window.NRCOverview = (() => {
     });
   }
   function handlePage(view) {
-    if (view.byteLength < 105) return;
-    const id = view.getUint32(view.byteLength - 4, false);
-    const request = pending.get(id);
+    const page = window.NRCFrames.decodeWorkspaceOverview(view);
+    const request = pending.get(page.correlationId);
     if (!request) return;
-    pending.delete(id); clearTimeout(request.timeout);
-    if (view.getBigUint64(2) !== 0n || view.getUint8(10) !== 1 || view.byteLength !== 105 + view.getUint16(99)) {
+    pending.delete(page.correlationId); clearTimeout(request.timeout);
+    if (page.convId !== 0n || !page.success) {
       request.resolve(null); return;
     }
-    let offset = 19; // opcode, scope, success, server sampling time
-    const counts = n => Array.from({ length: n }, () => { const value = view.getUint32(offset); offset += 4; return value; });
-    const status = counts(4), [assignedTasks, unassignedTasks, openSlices] = counts(3);
-    request.resolve({ counts: status, assignedTasks, unassignedTasks, openSlices,
-      sizes: counts(5), blockages: counts(3), ages: counts(5) });
+    request.resolve({
+      counts: page.statusCounts,
+      assignedTasks: page.assignedTasks,
+      unassignedTasks: page.unassignedTasks,
+      openSlices: page.openSlices,
+      sizes: page.sizeBuckets,
+      blockages: page.blockedBuckets,
+      ages: page.ageBuckets,
+    });
   }
   function cancel() {
     generation++;

@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 
-const calendar = fs.readFileSync(new URL("./calendar.js", import.meta.url), "utf8");
+const framesSource = fs.readFileSync(new URL("./protocol.js", import.meta.url), "utf8") + "\n" +
+  fs.readFileSync(new URL("./frames.js", import.meta.url), "utf8");
+const calendar = framesSource + fs.readFileSync(new URL("./calendar.js", import.meta.url), "utf8");
 const source = fs.readFileSync(new URL("./appointment-notify.js", import.meta.url), "utf8");
 const base = Date.parse("2026-09-28T12:00:00Z");
 const nanos = minutes => BigInt(base + minutes * 60000) * 1000000n;

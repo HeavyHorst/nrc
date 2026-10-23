@@ -195,13 +195,14 @@ function sendAssetMetadataPatch(asset, preview, payload, options = {}) {
 }
 
 function handleTransactionApplied(dataView) {
-  if (!(dataView instanceof DataView) || dataView.byteLength < 12) return false;
-  if (dataView.getUint16(0, false) !== 137 || dataView.getUint8(2) !== TRANSACTION_WIRE_VERSION) return false;
-  const status = dataView.getUint8(3);
-  const correlationId = dataView.getUint32(4, false);
-  const failedOperation = dataView.getUint16(8, false);
-  const count = dataView.getUint16(10, false);
-  if (status > 1 || count > 256 || dataView.byteLength !== 12 + count * 10) return false;
+  let result;
+  try {
+    result = window.NRCFrames.decodeTransactionResult(dataView);
+  } catch {
+    return false;
+  }
+  const { status, correlationId, failedOperation, operations } = result;
+  const count = operations.length;
 
   if (status === 1) {
     if (count !== 0) return false;
@@ -216,19 +217,19 @@ function handleTransactionApplied(dataView) {
   }
   if (failedOperation !== TRANSACTION_FAILED_NONE) return false;
   if (pendingTransactionRpc.get(correlationId)?.kind === "asset_patch") {
-    if (count !== 1 || dataView.getUint8(12) !== TransactionOperation.AssetPatch || dataView.getUint8(13) !== 0) return false;
-    settleTransaction(correlationId, true, { correlationId, assetId: dataView.getBigUint64(14) });
+    if (count !== 1 || operations[0].type !== TransactionOperation.AssetPatch) return false;
+    settleTransaction(correlationId, true, { correlationId, assetId: operations[0].entityId });
     return true;
   }
   if (count !== 2) return false;
 
-  const firstType = dataView.getUint8(12);
-  const secondType = dataView.getUint8(22);
-  if (firstType !== TransactionOperation.AssetCreate || dataView.getUint8(13) !== 0 ||
-      secondType !== TransactionOperation.EdgeCreate || dataView.getUint8(23) !== 0) return false;
-  const assetId = dataView.getBigUint64(14, false);
-  const edgeId = dataView.getBigUint64(24, false);
-  settleTransaction(correlationId, true, { correlationId, assetId, edgeId });
+  if (operations[0].type !== TransactionOperation.AssetCreate ||
+      operations[1].type !== TransactionOperation.EdgeCreate) return false;
+  settleTransaction(correlationId, true, {
+    correlationId,
+    assetId: operations[0].entityId,
+    edgeId: operations[1].entityId,
+  });
   return true;
 }
 

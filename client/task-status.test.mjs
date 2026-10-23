@@ -139,6 +139,8 @@ function makeHarness({ realPicker = false } = {}) {
   vm.runInContext(read("task-search.js"), sandbox);
   if (realPicker) vm.runInContext(read("custom-picker.js"), sandbox);
   vm.runInContext(read("loading-indicator.js"), sandbox);
+  vm.runInContext(read("protocol.js"), sandbox);
+  vm.runInContext(read("frames.js"), sandbox);
   vm.runInContext(`${read("tasks.js")}\nwindow.__renderTaskList = renderTaskList; window.__closeStatusMenuFor = closeStatusMenuFor;`, sandbox);
   return { sandbox, window, elements, document, sent, pickers };
 }

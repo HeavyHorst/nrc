@@ -97,6 +97,8 @@ function retainedSession() {
     globalThis: { crypto: { getRandomValues: (id) => { id.fill(7); return id; } } },
   };
   vm.runInNewContext(readFileSync(new URL("retained-messages.js", import.meta.url), "utf8"), context);
+  vm.runInNewContext(readFileSync(new URL("protocol.js", import.meta.url), "utf8"), context);
+  vm.runInNewContext(readFileSync(new URL("frames.js", import.meta.url), "utf8"), context);
   vm.runInNewContext([
     "sendRawProtocolMessage", "queuePendingRetainedSend", "finishPendingRetainedSend",
     "drainRetainedOperationQueue", "queueRetainedOperation", "completeRetainedOperation",

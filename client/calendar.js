@@ -25,7 +25,7 @@ window.NRCCalendar = (() => {
   let rendered = false;
   let people = [], peopleGeneration = 0;
   let loadingIndicator = null;
-  const encoder = new TextEncoder(), decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+  const encoder = new TextEncoder();
   const active = () => window.NRCViewManager?.getActiveView?.() === "calendar";
   const ready = () => typeof serverReady !== "undefined" && serverReady && typeof ws !== "undefined" && ws?.readyState === WebSocket.OPEN;
   function visibleRange(month = state.month, mode = state.mode) {
@@ -69,30 +69,20 @@ window.NRCCalendar = (() => {
     return buffer;
   }
   function decodePage(view) {
-    const count = view.getUint16(10), more = view.getUint8(12) === 1;
-    const cursor = { at: view.getBigInt64(13), kind: view.getUint8(21), id: view.getBigUint64(22) };
-    const rows = [];
-    let offset = 30;
-    const text = () => { const size = view.getUint16(offset); offset += 2;
-      const value = decoder.decode(new Uint8Array(view.buffer, view.byteOffset + offset, size)); offset += size; return value; };
-    for (let i = 0; i < count; i++) {
-      const wireKind = view.getUint8(offset++);
-      const kind = wireKind === 0 ? "task" : wireKind === 1 ? "reminder" : "appointment";
-      const id = view.getBigUint64(offset); offset += 8;
-      const at = view.getBigInt64(offset); offset += 8;
-      const blocked = view.getUint8(offset++) === 1;
-      const title = text(), assignee = text(), project = text();
-      const actualStartAt = wireKind >= 2 ? view.getBigInt64(offset) : at;
-      if (wireKind >= 2) offset += 8;
-      const endAt = wireKind >= 2 ? view.getBigInt64(offset) : 0n;
-      if (wireKind >= 2) offset += 8;
-      const occurrenceAt = wireKind === 3 ? view.getBigInt64(offset) : actualStartAt;
-      if (wireKind === 3) offset += 8;
-      const date = new Date(Number(actualStartAt / 1000000n));
-      rows.push({ id, kind, at, actualStartAt, endAt, occurrenceAt, serverFiltered: true, blocked, title, assignee, project, key: wireKind === 3 ? `${kind}:${id}:${occurrenceAt}` : `${kind}:${id}`,
-        day: dayKey(new Date(Number(at / 1000000n))), time: `${pad(date.getHours())}:${pad(date.getMinutes())}` });
-    }
-    return { rows, more, cursor };
+    const page = window.NRCFrames.decodeCalendarPage(view);
+    const rows = page.rows.map((row) => {
+      const kind = row.kind === 0 ? "task" : row.kind === 1 ? "reminder" : "appointment";
+      const date = new Date(Number(row.actualStartAt / 1000000n));
+      return {
+        ...row,
+        kind,
+        serverFiltered: true,
+        key: row.kind === 3 ? `${kind}:${row.id}:${row.occurrenceAt}` : `${kind}:${row.id}`,
+        day: dayKey(new Date(Number(row.at / 1000000n))),
+        time: `${pad(date.getHours())}:${pad(date.getMinutes())}`,
+      };
+    });
+    return { rows, more: page.more, cursor: page.cursor };
   }
   function requestPage(cursor = null) {
     const id = getRpcCorrelationId();

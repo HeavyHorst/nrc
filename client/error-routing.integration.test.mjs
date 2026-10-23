@@ -5,6 +5,8 @@ import path from "node:path";
 import vm from "node:vm";
 
 const clientDir = path.resolve("./client");
+const protocolSource = fs.readFileSync(path.join(clientDir, "protocol.js"), "utf8");
+const framesSource = fs.readFileSync(path.join(clientDir, "frames.js"), "utf8");
 
 function makeCustomEventClass() {
   return class CustomEvent {
@@ -59,6 +61,8 @@ function loadAssetsModule() {
   };
 
   const source = fs.readFileSync(path.join(clientDir, "assets.js"), "utf8");
+  vm.runInNewContext(protocolSource, sandbox, { filename: "protocol.js" });
+  vm.runInNewContext(framesSource, sandbox, { filename: "frames.js" });
   vm.runInNewContext(source, sandbox, { filename: "assets.js" });
 
   return {
@@ -120,9 +124,10 @@ test("asset create optionally appends a positive big-endian parent version after
   assert.equal(packets.length, 2);
 });
 
-function fullAssetPacket(correlationId, payload = "content", invalid = false, assetType = 5) {
+function fullAssetPacket(correlationId, payload = "content", invalid = false, assetType = 5, opcode = 143) {
   const bytes = new TextEncoder().encode(payload);
   const view = new DataView(new ArrayBuffer(63 + bytes.length));
+  view.setUint16(0, opcode);
   view.setUint16(2, assetType);
   view.setBigUint64(4, 42n);
   view.setBigUint64(40, 0n);
@@ -178,6 +183,7 @@ function loadEdgesModule() {
   };
 
   const source = fs.readFileSync(path.join(clientDir, "edges.js"), "utf8");
+  vm.runInNewContext(protocolSource, sandbox, { filename: "protocol.js" });
   vm.runInNewContext(source, sandbox, { filename: "edges.js" });
 
   return {
@@ -240,6 +246,7 @@ test("uncached workspace asset deletion invalidates calendar summaries", () => {
   let refreshes = 0;
   windowRef.NRCCalendar = { refreshSoon: () => refreshes++ };
   const view = new DataView(new ArrayBuffer(22));
+  view.setUint16(0, 142);
   view.setBigUint64(10, 901n);
   assets.handleAssetDeleted(view);
   assert.equal(refreshes, 1, "no asset cache or pending local delete is necessary");
@@ -265,6 +272,7 @@ test("asset success settles pending request and prevents stale error settlement"
 
   const ack = new ArrayBuffer(22);
   const view = new DataView(ack);
+  view.setUint16(0, 142, false);
   view.setBigUint64(2, 42n, false);
   view.setBigUint64(10, 901n, false);
   view.setUint32(18, correlationId, false);
@@ -305,7 +313,7 @@ test("asset mutation publishes slice changes to the slice register", () => {
     onAssetChanged: (asset, reason, correlationId) => changed.push({ asset, reason, correlationId }),
   };
 
-  assets.handleAssetUpdated(fullAssetPacket(0, "", false, assets.AssetType.Slice));
+  assets.handleAssetUpdated(fullAssetPacket(0, "", false, assets.AssetType.Slice, 141));
 
   assert.equal(changed.length, 1);
   assert.equal(changed[0].asset.assetType, assets.AssetType.Slice);
@@ -418,6 +426,7 @@ test("off-room note pages still notify the notes cache owner", () => {
   let event = null;
   assets.setOnNoteChanged((asset, action) => { event = { asset, action }; });
   const packet = new DataView(new ArrayBuffer(38));
+  packet.setUint16(0, 145, false);
   packet.setBigUint64(2, 7n, false);
   packet.setUint8(10, 0);
   packet.setUint8(11, 0);
@@ -440,6 +449,7 @@ test("customer pages do not overwrite the Notes pagination state", async () => {
   const load = assets.requestAllAssets(7n, assets.AssetType.CustomerContact);
   const correlation = new DataView(packets[0]).getUint32(16, false);
   const packet = new DataView(new ArrayBuffer(38));
+  packet.setUint16(0, 145, false);
   packet.setBigUint64(2, 7n, false);
   packet.setUint32(34, correlation, false);
   assets.handleAssetListPage(packet);
@@ -462,6 +472,7 @@ test("asset list callbacks receive the exact decoded snapshot after the cache is
   full.setUint16(2, 8, false);
   const encodedAsset = new Uint8Array(full.buffer, 2, full.byteLength - 6);
   const packet = new DataView(new ArrayBuffer(17 + encodedAsset.length));
+  packet.setUint16(0, 144, false);
   packet.setBigUint64(2, 0n, false);
   packet.setUint8(10, 1);
   packet.setUint16(11, 1, false);
@@ -481,6 +492,7 @@ test("bulk comment ingestion notifies task comment-count consumers", () => {
   assets.sendListComments(7n);
   const correlationId = new DataView(packets[0]).getUint32(14, false);
   const packet = new DataView(new ArrayBuffer(17));
+  packet.setUint16(0, 144, false);
   packet.setBigUint64(2, 7n, false);
   packet.setUint8(10, 1);
   packet.setUint16(11, 0, false);

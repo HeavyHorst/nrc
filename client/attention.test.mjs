@@ -176,7 +176,6 @@ function harness({ tasks = [], counts = {}, taskPages = null, dependencyPages = 
     myNickname: "rene",
     localPacketsOut: 0,
     getRpcCorrelationId: () => 1,
-    parseTask: (view, offset) => ({ task: view[offset], newOffset: offset + 1 }),
     activeDMs: new Map(dms.map((dm) => [dm.convId, dm])),
     isDMConversation: (convId) => dms.some((dm) => dm.convId === convId),
     formatDMDisplayName: (username) => username.toUpperCase(),

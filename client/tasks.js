@@ -1996,31 +1996,19 @@ function sendListTaskDependents(taskId, afterTaskId, options) {
 }
 
 function handleTaskDependentsPage(view) {
-  if (view.byteLength < 36) return;
-  const correlation = view.getUint32(view.byteLength - 4, false);
-  const pending = pendingTaskRpcs.get(correlation);
-  if (!pending?.dependents || view.getBigUint64(2, false) !== 0n || view.getBigUint64(10, false) !== pending.taskId) return;
-  pendingTaskRpcs.delete(correlation);
-  let result;
-  try {
-    const count = view.getUint16(19, false);
-    if (view.getUint8(18) > 1 || count > 50) throw new Error('Invalid dependency page');
-    let offset = 21, last = pending.afterTaskId;
-    const tasks = [];
-    for (let i = 0; i < count; i++) {
-      const parsed = parseTask(view, offset);
-      if (parsed.task.id <= last || parsed.task.blockedBy !== pending.taskId) throw new Error('Invalid dependency membership');
-      tasks.push(parsed.task); last = parsed.task.id; offset = parsed.newOffset;
-    }
-    const more = view.getUint8(offset++);
-    const nextTaskId = view.getBigUint64(offset, false); offset += 8;
-    const length = view.getUint16(offset, false); offset += 2;
-    if (offset + length + 4 !== view.byteLength || more > 1 || nextTaskId !== (count ? last : 0n) || (more && !count)) throw new Error('Invalid dependency cursor');
-    const message = new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset + offset, length));
-    if (!view.getUint8(18)) throw new Error(message || 'Dependency read failed');
-    result = { tasks, hasMore: more === 1, nextTaskId };
-  } catch (error) { pending.onError?.(error); return; }
-  pending.onSuccess?.(result);
+  const page = window.NRCFrames.decodeTaskDependentsPage(view);
+  const pending = pendingTaskRpcs.get(page.correlationId);
+  if (!pending?.dependents || page.convId !== 0n || page.taskId !== pending.taskId) return;
+  pendingTaskRpcs.delete(page.correlationId);
+  if (page.tasks.some((task) => task.blockedBy !== pending.taskId)) {
+    pending.onError?.(new Error("Invalid dependency membership"));
+    return;
+  }
+  if (!page.success) {
+    pending.onError?.(new Error(page.error || "Dependency read failed"));
+    return;
+  }
+  pending.onSuccess?.({ tasks: page.tasks, hasMore: page.hasMore, nextTaskId: page.nextTaskId });
 }
 
 function loadTaskPage(convId, statusMask, { reset = false } = {}) {
@@ -2165,143 +2153,6 @@ function requestTask(convId, taskId, requestOptions = null) {
 // PROTOCOL: MESSAGE PARSERS
 // =============================================================================
 
-function parseTask(dataView, offset) {
-  const task = {};
-
-  task.id = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  task.convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const titleLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const titleBytes = new Uint8Array(dataView.buffer, offset, titleLen);
-  task.title = new TextDecoder().decode(titleBytes);
-  offset += titleLen;
-
-  const descLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const descBytes = new Uint8Array(dataView.buffer, offset, descLen);
-  task.description = new TextDecoder().decode(descBytes);
-  offset += descLen;
-
-  task.status = dataView.getUint8(offset);
-  offset += 1;
-
-  task.orderIndex = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const assigneeLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const assigneeBytes = new Uint8Array(dataView.buffer, offset, assigneeLen);
-  task.assignee = new TextDecoder().decode(assigneeBytes);
-  offset += assigneeLen;
-
-  task.priority = dataView.getUint8(offset);
-  offset += 1;
-
-  task.color = dataView.getUint8(offset);
-  offset += 1;
-
-  const createdByLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const createdByBytes = new Uint8Array(dataView.buffer, offset, createdByLen);
-  task.createdBy = new TextDecoder().decode(createdByBytes);
-  offset += createdByLen;
-
-  task.createdAt = dataView.getBigInt64(offset, false);
-  offset += 8;
-
-  task.updatedAt = dataView.getBigInt64(offset, false);
-  offset += 8;
-
-  const extRefLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const extRefBytes = new Uint8Array(dataView.buffer, offset, extRefLen);
-  task.externalRef = new TextDecoder().decode(extRefBytes);
-  offset += extRefLen;
-
-  // New fields: dueAt, blockedBy, completedAt, completedBy
-  task.dueAt = dataView.getBigInt64(offset, false);
-  offset += 8;
-
-  task.blockedBy = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  task.completedAt = dataView.getBigInt64(offset, false);
-  offset += 8;
-
-  const completedByLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const completedByBytes = new Uint8Array(
-    dataView.buffer,
-    offset,
-    completedByLen,
-  );
-  task.completedBy = new TextDecoder().decode(completedByBytes);
-  offset += completedByLen;
-
-  const projectLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const projectBytes = new Uint8Array(dataView.buffer, offset, projectLen);
-  task.project = new TextDecoder().decode(projectBytes);
-  offset += projectLen;
-
-  // Parse attachments array
-  task.attachments = [];
-  const attachmentCount = dataView.getUint16(offset, false);
-  offset += 2;
-
-  for (let i = 0; i < attachmentCount; i++) {
-    // fileId (string with u16 length prefix)
-    const fileIdLen = dataView.getUint16(offset, false);
-    offset += 2;
-    const fileIdBytes = new Uint8Array(dataView.buffer, offset, fileIdLen);
-    const fileId = new TextDecoder().decode(fileIdBytes);
-    offset += fileIdLen;
-
-    // filename (string with u16 length prefix)
-    const filenameLen = dataView.getUint16(offset, false);
-    offset += 2;
-    const filenameBytes = new Uint8Array(dataView.buffer, offset, filenameLen);
-    const filename = new TextDecoder().decode(filenameBytes);
-    offset += filenameLen;
-
-    // size (u64)
-    const size = dataView.getBigUint64(offset, false);
-    offset += 8;
-
-    // mimeType (string with u16 length prefix)
-    const mimeLen = dataView.getUint16(offset, false);
-    offset += 2;
-    const mimeBytes = new Uint8Array(dataView.buffer, offset, mimeLen);
-    const mimeType = new TextDecoder().decode(mimeBytes);
-    offset += mimeLen;
-
-    // uploadedAt (i64)
-    const uploadedAt = dataView.getBigInt64(offset, false);
-    offset += 8;
-
-    task.attachments.push({
-      fileId,
-      filename,
-      size,
-      mimeType,
-      uploadedAt,
-    });
-  }
-
-  return { task, newOffset: offset };
-}
-
-function readTaskWireString(dataView, offset) {
-  const length = dataView.getUint16(offset, false);
-  offset += 2;
-  const value = new TextDecoder().decode(new Uint8Array(dataView.buffer, offset, length));
-  return { value, newOffset: offset + length };
-}
-
 function maskIncludesStatus(mask, status) {
   return status >= 0 && status < 8 && (mask & (1 << status)) !== 0;
 }
@@ -2314,29 +2165,14 @@ function isTaskStatusCacheLoaded(convId, status) {
 }
 
 function handleTaskListPage(dataView) {
-  let offset = 2;
-  const convId = dataView.getBigUint64(offset, false); offset += 8;
-  const success = dataView.getUint8(offset) !== 0; offset += 1;
-  const taskCount = dataView.getUint16(offset, false); offset += 2;
-  const tasks = [];
-  for (let i = 0; i < taskCount; i++) {
-    const parsed = parseTask(dataView, offset);
-    tasks.push(parsed.task);
-    offset = parsed.newOffset;
-  }
-  const hasMore = dataView.getUint8(offset) !== 0; offset += 1;
-  const nextCursorSortAt = dataView.getBigInt64(offset, false); offset += 8;
-  const nextCursorTaskId = dataView.getBigUint64(offset, false); offset += 8;
-  const totalCount = dataView.getUint32(offset, false); offset += 4;
-  const error = readTaskWireString(dataView, offset); offset = error.newOffset;
-  if (dataView.byteLength < offset + 4) return console.error("S_TaskListPage missing correlation_id");
-  const correlationId = dataView.getUint32(offset, false);
+  const { convId, success, tasks, hasMore, nextCursorSortAt, nextCursorTaskId, totalCount, error, correlationId } =
+    window.NRCFrames.decodeServerFrame(dataView);
   const pending = pendingTaskRpcs.get(correlationId);
   if (!pending) return console.warn("[S_TaskListPage] Unknown correlation:", correlationId);
   if (pending.kind === "ids") {
     if (!success) {
       pendingTaskRpcs.delete(correlationId);
-      pending.onError(new Error(error.value || "Task batch failed"));
+      pending.onError(new Error(error || "Task batch failed"));
       return;
     }
     if (!roomTasks.has(convId)) roomTasks.set(convId, new Map());
@@ -2353,7 +2189,7 @@ function handleTaskListPage(dataView) {
   const state = getTaskPageState(convId, pending.statusMask);
 
   if (!success) {
-    pending.onError?.({ convId, correlationId, message: error.value });
+    pending.onError?.({ convId, correlationId, message: error });
     return;
   }
 
@@ -2378,23 +2214,11 @@ function handleTaskListPage(dataView) {
 }
 
 function handleTaskFull(dataView) {
-  let offset = 2;
-  const convId = dataView.getBigUint64(offset, false); offset += 8;
-  const success = dataView.getUint8(offset) !== 0; offset += 1;
-  const hasTask = dataView.getUint8(offset) !== 0; offset += 1;
-  let task = null;
-  if (hasTask) {
-    const parsed = parseTask(dataView, offset);
-    task = parsed.task;
-    offset = parsed.newOffset;
-  }
-  const error = readTaskWireString(dataView, offset); offset = error.newOffset;
-  if (dataView.byteLength < offset + 4) return console.error("S_TaskFull missing correlation_id");
-  const correlationId = dataView.getUint32(offset, false);
+  const { convId, success, hasTask, task, error, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
   const pending = pendingTaskRpcs.get(correlationId);
   if (pending) pendingTaskRpcs.delete(correlationId);
   if (!success || !hasTask) {
-    pending?.onError?.({ convId, correlationId, message: error.value || "Task not found" });
+    pending?.onError?.({ convId, correlationId, message: error || "Task not found" });
     return;
   }
   if (!roomTasks.has(convId)) roomTasks.set(convId, new Map());
@@ -2405,13 +2229,7 @@ function handleTaskFull(dataView) {
 }
 
 function handleTaskCreated(dataView) {
-  // Skip opcode (2 bytes)
-  const { task, newOffset } = parseTask(dataView, 2);
-  if (dataView.byteLength < newOffset + 4) {
-    console.error("S_TaskCreated missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(newOffset, false);
+  const { task, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
   const pendingRpc = pendingTaskRpcs.get(correlationId);
   if (pendingRpc) {
     pendingTaskRpcs.delete(correlationId);
@@ -2464,13 +2282,7 @@ function handleTaskErrorResponse(originOpcode, correlationId, errorMsg = "") {
 }
 
 function handleTaskUpdated(dataView) {
-  // Skip opcode (2 bytes)
-  const { task, newOffset } = parseTask(dataView, 2);
-  if (dataView.byteLength < newOffset + 4) {
-    console.error("S_TaskUpdated missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(newOffset, false);
+  const { task, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
 
   // Get old task for comparison (before updating store)
   const oldTask = roomTasks.has(task.convId)
@@ -2545,20 +2357,7 @@ function notifyTaskChanged(task, reason) {
 }
 
 function handleTaskDeleted(dataView) {
-  // Skip opcode (2 bytes)
-  let offset = 2;
-
-  const taskId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_TaskDeleted missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
+  const { taskId, convId, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
 
   // Remove from store
   if (roomTasks.has(convId)) {
@@ -2601,39 +2400,8 @@ function handleTaskDeleted(dataView) {
 }
 
 function handleTaskMoved(dataView) {
-  // Skip opcode (2 bytes)
-  let offset = 2;
-
-  const taskId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const status = dataView.getUint8(offset);
-  offset += 1;
-
-  const orderIndex = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const completedAt = dataView.getBigInt64(offset, false);
-  offset += 8;
-
-  const completedByLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const completedByBytes = new Uint8Array(
-    dataView.buffer,
-    offset,
-    completedByLen,
-  );
-  const completedBy = new TextDecoder().decode(completedByBytes);
-  offset += completedByLen;
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_TaskMoved missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
+  const { taskId, convId, status, orderIndex, completedAt, completedBy, correlationId } =
+    window.NRCFrames.decodeServerFrame(dataView);
 
   const pendingRpc = pendingTaskRpcs.get(correlationId);
   if (pendingRpc) {
@@ -2703,43 +2471,18 @@ function handleTaskMoved(dataView) {
 }
 
 function handleTaskListResponse(dataView) {
-  // Skip opcode (2 bytes)
-  let offset = 2;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const success = dataView.getUint8(offset) !== 0;
-  offset += 1;
-
-  const taskCount = dataView.getUint16(offset, false);
-  offset += 2;
+  const { convId, success, tasks, error, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
 
   if (!success) {
-    // Skip to error
-    for (let i = 0; i < taskCount; i++) {
-      const { newOffset } = parseTask(dataView, offset);
-      offset = newOffset;
-    }
-    const errorLen = dataView.getUint16(offset, false);
-    offset += 2;
-    const errorBytes = new Uint8Array(dataView.buffer, offset, errorLen);
-    const errorMsg = new TextDecoder().decode(errorBytes);
-    offset += errorLen;
-    if (dataView.byteLength < offset + 4) {
-      console.error("S_TaskListResponse missing correlation_id");
-      return;
-    }
-    const correlationId = dataView.getUint32(offset, false);
     pendingTaskUpdateCorrelations.delete(correlationId);
     const pendingRpc = pendingTaskRpcs.get(correlationId);
     if (pendingRpc) {
       pendingTaskRpcs.delete(correlationId);
       if (typeof pendingRpc.onError === "function") {
-        pendingRpc.onError({ convId, correlationId, message: errorMsg });
+        pendingRpc.onError({ convId, correlationId, message: error });
       }
     }
-    logMessage("Error", `TASK LIST ERROR: ${errorMsg}`);
+    logMessage("Error", `TASK LIST ERROR: ${error}`);
     return;
   }
 
@@ -2747,11 +2490,7 @@ function handleTaskListResponse(dataView) {
   roomTasks.set(convId, new Map());
   const tasksMap = roomTasks.get(convId);
 
-  for (let i = 0; i < taskCount; i++) {
-    const { task, newOffset } = parseTask(dataView, offset);
-    offset = newOffset;
-    tasksMap.set(task.id, task);
-  }
+  for (const task of tasks) tasksMap.set(task.id, task);
   invalidateTaskList(convId);
 
   if (selectedTaskId && selectedTaskConvId === convId && !tasksMap.has(selectedTaskId)) {
@@ -2760,14 +2499,7 @@ function handleTaskListResponse(dataView) {
     }
   }
 
-  const errorLen = dataView.getUint16(offset, false);
-  offset += 2 + errorLen;
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_TaskListResponse missing correlation_id");
-    return;
-  }
-
-  logSystem(`LOADED ${taskCount} WORKSPACE TASKS`, "tasks", "DEBUG");
+  logSystem(`LOADED ${tasks.length} WORKSPACE TASKS`, "tasks", "DEBUG");
 
   // Update UI if viewing this room's tasks
   if (convId === 0n && kanbanVisible) {

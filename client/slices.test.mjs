@@ -4,7 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 
-const source = fs.readFileSync(path.resolve("client/loading-indicator.js"), "utf8") +
+const framesSource = fs.readFileSync(path.resolve("client/protocol.js"), "utf8") + "\n" +
+  fs.readFileSync(path.resolve("client/frames.js"), "utf8");
+const source = framesSource +
+  fs.readFileSync(path.resolve("client/loading-indicator.js"), "utf8") +
   fs.readFileSync(path.resolve("client/slices.js"), "utf8");
 
 const IDLE_CONTROLLER = () => ({

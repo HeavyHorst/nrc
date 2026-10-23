@@ -45,10 +45,11 @@ function harness() {
     },
     Date: class extends Date { static now() { return now; } },
     clearTimeout, setTimeout,
+    TextDecoder, TextEncoder, DataView, Uint8Array, ArrayBuffer, BigInt,
     AssetType: { Reminder: 9 }, currentRoomId: 7n,
     localStorage: { getItem: () => saved || null, setItem: (_key, value) => { saved = value; } },
   });
-  for (const file of ["task-state.js", "tasks.js"]) {
+  for (const file of ["protocol.js", "task-state.js", "tasks.js"]) {
     vm.runInContext(fs.readFileSync(`client/${file}`, "utf8"), context);
   }
   vm.runInContext("initTaskViewState(); renderReminderQueue();", context);

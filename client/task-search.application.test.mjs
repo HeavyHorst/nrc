@@ -50,8 +50,9 @@ function projection(id) {
 
 function taskFullResponse(correlationId) {
   const title = new TextEncoder().encode("Hydrated completed task");
-  const buffer = new ArrayBuffer(98 + title.length);
+  const buffer = new ArrayBuffer(95 + title.length);
   const view = new DataView(buffer);
+  view.setUint16(0, 136, false);
   let offset = 2;
   view.setBigUint64(offset, 0n, false); offset += 8;
   view.setUint8(offset++, 1); view.setUint8(offset++, 1);
@@ -132,6 +133,8 @@ function makeHarness({ now = null } = {}) {
   vm.runInContext(read("query-controller.js"), sandbox);
   vm.runInContext(read("task-search.js"), sandbox);
   vm.runInContext(read("loading-indicator.js"), sandbox);
+  vm.runInContext(read("protocol.js"), sandbox);
+  vm.runInContext(read("frames.js"), sandbox);
   vm.runInContext(`${read("tasks.js")}\nwindow.__renderTaskList = renderTaskList; window.__renderTaskListIfNeeded = renderTaskListIfNeeded; window.__invalidateTaskList = invalidateTaskList; window.__expireTaskList = () => { taskListValidUntilMs = 0; }; window.__getTaskListValidUntil = getTaskListValidUntil; window.__loadMoreTasksNearEnd = loadMoreTasksNearEnd; window.__handleCommentChanged = handleCommentChanged; window.__setKanbanVisible = (visible) => { kanbanVisible = visible; };`, sandbox);
   vm.runInContext(read("inspector.js"), sandbox);
   return { sandbox, window, elements, sent, fetches };

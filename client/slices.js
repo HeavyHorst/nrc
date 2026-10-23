@@ -523,12 +523,6 @@
     listRefreshTimer = setTimeout(() => requestList({ force: true }), 120);
   }
 
-  function readString(view, offset) {
-    const length = view.getUint16(offset, false);
-    const value = decoder.decode(new Uint8Array(view.buffer, view.byteOffset + offset + 2, length));
-    return { value, newOffset: offset + 2 + length };
-  }
-
   // ---------------------------------------------------------------------------
   // Headless reads
   // ---------------------------------------------------------------------------
@@ -596,45 +590,7 @@
   // belong to the page. The register's window and a headless read read one frame the
   // same way, so a change to the wire lands in both.
   function readSlicePage(dataView) {
-    const roomId = dataView.getBigUint64(2, false);
-    const success = dataView.getUint8(10) !== 0;
-    const count = dataView.getUint16(11, false);
-    const slices = [];
-    let offset = 13;
-    for (let i = 0; i < count; i++) {
-      const name = readString(dataView, offset); offset = name.newOffset;
-      const sliceId = dataView.getBigUint64(offset, false); offset += 8;
-      const owner = readString(dataView, offset); offset = owner.newOffset;
-      const flags = dataView.getUint8(offset); offset += 1;
-      const backlog = dataView.getUint16(offset, false); offset += 2;
-      const todo = dataView.getUint16(offset, false); offset += 2;
-      const inProgress = dataView.getUint16(offset, false); offset += 2;
-      const done = dataView.getUint16(offset, false); offset += 2;
-      const blocked = dataView.getUint16(offset, false); offset += 2;
-      const notes = dataView.getUint16(offset, false); offset += 2;
-      const files = dataView.getUint16(offset, false); offset += 2;
-      const tickets = dataView.getUint16(offset, false); offset += 2;
-      const oldestActiveAt = dataView.getBigInt64(offset, false); offset += 8;
-      const lastMovedAt = dataView.getBigInt64(offset, false); offset += 8;
-      slices.push({
-        name: name.value, sliceId, owner: owner.value, flags,
-        backlog, todo, inProgress, done, blocked, notes, files, tickets,
-        oldestActiveAt, lastMovedAt,
-      });
-    }
-    const hasMore = dataView.getUint8(offset) === 1; offset += 1;
-    const cursorClosed = dataView.getUint8(offset) === 1; offset += 1;
-    const cursorSortAt = dataView.getBigInt64(offset, false); offset += 8;
-    const cursorSliceId = dataView.getBigUint64(offset, false); offset += 8;
-    const total = dataView.getUint32(offset, false); offset += 4;
-    const assignedTasks = dataView.getUint32(offset, false); offset += 4;
-    const unassignedTasks = dataView.getUint32(offset, false); offset += 4;
-    const error = readString(dataView, offset); offset = error.newOffset;
-    return {
-      roomId, success, slices, hasMore, total, assignedTasks, unassignedTasks,
-      error: error.value,
-      cursor: hasMore ? { closed: cursorClosed, sortAt: cursorSortAt, sliceId: cursorSliceId } : null,
-    };
+    return window.NRCFrames.decodeTaskSliceList(dataView);
   }
 
   function handleSliceList(dataView) {

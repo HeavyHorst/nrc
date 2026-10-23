@@ -30,6 +30,8 @@ function load(file) {
       C_QueryTickets: 63,
     },
   });
+  vm.runInContext(fs.readFileSync(new URL("protocol.js", import.meta.url), "utf8"), context, { filename: "protocol.js" });
+  vm.runInContext(fs.readFileSync(new URL("frames.js", import.meta.url), "utf8"), context, { filename: "frames.js" });
   vm.runInContext(fs.readFileSync(new URL(file, import.meta.url), "utf8"), context, { filename: file });
   return { api: file === "assets.js" ? window.NRCAssets : window.NRCEdges, packets, context };
 }
@@ -105,7 +107,7 @@ test('large ticket read snapshots are chunked, acknowledged and rebuilt after re
 });
 
 function assetPage(correlation, assets, { room = 0n, more = false, cursorTime = 0n, cursorId = 0n } = {}) {
-  const w = writer(); w.u16(130); w.u64(room); w.u8(0); w.u8(more ? 1 : 0); w.i64(cursorTime);
+  const w = writer(); w.u16(145); w.u64(room); w.u8(0); w.u8(more ? 1 : 0); w.i64(cursorTime);
   w.u64(cursorId); w.u32(assets.length); w.u16(assets.length); w.u32(correlation);
   for (const a of assets) w.bytes(assetBytes({ room, ...a })); return w.done();
 }
@@ -183,9 +185,9 @@ test("a batch joining an exact read omits its missing target rather than failing
 test("full ID batches reject undecodable bodies for bulk and exact readers, ignoring late chunks", async () => {
   const f = load("assets.js");
   const page = (cid, preview, more = false) => {
-    const w = writer(); w.u16(130); w.u64(0); w.u8(1); w.u8(more ? 1 : 0);
+    const w = writer(); w.u16(145); w.u64(0); w.u8(1); w.u8(more ? 1 : 0);
     w.i64(0); w.u64(0); w.u32(1); w.u16(1); w.u32(cid);
-    const full = fullAsset(131, 0, { id: 42n, preview });
+    const full = fullAsset(143, 0, { id: 42n, preview });
     w.bytes(new Uint8Array(full.buffer).slice(2, -4));
     return w.done();
   };
@@ -224,13 +226,13 @@ test("offline bulk reads reject without joining queued exact reads, which still 
   vm.runInContext("serverReady = true", f.context);
   f.api.retryPendingAssetRequests();
   assert.equal(f.packets.length, 1, "queued exact read survives; bulk adds no reconnect requests");
-  f.api.handleAssetFull(fullAsset(131, new DataView(f.packets[0]).getUint32(18), { id: 42n, preview: "" }));
+  f.api.handleAssetFull(fullAsset(143, new DataView(f.packets[0]).getUint32(18), { id: 42n, preview: "" }));
   assert.equal(exactResult.assetId, 42n);
   assert.equal((await f.api.requestAssetsByIds(0n, [42n]))[0].assetId, 42n);
 });
 
 function edgePage(correlation, edges, { room = 0n, more = false, next = 0n } = {}) {
-  const w = writer(); w.u16(153); w.u64(room); w.u8(more ? 1 : 0); w.u64(next); w.u32(edges.length);
+  const w = writer(); w.u16(161); w.u64(room); w.u8(more ? 1 : 0); w.u64(next); w.u32(edges.length);
   w.u16(edges.length); w.u32(correlation); for (const e of edges) w.bytes(edgeBytes({ room, ...e })); return w.done();
 }
 
@@ -242,7 +244,7 @@ function edgeEvent(opcode, correlation, edge, deleted = false) {
 }
 
 function scopedEdges(correlation, endpoint, edges, room = 0n) {
-  const w = writer(); w.u16(142); w.u64(room); w.u16(endpoint.type); w.u64(endpoint.id); w.u16(edges.length);
+  const w = writer(); w.u16(152); w.u64(room); w.u16(endpoint.type); w.u64(endpoint.id); w.u16(edges.length);
   for (const e of edges) w.bytes(edgeBytes({ room, ...e })); w.u32(correlation); return w.done();
 }
 
@@ -330,9 +332,9 @@ test("asset snapshot does not lose create/delete/update mutations received while
   f.api.handleAssetListPage(assetPage(0, [{ id: 1n }, { id: 2n }]));
   const promise = f.api.requestAllAssets(7n, 8);
   const cid = assetCorrelation(f.packets.at(-1));
-  f.api.handleAssetCreated(fullAsset(130, 0, { type: 8, id: 3n, preview: "live-create" }));
-  f.api.handleAssetUpdated(fullAsset(131, 0, { type: 8, id: 1n, preview: "live-update" }));
-  f.api.handleAssetDeleted(fullAsset(132, 0, { id: 2n }, true));
+  f.api.handleAssetCreated(fullAsset(140, 0, { type: 8, id: 3n, preview: "live-create" }));
+  f.api.handleAssetUpdated(fullAsset(141, 0, { type: 8, id: 1n, preview: "live-update" }));
+  f.api.handleAssetDeleted(fullAsset(142, 0, { id: 2n }, true));
   f.api.handleAssetListPage(assetPage(cid, [{ id: 1n, preview: "stale" }, { id: 2n, preview: "stale" }]));
   const result = await promise;
   assert.equal(f.api.roomAssets.get(0n).get(1n).preview, "live-update");
@@ -392,12 +394,12 @@ test("generic note prefetch invalidates the Notes view without emitting paging e
 test("full and scoped edge snapshots remove stale edges from map and both endpoint indexes", async () => {
   const f = load("edges.js");
   const old = { id: 1n, sourceId: 10n, targetId: 20n };
-  f.api.handleEdgeCreated(edgeEvent(140, 0, old));
+  f.api.handleEdgeCreated(edgeEvent(150, 0, old));
   const all = f.api.requestAllEdges(7n); f.api.handleAllEdgeListPage(edgePage(edgeCorrelation(f.packets.at(-1)), [])); await all;
   assert.equal(f.api.roomEdges.get(0n).has(1n), false);
   assert.equal(f.api.getEdgesForEntity(0n, 1, 10n).length, 0);
   assert.equal(f.api.getEdgesForEntity(0n, 1, 20n).length, 0);
-  f.api.handleEdgeCreated(edgeEvent(140, 0, old));
+  f.api.handleEdgeCreated(edgeEvent(150, 0, old));
   f.api.sendListEdges(7n, 1, 10n); const request = new DataView(f.packets.at(-1));
   f.api.handleEdgeList(scopedEdges(request.getUint32(20), { type: 1, id: 10n }, []));
   assert.equal(f.api.roomEdges.get(0n).has(1n), false);
@@ -409,12 +411,12 @@ test("scoped edge snapshot cannot remove a live create or resurrect a live delet
   const f = load("edges.js");
   const endpoint = { type: 1, id: 10n };
   const deleted = { id: 1n, sourceId: 10n, targetId: 20n };
-  f.api.handleEdgeCreated(edgeEvent(140, 0, deleted));
+  f.api.handleEdgeCreated(edgeEvent(150, 0, deleted));
   f.api.sendListEdges(7n, endpoint.type, endpoint.id);
   const cid = new DataView(f.packets.at(-1)).getUint32(20);
-  f.api.handleEdgeDeleted(edgeEvent(141, 0, deleted, true));
+  f.api.handleEdgeDeleted(edgeEvent(151, 0, deleted, true));
   const created = { id: 2n, sourceId: 10n, targetId: 30n };
-  f.api.handleEdgeCreated(edgeEvent(140, 0, created));
+  f.api.handleEdgeCreated(edgeEvent(150, 0, created));
   f.api.handleEdgeList(scopedEdges(cid, endpoint, [deleted]));
   assert.equal(f.api.roomEdges.get(0n).has(1n), false);
   assert.equal(f.api.roomEdges.get(0n).has(2n), true);
@@ -424,13 +426,13 @@ test("scoped edge snapshot cannot remove a live create or resurrect a live delet
 test("edge pagination honors hasMore and live create/delete are not lost or resurrected", async () => {
   const f = load("edges.js");
   const stale = { id: 1n, sourceId: 10n, targetId: 20n };
-  f.api.handleEdgeCreated(edgeEvent(140, 0, stale));
+  f.api.handleEdgeCreated(edgeEvent(150, 0, stale));
   const promise = f.api.requestAllEdges(7n, { limit: 100 });
   f.api.handleAllEdgeListPage(edgePage(edgeCorrelation(f.packets.at(-1)), [stale], { more: true, next: 1n }));
   assert.equal(f.packets.length, 2);
-  f.api.handleEdgeDeleted(edgeEvent(141, 0, stale, true));
+  f.api.handleEdgeDeleted(edgeEvent(151, 0, stale, true));
   const live = { id: 3n, sourceId: 30n, targetId: 40n };
-  f.api.handleEdgeCreated(edgeEvent(140, 0, live));
+  f.api.handleEdgeCreated(edgeEvent(150, 0, live));
   f.api.handleAllEdgeListPage(edgePage(edgeCorrelation(f.packets.at(-1)), [stale]));
   const ids = (await promise).edges.map(e => e.edgeId).sort();
   assert.equal(ids.join(","), "3");

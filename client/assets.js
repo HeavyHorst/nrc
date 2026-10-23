@@ -401,37 +401,6 @@ function writeAssetAttachments(view, buffer, offset, attachments = []) {
   return offset;
 }
 
-function parseAssetAttachments(dataView, offset) {
-  const count = dataView.getUint16(offset, false);
-  offset += 2;
-  const attachments = [];
-  for (let i = 0; i < count; i += 1) {
-    const fileIdLen = dataView.getUint16(offset, false);
-    offset += 2;
-    const fileId = assetTextDecoder.decode(new Uint8Array(dataView.buffer, offset, fileIdLen));
-    offset += fileIdLen;
-
-    const filenameLen = dataView.getUint16(offset, false);
-    offset += 2;
-    const filename = assetTextDecoder.decode(new Uint8Array(dataView.buffer, offset, filenameLen));
-    offset += filenameLen;
-
-    const size = dataView.getBigUint64(offset, false);
-    offset += 8;
-
-    const mimeTypeLen = dataView.getUint16(offset, false);
-    offset += 2;
-    const mimeType = assetTextDecoder.decode(new Uint8Array(dataView.buffer, offset, mimeTypeLen));
-    offset += mimeTypeLen;
-
-    const uploadedAt = dataView.getBigInt64(offset, false);
-    offset += 8;
-
-    attachments.push({ fileId, filename, size, mimeType, uploadedAt });
-  }
-  return { attachments, newOffset: offset };
-}
-
 // =============================================================================
 // WIRE PROTOCOL - SEND
 // =============================================================================
@@ -1026,7 +995,6 @@ function requestTicketPage(query = {}, options = {}) {
 }
 
 // Complete indexed metadata, sharing asset RPC errors and disconnect cleanup.
-const personListDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
 function requestPersonList(opcode, { isCancelled } = {}) {
   if (![65, 66, 67].includes(opcode)) return Promise.reject(new Error("Unknown person list"));
   return new Promise((resolve, reject) => {
@@ -1045,20 +1013,13 @@ function requestPersonList(opcode, { isCancelled } = {}) {
 }
 
 function handlePersonList(view) {
-  const id = view.getUint32(view.byteLength - 4), request = pendingAssetRpcByCorrelation.get(id);
-  if (!request || request.kind !== "person_list" || view.getUint16(0) !== request.originOpcode + 106 || view.getBigUint64(2) !== 0n) return;
+  const page = window.NRCFrames.decodeStringList(view);
+  const id = page.correlationId;
+  const request = pendingAssetRpcByCorrelation.get(id);
+  if (!request || request.kind !== "person_list" || view.getUint16(0) !== request.originOpcode + 106 || page.convId !== 0n) return;
   if (request.isCancelled?.()) { settlePendingAssetRpc(id, false, { message: "Person list cancelled" }); return; }
-  try {
-    let offset = 12;
-    for (let i = 0; i < view.getUint16(10); i++) {
-      const size = view.getUint16(offset); offset += 2;
-      if (offset + size > view.byteLength - 5) throw new Error("Invalid person list");
-      request.values.push(personListDecoder.decode(new Uint8Array(view.buffer, view.byteOffset + offset, size)));
-      offset += size;
-    }
-    if (offset !== view.byteLength - 5) throw new Error("Invalid person list");
-    if (!view.getUint8(offset)) settlePendingAssetRpc(id, true, request.values);
-  } catch (error) { settlePendingAssetRpc(id, false, { message: error.message }); }
+  request.values.push(...page.values);
+  if (!page.hasMore) settlePendingAssetRpc(id, true, request.values);
 }
 
 function sendTicketPage(query, { isCancelled } = {}) {
@@ -1081,24 +1042,19 @@ function sendTicketPage(query, { isCancelled } = {}) {
 }
 
 function handleTicketPage(view) {
-  const correlationId = view.getUint32(2), pending = pendingAssetRpcByCorrelation.get(correlationId);
+  const page = window.NRCFrames.decodeTicketPage(view);
+  const correlationId = page.correlationId;
+  const pending = pendingAssetRpcByCorrelation.get(correlationId);
   if (!pending) return;
   if (pending.isCancelled?.()) { settlePendingAssetRpc(correlationId, false, { message: "Ticket query cancelled" }); return; }
-  const length = view.getUint32(6);
-  const page = JSON.parse(assetTextDecoder.decode(new Uint8Array(view.buffer, view.byteOffset + 10, length)));
-  let offset = 10 + length;
-  const count = view.getUint16(offset), full = view.getUint8(offset + 2) === 1;
-  offset += 3;
   const assets = [];
-  for (let i = 0; i < count; i++) {
-    const parsed = full ? parseAssetFull(view, offset) : parseAsset(view, offset);
-    offset = parsed.newOffset;
-    const asset = parsed.asset;
+  for (const asset of page.assets) {
+    if (page.fullContent) decodeFrameAssetPayload(asset);
     const version = assetMutationVersions.get(assetMutationKey(0n, asset.assetId)) ?? 0;
     if (version <= pending.snapshotStartVersion) storeAsset(asset);
     assets.push(roomAssets.get(0n)?.get(asset.assetId) || asset);
   }
-  settlePendingAssetRpc(correlationId, true, { ...page, assets });
+  settlePendingAssetRpc(correlationId, true, { ...page.page, assets });
 }
 
 function requestCustomerPage(convId, options = {}) {
@@ -1129,26 +1085,24 @@ function requestCustomerPage(convId, options = {}) {
 }
 
 function handleCustomerSearchPage(view) {
-  const correlationId = view.getUint32(25);
+  const page = window.NRCFrames.decodeCustomerSearchPage(view);
+  const correlationId = page.correlationId;
   const pending = pendingAssetRpcByCorrelation.get(correlationId);
   if (!pending) return;
-  const convId = view.getBigUint64(2);
+  const convId = page.convId;
   if (pending.isCancelled?.() || pending.convId !== convId) {
     settlePendingAssetRpc(correlationId, false, { message: "Customer search cancelled" });
     return;
   }
   const assets = [];
-  let offset = 29;
-  for (let i = 0; i < view.getUint16(23); i++) {
-    const parsed = parseAsset(view, offset);
-    offset = parsed.newOffset;
-    const version = assetMutationVersions.get(assetMutationKey(convId, parsed.asset.assetId)) ?? 0;
-    if (version <= pending.snapshotStartVersion) storeAsset(parsed.asset);
-    const asset = roomAssets.get(convId)?.get(parsed.asset.assetId);
-    if (asset) assets.push(asset);
+  for (const asset of page.assets) {
+    const version = assetMutationVersions.get(assetMutationKey(convId, asset.assetId)) ?? 0;
+    if (version <= pending.snapshotStartVersion) storeAsset(asset);
+    const stored = roomAssets.get(convId)?.get(asset.assetId);
+    if (stored) assets.push(stored);
   }
   settlePendingAssetRpc(correlationId, true, {
-    convId, assets, hasMore: view.getUint8(10) === 1, nextId: view.getBigUint64(11), totalCount: view.getUint32(19),
+    convId, assets, hasMore: page.hasMore, nextId: page.nextCompanyId, totalCount: page.totalCount,
   });
 }
 
@@ -1484,109 +1438,26 @@ function setOnReminderChanged(callback) {
 // WIRE PROTOCOL - RECEIVE
 // =============================================================================
 
-function parseAsset(dataView, offset, includeAttachments = true) {
-  const assetType = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const assetId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const parentType = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const parentId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const ownerLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const ownerBytes = new Uint8Array(dataView.buffer, offset, ownerLen);
-  const owner = assetTextDecoder.decode(ownerBytes);
-  offset += ownerLen;
-
-  const createdAt = dataView.getBigInt64(offset, false);
-  offset += 8;
-
-  const updatedAt = dataView.getBigInt64(offset, false);
-  offset += 8;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const payloadEncoding = dataView.getUint8(offset);
-  offset += 1;
-
-  const payloadRawLen = dataView.getUint32(offset, false);
-  offset += 4;
-
-  const previewLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const previewBytes = new Uint8Array(dataView.buffer, offset, previewLen);
-  const preview = assetTextDecoder.decode(previewBytes);
-  offset += previewLen;
-
-  let attachments = [];
-  if (includeAttachments) {
-    const parsedAttachments = parseAssetAttachments(dataView, offset);
-    attachments = parsedAttachments.attachments;
-    offset = parsedAttachments.newOffset;
-  }
-
-  return {
-    asset: {
-      assetType,
-      assetId,
-      parentType,
-      parentId,
-      owner,
-      createdAt,
-      updatedAt,
-      convId,
-      payloadEncoding,
-      payloadRawLen,
-      preview,
-      payload: null, // Only set by parseAssetFull
-      attachments,
-    },
-    newOffset: offset,
-  };
-}
-
-function parseAssetFull(dataView, offset) {
-  const { asset, newOffset } = parseAsset(dataView, offset, false);
-  offset = newOffset;
-
-  const payloadLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const payloadBytes = new Uint8Array(dataView.buffer.slice(offset, offset + payloadLen));
+function decodeFrameAssetPayload(asset) {
   try {
-    asset.payload = decodeAssetPayloadFromWire(asset.payloadEncoding, asset.payloadRawLen, payloadBytes);
+    asset.payload = decodeAssetPayloadFromWire(asset.payloadEncoding, asset.payloadRawLen, asset.payload);
   } catch (error) {
     console.error("[assets] Failed to decode asset payload", {
       assetId: asset.assetId.toString(),
       convId: asset.convId.toString(),
       payloadEncoding: asset.payloadEncoding,
       payloadRawLen: asset.payloadRawLen,
-      payloadLen,
+      payloadLen: asset.payload?.byteLength ?? 0,
       error,
     });
     asset.payload = null;
   }
-  offset += payloadLen;
-
-  const parsedAttachments = parseAssetAttachments(dataView, offset);
-  asset.attachments = parsedAttachments.attachments;
-  offset = parsedAttachments.newOffset;
-
-  return { asset, newOffset: offset };
+  return asset;
 }
 
 function handleAssetCreated(dataView) {
-  const { asset, newOffset } = parseAssetFull(dataView, 2);
-  if (dataView.byteLength < newOffset + 4) {
-    console.error("S_AssetCreated missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(newOffset, false);
+  const { asset, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
+  decodeFrameAssetPayload(asset);
 
   settlePendingAssetRpc(correlationId, true, {
     kind: "create",
@@ -1621,12 +1492,8 @@ function handleAssetCreated(dataView) {
 }
 
 function handleAssetUpdated(dataView) {
-  const { asset, newOffset } = parseAssetFull(dataView, 2);
-  if (dataView.byteLength < newOffset + 4) {
-    console.error("S_AssetUpdated missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(newOffset, false);
+  const { asset, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
+  decodeFrameAssetPayload(asset);
 
   settlePendingAssetRpc(correlationId, true, {
     kind: "update",
@@ -1661,13 +1528,7 @@ function handleAssetUpdated(dataView) {
 }
 
 function handleAssetDeleted(dataView) {
-  const convId = dataView.getBigUint64(2, false);
-  const assetId = dataView.getBigUint64(10, false);
-  if (dataView.byteLength < 22) {
-    console.error("S_AssetDeleted missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(18, false);
+  const { convId, assetId, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
   markAssetMutation(convId, assetId);
   const deletedAsset = roomAssets.get(convId)?.get(assetId) || null;
 
@@ -1722,12 +1583,8 @@ function handleAssetDeleted(dataView) {
 }
 
 function handleAssetFull(dataView) {
-  const { asset, newOffset } = parseAssetFull(dataView, 2);
-  if (dataView.byteLength < newOffset + 4) {
-    console.error("S_AssetFull missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(newOffset, false);
+  const { asset, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
+  decodeFrameAssetPayload(asset);
 
   if (asset.payload === null) {
     settlePendingAssetRpc(correlationId, false, {
@@ -1768,40 +1625,17 @@ function handleAssetFull(dataView) {
 }
 
 function handleAssetList(dataView) {
-  let offset = 2;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const fullContent = dataView.getUint8(offset) === 1;
-  offset += 1;
-
-  const count = dataView.getUint16(offset, false);
-  offset += 2;
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_AssetList missing correlation_id");
-    return 0;
-  }
-  const correlationId = dataView.getUint32(offset, false);
-  offset += 4;
+  const { convId, fullContent, count, assets: listedAssets, correlationId } =
+    window.NRCFrames.decodeServerFrame(dataView);
 
   // Clear existing assets for this room (only if we have data)
   if (!roomAssets.has(convId)) {
     roomAssets.set(convId, new Map());
   }
 
-  const listedAssets = [];
-  for (let i = 0; i < count; i++) {
-    let asset, newOffset;
-    if (fullContent) {
-      ({ asset, newOffset } = parseAssetFull(dataView, offset));
-    } else {
-      ({ asset, newOffset } = parseAsset(dataView, offset));
-    }
-    offset = newOffset;
+  for (const asset of listedAssets) {
+    if (fullContent) decodeFrameAssetPayload(asset);
     storeAsset(asset);
-    listedAssets.push(asset);
     if (asset.assetType === AssetType.RoomMapping) {
       window.NRCRooms?.handleRoomMappingAsset?.(asset);
     }
@@ -1833,35 +1667,8 @@ function handleAssetList(dataView) {
 }
 
 function handleAssetListPage(dataView) {
-  let offset = 2;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const fullContent = dataView.getUint8(offset) === 1;
-  offset += 1;
-
-  const hasMore = dataView.getUint8(offset) === 1;
-  offset += 1;
-
-  const nextCursorUpdatedAt = dataView.getBigInt64(offset, false);
-  offset += 8;
-
-  const nextCursorAssetId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const totalCount = dataView.getUint32(offset, false);
-  offset += 4;
-
-  const count = dataView.getUint16(offset, false);
-  offset += 2;
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_AssetListPage missing correlation_id");
-    return 0;
-  }
-  const correlationId = dataView.getUint32(offset, false);
-  offset += 4;
+  const { convId, fullContent, hasMore, nextCursorUpdatedAt, nextCursorAssetId, totalCount, count, assets, correlationId } =
+    window.NRCFrames.decodeServerFrame(dataView);
   const pending = pendingAssetRpcByCorrelation.get(correlationId);
 
   // Ignore delayed chunks of settled or failed reads, including after disconnect.
@@ -1871,22 +1678,14 @@ function handleAssetListPage(dataView) {
     roomAssets.set(convId, new Map());
   }
 
-  const assets = [];
-  for (let i = 0; i < count; i++) {
-    let asset, newOffset;
-    if (fullContent) {
-      ({ asset, newOffset } = parseAssetFull(dataView, offset));
-    } else {
-      ({ asset, newOffset } = parseAsset(dataView, offset));
-    }
-    offset = newOffset;
+  for (const asset of assets) {
+    if (fullContent) decodeFrameAssetPayload(asset);
     if (pending?.kind === "ids" && fullContent && asset.payload === null) {
       settlePendingAssetRpc(correlationId, false, {
         kind: "ids", correlationId, message: "Failed to decode asset payload",
       });
       return correlationId;
     }
-    assets.push(asset);
     const version = assetMutationVersions.get(assetMutationKey(convId, asset.assetId)) ?? 0;
     if (pending?.snapshotStartVersion == null || version <= pending.snapshotStartVersion) storeAsset(asset);
   }
@@ -1924,31 +1723,7 @@ function handleAssetListPage(dataView) {
 }
 
 function handleNoteProjectList(dataView) {
-  let offset = 2;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const count = dataView.getUint16(offset, false);
-  offset += 2;
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_NoteProjectList missing correlation_id");
-    return 0;
-  }
-  const correlationId = dataView.getUint32(offset, false);
-  offset += 4;
-
-  const projects = [];
-  for (let i = 0; i < count; i++) {
-    if (dataView.byteLength < offset + 2) break;
-    const projectLen = dataView.getUint16(offset, false);
-    offset += 2;
-    if (dataView.byteLength < offset + projectLen) break;
-    const projectBytes = new Uint8Array(dataView.buffer, offset, projectLen);
-    projects.push(assetTextDecoder.decode(projectBytes));
-    offset += projectLen;
-  }
+  const { convId, count, values: projects, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
 
   settlePendingAssetRpc(correlationId, true, {
     kind: "list_projects",
@@ -1967,31 +1742,7 @@ function handleNoteProjectList(dataView) {
 }
 
 function handleNoteTagList(dataView) {
-  let offset = 2;
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const count = dataView.getUint16(offset, false);
-  offset += 2;
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_NoteTagList missing correlation_id");
-    return 0;
-  }
-  const correlationId = dataView.getUint32(offset, false);
-  offset += 4;
-
-  const tags = [];
-  for (let i = 0; i < count; i++) {
-    if (dataView.byteLength < offset + 2) break;
-    const tagLen = dataView.getUint16(offset, false);
-    offset += 2;
-    if (dataView.byteLength < offset + tagLen) break;
-    const tagBytes = new Uint8Array(dataView.buffer, offset, tagLen);
-    tags.push(assetTextDecoder.decode(tagBytes));
-    offset += tagLen;
-  }
+  const { convId, count, values: tags, correlationId } = window.NRCFrames.decodeServerFrame(dataView);
 
   settlePendingAssetRpc(correlationId, true, {
     kind: "list_tags",

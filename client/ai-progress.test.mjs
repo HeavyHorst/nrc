@@ -5,6 +5,8 @@ import vm from "node:vm";
 import { parse } from "acorn";
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
+const framesSource = readFileSync(new URL("protocol.js", import.meta.url), "utf8") + "\n" +
+  readFileSync(new URL("frames.js", import.meta.url), "utf8");
 const names = new Set(["getMessageText", "isSullivanAuthor", "isAiAnswerMessage", "normalizeAiRunStep", "parseNewMessage"]);
 const functions = parse(source, { ecmaVersion: "latest" }).body
   .filter((node) => node.type === "FunctionDeclaration" && names.has(node.id.name))
@@ -35,6 +37,7 @@ test("AI DM drops room and workspace progress but preserves answers and other au
     logMessage: (_type, text) => messages.push(text),
     getVisibleConversationId: () => 42n,
   };
+  vm.runInNewContext(framesSource, context);
   vm.runInNewContext(functions, context);
   const answer = "**AI RESPONSE · CONTEXT WORKSPACE**\nDone.";
   context.parseNewMessage(messageFrame("sullivan-ai", answer));

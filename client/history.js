@@ -73,11 +73,12 @@ window.NRCHistory = (() => {
     sendPacket(view.buffer);
   }
   function handlePage(view) {
-    if (view.byteLength < 6 || view.getUint32(2) !== pending?.correlation) return;
+    const decoded = window.NRCFrames.decodeHistoryPage(view);
+    if (decoded.correlationId !== pending?.correlation) return;
     const { cursor, limit } = pending;
     cancel();
     try {
-      const page = JSON.parse(new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset + 6, view.byteLength - 6)));
+      const page = decoded.page;
       const decimal = value => typeof value === "string" && /^\d+$/.test(value) && BigInt(value) <= 18446744073709551615n;
       if (page.error || !Array.isArray(page.events) || page.events.length > limit || !decimal(page.nextBefore)) throw Error();
       let previous = cursor === "0" ? null : BigInt(cursor);

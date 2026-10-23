@@ -3,7 +3,9 @@ import test from "node:test";
 import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
-const source = await readFile(new URL("./transactions.js", import.meta.url), "utf8");
+const framesSource = await readFile(new URL("./protocol.js", import.meta.url), "utf8") + "\n" +
+  await readFile(new URL("./frames.js", import.meta.url), "utf8");
+const source = framesSource + await readFile(new URL("./transactions.js", import.meta.url), "utf8");
 
 function fixture() {
   const packets = [];
@@ -15,6 +17,7 @@ function fixture() {
     WebSocket: { OPEN: 1 },
     sendPacket: (packet) => packets.push(packet),
     TextEncoder,
+    TextDecoder,
     DataView,
     ArrayBuffer,
     Uint8Array,

@@ -4,9 +4,12 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { execFileSync } from "node:child_process";
 
-const calendarSource = fs.readFileSync(new URL("./loading-indicator.js", import.meta.url), "utf8") +
+const framesSource = fs.readFileSync(new URL("./protocol.js", import.meta.url), "utf8") + "\n" +
+  fs.readFileSync(new URL("./frames.js", import.meta.url), "utf8");
+const calendarSource = framesSource +
+  fs.readFileSync(new URL("./loading-indicator.js", import.meta.url), "utf8") +
   fs.readFileSync(new URL("./calendar.js", import.meta.url), "utf8");
-const querySource = fs.readFileSync(new URL("./task-query.js", import.meta.url), "utf8");
+const querySource = framesSource + fs.readFileSync(new URL("./task-query.js", import.meta.url), "utf8");
 const ns = value => BigInt(Date.parse(value)) * 1000000n;
 
 function response(request, rows, { more = false, cursor = null, correlation = null } = {}) {
@@ -50,7 +53,7 @@ function harness({ ready = true } = {}) {
   const context = { window, document, TextEncoder, TextDecoder, ArrayBuffer, DataView, Uint8Array, Date, Intl, BigInt, Number,
     String, Math, Array, Object, Set, Map, JSON, WebSocket: { OPEN: 1 }, serverReady: ready,
     ws: { readyState: ready ? 1 : 0 }, myNickname: "rene", getRpcCorrelationId: () => ++id,
-    sendPacket: buffer => sent.push(new DataView(buffer)), readString() {}, parseTask() {}, setTimeout: detachedTimeout, clearTimeout };
+    sendPacket: buffer => sent.push(new DataView(buffer)), setTimeout: detachedTimeout, clearTimeout };
   vm.runInNewContext(querySource, context);
   vm.runInNewContext(calendarSource, context);
   window.NRCCalendar.getState().month = "2026-09";
@@ -173,7 +176,7 @@ test("month and grid calculations remain local and stable through DST", () => {
   assert.deepEqual(Array.from(calendar.monthDays("2026-09")).slice(0, 2), ["2026-08-31", "2026-09-01"]);
   assert.equal(calendar.monthDays("2024-02").filter(day => day.startsWith("2024-02")).length, 29);
   const script = `const fs=require('fs'),vm=require('vm');const window={};const document={getElementById(){}};
-    vm.runInNewContext(fs.readFileSync(${JSON.stringify(new URL("./calendar.js", import.meta.url).pathname)},'utf8'),{window,document,Date,Intl,BigInt,Number,String,Math,Array,Object,Set,Map,TextEncoder,TextDecoder});
+    vm.runInNewContext(fs.readFileSync(${JSON.stringify(new URL("./protocol.js", import.meta.url).pathname)},'utf8') + "\\n" + fs.readFileSync(${JSON.stringify(new URL("./frames.js", import.meta.url).pathname)},'utf8') + "\\n" + fs.readFileSync(${JSON.stringify(new URL("./calendar.js", import.meta.url).pathname)},'utf8'),{window,document,Date,Intl,BigInt,Number,String,Math,Array,Object,Set,Map,TextEncoder,TextDecoder});
     const c=window.NRCCalendar; process.stdout.write(JSON.stringify([c.monthDays('2026-03'),c.monthDays('2026-11'),c.visibleRange('2026-03','month')],(_,v)=>typeof v==='bigint'?String(v):v));`;
   const [spring, fall, range] = JSON.parse(execFileSync(process.execPath, ["-e", script], { env: { ...process.env, TZ: "America/New_York" }, encoding: "utf8" }));
   assert.deepEqual([spring[0], spring.at(-1)], ["2026-02-23", "2026-04-05"]);
@@ -240,11 +243,15 @@ test("disconnect clears a pending snapshot and renders offline", () => {
 test("remote task deletion notifies summary views without a task cache", () => {
   const source = fs.readFileSync(new URL("./tasks.js", import.meta.url), "utf8");
   const events = [];
-  const context = { roomTasks: new Map(), selectedTaskId: null, selectedTaskConvId: null,
+  const window = {};
+  const context = { window, roomTasks: new Map(), selectedTaskId: null, selectedTaskConvId: null,
     kanbanVisible: false, refreshTaskSearchAfterMutation() {}, console,
+    TextDecoder, ArrayBuffer, DataView, Uint8Array,
     notifyTaskChanged: (task, reason) => events.push([String(task.id), String(task.convId), reason]) };
+  vm.runInNewContext(framesSource, context);
   vm.runInNewContext(source.slice(source.indexOf("function handleTaskDeleted("), source.indexOf("function handleTaskMoved(")), context);
   const view = new DataView(new ArrayBuffer(22));
+  view.setUint16(0, 132);
   view.setBigUint64(2, 19n);
   context.handleTaskDeleted(view);
   assert.deepEqual(events, [["19", "0", "deleted"]]);

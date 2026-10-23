@@ -2030,58 +2030,24 @@ function parseSystemStats(dataView) {
 }
 
 function parseServerReady(dataView) {
-  // S_ServerReady Payload: { build_version: []byte, protocol_version: u32, cpu_model: []byte, username: []byte, is_authenticated: bool }
-  let offset = 2; // Skip opcode
+  const ready = window.NRCFrames.decodeServerReady(dataView);
 
-  if (dataView.byteLength < offset + 2) return false;
-
-  const buildLen = dataView.getUint16(offset, false);
-  offset += 2;
-  if (dataView.byteLength < offset + buildLen + 4) return false;
-
-  const buildBytes = new Uint8Array(dataView.buffer, offset, buildLen);
-  const buildVersion = new TextDecoder("utf-8").decode(buildBytes);
-  offset += buildLen;
-
-  const protocolVersion = dataView.getUint32(offset, false);
-  offset += 4;
-
-  if (dataView.byteLength < offset + 2) return false;
-  const cpuLen = dataView.getUint16(offset, false);
-  offset += 2;
-  if (dataView.byteLength < offset + cpuLen) return false;
-  const cpuBytes = new Uint8Array(dataView.buffer, offset, cpuLen);
-  const cpuModel = new TextDecoder("utf-8").decode(cpuBytes);
-  offset += cpuLen;
-
-  if (dataView.byteLength < offset + 2) return false;
-  const usernameLen = dataView.getUint16(offset, false);
-  offset += 2;
-  if (dataView.byteLength < offset + usernameLen) return false;
-  const usernameBytes = new Uint8Array(dataView.buffer, offset, usernameLen);
-  const username = new TextDecoder("utf-8").decode(usernameBytes);
-  offset += usernameLen;
-
-  if (dataView.byteLength !== offset + 1) return false;
-  const isAuthenticated = dataView.getUint8(offset) !== 0;
-  offset += 1;
-
-  if (username) {
-    myNickname = username;
+  if (ready.username) {
+    myNickname = ready.username;
     nicknameReceived = true;
   }
 
   const authStatusEl = document.getElementById("authStatus");
   if (authStatusEl) {
-    authStatusEl.textContent = isAuthenticated ? "VERIFIED" : "UNVERIFIED";
+    authStatusEl.textContent = ready.isAuthenticated ? "VERIFIED" : "UNVERIFIED";
   }
 
-  updateSystemStatsDisplay(buildVersion, protocolVersion, cpuModel);
+  updateSystemStatsDisplay(ready.buildVersion, ready.protocolVersion, ready.cpuModel);
 
-  if (protocolVersion !== EXPECTED_PROTOCOL_VERSION) {
+  if (ready.protocolVersion !== EXPECTED_PROTOCOL_VERSION) {
     logMessage(
       "Error",
-      `PROTOCOL VERSION MISMATCH: server=${protocolVersion} client=${EXPECTED_PROTOCOL_VERSION}. UPDATE SERVER AND CLIENT TOGETHER.`,
+      `PROTOCOL VERSION MISMATCH: server=${ready.protocolVersion} client=${EXPECTED_PROTOCOL_VERSION}. UPDATE SERVER AND CLIENT TOGETHER.`,
     );
     return false;
   }
@@ -2260,20 +2226,10 @@ function checkRetransmissions() {
 }
 
 function parseAckSendMessage(dataView) {
-  // S_AckSendMessage Payload: { client_req_id: u32, assigned_seq: u64, timestamp: i64 }
-  let offset = 2; // Skip opcode
-
-  if (dataView.byteLength < offset + 4 + 8 + 8) {
-    console.error("Received S_AckSendMessage payload too short.");
-    return;
-  }
-
-  const clientReqId = dataView.getUint32(offset, false);
-  offset += 4;
-  const assignedSeq = dataView.getBigUint64(offset, false);
-  offset += 8;
-  const timestamp = dataView.getBigInt64(offset, false);
-  offset += 8;
+  const ack = window.NRCFrames.decodeAckSendMessage(dataView);
+  const clientReqId = ack.clientReqId;
+  const assignedSeq = ack.assignedSeq;
+  const timestamp = ack.timestamp;
 
   lastAckTime = Date.now();
 
@@ -2303,30 +2259,10 @@ function parseAckSendMessage(dataView) {
 }
 
 function parseErrorResponse(dataView) {
-  let offset = 2; // Skip opcode
-
-  if (dataView.byteLength < offset + 2 + 2) {
-    console.error("S_ErrorResponse payload too short");
-    return;
-  }
-
-  const originOpcode = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const errorMsgLen = dataView.getUint16(offset, false);
-  offset += 2;
-
-  let errorMsg = "";
-  if (errorMsgLen > 0 && dataView.byteLength >= offset + errorMsgLen) {
-    errorMsg = new TextDecoder().decode(new Uint8Array(dataView.buffer, offset, errorMsgLen));
-    offset += errorMsgLen;
-  }
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_ErrorResponse missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
+  const error = window.NRCFrames.decodeErrorResponse(dataView);
+  const originOpcode = error.originOpcode;
+  const errorMsg = error.errorMsg;
+  const correlationId = error.correlationId;
 
   const opcodeName = Object.entries(Opcode).find(([, v]) => v === originOpcode)?.[0] || `opcode ${originOpcode}`;
   console.error(`[S_ErrorResponse] ${opcodeName}: ${errorMsg} (corr=${correlationId})`);
@@ -2549,33 +2485,13 @@ function sendLeaveDM(convId) {
 }
 
 function parseDMStarted(dataView) {
-  let offset = 2; // Skip opcode
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  const usernameLen = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const username = new TextDecoder().decode(
-    new Uint8Array(dataView.buffer, offset, usernameLen),
-  );
-  offset += usernameLen;
-
-  const authenticated = dataView.getUint8(offset) !== 0;
-  offset += 1;
-
-  const online = dataView.getUint8(offset) !== 0;
-  offset += 1;
-
-  const isInitiator = dataView.getUint8(offset) !== 0;
-  offset += 1;
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_DMStarted missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
+  const started = window.NRCFrames.decodeDMStarted(dataView);
+  const convId = started.convId;
+  const username = started.username;
+  const authenticated = started.authenticated;
+  const online = started.online;
+  const isInitiator = started.isInitiator;
+  const correlationId = started.correlationId;
 
   // Clear optimistic entry if pending for this username
   const suppressAutoSwitch = suppressedDMStartCorrelations.delete(correlationId);
@@ -2627,17 +2543,8 @@ function parseDMStarted(dataView) {
 }
 
 function parseDMList(dataView) {
-  let offset = 2; // Skip opcode
-
-  const count = dataView.getUint16(offset, false);
-  offset += 2;
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_DMList missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
-  offset += 4;
+  const list = window.NRCFrames.decodeDMList(dataView);
+  const correlationId = list.correlationId;
 
   // Preserve unread counts from existing DMs
   const oldUnreads = new Map();
@@ -2651,26 +2558,9 @@ function parseDMList(dataView) {
 
   activeDMs.clear();
 
-  for (let i = 0; i < count; i++) {
-    const convId = dataView.getBigUint64(offset, false);
-    offset += 8;
-
-    const usernameLen = dataView.getUint16(offset, false);
-    offset += 2;
-
-    const username = new TextDecoder().decode(
-      new Uint8Array(dataView.buffer, offset, usernameLen),
-    );
-    offset += usernameLen;
-
-    const authenticated = dataView.getUint8(offset) !== 0;
-    offset += 1;
-
-    const online = dataView.getUint8(offset) !== 0;
-    offset += 1;
-
-    const lastSeen = Number(dataView.getBigUint64(offset, false)) * 1000; // Convert to ms
-    offset += 8;
+  for (const entry of list.entries) {
+    const { convId, username, authenticated, online } = entry;
+    const lastSeen = Number(entry.lastSeen) * 1000; // Convert to ms
 
     activeDMs.set(convId, {
       username,
@@ -2709,32 +2599,11 @@ function parseDMList(dataView) {
 }
 
 function parseDMError(dataView) {
-  let offset = 2;
-
-  const errorCode = dataView.getUint8(offset);
-  offset += 1;
-
-  const usernameLen = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const targetUsername = new TextDecoder().decode(
-    new Uint8Array(dataView.buffer, offset, usernameLen),
-  );
-  offset += usernameLen;
-
-  const msgLen = dataView.getUint16(offset, false);
-  offset += 2;
-
-  const message = new TextDecoder().decode(
-    new Uint8Array(dataView.buffer, offset, msgLen),
-  );
-  offset += msgLen;
-
-  if (dataView.byteLength < offset + 4) {
-    console.error("S_DMError missing correlation_id");
-    return;
-  }
-  const correlationId = dataView.getUint32(offset, false);
+  const error = window.NRCFrames.decodeDMError(dataView);
+  const errorCode = error.errorCode;
+  const targetUsername = error.targetUsername;
+  const message = error.message;
+  const correlationId = error.correlationId;
 
   // If this is an idempotent leave race, treat as successful cleanup.
   if (errorCode === 3) {
@@ -2794,12 +2663,9 @@ function parseDMError(dataView) {
 }
 
 function parseDMLeft(dataView) {
-  if (dataView.byteLength < 14) {
-    console.error("S_DMLeft missing correlation_id");
-    return;
-  }
-  const convId = dataView.getBigUint64(2, false);
-  const correlationId = dataView.getUint32(10, false);
+  const left = window.NRCFrames.decodeDMLeft(dataView);
+  const convId = left.convId;
+  const correlationId = left.correlationId;
   pendingLeaveDMs.delete(convId);
   window.NRCAI?.onDisplayConversationRemoved?.(convId);
 
@@ -2823,17 +2689,10 @@ function parseDMLeft(dataView) {
 }
 
 function parseDMPartnerStatus(dataView) {
-  let offset = 2;
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-  const online = dataView.getUint8(offset) !== 0;
-  offset += 1;
-  const usernameLen = dataView.getUint16(offset, false);
-  offset += 2;
-  const usernameBytes = new Uint8Array(dataView.buffer, offset, usernameLen);
-  offset += usernameLen;
-  const username = new TextDecoder().decode(usernameBytes);
-  const lastSeen = Number(dataView.getBigUint64(offset, false)) * 1000; // Convert to ms
+  const status = window.NRCFrames.decodeDMPartnerStatus(dataView);
+  const convId = status.convId;
+  const online = status.online;
+  const lastSeen = Number(status.lastSeen) * 1000; // Convert to ms
 
   const dm = activeDMs.get(convId);
   if (dm) {
@@ -3295,120 +3154,16 @@ function initDMUserPicker() {
 }
 
 function parseRoomPresenceUpdate(dataView) {
-  // S_RoomPresenceUpdate Payload: { conv_id: u64, event_type: u8, sequence: u64, username: []byte, is_authenticated: bool, user_type: u8, old_username: []byte, user_list: []{username: []byte, is_authenticated: bool, user_type: u8} }
-  let offset = 2; // Skip opcode
-
-  if (dataView.byteLength < offset + 8 + 1 + 8 + 2) {
-    logMessage(
-      "Error",
-      "⚠ PAYLOAD CORRUPTION - S_RoomPresenceUpdate too short",
-    );
-    return;
-  }
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-  const eventType = dataView.getUint8(offset);
-  offset += 1;
-  const sequence = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  // Parse username (length-prefixed)
-  const usernameLength = dataView.getUint16(offset, false);
-  offset += 2;
-  if (dataView.byteLength < offset + usernameLength + 1 + 1 + 2) {
-    logMessage("Error", "⚠ PAYLOAD CORRUPTION - Username length mismatch");
-    return;
-  }
-
-  let username = "";
-  if (usernameLength > 0) {
-    const usernameBytes = new Uint8Array(
-      dataView.buffer,
-      offset,
-      usernameLength,
-    );
-    username = new TextDecoder("utf-8").decode(usernameBytes);
-    offset += usernameLength;
-  }
-
-  // Parse is_authenticated flag for username
-  const isAuthenticated = dataView.getUint8(offset) !== 0;
-  offset += 1;
-
-  // Parse user_type for username (skip for now)
-  const userType = dataView.getUint8(offset);
-  offset += 1;
-
-  // Parse old_username (length-prefixed) - for UserRenamed events
-  const oldUsernameLength = dataView.getUint16(offset, false);
-  offset += 2;
-  if (dataView.byteLength < offset + oldUsernameLength + 2) {
-    logMessage("Error", "⚠ PAYLOAD CORRUPTION - Old username length mismatch");
-    return;
-  }
-
-  let oldUsername = "";
-  if (oldUsernameLength > 0) {
-    const oldUsernameBytes = new Uint8Array(
-      dataView.buffer,
-      offset,
-      oldUsernameLength,
-    );
-    oldUsername = new TextDecoder("utf-8").decode(oldUsernameBytes);
-    offset += oldUsernameLength;
-  }
-
-  // Parse user list count
-  const userListCount = dataView.getUint16(offset, false);
-  offset += 2;
-
-  // Parse user list with auth flags (for sync events)
-  const userList = [];
-  for (let i = 0; i < userListCount; i++) {
-    if (dataView.byteLength < offset + 2) {
-      logMessage(
-        "Error",
-        "⚠ PAYLOAD CORRUPTION - User list entry length missing",
-      );
-      return;
-    }
-
-    const userLength = dataView.getUint16(offset, false);
-    offset += 2;
-    if (dataView.byteLength < offset + userLength + 1 + 1) {
-      logMessage(
-        "Error",
-        "⚠ PAYLOAD CORRUPTION - User list entry content missing",
-      );
-      return;
-    }
-
-    const userBytes = new Uint8Array(dataView.buffer, offset, userLength);
-    const user = new TextDecoder("utf-8").decode(userBytes);
-    offset += userLength;
-
-    // Parse auth flag for this user
-    const userIsAuthenticated = dataView.getUint8(offset) !== 0;
-    offset += 1;
-
-    // Parse user_type for this user
-    const userUserType = dataView.getUint8(offset);
-    offset += 1;
-
-    userList.push({ username: user, isAuthenticated: userIsAuthenticated, userType: userUserType });
-  }
-
-  // Update room presence state
+  const update = window.NRCFrames.decodeRoomPresenceUpdate(dataView);
   updateRoomPresence(
-    convId,
-    eventType,
-    Number(sequence),
-    username,
-    isAuthenticated,
-    userType,
-    oldUsername,
-    userList,
+    update.convId,
+    update.eventType,
+    Number(update.sequence),
+    update.username,
+    update.isAuthenticated,
+    update.userType,
+    update.oldUsername,
+    update.userList,
   );
 }
 
@@ -3599,44 +3354,12 @@ function updateChatStats() {
 }
 
 function parseNewMessage(dataView) {
-  // S_NewMessage Payload: { conv_id: u64, seq: u64, author_id: u64, timestamp: i64, content_type: u8, content_len: u16, content: []byte }
-  let offset = 2; // Skip opcode
-
-  if (dataView.byteLength < offset + 8 + 8 + 8 + 8 + 1 + 2) {
-    logMessage("Error", "PAYLOAD CORRUPTION - S_NewMessage too short");
-    return;
-  }
-
-  const convId = dataView.getBigUint64(offset, false);
-  offset += 8;
-  const seq = dataView.getBigUint64(offset, false);
-  offset += 8;
-
-  // Parse username (length-prefixed)
-  const usernameLength = dataView.getUint16(offset, false);
-  offset += 2;
-  if (dataView.byteLength < offset + usernameLength) {
-    logMessage("Error", "PAYLOAD CORRUPTION - Username length mismatch");
-    return;
-  }
-  const usernameBytes = new Uint8Array(dataView.buffer, offset, usernameLength);
-  const authorUsername = new TextDecoder("utf-8").decode(usernameBytes);
-  offset += usernameLength;
-
-  const timestamp = dataView.getBigInt64(offset, false);
-  offset += 8;
-  const contentType = dataView.getUint8(offset);
-  offset += 1;
-  const contentLength = dataView.getUint16(offset, false);
-  offset += 2; // Protocol uses u16
-
-  if (dataView.byteLength < offset + contentLength) {
-    logMessage("Error", "PAYLOAD CORRUPTION - Content length mismatch");
-    return;
-  }
-
-  const contentBytes = new Uint8Array(dataView.buffer, offset, contentLength);
-  const content = new TextDecoder("utf-8").decode(contentBytes);
+  const message = window.NRCFrames.decodeNewMessage(dataView);
+  const convId = message.convId;
+  const seq = message.seq;
+  const authorUsername = message.authorUsername;
+  const timestamp = message.timestamp;
+  const content = message.content;
 
   const date = new Date(Number(timestamp / 1000000n));
   const isOwnMessage = myNickname && authorUsername === myNickname;
@@ -4310,12 +4033,8 @@ function unsubscribeFromConversations(convIds) {
 }
 
 function parseAckUnsubscribeConvs(dataView) {
-  if (dataView.byteLength !== 6) {
-    console.error(`S_AckUnsubscribeConvs invalid length: ${dataView.byteLength}`);
-    return;
-  }
-  const correlationId = dataView.getUint32(2, false);
-  console.log(`[S_AckUnsubscribeConvs] completed correlation=${correlationId}`);
+  const ack = window.NRCFrames.decodeAckUnsubscribeConvs(dataView);
+  console.log(`[S_AckUnsubscribeConvs] completed correlation=${ack.correlationId}`);
 }
 
 function refreshRoomParticipants() {
@@ -7039,21 +6758,12 @@ function sendPing() {
 }
 
 function parsePongResponse(dataView) {
-  // S_Pong payload: timestamp(8) + server_timestamp(8)
-  let offset = 2; // Skip opcode
-
-  if (dataView.byteLength < offset + 16) {
-    logMessage("Error", "⚠ PAYLOAD CORRUPTION - S_Pong too short");
-    return;
-  }
-
+  const pong = window.NRCFrames.decodePongResponse(dataView);
   const pongReceivedAt = performance.now(); // High-resolution timestamp
   const now = Date.now();
 
-  const timestamp = dataView.getBigUint64(offset, false);
-  offset += 8;
-  const serverTimestamp = dataView.getBigUint64(offset, false);
-  offset += 8;
+  const timestamp = pong.timestamp;
+  const serverTimestamp = pong.serverTimestamp;
 
   // Find matching ping timestamp
   const pingData = pendingPings.get(Number(timestamp));

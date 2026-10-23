@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import fs from "node:fs";
 
+const framesSource = fs.readFileSync(new URL("./protocol.js", import.meta.url), "utf8") + "\n" +
+  fs.readFileSync(new URL("./frames.js", import.meta.url), "utf8");
+
 function fixture() {
   const nodes = new Map();
   const document = { getElementById(id) {
@@ -15,7 +18,7 @@ function fixture() {
     serverReady: true, ws: { readyState: 1 }, WebSocket: { OPEN: 1 }, Opcode: { C_ListHistory: 62 },
     getRpcCorrelationId: () => ++sequence, sendPacket: buffer => requests.push(new DataView(buffer)),
     setTimeout: fn => { timers.set(sequence, fn); return sequence; }, clearTimeout: id => timers.delete(id) });
-  vm.runInContext(fs.readFileSync(new URL("history.js", import.meta.url), "utf8"), context);
+  vm.runInContext(framesSource + fs.readFileSync(new URL("history.js", import.meta.url), "utf8"), context);
   const api = context.window.NRCHistory;
   context.window.NRCViewManager = { getActiveView: () => view, setActiveView: next => { view = next; api.onViewChanged(next); } };
   api.init();

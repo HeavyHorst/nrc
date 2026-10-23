@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 
-const source = fs.readFileSync(new URL("./task-query.js", import.meta.url), "utf8");
+const framesSource = fs.readFileSync(new URL("./protocol.js", import.meta.url), "utf8") + "\n" +
+  fs.readFileSync(new URL("./frames.js", import.meta.url), "utf8");
+const source = framesSource + fs.readFileSync(new URL("./task-query.js", import.meta.url), "utf8");
 const readString = (view, offset) => {
   const size = view.getUint16(offset, false);
   return { value: new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset + offset + 2, size)), newOffset: offset + 2 + size };
@@ -18,7 +20,6 @@ function harness(t, onAssignees) {
   const controller = window.createTaskQueryController({
     getRoomId: () => room, getFilters: () => filters, getSort: () => sort, getNickname: () => "René",
     isReady: () => ready, nextId: () => ++id, send: (buffer) => sent.push(new DataView(buffer)),
-    readString, parseTask: (view, offset) => ({ task: { id: view.getBigUint64(offset, false) }, newOffset: offset + 8 }),
     cacheTasks: (roomId, tasks) => cached.push({ roomId, tasks }),
     onAssignees,
   });
@@ -109,12 +110,28 @@ test("assignee metadata is unfiltered, chunked, invalidated by mutations and cle
   h.controller.disconnect();
   assert.deepEqual(Array.from(h.controller.getAssignees()), []);
 });
+// Empty-string task record as serialized by protocol/tasks.odin. Task pages
+// carry full records, so the fixture must exercise the shared decoder rather
+// than the old id-only shortcut.
+function writeTask(view, offset, id) {
+  view.setBigUint64(offset, id); offset += 8;
+  view.setBigUint64(offset, 0n); offset += 8;
+  for (let field = 0; field < 2; field += 1) { view.setUint16(offset, 0); offset += 2; }
+  view.setUint8(offset++, 0); view.setUint16(offset, 0); offset += 2;
+  view.setUint16(offset, 0); offset += 2; view.setUint8(offset++, 0); view.setUint8(offset++, 0);
+  view.setUint16(offset, 0); offset += 2; view.setBigInt64(offset, 0n); offset += 8;
+  view.setBigInt64(offset, 0n); offset += 8; view.setUint16(offset, 0); offset += 2;
+  view.setBigInt64(offset, 0n); offset += 8; view.setBigUint64(offset, 0n); offset += 8;
+  view.setBigInt64(offset, 0n); offset += 8; view.setUint16(offset, 0); offset += 2;
+  view.setUint16(offset, 0); offset += 2; view.setUint16(offset, 0); offset += 2;
+  return offset;
+}
 function page(request, ids, { total = ids.length, more = false, text = "", number = 0n, success = true } = {}) {
   const bytes = new TextEncoder().encode(text);
-  const view = new DataView(new ArrayBuffer(42 + ids.length * 8 + bytes.length));
+  const view = new DataView(new ArrayBuffer(42 + ids.length * 77 + bytes.length));
   view.setUint16(0, 138); view.setBigUint64(2, request.getBigUint64(2)); view.setUint8(10, success ? 1 : 0); view.setUint16(11, ids.length);
   let offset = 13;
-  for (const id of ids) { view.setBigUint64(offset, id); offset += 8; }
+  for (const id of ids) offset = writeTask(view, offset, id);
   view.setUint8(offset++, more ? 1 : 0); view.setBigInt64(offset, number); offset += 8;
   view.setBigUint64(offset, ids.at(-1) ?? 0n); offset += 8;
   view.setUint16(offset, bytes.length); offset += 2;
