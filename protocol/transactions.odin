@@ -326,3 +326,222 @@ serializeTransactionResult :: proc(
 	}
 	return offset
 }
+
+// ----------------------------------------------------------------------------
+// Version-1 operation body serializers. They mirror the parsers above so tests
+// and tooling can build a transaction without re-deriving the layouts.
+// ----------------------------------------------------------------------------
+
+serializeTransactionReference :: proc(buf: []byte, reference: TransactionReference) -> int {
+	if len(buf) < 12 do return -1
+	buf[0] = u8(reference.kind)
+	buf[1] = u8(reference.entity_type)
+	endian.put_u16(buf[2:], .Big, 0)
+	endian.put_u64(buf[4:], .Big, reference.value)
+	return 12
+}
+
+transaction_write_bytes :: proc(buf: []byte, offset: int, value: []byte) -> int {
+	// The wire carries the length as u16; a longer field would be truncated to a
+	// length the parser rejects, so refuse it here.
+	if len(value) > int(max(u16)) do return -1
+	if len(buf) - offset < 2 + len(value) do return -1
+	endian.put_u16(buf[offset:], .Big, u16(len(value)))
+	copy(buf[offset + 2:], value)
+	return 2 + len(value)
+}
+
+getSizeTransactionTaskCreate :: proc(body: TransactionTaskCreate) -> int {
+	return 20 + 12 + 2 + len(body.title) + 2 + len(body.description) + 2 + len(body.external_ref) + 2 + len(body.project)
+}
+
+serializeTransactionTaskCreate :: proc(body: TransactionTaskCreate, buf: []byte) -> int {
+	total := getSizeTransactionTaskCreate(body)
+	if len(buf) < total do return -1
+	if len(body.title) > MAX_TASK_TITLE_LENGTH ||
+	   len(body.description) > MAX_TASK_DESCRIPTION_LENGTH ||
+	   len(body.external_ref) > MAX_EXTERNAL_REF_LENGTH ||
+	   len(body.project) > MAX_PROJECT_LENGTH {
+		return -1
+	}
+	endian.put_u64(buf[0:], .Big, u64(body.conv_id))
+	buf[8] = u8(body.status)
+	buf[9] = body.priority
+	buf[10] = u8(body.color)
+	buf[11] = 0
+	endian.put_u64(buf[12:], .Big, u64(body.due_at))
+	if serializeTransactionReference(buf[20:], body.blocked_by) < 0 do return -1
+	offset := 32
+	for value in ([?][]byte{body.title, body.description, body.external_ref, body.project}) {
+		written := transaction_write_bytes(buf, offset, value)
+		if written < 0 do return -1
+		offset += written
+	}
+	return offset
+}
+
+getSizeTransactionTaskPatch :: proc(body: TransactionTaskPatch) -> int {
+	size := 8 + 12 + 8 + 2
+	if body.present & TRANSACTION_TASK_PATCH_TITLE != 0 do size += 2 + len(body.title)
+	if body.present & TRANSACTION_TASK_PATCH_DESCRIPTION != 0 do size += 2 + len(body.description)
+	if body.present & TRANSACTION_TASK_PATCH_STATUS != 0 do size += 1
+	if body.present & TRANSACTION_TASK_PATCH_PRIORITY != 0 do size += 1
+	if body.present & TRANSACTION_TASK_PATCH_COLOR != 0 do size += 1
+	if body.present & TRANSACTION_TASK_PATCH_DUE_AT != 0 do size += 8
+	if body.present & TRANSACTION_TASK_PATCH_BLOCKED_BY != 0 do size += 12
+	if body.present & TRANSACTION_TASK_PATCH_ASSIGNEE != 0 do size += 2 + len(body.assignee)
+	if body.present & TRANSACTION_TASK_PATCH_EXTERNAL_REF != 0 do size += 2 + len(body.external_ref)
+	if body.present & TRANSACTION_TASK_PATCH_PROJECT != 0 do size += 2 + len(body.project)
+	return size
+}
+
+serializeTransactionTaskPatch :: proc(body: TransactionTaskPatch, buf: []byte) -> int {
+	if body.present == 0 || body.present &~ TRANSACTION_TASK_PATCH_ALL != 0 do return -1
+	if body.present & TRANSACTION_TASK_PATCH_TITLE != 0 && len(body.title) > MAX_TASK_TITLE_LENGTH do return -1
+	if body.present & TRANSACTION_TASK_PATCH_DESCRIPTION != 0 && len(body.description) > MAX_TASK_DESCRIPTION_LENGTH do return -1
+	if body.present & TRANSACTION_TASK_PATCH_ASSIGNEE != 0 && len(body.assignee) > MAX_ASSIGNEE_LENGTH do return -1
+	if body.present & TRANSACTION_TASK_PATCH_EXTERNAL_REF != 0 && len(body.external_ref) > MAX_EXTERNAL_REF_LENGTH do return -1
+	if body.present & TRANSACTION_TASK_PATCH_PROJECT != 0 && len(body.project) > MAX_PROJECT_LENGTH do return -1
+	total := getSizeTransactionTaskPatch(body)
+	if len(buf) < total do return -1
+	endian.put_u64(buf[0:], .Big, u64(body.conv_id))
+	if serializeTransactionReference(buf[8:], body.task) < 0 do return -1
+	endian.put_u64(buf[20:], .Big, u64(body.if_updated_at))
+	endian.put_u16(buf[28:], .Big, body.present)
+	offset := 30
+	if body.present & TRANSACTION_TASK_PATCH_TITLE != 0 {
+		written := transaction_write_bytes(buf, offset, body.title)
+		if written < 0 do return -1
+		offset += written
+	}
+	if body.present & TRANSACTION_TASK_PATCH_DESCRIPTION != 0 {
+		written := transaction_write_bytes(buf, offset, body.description)
+		if written < 0 do return -1
+		offset += written
+	}
+	if body.present & TRANSACTION_TASK_PATCH_STATUS != 0 {buf[offset] = u8(body.status); offset += 1}
+	if body.present & TRANSACTION_TASK_PATCH_PRIORITY != 0 {buf[offset] = body.priority; offset += 1}
+	if body.present & TRANSACTION_TASK_PATCH_COLOR != 0 {buf[offset] = u8(body.color); offset += 1}
+	if body.present & TRANSACTION_TASK_PATCH_DUE_AT != 0 {
+		endian.put_u64(buf[offset:], .Big, u64(body.due_at))
+		offset += 8
+	}
+	if body.present & TRANSACTION_TASK_PATCH_BLOCKED_BY != 0 {
+		if serializeTransactionReference(buf[offset:], body.blocked_by) < 0 do return -1
+		offset += 12
+	}
+	if body.present & TRANSACTION_TASK_PATCH_ASSIGNEE != 0 {
+		written := transaction_write_bytes(buf, offset, body.assignee)
+		if written < 0 do return -1
+		offset += written
+	}
+	if body.present & TRANSACTION_TASK_PATCH_EXTERNAL_REF != 0 {
+		written := transaction_write_bytes(buf, offset, body.external_ref)
+		if written < 0 do return -1
+		offset += written
+	}
+	if body.present & TRANSACTION_TASK_PATCH_PROJECT != 0 {
+		written := transaction_write_bytes(buf, offset, body.project)
+		if written < 0 do return -1
+		offset += written
+	}
+	return offset
+}
+
+getSizeTransactionAssetCreate :: proc(body: TransactionAssetCreate) -> int {
+	size := 12 + 1 + 4 + 2 + len(body.preview) + 2 + len(body.payload)
+	if body.parent_type != .None do size += 12
+	return size
+}
+
+serializeTransactionAssetCreate :: proc(body: TransactionAssetCreate, buf: []byte) -> int {
+	if len(body.preview) > MAX_PREVIEW_LENGTH || len(body.payload) > MAX_PAYLOAD_LENGTH || body.payload_raw_len > MAX_PAYLOAD_LENGTH {
+		return -1
+	}
+	if body.payload_encoding == .Plain && body.payload_raw_len != u32(len(body.payload)) do return -1
+	total := getSizeTransactionAssetCreate(body)
+	if len(buf) < total do return -1
+	endian.put_u64(buf[0:], .Big, u64(body.conv_id))
+	endian.put_u16(buf[8:], .Big, u16(body.asset_type))
+	endian.put_u16(buf[10:], .Big, u16(body.parent_type))
+	offset := 12
+	if body.parent_type != .None {
+		if serializeTransactionReference(buf[offset:], body.parent) < 0 do return -1
+		offset += 12
+	}
+	buf[offset] = u8(body.payload_encoding); offset += 1
+	endian.put_u32(buf[offset:], .Big, body.payload_raw_len); offset += 4
+	preview_size := transaction_write_bytes(buf, offset, body.preview)
+	if preview_size < 0 do return -1
+	offset += preview_size
+	payload_size := transaction_write_bytes(buf, offset, body.payload)
+	if payload_size < 0 do return -1
+	offset += payload_size
+	return offset
+}
+
+getSizeTransactionAssetPatch :: proc(body: TransactionAssetPatch) -> int {
+	size := 8 + 12 + 8 + 1
+	if body.present & TRANSACTION_ASSET_PATCH_PREVIEW != 0 do size += 2 + len(body.preview)
+	if body.present & TRANSACTION_ASSET_PATCH_PAYLOAD != 0 do size += 1 + 4 + 2 + len(body.payload)
+	return size
+}
+
+serializeTransactionAssetPatch :: proc(body: TransactionAssetPatch, buf: []byte) -> int {
+	if body.present == 0 || body.present &~ u8(3) != 0 do return -1
+	if body.present & TRANSACTION_ASSET_PATCH_PREVIEW != 0 && len(body.preview) > MAX_PREVIEW_LENGTH do return -1
+	if body.present & TRANSACTION_ASSET_PATCH_PAYLOAD != 0 {
+		if len(body.payload) > MAX_PAYLOAD_LENGTH || body.payload_raw_len > MAX_PAYLOAD_LENGTH do return -1
+		// parseTransactionAssetPatch accepts this mismatch on its own, but the apply
+		// path rejects a plain payload whose declared raw length differs, so refuse
+		// to build a body that can only fail later.
+		if body.payload_encoding == .Plain && body.payload_raw_len != u32(len(body.payload)) do return -1
+	}
+	total := getSizeTransactionAssetPatch(body)
+	if len(buf) < total do return -1
+	endian.put_u64(buf[0:], .Big, u64(body.conv_id))
+	if serializeTransactionReference(buf[8:], body.asset) < 0 do return -1
+	endian.put_u64(buf[20:], .Big, u64(body.if_updated_at))
+	buf[28] = body.present
+	offset := 29
+	if body.present & TRANSACTION_ASSET_PATCH_PREVIEW != 0 {
+		written := transaction_write_bytes(buf, offset, body.preview)
+		if written < 0 do return -1
+		offset += written
+	}
+	if body.present & TRANSACTION_ASSET_PATCH_PAYLOAD != 0 {
+		buf[offset] = u8(body.payload_encoding); offset += 1
+		endian.put_u32(buf[offset:], .Big, body.payload_raw_len); offset += 4
+		written := transaction_write_bytes(buf, offset, body.payload)
+		if written < 0 do return -1
+		offset += written
+	}
+	return offset
+}
+
+getSizeTransactionEdgeCreate :: proc() -> int {
+	return 8 + 12 + 12 + 2
+}
+
+serializeTransactionEdgeCreate :: proc(body: TransactionEdgeCreate, buf: []byte) -> int {
+	total := getSizeTransactionEdgeCreate()
+	if len(buf) < total do return -1
+	endian.put_u64(buf[0:], .Big, u64(body.conv_id))
+	if serializeTransactionReference(buf[8:], body.source) < 0 do return -1
+	if serializeTransactionReference(buf[20:], body.target) < 0 do return -1
+	endian.put_u16(buf[32:], .Big, u16(body.relation))
+	return total
+}
+
+getSizeTransactionDelete :: proc(entity: TransactionEntityType) -> int {
+	return entity == .Edge ? 20 : 28
+}
+
+serializeTransactionDelete :: proc(body: TransactionDelete, buf: []byte, entity: TransactionEntityType) -> int {
+	total := getSizeTransactionDelete(entity)
+	if len(buf) < total do return -1
+	endian.put_u64(buf[0:], .Big, u64(body.conv_id))
+	if serializeTransactionReference(buf[8:], body.entity) < 0 do return -1
+	if entity != .Edge do endian.put_u64(buf[20:], .Big, u64(body.if_updated_at))
+	return total
+}

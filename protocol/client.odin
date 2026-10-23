@@ -1722,3 +1722,312 @@ parseRoomPresenceUpdate :: proc(data: []byte, allocator := context.allocator) ->
 
 	return result, nil
 }
+
+// ----------------------------------------------------------------------------
+// Requests without a serializer above. These exist so tests and tooling can
+// build real client bytes instead of re-deriving the layout by hand.
+// ----------------------------------------------------------------------------
+
+// C_StartDM (opcode 16)
+getSizeStartDMRequest :: proc(username: string) -> int {
+	return 2 + 2 + len(username) + 4
+}
+
+serializeStartDMRequest :: proc(username: string, correlation_id: u32, buf: []byte) -> int {
+	total_size := getSizeStartDMRequest(username)
+	if len(buf) < total_size || len(username) > MAX_NICKNAME_LENGTH do return -1
+	endian.put_u16(buf[0:], .Big, u16(Opcode.C_StartDM))
+	endian.put_u16(buf[2:], .Big, u16(len(username)))
+	copy(buf[4:], username)
+	endian.put_u32(buf[4 + len(username):], .Big, correlation_id)
+	return total_size
+}
+
+// C_ListDMs (opcode 17)
+getSizeListDMsRequest :: proc() -> int {
+	return 2 + 4
+}
+
+serializeListDMsRequest :: proc(correlation_id: u32, buf: []byte) -> int {
+	total_size := getSizeListDMsRequest()
+	if len(buf) < total_size do return -1
+	endian.put_u16(buf[0:], .Big, u16(Opcode.C_ListDMs))
+	endian.put_u32(buf[2:], .Big, correlation_id)
+	return total_size
+}
+
+// C_LeaveDM (opcode 18)
+getSizeLeaveDMRequest :: proc() -> int {
+	return 2 + 8 + 4
+}
+
+serializeLeaveDMRequest :: proc(conv_id: ConversationID, correlation_id: u32, buf: []byte) -> int {
+	total_size := getSizeLeaveDMRequest()
+	if len(buf) < total_size do return -1
+	endian.put_u16(buf[0:], .Big, u16(Opcode.C_LeaveDM))
+	endian.put_u64(buf[2:], .Big, u64(conv_id))
+	endian.put_u32(buf[10:], .Big, correlation_id)
+	return total_size
+}
+
+// C_QueryTasks (opcode 28). The membership scope is optional and only valid
+// with the WorkOrder sort.
+getSizeTaskQueryRequest :: proc(req: TaskQueryRequest) -> int {
+	size := 2 + 8 + 1 + 2 + 1 + 1 + 1 + 1 + 8 + 1 + 2 + len(req.assignee) + 1 + 2 + len(req.project) + 1 + 8 + 2 + len(req.cursor_text) + 8 + 4
+	if req.slice_id != 0 do size += 8
+	return size
+}
+
+serializeTaskQueryRequest :: proc(req: TaskQueryRequest, buf: []byte) -> int {
+	total_size := getSizeTaskQueryRequest(req)
+	if len(buf) < total_size do return -1
+	if len(req.assignee) > MAX_ASSIGNEE_LENGTH || len(req.project) > MAX_PROJECT_LENGTH || len(req.cursor_text) > MAX_TASK_TITLE_LENGTH {
+		return -1
+	}
+	if req.slice_id != 0 && req.sort != .WorkOrder do return -1
+
+	offset := 0
+	endian.put_u16(buf[offset:], .Big, u16(Opcode.C_QueryTasks)); offset += 2
+	endian.put_u64(buf[offset:], .Big, u64(req.conv_id)); offset += 8
+	buf[offset] = req.status_mask; offset += 1
+	endian.put_u16(buf[offset:], .Big, req.limit); offset += 2
+	buf[offset] = u8(req.sort); offset += 1
+	buf[offset] = req.descending ? 1 : 0; offset += 1
+	buf[offset] = req.color; offset += 1
+	buf[offset] = req.blocked; offset += 1
+	endian.put_u64(buf[offset:], .Big, u64(req.overdue_before)); offset += 8
+	buf[offset] = req.has_assignee ? 1 : 0; offset += 1
+	endian.put_u16(buf[offset:], .Big, u16(len(req.assignee))); offset += 2
+	copy(buf[offset:], req.assignee); offset += len(req.assignee)
+	buf[offset] = req.has_project ? 1 : 0; offset += 1
+	endian.put_u16(buf[offset:], .Big, u16(len(req.project))); offset += 2
+	copy(buf[offset:], req.project); offset += len(req.project)
+	buf[offset] = req.has_cursor ? 1 : 0; offset += 1
+	endian.put_u64(buf[offset:], .Big, u64(req.cursor_number)); offset += 8
+	endian.put_u16(buf[offset:], .Big, u16(len(req.cursor_text))); offset += 2
+	copy(buf[offset:], req.cursor_text); offset += len(req.cursor_text)
+	endian.put_u64(buf[offset:], .Big, u64(req.cursor_task_id)); offset += 8
+	endian.put_u32(buf[offset:], .Big, req.correlation_id); offset += 4
+	if req.slice_id != 0 {
+		endian.put_u64(buf[offset:], .Big, u64(req.slice_id))
+		offset += 8
+	}
+	return total_size
+}
+
+// The project register answers six opcodes with one wire format.
+getSizeListTaskProjectsRequest :: proc() -> int {
+	return 2 + 8 + 4
+}
+
+serializeListTaskProjectsRequest :: proc(conv_id: ConversationID, correlation_id: u32, buf: []byte, opcode: Opcode = .C_ListTaskProjects) -> int {
+	total_size := getSizeListTaskProjectsRequest()
+	if len(buf) < total_size do return -1
+	endian.put_u16(buf[0:], .Big, u16(opcode))
+	endian.put_u64(buf[2:], .Big, u64(conv_id))
+	endian.put_u32(buf[10:], .Big, correlation_id)
+	return total_size
+}
+
+// C_ListTaskSlices (opcode 56)
+getSizeListTaskSlicesRequest :: proc(req: ListTaskSlicesRequest) -> int {
+	size := 2 + 8 + 1 + 1 + 2 + len(req.owner) + 1 + 2 + len(req.name) + 2 + 1 + 4
+	if req.has_cursor do size += 17
+	return size
+}
+
+serializeListTaskSlicesRequest :: proc(req: ListTaskSlicesRequest, buf: []byte) -> int {
+	total_size := getSizeListTaskSlicesRequest(req)
+	if len(buf) < total_size do return -1
+	if len(req.owner) > MAX_ASSIGNEE_LENGTH || len(req.name) > MAX_PROJECT_LENGTH do return -1
+
+	offset := 0
+	endian.put_u16(buf[offset:], .Big, u16(Opcode.C_ListTaskSlices)); offset += 2
+	endian.put_u64(buf[offset:], .Big, u64(req.conv_id)); offset += 8
+	buf[offset] = req.include_closed ? 1 : 0; offset += 1
+	buf[offset] = req.has_owner ? 1 : 0; offset += 1
+	endian.put_u16(buf[offset:], .Big, u16(len(req.owner))); offset += 2
+	copy(buf[offset:], req.owner); offset += len(req.owner)
+	buf[offset] = req.has_name ? 1 : 0; offset += 1
+	endian.put_u16(buf[offset:], .Big, u16(len(req.name))); offset += 2
+	copy(buf[offset:], req.name); offset += len(req.name)
+	endian.put_u16(buf[offset:], .Big, req.limit); offset += 2
+	buf[offset] = req.has_cursor ? 1 : 0; offset += 1
+	if req.has_cursor {
+		buf[offset] = req.cursor_closed ? 1 : 0; offset += 1
+		endian.put_u64(buf[offset:], .Big, u64(req.cursor_sort_at)); offset += 8
+		endian.put_u64(buf[offset:], .Big, u64(req.cursor_slice_id)); offset += 8
+	}
+	endian.put_u32(buf[offset:], .Big, req.correlation_id)
+	return total_size
+}
+
+// C_QueryCalendar (opcode 58)
+getSizeCalendarRequest :: proc(req: CalendarRequest) -> int {
+	return 2 + 8 + 8 + 8 + 2 + 1 + 8 + 1 + 8 + 2 + len(req.assignee) + 2 + len(req.project) + 4
+}
+
+serializeCalendarRequest :: proc(req: CalendarRequest, buf: []byte) -> int {
+	total_size := getSizeCalendarRequest(req)
+	if len(buf) < total_size do return -1
+	if len(req.assignee) > MAX_USERNAME_LENGTH || len(req.project) > MAX_PROJECT_LENGTH do return -1
+
+	offset := 0
+	endian.put_u16(buf[offset:], .Big, u16(Opcode.C_QueryCalendar)); offset += 2
+	endian.put_u64(buf[offset:], .Big, u64(req.conv_id)); offset += 8
+	endian.put_u64(buf[offset:], .Big, u64(req.start)); offset += 8
+	endian.put_u64(buf[offset:], .Big, u64(req.end)); offset += 8
+	endian.put_u16(buf[offset:], .Big, req.limit); offset += 2
+	buf[offset] = req.has_cursor ? 1 : 0; offset += 1
+	endian.put_u64(buf[offset:], .Big, u64(req.cursor.at)); offset += 8
+	buf[offset] = req.cursor.kind; offset += 1
+	endian.put_u64(buf[offset:], .Big, req.cursor.id); offset += 8
+	endian.put_u16(buf[offset:], .Big, u16(len(req.assignee))); offset += 2
+	copy(buf[offset:], req.assignee); offset += len(req.assignee)
+	endian.put_u16(buf[offset:], .Big, u16(len(req.project))); offset += 2
+	copy(buf[offset:], req.project); offset += len(req.project)
+	endian.put_u32(buf[offset:], .Big, req.correlation_id)
+	return total_size
+}
+
+// C_GetTasksByIDs (60) and C_GetAssetsByIDs (61) share one format.
+getSizeGetRecordsByIDsRequest :: proc(req: GetRecordsByIDsRequest) -> int {
+	return 2 + 8 + 4 + 1 + 2 + 8 * len(req.ids)
+}
+
+serializeGetRecordsByIDsRequest :: proc(req: GetRecordsByIDsRequest, buf: []byte, opcode: Opcode = .C_GetTasksByIDs) -> int {
+	total_size := getSizeGetRecordsByIDsRequest(req)
+	if len(buf) < total_size || len(req.ids) > MAX_ID_BATCH_SIZE do return -1
+
+	offset := 0
+	endian.put_u16(buf[offset:], .Big, u16(opcode)); offset += 2
+	endian.put_u64(buf[offset:], .Big, u64(req.conv_id)); offset += 8
+	endian.put_u32(buf[offset:], .Big, req.correlation_id); offset += 4
+	buf[offset] = req.full_content ? 1 : 0; offset += 1
+	endian.put_u16(buf[offset:], .Big, u16(len(req.ids))); offset += 2
+	for id in req.ids {
+		endian.put_u64(buf[offset:], .Big, id); offset += 8
+	}
+	return total_size
+}
+
+// C_ListTaskDependents (opcode 64)
+getSizeListTaskDependentsRequest :: proc() -> int {
+	return 2 + 8 + 8 + 2 + 8 + 4
+}
+
+serializeListTaskDependentsRequest :: proc(req: ListTaskDependentsRequest, buf: []byte) -> int {
+	total_size := getSizeListTaskDependentsRequest()
+	if len(buf) < total_size do return -1
+	endian.put_u16(buf[0:], .Big, u16(Opcode.C_ListTaskDependents))
+	endian.put_u64(buf[2:], .Big, u64(req.conv_id))
+	endian.put_u64(buf[10:], .Big, u64(req.task_id))
+	endian.put_u16(buf[18:], .Big, req.limit)
+	endian.put_u64(buf[20:], .Big, u64(req.after_task_id))
+	endian.put_u32(buf[28:], .Big, req.correlation_id)
+	return total_size
+}
+
+// C_ListEdgesPaged (opcode 54)
+getSizeListEdgesPagedRequest :: proc() -> int {
+	return 2 + 8 + 2 + 8 + 2 + 8 + 4
+}
+
+serializeListEdgesPagedRequest :: proc(req: ListEdgesPagedRequest, buf: []byte) -> int {
+	total_size := getSizeListEdgesPagedRequest()
+	if len(buf) < total_size do return -1
+	endian.put_u16(buf[0:], .Big, u16(Opcode.C_ListEdgesPaged))
+	endian.put_u64(buf[2:], .Big, u64(req.conv_id))
+	endian.put_u16(buf[10:], .Big, u16(req.target_type))
+	endian.put_u64(buf[12:], .Big, req.target_id)
+	endian.put_u16(buf[20:], .Big, req.limit)
+	endian.put_u64(buf[22:], .Big, u64(req.after_edge_id))
+	endian.put_u32(buf[30:], .Big, req.correlation_id)
+	return total_size
+}
+
+// C_SearchCustomers (opcode 55)
+getSizeSearchCustomersRequest :: proc(req: SearchCustomersRequest) -> int {
+	return 2 + 8 + 2 + 8 + 1 + 2 + len(req.query) + 4
+}
+
+serializeSearchCustomersRequest :: proc(req: SearchCustomersRequest, buf: []byte) -> int {
+	total_size := getSizeSearchCustomersRequest(req)
+	if len(buf) < total_size || len(req.query) > MAX_CUSTOMER_SEARCH_QUERY do return -1
+
+	offset := 0
+	endian.put_u16(buf[offset:], .Big, u16(Opcode.C_SearchCustomers)); offset += 2
+	endian.put_u64(buf[offset:], .Big, u64(req.conv_id)); offset += 8
+	endian.put_u16(buf[offset:], .Big, req.limit); offset += 2
+	endian.put_u64(buf[offset:], .Big, u64(req.after_company_id)); offset += 8
+	buf[offset] = req.include_archived ? 1 : 0; offset += 1
+	endian.put_u16(buf[offset:], .Big, u16(len(req.query))); offset += 2
+	copy(buf[offset:], req.query); offset += len(req.query)
+	endian.put_u32(buf[offset:], .Big, req.correlation_id)
+	return total_size
+}
+
+// C_GraphRank (opcode 52)
+getSizeGraphRankRequest :: proc(req: GraphRankRequest) -> int {
+	return 2 + 8 + 1 + 10 * int(req.anchor_count) + 1 + 10 * int(req.candidate_count) + 1 + 2 + 1 + 1 + 4
+}
+
+serializeGraphRankRequest :: proc(req: GraphRankRequest, buf: []byte) -> int {
+	if int(req.anchor_count) > MAX_GRAPH_RANK_ANCHORS || int(req.candidate_count) > MAX_GRAPH_RANK_CANDIDATES {
+		return -1
+	}
+	total_size := getSizeGraphRankRequest(req)
+	if len(buf) < total_size do return -1
+
+	offset := 0
+	endian.put_u16(buf[offset:], .Big, u16(Opcode.C_GraphRank)); offset += 2
+	endian.put_u64(buf[offset:], .Big, u64(req.conv_id)); offset += 8
+	buf[offset] = req.anchor_count; offset += 1
+	for i in 0 ..< int(req.anchor_count) {
+		endian.put_u16(buf[offset:], .Big, u16(req.anchors[i].target_type)); offset += 2
+		endian.put_u64(buf[offset:], .Big, req.anchors[i].target_id); offset += 8
+	}
+	buf[offset] = req.candidate_count; offset += 1
+	for i in 0 ..< int(req.candidate_count) {
+		endian.put_u16(buf[offset:], .Big, u16(req.candidates[i].target_type)); offset += 2
+		endian.put_u64(buf[offset:], .Big, req.candidates[i].target_id); offset += 8
+	}
+	buf[offset] = req.max_depth; offset += 1
+	endian.put_u16(buf[offset:], .Big, req.relation_mask); offset += 2
+	buf[offset] = u8(req.direction); offset += 1
+	buf[offset] = req.top_n; offset += 1
+	endian.put_u32(buf[offset:], .Big, req.correlation_id)
+	return total_size
+}
+
+// C_QueryTickets (opcode 63). The query is a raw JSON payload.
+getSizeTicketQueryRequest :: proc(query: []byte) -> int {
+	return 2 + 4 + len(query)
+}
+
+serializeTicketQueryRequest :: proc(correlation_id: u32, query: []byte, buf: []byte) -> int {
+	total_size := getSizeTicketQueryRequest(query)
+	if len(buf) < total_size do return -1
+	endian.put_u16(buf[0:], .Big, u16(Opcode.C_QueryTickets))
+	endian.put_u32(buf[2:], .Big, correlation_id)
+	copy(buf[6:], query)
+	return total_size
+}
+
+// C_ListHistory (opcode 62)
+getSizeListHistoryRequest :: proc() -> int {
+	return 2 + LIST_HISTORY_REQUEST_SIZE
+}
+
+serializeListHistoryRequest :: proc(req: ListHistoryRequest, buf: []byte) -> int {
+	total_size := getSizeListHistoryRequest()
+	if len(buf) < total_size do return -1
+	endian.put_u16(buf[0:], .Big, u16(Opcode.C_ListHistory))
+	endian.put_u64(buf[2:], .Big, u64(req.conv_id))
+	buf[10] = req.kind
+	endian.put_u64(buf[11:], .Big, req.entity)
+	endian.put_u64(buf[19:], .Big, req.before)
+	endian.put_u16(buf[27:], .Big, req.limit)
+	endian.put_u32(buf[29:], .Big, req.correlation_id)
+	return total_size
+}
