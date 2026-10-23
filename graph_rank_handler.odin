@@ -135,53 +135,52 @@ graph_rank_scores :: proc(
 		if a.target_type != b.target_type do return u16(a.target_type) < u16(b.target_type)
 		return a.target_id < b.target_id
 	})
-	personalization := make(map[Edge_Entity_Key]f64, int(req.anchor_count), allocator = allocator)
+	indices := make(map[Edge_Entity_Key]int, len(keys), allocator = allocator)
+	for key, i in keys do indices[key] = i
+	personalization := make([]f64, len(keys), allocator = allocator)
 	weight_sum := 0.0
 	for i := 0; i < int(req.anchor_count); i += 1 {
 		weight := 1.0 / f64(i + 1)
-		personalization[graph_rank_key(req.anchors[i])] = weight
+		personalization[indices[graph_rank_key(req.anchors[i])]] = weight
 		weight_sum += weight
 	}
-	for key, weight in personalization do personalization[key] = weight / weight_sum
-	rank := make(map[Edge_Entity_Key]f64, len(keys), allocator = allocator)
-	next := make(map[Edge_Entity_Key]f64, len(keys), allocator = allocator)
-	for key, weight in personalization do rank[key] = weight
-	degree_by_key := make(map[Edge_Entity_Key]int, len(keys), allocator = allocator)
-	for key in keys {
+	for &weight in personalization do weight /= weight_sum
+	rank := make([]f64, len(keys), allocator = allocator)
+	next := make([]f64, len(keys), allocator = allocator)
+	copy(rank, personalization)
+	// Resolve the directed union once, preserving sorted-node and adjacency order
+	// so the score iterations retain their existing floating-point summation order.
+	offsets := make([]int, len(keys) + 1, allocator = allocator)
+	neighbors := make([dynamic]int, 0, 2 * len(union_edges), allocator = allocator)
+	for key, i in keys {
 		if edge_ids, ok := conv.edges_by_entity[key]; ok {
 			for edge_id in edge_ids {
 				if edge_id not_in union_edges do continue
 				edge := conv.edges[edge_id]
 				if edge == nil do continue
-				_, resolved := pr.resolve_neighbor(edge, key.target_type, key.target_id, req.direction)
-				if resolved do degree_by_key[key] += 1
+				neighbor, resolved := pr.resolve_neighbor(edge, key.target_type, key.target_id, req.direction)
+				if resolved do append(&neighbors, indices[Edge_Entity_Key{target_type = neighbor.target_type, target_id = neighbor.target_id}])
 			}
 		}
+		offsets[i + 1] = len(neighbors)
 	}
 
 	for _ in 0 ..< GRAPH_RANK_ITERATIONS {
-		clear(&next)
-		for key, weight in personalization do next[key] = (1.0 - GRAPH_RANK_DAMPING) * weight
+		for weight, i in personalization do next[i] = (1.0 - GRAPH_RANK_DAMPING) * weight
 		dangling := 0.0
-		for key in keys {
-			degree := degree_by_key[key]
+		for i in 0 ..< len(keys) {
+			degree := offsets[i + 1] - offsets[i]
 			if degree == 0 {
-				dangling += rank[key]
+				dangling += rank[i]
 				continue
 			}
-			share := GRAPH_RANK_DAMPING * rank[key] / f64(degree)
-			for edge_id in conv.edges_by_entity[key] {
-				if edge_id not_in union_edges do continue
-				edge := conv.edges[edge_id]
-				if edge == nil do continue
-				neighbor, resolved := pr.resolve_neighbor(edge, key.target_type, key.target_id, req.direction)
-				if resolved do next[Edge_Entity_Key{target_type = neighbor.target_type, target_id = neighbor.target_id}] += share
-			}
+			share := GRAPH_RANK_DAMPING * rank[i] / f64(degree)
+			for neighbor in neighbors[offsets[i]:offsets[i + 1]] do next[neighbor] += share
 		}
-		for key, weight in personalization do next[key] += GRAPH_RANK_DAMPING * dangling * weight
+		for weight, i in personalization do next[i] += GRAPH_RANK_DAMPING * dangling * weight
 		delta := 0.0
-		for key in keys {
-			difference := next[key] - rank[key]
+		for i in 0 ..< len(keys) {
+			difference := next[i] - rank[i]
 			if difference < 0 do difference = -difference
 			delta += difference
 		}
@@ -189,15 +188,20 @@ graph_rank_scores :: proc(
 		if delta < GRAPH_RANK_TOLERANCE do break
 	}
 	max_score := 0.0
-	for key in keys do max_score = max(max_score, rank[key])
+	for score in rank do max_score = max(max_score, score)
+	scores := make(map[Edge_Entity_Key]f64, len(keys), allocator = allocator)
+	for key, i in keys do scores[key] = rank[i]
 	if max_score > 0 {
-		for key in keys do rank[key] = rank[key] / max_score * f64(req.anchor_count)
+		for key in keys do scores[key] = scores[key] / max_score * f64(req.anchor_count)
 	}
 	delete(keys)
-	delete(personalization)
-	delete(next)
-	delete(degree_by_key)
-	return rank
+	delete(indices)
+	delete(personalization, allocator)
+	delete(rank, allocator)
+	delete(next, allocator)
+	delete(offsets, allocator)
+	delete(neighbors)
+	return scores
 }
 
 handle_graph_rank :: proc(c: ^NRC_Connection, req: pr.GraphRankRequest) {

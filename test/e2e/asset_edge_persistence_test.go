@@ -179,4 +179,32 @@ func TestAssetAndEdgePersistenceAcrossRestart(t *testing.T) {
 	if restoredEdge.Relation != protocol.RelationDependsOn {
 		t.Fatalf("restored edge relation mismatch: got %d want %d", restoredEdge.Relation, protocol.RelationDependsOn)
 	}
+
+	// Repeated ranking must preserve the restored graph and leave the real
+	// worker heap usable; simulation allocators can hide mismatched frees.
+	anchor := protocol.GraphRankEntity{Type: protocol.TargetTypeAsset, ID: assetCreated1.Asset.AssetID}
+	target := protocol.GraphRankEntity{Type: protocol.TargetTypeAsset, ID: assetCreated2.Asset.AssetID}
+	for correlation := uint32(1); correlation <= 3; correlation++ {
+		request, err := protocol.EncodeGraphRankWithCorrelation(uint64(roomID), []protocol.GraphRankEntity{anchor}, []protocol.GraphRankEntity{target}, 1, 0, 0, 2, correlation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sendProtocolMessage(connAfterRestart, protocol.C_GraphRank, request); err != nil {
+			t.Fatal(err)
+		}
+		result, err := protocol.DecodeGraphRankResult(mustReadUntilOpcode(t, connAfterRestart, protocol.S_GraphRankResult, 12))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.CorrelationID != correlation || result.Truncated || len(result.Entries) != 2 || len(result.Edges) != 1 {
+			t.Fatalf("unexpected ranking result: %+v", result)
+		}
+		candidate, source := result.Entries[0], result.Entries[1]
+		if candidate.Entity != target || !(candidate.Score > 0 && candidate.Score < 1) || source.Entity != anchor || source.Score != 1 {
+			t.Fatalf("unexpected ranking scores: %+v", result.Entries)
+		}
+		if len(candidate.Paths) != 1 || candidate.Paths[0].AnchorIndex != 0 || candidate.Paths[0].Depth != 1 || len(candidate.Paths[0].EdgeIDs) != 1 || candidate.Paths[0].EdgeIDs[0] != restoredEdge.EdgeID {
+			t.Fatalf("unexpected ranking path: %+v", candidate.Paths)
+		}
+	}
 }
