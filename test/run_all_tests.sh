@@ -40,6 +40,11 @@ run "$odin_tests" spsc/ "${odin_common[@]}" "${odin_hegel[@]}"
 run "$odin_tests" clock/ "${odin_common[@]}"
 run "$odin_tests" nbio/ "${odin_common[@]}"
 run "$odin_tests" hegel/ "${odin_common[@]}" "${odin_hegel[@]}"
+# The fuzz target's own package: it checks that every client opcode is dispatched.
+run "$odin_tests" test/protocol_fuzz/ "${odin_common[@]}"
+# The fuzz corpus is generated from the protocol serializers; this fails when a
+# wire change leaves it stale. It needs Odin only, not the fuzzing toolchain.
+run ./test/run_protocol_fuzz.sh --check-seeds
 
 # Go protocol, CLI, and real-process server tests.
 run go -C protocol-go test -v -count=1 -timeout=5m ./...

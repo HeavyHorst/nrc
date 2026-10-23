@@ -73,6 +73,11 @@ Follow [AGENTS.md](../AGENTS.md) and [client guidance](../client/AGENTS.md)
 when you edit code. Format Odin with `odinfmt -w .`.
 For frontend changes, also update the PWA cache contract.
 
+Coverage-guided protocol fuzzing is a separate, opt-in tier because it needs a
+clang toolchain in addition to Odin: `./test/run_protocol_fuzz.sh` builds a
+libFuzzer + AddressSanitizer binary from the Odin parsers. See
+[TEST_MATRIX.md](TEST_MATRIX.md#protocol-fuzzing-coverage-guided).
+
 ## Architecture
 
 The main thread accepts connections and routes an owned HTTP upgrade request to

@@ -137,6 +137,103 @@ The structure checker is opt-in and requires assertions enabled. Its per-operati
 heap walks and independently allocated scratch map are intentionally expensive;
 do not enable it for production or throughput measurements.
 
+## Protocol fuzzing (coverage-guided)
+
+`test/run_protocol_fuzz.sh` builds a libFuzzer + AddressSanitizer binary whose
+target is the protocol request parsers, then runs a bounded campaign. It
+complements the Hegel properties: Hegel checks named invariants on generated
+requests, libFuzzer explores byte-level mutations of real client messages.
+
+Prerequisites are Odin plus clang 19 or newer with its sanitizer runtimes and
+the matching `llvm-link` (Debian/Ubuntu: `clang-19 libclang-rt-19-dev llvm-19`).
+Override the compiler with `CLANG=...`; `ODIN_BIN` selects Odin. The version
+floor is set by the IR, not by taste: Odin emits `#dbg_declare` debug records,
+which LLVM only accepts from version 19 on, and clang 15 and 16 reject the
+module with `expected instruction opcode`. Opaque pointers alone would only
+need version 15.
+
+```bash
+# Build only.
+./test/run_protocol_fuzz.sh --build
+
+# Bounded campaign: 60 seconds by default, or an exact run count.
+./test/run_protocol_fuzz.sh --seconds 60
+./test/run_protocol_fuzz.sh --runs 1000000
+
+# Regenerate the committed seed corpus after a wire-format change.
+./test/run_protocol_fuzz.sh --seeds
+
+# Fail if the committed corpus no longer matches the serializers.
+./test/run_protocol_fuzz.sh --check-seeds
+
+# Re-run a crash artifact; the campaign prints this command on failure.
+./test/run_protocol_fuzz.sh --replay test/protocol_fuzz/artifacts/crash-<hash>
+```
+
+The target covers every client-to-server opcode in `Opcode`: all task, asset,
+edge, graph, ticket, direct-message, legacy-chat, retained-message and history
+requests, and `C_ApplyTransaction` with its eight operation types. Each one is
+parsed through the same function the server dispatches to. A unit test in the
+package walks `Opcode` and fails if any `C_*` member has no dispatch case, so
+adding an opcode cannot silently shrink what the campaign reaches. The target
+starts no workers, sockets or files.
+
+It dispatches on the real two-byte opcode, caps inputs at 128 KiB, runs with a
+nil allocator and nil logger, and asserts that every returned byte field borrows
+from the input slice instead of fabricated memory. A returned error is a normal
+result; only an assertion, a sanitizer finding, or a crash fails the run.
+
+`test/protocol_fuzz/corpus/` holds the committed seed set, one seed per opcode.
+Every seed is produced by a serializer in the protocol package — the client
+serializers for requests and the operation-body serializers for transactions —
+and the generator re-parses each one before writing it, so a serializer/parser
+drift fails regeneration instead of silently shrinking coverage. Adding a
+request format therefore means adding its serializer next to the others rather
+than encoding bytes in the fuzz tooling. `--check-seeds` rebuilds the corpus in
+a scratch directory and diffs it against the committed one; the full matrix runs
+that check, so a wire change cannot leave the corpus stale. Campaigns grow a
+working copy under `test/protocol_fuzz/.build/corpus`; both that directory and
+the crash artifacts are ignored by Git.
+
+The build has two non-obvious constraints. The first is the clang floor above.
+The second is that the linked module must be compiled to an object without
+`-fsanitize=address`. Clang adds no AddressSanitizer checks when it compiles
+this IR (a one-line C function emitted to IR and recompiled the same way also
+gets none), so Odin's `-sanitize:address` is what actually instruments the
+parsers and clang contributes only the sanitizer-coverage pass. Enabling
+`-fsanitize=address` on the IR as well produced a binary that
+segmentation-faults during Odin runtime startup in `os.get_args`, so the runner
+leaves it off. The
+per-package modules are merged with `llvm-link` into one unit before compiling;
+separate per-package objects also link on this toolchain, so merging is a
+simplification rather than a requirement. Odin's generated `main` is kept as the
+program entry so the same binary also runs as a plain Odin program for
+`--seeds`, and it hands control to `LLVMFuzzerRunDriver` from
+`libclang_rt.fuzzer_no_main`. Keeping it is a convenience, not a requirement:
+the same target linked under libFuzzer's own `main`, without Odin's entry point
+and therefore without `__$startup_runtime`, executed the whole corpus at
+identical coverage.
+
+The wiring is verified by a negative control: an injected one-byte heap
+over-read in a parser is reported as
+`AddressSanitizer: heap-buffer-overflow` at that file and line, written as a
+`crash-*` artifact, and reproduced by `--replay`, both with exit status 134.
+
+Coverage figures come from 30- to 40-second campaigns on one x64 machine with
+`-max_len=8192`. They are indicative rather than stable, because the budget is
+wall-clock time rather than a run count. The committed seeds cover 849
+instrumented edges on load and a campaign reaches roughly 2,100 at
+134,000-160,000 executions per second. A fresh empty corpus starts at 16 edges
+and reaches 2,080 after 30 seconds. The corpus therefore buys a large head
+start, not reachability: the mutator and its auto-dictionary still find almost
+all of the same counters on their own within the same budget.
+
+This is not a substitute for the rest of the matrix. The target stops at the
+request parsers: it covers no handler state, persistence, or response
+serialization, and it finds memory errors reachable from a single request
+payload rather than logic errors that need workspace state. ASan still cannot
+see TLSF metadata helpers, which intentionally bypass it.
+
 ## Full local
 
 Run both production and deterministic-simulation root suites before merging changes that cross handlers, persistence, protocol, connection lifetime, or worker boundaries:
