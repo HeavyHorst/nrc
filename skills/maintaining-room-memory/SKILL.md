@@ -97,36 +97,54 @@ Do not persist raw transient chatter unless the user explicitly wants a transcri
 
 Do not store secrets, tokens, or incidental private data in notes.
 
+## Amp Thread Provenance
+
+When a note is derived from an Amp thread, record each source as a titled Markdown link in the note body:
+
+```markdown
+Source: [Descriptive thread title](https://ampcode.com/threads/T-...)
+```
+
+For multiple threads, use `Sources:` followed by titled Markdown links. Never store a bare Amp thread URL: NRC's Amp-thread ledger displays the link text, so a bare URL produces an unhelpful generic label. Resolve the title from thread metadata when available. If a thread has no usable title, write a concise subject that identifies its content rather than using `thread` or the thread ID. Use the same title and URL consistently when one source contributes to multiple notes.
+
+This provenance rule applies equally to interactive plugin-driven writes, historical backfills, migrations, and other batch workflows. Keep private-source provenance out of shared memory when the source URL or title could disclose or re-identify private information; retain only the safely generalized finding in that case.
+
 ## Writing Workflow
 
 Use this workflow only after an explicit persistence request or clearly established standing authorization. A useful or durable finding alone is not permission to mutate workspace memory.
 
-1. Check whether a canonical note already exists.
-2. Update that note if the new information extends or corrects it. Make the current guidance clear; retain older guidance only when it remains applicable or provides important decision context.
-3. Create a new note only when the information is a separate durable concept.
+Apply the same curation checks to plugin-triggered learning, direct CLI writes, imported threads and batch cleanup. The plugin is a shortcut, not a separate writer or permission boundary.
+
+1. Name the future question this memory should answer. Find and read the full canonical note and any destinations claimed to replace its content; titles and search previews are not enough.
+2. Choose **keep**, **reconcile**, **condense**, or **create** for each candidate. Keep when it already answers the question; reconcile when facts or decisions changed; condense when completed checkpoints obscure the answer; create only for a distinct durable retrieval intent. Reconcile and condense may be combined. No write is a valid outcome; normally a learned thread needs at most 1–3 notes, not one per implementation step or subthread.
+3. Preview the target IDs and decisions before writing. For each update, state what it supersedes and which constraints, unresolved obligations and evidence must survive. Replace superseded checkpoints in the body rather than merely prepending another status banner. Put the current conclusion first; keep only the history needed to explain or safely act on it. Active work belongs in tasks; temporary execution manifests and recovery handoffs remain until applied and verified.
 4. For project-specific memory, set `--project` to the canonical repo/project identifier.
 5. Do not add the project/repo identifier to the title when it is already available as the structured `project` field. Make the title specific by naming the durable concept, not by appending `[project]`.
 6. Add `--tag` values for durable topics that should be filterable across projects.
 7. Prefer `--content-file <path>` for prepared Markdown or HTML instead of shell-substituting file contents into `--content`; use either `--content` or `--content-file`, not both. Notes default to Markdown. Pass `--format html` only for a self-contained visual document, and load `designing-nrc-content` before authoring it.
 8. Attach durable source files, diagrams, logs, screenshots, or PDFs when preserving the file itself matters. For attachment add/replace/remove/download commands and `att:N` safety, read `reference/operations.md`.
-9. For localized edits, prefer `note patch`; use `--dry-run` when practical and `--expect-updated-at` with a fresh timestamp. Read `reference/operations.md` for patch diagnostics and backup/revert workflows.
+9. For localized edits, prefer `note patch`; use `--dry-run` when practical. Guard updates and patches with `--expect-updated-at` from the body you reviewed, preserving the nanosecond timestamp exactly (for example as a decimal string). On a mismatch, read and reconcile the full fresh body; never substitute a newer timestamp onto a stale proposal. Read `reference/operations.md` for patch diagnostics and backup/revert workflows.
 10. Use `nrc note update --content-file` when intentionally replacing or substantially rewriting the whole note.
 11. `note update`, `note patch`, and `note revert --force` write local pre-change backups; inspect and dry-run before restoration. See `reference/operations.md`.
 12. Add edges so future retrieval can find the note by relationship, not just wording.
+13. Read back the saved body and verify intended content and preserved metadata/attachments. Check exact-identifier and natural-language retrieval; report stale-index warnings separately from successful write verification. At closeout, reconcile resolved pending language into the final outcome instead of adding another checkpoint.
 
 Prefer one stable note per durable concept over many overlapping notes.
 
-Before writing, compare the draft with its sources. Distinguish explicit rules from observations and inferences; never turn example inputs into prerequisites. Preserve scope and applicable exceptions, and flag unresolved conflicts rather than inventing a resolution.
+Before writing, compare the draft with its sources. Distinguish explicit rules from observations and inferences; never turn example inputs into prerequisites. Preserve scope and applicable exceptions, and flag unresolved conflicts rather than inventing a resolution. Make the current guidance clear; retain older guidance only when it remains applicable or provides important decision context.
+
+### Preserve meaning when reconciling or condensing
+
+- Retain active owner decisions, approval gates, unresolved obligations, rollback prerequisites and exact commands/identifiers. Date superseded policy rather than rewriting what it historically required. Implementation, deployment, acceptance and recovery are different claims; inventory-wide absence is not per-receipt reconciliation, and a passing test does not close unrelated obligations.
+- Compare removed links and identifiers against the original. Preserve counter-evidence links and unique titled source links, using a compact Sources block instead of repeated narrative. Move evidence only to a verified canonical destination and link it; do not drop its last retained copy. Keep typed `[note:ID]` and `[task:ID]` references distinct; `NRC###` is ambiguous. Apply the privacy exception in Amp Thread Provenance before retaining a source in shared memory.
+- Preserve IDs, metadata, attachment order, positional `att:N` references and membership edges unless changes to them are specifically authorized. A published note ID identifies an article; do not merge or delete it as a text-cleanup shortcut. Treat HTML separately rather than stripping it into Markdown.
+- Review new word/number joins, shortened host names, altered dates and identifiers against the original. Token scans flag candidates for inspection, not automatic splitting of valid identifiers. Reduction in word count is not a correctness or completion target; a clearer constraint may make a note longer.
 
 ## Atomic Graph Writes
 
 Use `nrc batch apply --atomic` when several task, note/asset, and edge changes form one durable fact and partial application would leave misleading memory. Typical uses include creating several notes and their relationships together, creating a task plus its context note and edge, bulk-changing project or status fields, or deleting an entity with related explicit changes. The server validates the projected final graph and commits the request as one WAL transaction.
 
-Create operations may define symbolic `ref` names. A task blocker, note/asset parent, or edge endpoint can use a matching `*_ref`, including a forward reference to a later create operation. References are transaction-local and typed; parents, blockers, and edge endpoints are workspace-wide.
-
-Use `if_updated_at` from a fresh read for updates and deletes of existing tasks or notes/assets when concurrent edits must reject the whole transaction. Atomic note metadata updates automatically read the current note and add this compare-and-swap when the caller did not supply one. A confirmed rejection applies nothing. If the CLI reports `unknown_outcome:true` after a transport failure, reconcile current state before retrying because there is no transaction idempotency receipt.
-
-Atomic operations do not support attachments. Keep attachment changes in their explicit workflows; do not claim an attachment-plus-graph sequence is atomic. Read **Atomic Task, Note, And Edge Writes** in `reference/operations.md` for the JSON shape and result contract.
+Read **Atomic Task, Note, And Edge Writes** in `reference/operations.md` for the supported operations, JSON shape, symbolic references, compare-and-swap fields, limits, and result contract. Keep these safety invariants visible: references are transaction-local and typed; parents, blockers, and edge endpoints are workspace-wide; attachments are not atomic; a confirmed rejection applies nothing; and `unknown_outcome:true` requires state reconciliation before retry because there is no transaction idempotency receipt.
 
 When an incident, decision, or troubleshooting result has a distinct future retrieval intent, give it its own note instead of appending it deep inside a broader note. Put stable identifiers that people are likely to search for—media/product numbers, ticket IDs, service names, producer/customer names—in the title when they identify the concept, otherwise in the opening metadata or finding. After writing, verify one exact-identifier query and one likely natural-language query; both should surface the canonical note near the top.
 
@@ -222,29 +240,9 @@ Use HTML format when the note is genuinely a document-like interface, dashboard,
 - Load and follow `designing-nrc-content` for the complete visual, interaction, accessibility, theme, attachment, and sandbox contract.
 - Keep the UTF-8 document below the protocol's 65,535-byte limit. Search indexes readable HTML text but excludes script and style content.
 
-## Common Note Write Loop
-
-Use this exact flow for requests like "add a note about X":
-
-1. Search for an existing canonical note before writing anything.
-   - Example: `nrc search query --type note --top 5 "taskcards import logic"`
-2. Load the strongest hit before deciding whether to update or create. For an explicit partial metadata update to a known note ID, direct `note update` is sufficient because omitted fields are preserved.
-   - Example: `nrc note get 123`
-3. If an existing note already covers the durable concept, update it instead of creating a duplicate. Prefer `nrc note patch` for a small/localized content change, and `nrc note update --content-file` for a full replacement.
-   - Example: `nrc note update 123 --content-file /tmp/nrc-note.md`
-4. If no canonical note exists, create one with a stable title and structured metadata.
-   - Example: `nrc note create "Context: taskcards import logic" --project "heavyhorst/nrc" --tag import --tag taskcards --content-file /tmp/nrc-note.md`
-5. If the note should preserve files, attach them during creation or immediately after.
-   - Example: `nrc note create "Evidence: websocket trace" --content-file /tmp/nrc-note.md --attach "/tmp/trace.log,/tmp/screenshot.png"`
-   - Example: `nrc note attach 123 /tmp/diagram.pdf /tmp/error.log`
-   - For replacement, removal, download, and `att:N` rules, read `reference/operations.md`.
-6. Capture the note ID from the structured mutation result. Verify the saved content against the intended change using a complete returned payload or a direct readback; search rank alone does not establish correctness.
-   - Example: `nrc note get <new-note-id>`
-7. Add edges when the note should remain discoverable from related tasks or assets. If the note and its edges are all new and must appear together, create them with one atomic batch instead of separate commands.
-
 ## Exact Command Recipes
 
-Read `reference/recipes.md` when exact syntax is needed for note updates, project/tag paging, direct edge operations, or graph traversal. Do not load it for a straightforward retrieval or note write whose command shape is already clear.
+Read `reference/recipes.md` when exact syntax is needed for the canonical write loop, note creation or updates, project/tag paging, direct edge operations, or graph traversal. Do not load it for a straightforward retrieval or note write whose command shape is already clear.
 
 ## Quality Bar
 
@@ -256,6 +254,7 @@ Before finishing, make sure:
 - one exact-identifier query and one natural-language query surface the canonical note near the top when new memory was written
 - the note title is stable and specific
 - project-specific notes set the structured project field and do not duplicate that project in the title
+- Amp thread provenance uses titled Markdown links rather than bare thread URLs, unless private-source provenance must be omitted
 - important related tasks or assets are linked with edges
 - outdated guidance is corrected or superseded within its stated scope instead of silently duplicated
 
