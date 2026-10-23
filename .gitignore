@@ -21,6 +21,10 @@ services/bots/nrc-ai/nrc-ai
 benchmark/nrc-bench
 benchmark/bin/
 
+# Protocol fuzzing build output and crash artifacts
+/test/protocol_fuzz/.build/
+/test/protocol_fuzz/artifacts/
+
 # Benchmark results
 /.benchmark-results/
 
