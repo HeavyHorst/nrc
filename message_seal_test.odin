@@ -124,11 +124,11 @@ test_message_seal_channel_lifecycle :: proc(t: ^testing.T) {
 	// B can append while a reader borrows A; filling B applies backpressure.
 	store.async_readers = 1
 	store.frozen.async_readers = 1
-	store.active_started_hour -= 1
+	store.active_started_day -= 1
 	third := test_retained_message(workspace, 42, 3, now)
 	result, _ = append_or_deduplicate_message(store, &third)
 	testing.expect_value(t, result, Message_Store_Result.Capacity)
-	store.active_started_hour += 1
+	store.active_started_day += 1
 	testing.expect_value(t, store.wal.write_offset, 0)
 	worker = thread.create_and_start_with_poly_data(&server, proc(s: ^NRC_Server) {_ = service_shard_compaction_job(s)}, service_context)
 	thread.join(worker)
@@ -1118,11 +1118,11 @@ when NRC_SIMULATION {
 		td.message_stores.write_batch_records = 1
 		td.message_stores.store_index[shard] = 0
 
-		hour_h := (NRC_SIM_TIME_EPOCH_NANOS / i64(time.Hour) + 1) * i64(time.Hour)
-		store.active_started_hour = hour_h / i64(time.Hour)
-		// Cross the hour boundary without aging this shutdown fixture's
+		day := i64(24 * time.Hour)
+		day_start := (NRC_SIM_TIME_EPOCH_NANOS / day + 1) * day
+		// Cross the day boundary without aging this shutdown fixture's
 		// never-staged tail past the deferred residence limit.
-		ctx.sim.world.now = time.Duration(hour_h + i64(time.Hour - time.Millisecond) - NRC_SIM_TIME_EPOCH_NANOS)
+		ctx.sim.world.now = time.Duration(day_start + day - i64(time.Millisecond) - NRC_SIM_TIME_EPOCH_NANOS)
 		for marker in 1 ..= 2 {
 			req := pr.SendMessageV2Request {
 				conv_id        = 42,
@@ -1212,8 +1212,8 @@ when NRC_SIMULATION {
 		seed.client_message_id[0] = 2
 		result, _ = append_or_deduplicate_message(store, &seed)
 		testing.expect_value(t, result, Message_Store_Result.Appended)
-		// The ordinary hourly threshold fills B while A is still queued.
-		ctx.sim.world.now += time.Hour
+		// The ordinary daily threshold fills B while A is still queued.
+		ctx.sim.world.now += 24 * time.Hour
 		req := pr.SendMessageV2Request {
 			conv_id        = 42,
 			correlation_id = 3,
@@ -1489,7 +1489,7 @@ when NRC_SIMULATION {
 
 		process_message_history(conn, {conv_id = 42, limit = 10, correlation_id = 20}, true)
 		testing.expect(t, store.async_readers == 1)
-		store.active_started_hour -= 1
+		store.active_started_day -= 1
 		seed.correlation_id = 2
 		process_send_message_v2(conn, seed)
 		for marker in 2 ..= 3 {

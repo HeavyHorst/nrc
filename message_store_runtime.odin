@@ -915,7 +915,8 @@ init_message_store_with_storage :: proc(
 	persistence.set_recovered_wal_state(&store.wal, inspection.last_hash, inspection.record_count)
 	store.active_bytes = inspection.file_size
 	store.total_bytes = inspection.file_size; for segment in store.segments do store.total_bytes += segment.bytes
-	store.active_started_hour = inspection.record_count > 0 ? store.active_max_time / i64(time.Hour) : now / i64(time.Hour); store.enabled = true
+	store.active_started_day =
+		inspection.record_count > 0 ? store.active_min_time / i64(MESSAGE_SEGMENT_INTERVAL) : now / i64(MESSAGE_SEGMENT_INTERVAL); store.enabled = true
 	written := write_message_manifest(store)
 	if !written {
 		_ = persistence.shutdown_wal(&store.wal)
@@ -996,7 +997,7 @@ publish_message_seal :: proc(store: ^Message_Store, now_ns: i64, sealed_bytes: u
 	_ = storage_io.sync_directory(store.storage, store.directory)
 	if !reset_active_message_indexes(store) {store.poisoned = true; return false}
 	store.active_first_seq = 0; store.active_min_time = 0; store.active_max_time = 0; store.active_bytes = 0
-	store.active_started_hour = now_ns / i64(time.Hour)
+	store.active_started_day = now_ns / i64(MESSAGE_SEGMENT_INTERVAL)
 	store.commit_pending = false
 	resume_durable_outboxes(&store.durability_waiters)
 	return true
@@ -1097,12 +1098,13 @@ append_new_message :: proc(store: ^Message_Store, message: ^Retained_Message, de
 	if !valid || int(shard_for_workspace(transmute([]byte)message.workspace)) != store.shard do return .Invalid, 0
 	record_bytes := u64(persistence.LOG_HEADER_SIZE + size)
 	if store.quota_bytes > 0 && store.total_bytes + record_bytes > store.quota_bytes do return .Capacity, 0
-	now_hour := message.accepted_at_ns / i64(time.Hour)
+	now_day := message.accepted_at_ns / i64(MESSAGE_SEGMENT_INTERVAL)
+	if store.wal.record_count == 0 do store.active_started_day = now_day
 	requires_rotation :=
 		store.wal.record_count + 1 > MESSAGE_MAX_INDEX_RECORDS ||
 		store.wal.record_count > 0 &&
 			(store.active_bytes + record_bytes >= MESSAGE_SEGMENT_BYTES ||
-					now_hour != store.active_started_hour ||
+					now_day != store.active_started_day ||
 					store.active_index_arena.total_used >= MESSAGE_ACTIVE_INDEX_BUDGET)
 	if requires_rotation {
 		if store.frozen != nil || store.async_readers != 0 do return .Capacity, 0

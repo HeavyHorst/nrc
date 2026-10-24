@@ -285,6 +285,37 @@ test_message_scan_borrowed_lifetime_and_allocations :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_message_store_daily_append_rotation_after_restart :: proc(t: ^testing.T) {
+	dir := test_wal_path("daily-append"); defer os.remove_all(dir)
+	testing.expect(t, os.make_directory(dir) == nil)
+	workspace := "daily-append"
+	shard := int(shard_for_workspace(transmute([]byte)workspace))
+	store: Message_Store
+	if !testing.expect(t, init_message_store(&store, dir, shard, 7 * 24 * time.Hour, 0)) do return
+	day := i64(24 * time.Hour)
+	start := nrc_time_unix_nanos() / day * day
+	for hour, i in ([3]int{10, 11, 23}) {
+		message := test_retained_message(workspace, 42, u64(i + 1), start + i64(hour) * i64(time.Hour))
+		result, _ := append_or_deduplicate_message(&store, &message)
+		testing.expect_value(t, result, Message_Store_Result.Appended)
+	}
+	testing.expect(t, store.active_generation == 1 && len(store.segments) == 0)
+	testing.expect(t, shutdown_message_store(&store))
+	if !testing.expect(t, init_message_store(&store, dir, shard, 7 * 24 * time.Hour, 0)) do return
+	defer shutdown_message_store(&store)
+	message := test_retained_message(workspace, 42, 4, start + day - 1)
+	result, _ := append_or_deduplicate_message(&store, &message)
+	testing.expect_value(t, result, Message_Store_Result.Appended)
+	testing.expect_value(t, len(store.segments), 0)
+	message = test_retained_message(workspace, 42, 5, start + day)
+	result, _ = append_or_deduplicate_message(&store, &message)
+	testing.expect_value(t, result, Message_Store_Result.Appended)
+	testing.expect(t, len(store.segments) == 1 && store.active_generation == 3)
+	testing.expect_value(t, store.wal.record_count, u64(1))
+	testing.expect_value(t, store.high_water, u64(5))
+}
+
+@(test)
 test_parse_message_retention_configuration :: proc(t: ^testing.T) {
 	value, ok := parse_message_retention(""); testing.expect(t, ok); testing.expect_value(t, value, time.Duration(0))
 	value, ok = parse_message_retention("24h"); testing.expect(t, ok); testing.expect_value(t, value, 24 * time.Hour)
@@ -1753,7 +1784,7 @@ when NRC_SIMULATION {
 		_ = schedule_retained_message_fsync(store)
 		store.commit_started = {}
 		testing.expect(t, schedule_retained_message_fsync(store))
-		store.active_started_hour -= 1
+		store.active_started_day -= 1
 		for &word in store.segments[0].dedup_filter do word = 0
 		req := pr.SendMessageV2Request {
 			conv_id      = 42,
@@ -1917,7 +1948,7 @@ when NRC_SIMULATION {
 				generation := store.active_generation
 				store.commit_started = {}
 				testing.expect(t, schedule_retained_message_fsync(store))
-				store.active_started_hour -= 1
+				store.active_started_day -= 1
 				_, ok := flush_pending_retained_message_writes(&td.message_stores)
 				for nrc_sim_run_next_file_write(&ctx.sim) {}
 				testing.expect(t, ok && store.rotation_pending && store.deferred_head == 3)
@@ -2136,7 +2167,7 @@ when NRC_SIMULATION {
 
 		nrc_sim_clear_inboxes(&ctx.sim)
 		generation_before_rotation := store.active_generation
-		store.active_started_hour -= 1
+		store.active_started_day -= 1
 		store.wal.pending_bytes = persistence.FSYNC_BYTE_THRESHOLD
 		testing.expect(t, schedule_retained_message_fsync(store))
 		rotation_id: [16]byte

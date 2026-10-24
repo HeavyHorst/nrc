@@ -2,7 +2,6 @@ package main
 
 import "core:strings"
 import "core:sync/chan"
-import "core:time"
 import "persistence"
 import "storage_io"
 
@@ -126,7 +125,7 @@ freeze_message_store_active :: proc(store: ^Message_Store, next: u64, now_ns: i6
 	store.active_index_arena = nil; store.active_arena_ready = false
 	store.active_record_arena = nil; store.active_record_ready = false; store.active_cached_bytes = 0
 	store.active_dedup = nil; store.active_offsets = nil
-	store.active_started_hour = now_ns / i64(time.Hour)
+	store.active_started_day = now_ns / i64(MESSAGE_SEGMENT_INTERVAL)
 	store.fsync_snapshot = {}; store.commit_pending = false
 }
 

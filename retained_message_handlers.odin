@@ -553,11 +553,12 @@ retained_message_try_stage_append :: proc(ctx: ^Retained_Dedup_Context, key: str
 		retained_message_schedule_store_flush(store)
 		return false
 	}
-	now_hour := ctx.message.accepted_at_ns / i64(time.Hour)
+	now_day := ctx.message.accepted_at_ns / i64(MESSAGE_SEGMENT_INTERVAL)
+	if store.wal.record_count == 0 && store.wal.buffered_record_count == 0 do store.active_started_day = now_day
 	if store.wal.buffered_record_count == 0 &&
 	   store.wal.record_count > 0 &&
 	   (store.active_bytes + record_bytes >= MESSAGE_SEGMENT_BYTES ||
-			   now_hour != store.active_started_hour ||
+			   now_day != store.active_started_day ||
 			   store.active_index_arena.total_used >= MESSAGE_ACTIVE_INDEX_BUDGET) {
 		store.rotation_pending = true
 		retained_message_schedule_store_flush(store)

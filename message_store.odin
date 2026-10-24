@@ -20,6 +20,7 @@ import "storage_io"
 MESSAGE_WAL_MAGIC :: u32(0x4e52434d) // NRCM
 MESSAGE_WAL_VERSION :: u16(1)
 MESSAGE_SEGMENT_BYTES :: u64(#config(NRC_MESSAGE_SEGMENT_BYTES, 256 * 1024 * 1024))
+MESSAGE_SEGMENT_INTERVAL :: 24 * time.Hour
 MESSAGE_ACTIVE_INDEX_BUDGET :: 64 * 1024 * 1024
 MESSAGE_ACTIVE_ARENA_BLOCK_BYTES :: 256 * 1024
 MESSAGE_ACTIVE_RECORD_ARENA_BLOCK_BYTES :: 64 * 1024
@@ -164,24 +165,24 @@ Message_History_Plan :: struct {
 // Storage metadata shared with detached lifecycle snapshots; no live indexes,
 // caches, readers, append buffers or connection-owned requests.
 Message_Storage_State :: struct {
-	enabled:             bool,
-	poisoned:            bool,
-	shard:               int,
-	retention:           time.Duration,
-	dedup_window:        time.Duration,
-	previous_retention:  time.Duration,
-	quota_bytes:         u64,
-	directory:           string,
-	storage:             storage_io.Context,
-	active_generation:   u64,
-	active_started_hour: i64,
-	active_first_seq:    u64,
-	active_min_time:     i64,
-	active_max_time:     i64,
-	active_bytes:        u64,
-	high_water:          u64,
-	purge_floor_ns:      i64,
-	total_bytes:         u64,
+	enabled:            bool,
+	poisoned:           bool,
+	shard:              int,
+	retention:          time.Duration,
+	dedup_window:       time.Duration,
+	previous_retention: time.Duration,
+	quota_bytes:        u64,
+	directory:          string,
+	storage:            storage_io.Context,
+	active_generation:  u64,
+	active_started_day: i64,
+	active_first_seq:   u64,
+	active_min_time:    i64,
+	active_max_time:    i64,
+	active_bytes:       u64,
+	high_water:         u64,
+	purge_floor_ns:     i64,
+	total_bytes:        u64,
 }
 
 Message_Store :: struct {
