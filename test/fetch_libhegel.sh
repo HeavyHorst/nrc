@@ -18,8 +18,8 @@ if [[ "$(uname -s)" != Linux || "$(uname -m)" != x86_64 ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-version=0.33.3
-sha256=1ceb1636f3dd8e939fef88e99e3417b9da23675c7847e4cb22717ca8834c699b
+version=0.47.1
+sha256=280753533a47f4b226cf9665f4de52a35562aa9918194db5ed6db97608cb6113
 cache="$repo_root/.hegel/libhegel-$version"
 library="$cache/libhegel-linux-amd64.so"
 
@@ -35,7 +35,7 @@ else
 	echo "Downloading libhegel $version for tests" >&2
 	curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
 		--connect-timeout 15 --max-time 180 --retry 3 \
-		"https://github.com/hegeldev/hegel-rust/releases/download/v$version/libhegel-linux-amd64.so" \
+		"https://github.com/hegeldev/hegel-rust/releases/download/libhegel-v$version/libhegel-linux-amd64.so" \
 		--output "$temporary"
 	if ! printf '%s  %s\n' "$sha256" "$temporary" | sha256sum --check --status; then
 		echo "Downloaded libhegel failed SHA256 verification; nothing was installed." >&2

@@ -65,7 +65,7 @@ Test_Case :: struct {
 }
 
 LIBHEGEL_PATH_ENV :: "HEGEL_LIBHEGEL_PATH"
-LIBHEGEL_VERSION :: "0.33.3"
+LIBHEGEL_VERSION :: "0.47.1"
 LIBHEGEL_CACHE_PATH :: ".hegel/libhegel-" + LIBHEGEL_VERSION + "/libhegel-linux-amd64.so"
 HEGEL_DEFAULT_DATABASE :: ".hegel/examples/" + LIBHEGEL_VERSION + "/"
 HEGEL_TEST_CASE_MULTIPLIER_ENV :: "HEGEL_TEST_CASE_MULTIPLIER"
@@ -101,10 +101,9 @@ Libhegel_Status :: enum i32 {
 #assert(i32(Libhegel_Status.Interesting) == 3)
 
 Libhegel_Run_Status :: enum i32 {
-	Passed                  = 0,
-	Failed                  = 1,
-	Error                   = 2,
-	Failed_Nondeterministic = 3,
+	Passed = 0,
+	Failed = 1,
+	Error  = 2,
 }
 
 Libhegel_Context :: distinct rawptr
@@ -120,9 +119,19 @@ Libhegel_Bytes_Result :: struct {
 	len:  uint,
 }
 
-Libhegel_String_Result :: struct {
+// hegel_string_t and hegel_owned_string_t share this layout. Only owned
+// generator results may be passed to hegel_owned_string_free.
+Libhegel_String :: struct {
 	data: ^u8,
 	len:  uint,
+}
+
+libhegel_string :: proc(value: string) -> Libhegel_String {
+	return {raw_data(value), uint(len(value))}
+}
+
+libhegel_string_view :: proc(value: Libhegel_String) -> string {
+	return string(([^]byte)(value.data)[:value.len])
 }
 
 Libhegel_Date :: struct {
@@ -132,10 +141,10 @@ Libhegel_Date :: struct {
 }
 
 Libhegel_Time :: struct {
-	hour:        u8,
-	minute:      u8,
-	second:      u8,
-	microsecond: u32,
+	hour:       u8,
+	minute:     u8,
+	second:     u8,
+	nanosecond: u32,
 }
 
 Libhegel_Datetime :: struct {
@@ -146,9 +155,9 @@ Libhegel_Datetime :: struct {
 #assert(size_of(Libhegel_Bytes_Result) == 16)
 #assert(align_of(Libhegel_Bytes_Result) == 8)
 #assert(offset_of(Libhegel_Bytes_Result, len) == 8)
-#assert(size_of(Libhegel_String_Result) == 16)
-#assert(align_of(Libhegel_String_Result) == 8)
-#assert(offset_of(Libhegel_String_Result, len) == 8)
+#assert(size_of(Libhegel_String) == 16)
+#assert(align_of(Libhegel_String) == 8)
+#assert(offset_of(Libhegel_String, len) == 8)
 #assert(size_of(Libhegel_Date) == 8)
 #assert(align_of(Libhegel_Date) == 4)
 #assert(offset_of(Libhegel_Date, month) == 4)
@@ -157,7 +166,7 @@ Libhegel_Datetime :: struct {
 #assert(align_of(Libhegel_Time) == 4)
 #assert(offset_of(Libhegel_Time, minute) == 1)
 #assert(offset_of(Libhegel_Time, second) == 2)
-#assert(offset_of(Libhegel_Time, microsecond) == 4)
+#assert(offset_of(Libhegel_Time, nanosecond) == 4)
 #assert(size_of(Libhegel_Datetime) == 16)
 #assert(align_of(Libhegel_Datetime) == 4)
 #assert(offset_of(Libhegel_Datetime, time) == 8)
@@ -165,39 +174,40 @@ Libhegel_Datetime :: struct {
 Libhegel_Output_Callback :: proc "c" (user_data: rawptr, line: cstring, len: uint)
 
 Libhegel_Symbols :: struct {
-	__handle:                                 dynlib.Library,
-	hegel_context_new:                        proc "c" () -> Libhegel_Context,
-	hegel_context_free:                       proc "c" (ctx: Libhegel_Context) -> Libhegel_Result,
-	hegel_context_last_error:                 proc "c" (ctx: Libhegel_Context) -> cstring,
-	hegel_settings_new:                       proc "c" (ctx: Libhegel_Context, out_settings: ^Libhegel_Settings) -> Libhegel_Result,
-	hegel_settings_free:                      proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings) -> Libhegel_Result,
-	hegel_settings_set_test_cases:            proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, test_cases: u64) -> Libhegel_Result,
-	hegel_settings_set_seed:                  proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, seed: u64, has_seed: bool) -> Libhegel_Result,
-	hegel_settings_set_derandomize:           proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, derandomize: bool) -> Libhegel_Result,
-	hegel_settings_set_database:              proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, database: cstring) -> Libhegel_Result,
-	hegel_settings_set_database_key:          proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, key: cstring) -> Libhegel_Result,
-	hegel_settings_set_suppress_health_check: proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, checks: u32) -> Libhegel_Result,
-	hegel_run_start:                          proc "c" (
+	__handle:                                     dynlib.Library,
+	hegel_context_new:                            proc "c" () -> Libhegel_Context,
+	hegel_context_free:                           proc "c" (ctx: Libhegel_Context) -> Libhegel_Result,
+	hegel_context_last_error:                     proc "c" (ctx: Libhegel_Context) -> Libhegel_String,
+	hegel_settings_new:                           proc "c" (ctx: Libhegel_Context, out_settings: ^Libhegel_Settings) -> Libhegel_Result,
+	hegel_settings_free:                          proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings) -> Libhegel_Result,
+	hegel_settings_set_test_cases:                proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, test_cases: u64) -> Libhegel_Result,
+	hegel_settings_set_seed:                      proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, seed: u64, has_seed: bool) -> Libhegel_Result,
+	hegel_settings_set_derandomize:               proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, derandomize: bool) -> Libhegel_Result,
+	hegel_settings_set_database:                  proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, database: ^Libhegel_String) -> Libhegel_Result,
+	hegel_settings_set_database_key:              proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, key: ^Libhegel_String) -> Libhegel_Result,
+	hegel_settings_set_suppress_health_check:     proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, checks: u32) -> Libhegel_Result,
+	hegel_settings_set_nondeterminism_strictness: proc "c" (ctx: Libhegel_Context, settings: Libhegel_Settings, strictness: u32) -> Libhegel_Result,
+	hegel_run_start:                              proc "c" (
 		ctx: Libhegel_Context,
 		settings: Libhegel_Settings,
 		callback: Libhegel_Output_Callback,
 		user_data: rawptr,
 		out_run: ^Libhegel_Run,
 	) -> Libhegel_Result,
-	hegel_next_test_case:                     proc "c" (ctx: Libhegel_Context, run: Libhegel_Run, out_test_case: ^Libhegel_Test_Case) -> Libhegel_Result,
-	hegel_run_result:                         proc "c" (ctx: Libhegel_Context, run: Libhegel_Run, out_result: ^Libhegel_Run_Result) -> Libhegel_Result,
-	hegel_run_result_free:                    proc "c" (ctx: Libhegel_Context, result: Libhegel_Run_Result) -> Libhegel_Result,
-	hegel_run_free:                           proc "c" (ctx: Libhegel_Context, run: Libhegel_Run) -> Libhegel_Result,
-	hegel_test_case_from_blob:                proc "c" (
+	hegel_next_test_case:                         proc "c" (ctx: Libhegel_Context, run: Libhegel_Run, out_test_case: ^Libhegel_Test_Case) -> Libhegel_Result,
+	hegel_run_result:                             proc "c" (ctx: Libhegel_Context, run: Libhegel_Run, out_result: ^Libhegel_Run_Result) -> Libhegel_Result,
+	hegel_run_result_free:                        proc "c" (ctx: Libhegel_Context, result: Libhegel_Run_Result) -> Libhegel_Result,
+	hegel_run_free:                               proc "c" (ctx: Libhegel_Context, run: Libhegel_Run) -> Libhegel_Result,
+	hegel_test_case_from_blob:                    proc "c" (
 		ctx: Libhegel_Context,
 		settings: Libhegel_Settings,
-		blob: cstring,
+		blob: Libhegel_String,
 		callback: Libhegel_Output_Callback,
 		user_data: rawptr,
 		out_test_case: ^Libhegel_Test_Case,
 	) -> Libhegel_Result,
-	hegel_test_case_free:                     proc "c" (ctx: Libhegel_Context, test_case: Libhegel_Test_Case) -> Libhegel_Result,
-	hegel_generate_boolean:                   proc "c" (
+	hegel_test_case_free:                         proc "c" (ctx: Libhegel_Context, test_case: Libhegel_Test_Case) -> Libhegel_Result,
+	hegel_generate_boolean:                       proc "c" (
 		ctx: Libhegel_Context,
 		test_case: Libhegel_Test_Case,
 		probability: f64,
@@ -205,13 +215,13 @@ Libhegel_Symbols :: struct {
 		has_forced: bool,
 		out_value: ^bool,
 	) -> Libhegel_Result,
-	hegel_generate_integer:                   proc "c" (
+	hegel_generate_integer:                       proc "c" (
 		ctx: Libhegel_Context,
 		test_case: Libhegel_Test_Case,
 		min_value, max_value: i64,
 		out_value: ^i64,
 	) -> Libhegel_Result,
-	hegel_generate_integer_big:               proc "c" (
+	hegel_generate_integer_big:                   proc "c" (
 		ctx: Libhegel_Context,
 		test_case: Libhegel_Test_Case,
 		min_value: ^u8,
@@ -222,7 +232,7 @@ Libhegel_Symbols :: struct {
 		out_value_cap: uint,
 		out_value_len: ^uint,
 	) -> Libhegel_Result,
-	hegel_generate_float:                     proc "c" (
+	hegel_generate_float:                         proc "c" (
 		ctx: Libhegel_Context,
 		test_case: Libhegel_Test_Case,
 		width: u32,
@@ -231,84 +241,95 @@ Libhegel_Symbols :: struct {
 		smallest_nonzero_magnitude: f64,
 		out_value: ^f64,
 	) -> Libhegel_Result,
-	hegel_generate_bytes:                     proc "c" (
+	hegel_generate_bytes:                         proc "c" (
 		ctx: Libhegel_Context,
 		test_case: Libhegel_Test_Case,
 		min_size, max_size: u64,
 		out_result: ^Libhegel_Bytes_Result,
 	) -> Libhegel_Result,
-	hegel_generate_bytes_result_free:         proc "c" (ctx: Libhegel_Context, result: ^Libhegel_Bytes_Result) -> Libhegel_Result,
-	hegel_string_generator_text:              proc "c" (
+	hegel_generate_bytes_result_free:             proc "c" (ctx: Libhegel_Context, result: ^Libhegel_Bytes_Result) -> Libhegel_Result,
+	hegel_string_generator_text:                  proc "c" (
 		ctx: Libhegel_Context,
 		min_size, max_size: u64,
-		codec: cstring,
+		codec: ^Libhegel_String,
 		min_codepoint, max_codepoint: u32,
-		categories: ^cstring,
+		categories: ^Libhegel_String,
 		categories_len: uint,
-		exclude_categories: ^cstring,
+		exclude_categories: ^Libhegel_String,
 		exclude_categories_len: uint,
-		include_characters: ^u8,
-		include_characters_len: uint,
-		exclude_characters: ^u8,
-		exclude_characters_len: uint,
+		include_characters: Libhegel_String,
+		exclude_characters: Libhegel_String,
 		out_generator: ^Libhegel_String_Generator,
 	) -> Libhegel_Result,
-	hegel_string_generator_regex:             proc "c" (
+	hegel_string_generator_regex:                 proc "c" (
 		ctx: Libhegel_Context,
-		pattern: cstring,
+		pattern: Libhegel_String,
 		fullmatch: bool,
 		alphabet: Libhegel_String_Generator,
 		out_generator: ^Libhegel_String_Generator,
 	) -> Libhegel_Result,
-	hegel_string_generator_email:             proc "c" (ctx: Libhegel_Context, out_generator: ^Libhegel_String_Generator) -> Libhegel_Result,
-	hegel_string_generator_url:               proc "c" (ctx: Libhegel_Context, out_generator: ^Libhegel_String_Generator) -> Libhegel_Result,
-	hegel_string_generator_domain:            proc "c" (ctx: Libhegel_Context, max_length: u64, out_generator: ^Libhegel_String_Generator) -> Libhegel_Result,
-	hegel_string_generator_free:              proc "c" (ctx: Libhegel_Context, generator: Libhegel_String_Generator) -> Libhegel_Result,
-	hegel_generate_string:                    proc "c" (
+	hegel_string_generator_email:                 proc "c" (ctx: Libhegel_Context, out_generator: ^Libhegel_String_Generator) -> Libhegel_Result,
+	hegel_string_generator_url:                   proc "c" (ctx: Libhegel_Context, out_generator: ^Libhegel_String_Generator) -> Libhegel_Result,
+	hegel_string_generator_domain:                proc "c" (
+		ctx: Libhegel_Context,
+		max_length: u64,
+		out_generator: ^Libhegel_String_Generator,
+	) -> Libhegel_Result,
+	hegel_string_generator_free:                  proc "c" (ctx: Libhegel_Context, generator: Libhegel_String_Generator) -> Libhegel_Result,
+	hegel_generate_string:                        proc "c" (
 		ctx: Libhegel_Context,
 		test_case: Libhegel_Test_Case,
 		generator: Libhegel_String_Generator,
-		out_result: ^Libhegel_String_Result,
+		out_result: ^Libhegel_String,
 	) -> Libhegel_Result,
-	hegel_generate_string_result_free:        proc "c" (ctx: Libhegel_Context, result: ^Libhegel_String_Result) -> Libhegel_Result,
-	hegel_generate_date:                      proc "c" (
+	hegel_owned_string_free:                      proc "c" (ctx: Libhegel_Context, result: ^Libhegel_String) -> Libhegel_Result,
+	hegel_generate_date:                          proc "c" (
 		ctx: Libhegel_Context,
 		test_case: Libhegel_Test_Case,
 		min_value, max_value: Libhegel_Date,
 		out_value: ^Libhegel_Date,
 	) -> Libhegel_Result,
-	hegel_generate_time:                      proc "c" (
+	hegel_generate_time:                          proc "c" (
 		ctx: Libhegel_Context,
 		test_case: Libhegel_Test_Case,
 		min_value, max_value: Libhegel_Time,
 		out_value: ^Libhegel_Time,
 	) -> Libhegel_Result,
-	hegel_generate_datetime:                  proc "c" (
+	hegel_generate_datetime:                      proc "c" (
 		ctx: Libhegel_Context,
 		test_case: Libhegel_Test_Case,
 		min_value, max_value: Libhegel_Datetime,
 		out_value: ^Libhegel_Datetime,
 	) -> Libhegel_Result,
-	hegel_generate_ipv4:                      proc "c" (ctx: Libhegel_Context, test_case: Libhegel_Test_Case, out_bytes: ^u8) -> Libhegel_Result,
-	hegel_generate_ipv6:                      proc "c" (ctx: Libhegel_Context, test_case: Libhegel_Test_Case, out_bytes: ^u8) -> Libhegel_Result,
-	hegel_mark_complete:                      proc "c" (ctx: Libhegel_Context, test_case: Libhegel_Test_Case, status: u32, origin: cstring) -> Libhegel_Result,
-	hegel_run_result_status:                  proc "c" (
+	hegel_generate_ipv4:                          proc "c" (ctx: Libhegel_Context, test_case: Libhegel_Test_Case, out_bytes: ^u8) -> Libhegel_Result,
+	hegel_generate_ipv6:                          proc "c" (ctx: Libhegel_Context, test_case: Libhegel_Test_Case, out_bytes: ^u8) -> Libhegel_Result,
+	hegel_mark_complete:                          proc "c" (
+		ctx: Libhegel_Context,
+		test_case: Libhegel_Test_Case,
+		status: u32,
+		origin: ^Libhegel_String,
+	) -> Libhegel_Result,
+	hegel_run_result_status:                      proc "c" (
 		ctx: Libhegel_Context,
 		result: Libhegel_Run_Result,
 		out_status: ^Libhegel_Run_Status,
 	) -> Libhegel_Result,
-	hegel_run_result_error:                   proc "c" (ctx: Libhegel_Context, result: Libhegel_Run_Result, out_error: ^cstring) -> Libhegel_Result,
-	hegel_run_result_failure_count:           proc "c" (ctx: Libhegel_Context, result: Libhegel_Run_Result, out_count: ^uint) -> Libhegel_Result,
-	hegel_run_result_failure:                 proc "c" (
+	hegel_run_result_error:                       proc "c" (
+		ctx: Libhegel_Context,
+		result: Libhegel_Run_Result,
+		out_error: ^^Libhegel_String,
+	) -> Libhegel_Result,
+	hegel_run_result_failure_count:               proc "c" (ctx: Libhegel_Context, result: Libhegel_Run_Result, out_count: ^uint) -> Libhegel_Result,
+	hegel_run_result_failure:                     proc "c" (
 		ctx: Libhegel_Context,
 		result: Libhegel_Run_Result,
 		index: uint,
 		out_failure: ^Libhegel_Failure,
 	) -> Libhegel_Result,
-	hegel_failure_free:                       proc "c" (ctx: Libhegel_Context, failure: Libhegel_Failure) -> Libhegel_Result,
-	hegel_failure_origin:                     proc "c" (ctx: Libhegel_Context, failure: Libhegel_Failure, out_origin: ^cstring) -> Libhegel_Result,
-	hegel_failure_reproduction_blob:          proc "c" (ctx: Libhegel_Context, failure: Libhegel_Failure, out_blob: ^cstring) -> Libhegel_Result,
-	hegel_version:                            proc "c" (ctx: Libhegel_Context, out_version: ^cstring) -> Libhegel_Result,
+	hegel_failure_free:                           proc "c" (ctx: Libhegel_Context, failure: Libhegel_Failure) -> Libhegel_Result,
+	hegel_failure_origin:                         proc "c" (ctx: Libhegel_Context, failure: Libhegel_Failure, out_origin: ^Libhegel_String) -> Libhegel_Result,
+	hegel_failure_reproduction_blob:              proc "c" (ctx: Libhegel_Context, failure: Libhegel_Failure, out_blob: ^^Libhegel_String) -> Libhegel_Result,
+	hegel_version:                                proc "c" (ctx: Libhegel_Context, out_version: ^Libhegel_String) -> Libhegel_Result,
 }
 
 Native_Run_State :: struct {
@@ -542,18 +563,19 @@ text_gen_draw :: proc(tc: ^Test_Case, gen: Text_Generator) -> (string, Draw_Erro
 		return "", .Protocol_Error
 	}
 
-	codec: cstring
+	codec: ^Libhegel_String
+	codec_value: Libhegel_String
 	if gen.codec != nil {
-		codec = strings.clone_to_cstring(gen.codec.?, context.temp_allocator)
-		defer delete(codec, context.temp_allocator)
+		codec_value = libhegel_string(gen.codec.?)
+		codec = &codec_value
 	}
-	include: []byte
-	categories: ^cstring
+	include: Libhegel_String
+	categories: ^Libhegel_String
+	empty_categories: [1]Libhegel_String
 	if gen.alphabet != nil {
-		include = transmute([]byte)gen.alphabet.?
+		include = libhegel_string(gen.alphabet.?)
 		// A non-nil empty category list starts with an empty alphabet; the
 		// explicitly included characters then become the complete alphabet.
-		empty_categories: [1]cstring
 		categories = &empty_categories[0]
 		codec = nil
 	}
@@ -569,10 +591,8 @@ text_gen_draw :: proc(tc: ^Test_Case, gen: Text_Generator) -> (string, Draw_Erro
 		0,
 		nil,
 		0,
-		raw_data(include),
-		uint(len(include)),
-		nil,
-		0,
+		include,
+		{},
 		&generator,
 	)
 	if result != .OK {
@@ -601,10 +621,8 @@ draw_regex_impl :: proc(tc: ^Test_Case, pattern: string, fullmatch: bool) -> (st
 		return "", .Stop_Test
 	}
 
-	pattern_cstr := strings.clone_to_cstring(pattern, context.temp_allocator)
-	defer delete(pattern_cstr, context.temp_allocator)
 	generator: Libhegel_String_Generator
-	result := libhegel_symbols.hegel_string_generator_regex(tc.native.ctx, pattern_cstr, fullmatch, nil, &generator)
+	result := libhegel_symbols.hegel_string_generator_regex(tc.native.ctx, libhegel_string(pattern), fullmatch, nil, &generator)
 	if result != .OK {
 		return "", native_draw_error(tc, "string_generator_regex", result)
 	}
@@ -1161,6 +1179,7 @@ libhegel_load :: proc() -> bool {
 		libhegel_symbols.hegel_settings_set_derandomize != nil &&
 		libhegel_symbols.hegel_settings_set_database != nil &&
 		libhegel_symbols.hegel_settings_set_database_key != nil &&
+		libhegel_symbols.hegel_settings_set_nondeterminism_strictness != nil &&
 		libhegel_symbols.hegel_run_start != nil &&
 		libhegel_symbols.hegel_next_test_case != nil &&
 		libhegel_symbols.hegel_run_result != nil &&
@@ -1181,7 +1200,7 @@ libhegel_load :: proc() -> bool {
 		libhegel_symbols.hegel_string_generator_domain != nil &&
 		libhegel_symbols.hegel_string_generator_free != nil &&
 		libhegel_symbols.hegel_generate_string != nil &&
-		libhegel_symbols.hegel_generate_string_result_free != nil &&
+		libhegel_symbols.hegel_owned_string_free != nil &&
 		libhegel_symbols.hegel_generate_date != nil &&
 		libhegel_symbols.hegel_generate_time != nil &&
 		libhegel_symbols.hegel_generate_datetime != nil &&
@@ -1198,11 +1217,11 @@ libhegel_load :: proc() -> bool {
 		libhegel_symbols.hegel_version != nil
 	if libhegel_loaded {
 		ctx := libhegel_symbols.hegel_context_new()
-		version: cstring
+		version: Libhegel_String
 		version_result := libhegel_symbols.hegel_version(ctx, &version)
 		libhegel_symbols.hegel_context_free(ctx)
 		actual_version := "<unavailable>"
-		if version != nil do actual_version = string(version)
+		if version.data != nil do actual_version = libhegel_string_view(version)
 		if !libhegel_version_compatible(version_result, actual_version) {
 			if HEGEL_REQUIRED {
 				log.errorf("libhegel version mismatch: path=%s expected=%s actual=%s", path, LIBHEGEL_VERSION, actual_version)
@@ -1221,7 +1240,7 @@ libhegel_error_log :: proc(ctx: Libhegel_Context, op: string, result: Libhegel_R
 		log.errorf("hegel native %s failed: result=%v", op, result)
 		return
 	}
-	message := string(libhegel_symbols.hegel_context_last_error(ctx))
+	message := libhegel_string_view(libhegel_symbols.hegel_context_last_error(ctx))
 	if message == "" {
 		log.errorf("hegel native %s failed: result=%v", op, result)
 	} else {
@@ -1379,6 +1398,20 @@ run :: proc(body: Test_Body, user_data: rawptr = nil, options := Run_Options{}, 
 	}
 	defer libhegel_symbols.hegel_settings_free(ctx, settings)
 
+	// NRC properties must replay deterministically; do not accept Hegel's
+	// default automatic switch to nondeterministic failure handling.
+	HEGEL_NONDETERMINISM_ERROR :: u32(2)
+	if !libhegel_ok(
+		ctx,
+		"settings_set_nondeterminism_strictness",
+		libhegel_symbols.hegel_settings_set_nondeterminism_strictness(ctx, settings, HEGEL_NONDETERMINISM_ERROR),
+	) {
+		if diagnostics {
+			diagnostics_finish(loc, started_at, {}, Hegel_Error.Native_Error)
+		}
+		return {}, .Native_Error
+	}
+
 	if !libhegel_ok(ctx, "settings_set_test_cases", libhegel_symbols.hegel_settings_set_test_cases(ctx, settings, u64(test_cases))) {
 		if diagnostics {
 			diagnostics_finish(loc, started_at, {}, Hegel_Error.Native_Error)
@@ -1418,9 +1451,8 @@ run :: proc(body: Test_Body, user_data: rawptr = nil, options := Run_Options{}, 
 		}
 	}
 	if database != "" || options.disable_database {
-		database_cstr := strings.clone_to_cstring(database, context.temp_allocator)
-		defer delete(database_cstr, context.temp_allocator)
-		if !libhegel_ok(ctx, "settings_set_database", libhegel_symbols.hegel_settings_set_database(ctx, settings, database_cstr)) {
+		database_string := libhegel_string(database)
+		if !libhegel_ok(ctx, "settings_set_database", libhegel_symbols.hegel_settings_set_database(ctx, settings, &database_string)) {
 			if diagnostics {
 				diagnostics_finish(loc, started_at, {}, Hegel_Error.Native_Error)
 			}
@@ -1428,9 +1460,8 @@ run :: proc(body: Test_Body, user_data: rawptr = nil, options := Run_Options{}, 
 		}
 	}
 	if database_key != "" {
-		database_key_cstr := strings.clone_to_cstring(database_key, context.temp_allocator)
-		defer delete(database_key_cstr, context.temp_allocator)
-		if !libhegel_ok(ctx, "settings_set_database_key", libhegel_symbols.hegel_settings_set_database_key(ctx, settings, database_key_cstr)) {
+		database_key_string := libhegel_string(database_key)
+		if !libhegel_ok(ctx, "settings_set_database_key", libhegel_symbols.hegel_settings_set_database_key(ctx, settings, &database_key_string)) {
 			if diagnostics {
 				diagnostics_finish(loc, started_at, {}, Hegel_Error.Native_Error)
 			}
@@ -1546,16 +1577,13 @@ run_native_event_loop :: proc(
 		return result, nil
 
 	case .Error:
-		error_message: cstring
+		error_message: ^Libhegel_String
 		if libhegel_ok(state.ctx, "run_result_error", libhegel_symbols.hegel_run_result_error(state.ctx, native_result, &error_message)) &&
 		   error_message != nil {
-			log.errorf("hegel native run error: %s", string(error_message))
+			log.errorf("hegel native run error: %s", libhegel_string_view(error_message^))
 		}
 		return result, .Native_Error
 
-	case .Failed_Nondeterministic:
-		log.error("hegel native run failed nondeterministically; deterministic NRC properties cannot replay this result")
-		return result, .Native_Error
 	}
 
 	return result, .Native_Error
@@ -1576,11 +1604,11 @@ replay_native_failure :: proc(
 		return .Native_Error
 	}
 	defer libhegel_symbols.hegel_failure_free(state.ctx, failure)
-	origin: cstring
-	if libhegel_ok(state.ctx, "failure_origin", libhegel_symbols.hegel_failure_origin(state.ctx, failure, &origin)) && origin != nil {
-		log.errorf("hegel native failure origin: %s", string(origin))
+	origin: Libhegel_String
+	if libhegel_ok(state.ctx, "failure_origin", libhegel_symbols.hegel_failure_origin(state.ctx, failure, &origin)) {
+		log.errorf("hegel native failure origin: %s", libhegel_string_view(origin))
 	}
-	blob: cstring
+	blob: ^Libhegel_String
 	if !libhegel_ok(state.ctx, "failure_reproduction_blob", libhegel_symbols.hegel_failure_reproduction_blob(state.ctx, failure, &blob)) {
 		return .Native_Error
 	}
@@ -1588,11 +1616,11 @@ replay_native_failure :: proc(
 		return .Native_Error
 	}
 	if diagnostics {
-		fmt.eprintf("[hegel diag] reproduction caller=%s final_index=%d blob=%s\n", loc.procedure, index, string(blob))
+		fmt.eprintf("[hegel diag] reproduction caller=%s final_index=%d blob=%s\n", loc.procedure, index, libhegel_string_view(blob^))
 	}
 
 	test_case: Libhegel_Test_Case
-	if !libhegel_ok(state.ctx, "test_case_from_blob", libhegel_symbols.hegel_test_case_from_blob(state.ctx, state.settings, blob, nil, nil, &test_case)) {
+	if !libhegel_ok(state.ctx, "test_case_from_blob", libhegel_symbols.hegel_test_case_from_blob(state.ctx, state.settings, blob^, nil, nil, &test_case)) {
 		return .Native_Error
 	}
 	if test_case == nil {
@@ -1640,12 +1668,12 @@ run_native_one_case :: proc(state: ^Native_Run_State, native_tc: Libhegel_Test_C
 		}
 	}
 
-	origin_cstr: cstring
+	origin_string := libhegel_string(origin)
+	origin_ptr: ^Libhegel_String
 	if origin != "" {
-		origin_cstr = strings.clone_to_cstring(origin, context.temp_allocator)
-		defer delete(origin_cstr, context.temp_allocator)
+		origin_ptr = &origin_string
 	}
-	if !libhegel_ok(state.ctx, "mark_complete", libhegel_symbols.hegel_mark_complete(state.ctx, native_tc, u32(status), origin_cstr)) {
+	if !libhegel_ok(state.ctx, "mark_complete", libhegel_symbols.hegel_mark_complete(state.ctx, native_tc, u32(status), origin_ptr)) {
 		return .Native_Error
 	}
 	return nil
@@ -1802,16 +1830,16 @@ native_draw_error :: proc(tc: ^Test_Case, operation: string, result: Libhegel_Re
 }
 
 draw_native_string :: proc(tc: ^Test_Case, generator: Libhegel_String_Generator) -> (string, Draw_Error) {
-	native_result: Libhegel_String_Result
+	native_result: Libhegel_String
 	result := libhegel_symbols.hegel_generate_string(tc.native.ctx, tc.native_tc, generator, &native_result)
 	if result != .OK {
 		return "", native_draw_error(tc, "generate_string", result)
 	}
-	defer libhegel_symbols.hegel_generate_string_result_free(tc.native.ctx, &native_result)
+	defer libhegel_symbols.hegel_owned_string_free(tc.native.ctx, &native_result)
 	if native_result.len == 0 {
 		return "", nil
 	}
-	return strings.clone(string(([^]byte)(native_result.data)[:native_result.len])), nil
+	return strings.clone(libhegel_string_view(native_result)), nil
 }
 
 u64_twos_complement :: proc(value: u64) -> [9]u8 {
@@ -1843,7 +1871,7 @@ draw_native_time_value :: proc(tc: ^Test_Case) -> (Libhegel_Time, Draw_Error) {
 		tc.native.ctx,
 		tc.native_tc,
 		Libhegel_Time{},
-		Libhegel_Time{hour = 23, minute = 59, second = 59, microsecond = 999_999},
+		Libhegel_Time{hour = 23, minute = 59, second = 59, nanosecond = 999_999_999},
 		&value,
 	)
 	if result != .OK {
@@ -1862,7 +1890,7 @@ draw_native_date :: proc(tc: ^Test_Case) -> (string, Draw_Error) {
 draw_native_time :: proc(tc: ^Test_Case) -> (string, Draw_Error) {
 	value, err := draw_native_time_value(tc)
 	if err != nil do return "", err
-	return fmt.tprintf("%02d:%02d:%02d.%06d", value.hour, value.minute, value.second, value.microsecond), nil
+	return fmt.tprintf("%02d:%02d:%02d.%06d", value.hour, value.minute, value.second, value.nanosecond / 1000), nil
 
 }
 
@@ -1872,7 +1900,7 @@ draw_native_datetime :: proc(tc: ^Test_Case) -> (string, Draw_Error) {
 		tc.native.ctx,
 		tc.native_tc,
 		Libhegel_Datetime{date = {year = 1, month = 1, day = 1}},
-		Libhegel_Datetime{date = {year = 9999, month = 12, day = 31}, time = {hour = 23, minute = 59, second = 59, microsecond = 999_999}},
+		Libhegel_Datetime{date = {year = 9999, month = 12, day = 31}, time = {hour = 23, minute = 59, second = 59, nanosecond = 999_999_999}},
 		&value,
 	)
 	if result != .OK {
@@ -1886,7 +1914,7 @@ draw_native_datetime :: proc(tc: ^Test_Case) -> (string, Draw_Error) {
 			value.time.hour,
 			value.time.minute,
 			value.time.second,
-			value.time.microsecond,
+			value.time.nanosecond / 1000,
 		),
 		nil
 }

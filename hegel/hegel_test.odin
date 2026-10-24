@@ -66,10 +66,10 @@ test_loaded_libhegel_matches_pinned_version :: proc(t: ^testing.T) {
 	if !can_run() do return
 	ctx := libhegel_symbols.hegel_context_new()
 	defer libhegel_symbols.hegel_context_free(ctx)
-	version: cstring
+	version: Libhegel_String
 	result := libhegel_symbols.hegel_version(ctx, &version)
 	testing.expect_value(t, result, Libhegel_Result.OK)
-	testing.expect_value(t, string(version), LIBHEGEL_VERSION)
+	testing.expect_value(t, libhegel_string_view(version), LIBHEGEL_VERSION)
 }
 
 @(test)
@@ -82,7 +82,7 @@ test_libhegel_version_compatibility :: proc(t: ^testing.T) {
 
 @(test)
 test_effective_database_is_versioned_and_respects_overrides :: proc(t: ^testing.T) {
-	testing.expect_value(t, effective_database({}), ".hegel/examples/0.33.3/")
+	testing.expect_value(t, effective_database({}), ".hegel/examples/0.47.1/")
 	testing.expect_value(t, effective_database({database = "/tmp/hegel-examples"}), "/tmp/hegel-examples")
 	testing.expect_value(t, effective_database({database = "/tmp/hegel-examples", disable_database = true}), "")
 }
@@ -141,6 +141,30 @@ prop_failure_across_draw_kinds :: proc(tc: ^Test_Case, _: rawptr) -> Body_Result
 		if integer_err != nil do return interesting("integer branch draw failed")
 	}
 	return interesting("expected cross-draw-kind failure")
+}
+
+@(test)
+test_nondeterministic_failure_is_an_error :: proc(t: ^testing.T) {
+	if !can_run() do return
+	calls := 0
+	previous_logger := context.logger
+	context.logger = log.nil_logger()
+	result, err := run(prop_failure_only_once, &calls, {test_cases = 5, seed = 1, disable_database = true})
+	context.logger = previous_logger
+	testing.expect_value(t, err, Hegel_Error.Native_Error)
+	testing.expect(t, !result.passed)
+	testing.expect_value(t, result.interesting_test_cases, i64(0))
+	testing.expect(t, calls > 1, "the failure must be replayed to detect nondeterminism")
+}
+
+prop_failure_only_once :: proc(tc: ^Test_Case, user_data: rawptr) -> Body_Result {
+	_, err := draw_bool(tc)
+	if err == .Stop_Test do return abort()
+	if err != nil do return interesting("boolean draw failed")
+	calls := (^int)(user_data)
+	calls^ += 1
+	if calls^ == 1 do return interesting("failure disappears on replay")
+	return valid()
 }
 
 @(test)
@@ -752,17 +776,27 @@ test_gen_filter_with_attempts_rejects_after_configured_limit :: proc(t: ^testing
 		return
 	}
 
-	result, err := run(prop_gen_filter_with_attempts_rejects, nil, {test_cases = 5})
-	testing.expectf(t, err == nil, "filter_with_attempts rejection test failed: err=%v interesting=%v", err, result.interesting_test_cases)
+	previous_logger := context.logger
+	context.logger = log.nil_logger()
+	result, err := run(prop_gen_filter_with_attempts_rejects, t, {test_cases = 5, seed = 1, disable_database = true})
+	context.logger = previous_logger
+	// An always-rejecting property is unsatisfiable, not a passing run.
+	testing.expect_value(t, err, Hegel_Error.Native_Error)
+	testing.expect(t, !result.passed)
+	testing.expect(t, result.executed_test_cases > 0)
+	testing.expect_value(t, result.interesting_test_cases, i64(0))
 }
 
-prop_gen_filter_with_attempts_rejects :: proc(tc: ^Test_Case, _: rawptr) -> Body_Result {
+prop_gen_filter_with_attempts_rejects :: proc(tc: ^Test_Case, user_data: rawptr) -> Body_Result {
 	source := basic_i64(0, 100)
 	reject_all := proc(n: i64) -> bool {return false}
 	g := filter_with_attempts(i64, source, reject_all, 2)
 	defer gen_destroy(g)
 
 	_, draw_err := gen_draw(tc, g)
+	t := (^testing.T)(user_data)
+	testing.expect_value(t, draw_err, Draw_Error.Stop_Test)
+	testing.expect(t, tc.rejected)
 	if draw_err != .Stop_Test || !tc.rejected {
 		return interesting("filter_with_attempts did not reject after configured attempts")
 	}
@@ -992,7 +1026,9 @@ prop_format_times :: proc(tc: ^Test_Case, _: rawptr) -> Body_Result {
 	val, err := gen_draw(tc, times())
 	if err == .Stop_Test {return abort()}
 	if err != nil {return interesting("time error")}
-	if len(val) == 0 {return interesting("empty time")}
+	if len(val) != 15 || val[2] != ':' || val[5] != ':' || val[8] != '.' {
+		return interesting("expected HH:MM:SS.ffffff")
+	}
 	return valid()
 }
 
@@ -1007,7 +1043,9 @@ prop_format_datetimes :: proc(tc: ^Test_Case, _: rawptr) -> Body_Result {
 	val, err := gen_draw(tc, datetimes())
 	if err == .Stop_Test {return abort()}
 	if err != nil {return interesting("datetime error")}
-	if len(val) == 0 {return interesting("empty datetime")}
+	if len(val) != 26 || val[10] != 'T' || val[13] != ':' || val[16] != ':' || val[19] != '.' {
+		return interesting("expected YYYY-MM-DDTHH:MM:SS.ffffff")
+	}
 	return valid()
 }
 
@@ -1093,6 +1131,25 @@ prop_from_regex :: proc(tc: ^Test_Case, _: rawptr) -> Body_Result {
 	if err != nil {return interesting("from_regex error")}
 	defer delete(val)
 	if len(val) < 1 {return interesting("empty regex result")}
+	return valid()
+}
+
+@(test)
+test_regex_preserves_embedded_nul_and_utf8 :: proc(t: ^testing.T) {
+	if !can_run() {return}
+	result, err := run(prop_regex_embedded_nul, nil, {test_cases = 5, seed = 1, disable_database = true})
+	testing.expect_value(t, err, Hegel_Error.None)
+	testing.expect(t, result.passed)
+}
+
+prop_regex_embedded_nul :: proc(tc: ^Test_Case, _: rawptr) -> Body_Result {
+	// A C-string binding would truncate this pattern at the NUL and lose its suffix.
+	gen := from_regex("é\x00Z", true)
+	value, err := gen_draw(tc, gen)
+	if err == .Stop_Test {return abort()}
+	if err != nil {return interesting("embedded NUL regex draw failed")}
+	defer delete(value)
+	if value != "é\x00Z" {return interesting("embedded NUL or UTF-8 was truncated")}
 	return valid()
 }
 

@@ -118,7 +118,7 @@ Use `test/run_odin_tests.sh` by default rather than `odin test`. It builds with
 This avoids retaining the compiler's memory during test execution. Pass the package and ordinary
 build/test defines as arguments; the script owns the build mode and output path and preserves the
 caller's working directory. Optimization, test concurrency, and memory tracking are unchanged.
-The wrapper fetches checksum-pinned libhegel 0.33.3 into the ignored `.hegel/` cache and requires
+The wrapper fetches checksum-pinned libhegel 0.47.1 into the ignored `.hegel/` cache and requires
 Hegel by default. It accepts a trusted `HEGEL_LIBHEGEL_PATH` override. Direct Odin test commands
 need `test/fetch_libhegel.sh` first or an explicit library path; Odin itself never downloads it.
 

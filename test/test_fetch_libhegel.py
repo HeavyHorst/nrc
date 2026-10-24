@@ -9,7 +9,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SHA256 = "1ceb1636f3dd8e939fef88e99e3417b9da23675c7847e4cb22717ca8834c699b"
+SHA256 = "280753533a47f4b226cf9665f4de52a35562aa9918194db5ed6db97608cb6113"
 
 
 class FetchLibhegelTests(unittest.TestCase):
@@ -25,10 +25,10 @@ class FetchLibhegelTests(unittest.TestCase):
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
                     "FETCH_TEST_ROOT": str(self.root)}
         self.env.pop("HEGEL_LIBHEGEL_PATH", None)
-        self.library = self.root / ".hegel/libhegel-0.33.3/libhegel-linux-amd64.so"
+        self.library = self.root / ".hegel/libhegel-0.47.1/libhegel-linux-amd64.so"
         self.command("uname", 'import sys; print("Linux" if sys.argv[1] == "-s" else "x86_64")')
         self.command("curl", '''import os, pathlib, sys
-assert "https://github.com/hegeldev/hegel-rust/releases/download/v0.33.3/libhegel-linux-amd64.so" in sys.argv
+assert "https://github.com/hegeldev/hegel-rust/releases/download/libhegel-v0.47.1/libhegel-linux-amd64.so" in sys.argv
 assert sys.argv[sys.argv.index("--proto") + 1] == "=https"
 assert sys.argv[sys.argv.index("--proto-redir") + 1] == "=https"
 root = pathlib.Path(os.environ["FETCH_TEST_ROOT"])
@@ -104,7 +104,7 @@ sys.exit(0 if pathlib.Path(path).read_bytes() == b"fixture library" else 1)
         self.command("odin", '''import os, pathlib, sys
 root = pathlib.Path(os.environ["FETCH_TEST_ROOT"])
 assert pathlib.Path.cwd() == root / "test"
-assert os.environ["HEGEL_LIBHEGEL_PATH"] == str(root / ".hegel/libhegel-0.33.3/libhegel-linux-amd64.so")
+assert os.environ["HEGEL_LIBHEGEL_PATH"] == str(root / ".hegel/libhegel-0.47.1/libhegel-linux-amd64.so")
 assert sys.argv.count("-define:HEGEL_REQUIRED=true") == 1
 output = pathlib.Path(next(arg.removeprefix("-out:") for arg in sys.argv if arg.startswith("-out:")))
 output.write_text("#!/usr/bin/env bash\\ntest -f \\\"$HEGEL_LIBHEGEL_PATH\\\"\\n")

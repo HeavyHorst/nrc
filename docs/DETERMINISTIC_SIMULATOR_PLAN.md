@@ -184,7 +184,7 @@ The current replay contract is sufficient:
 
 1. `HEGEL_SEED` reproduces the campaign’s generated cases.
 2. Stable call-site database keys retain minimized reproduction blobs under
-   `.hegel/examples/0.33.3/`.
+   `.hegel/examples/0.47.1/`.
 3. Semantic campaigns print executable Odin fixtures where a stable operation trace is useful.
 4. CI uploads hidden `.hegel` artifacts and diagnostics.
 

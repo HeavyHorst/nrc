@@ -20,14 +20,15 @@ MIT notice applies to the imported code, not the later Odin package's license.
 
 ## Test-only Hegel dependency
 
-Test runners download [libhegel 0.33.3](https://github.com/hegeldev/hegel-rust/releases/tag/v0.33.3)
+Test runners download [libhegel 0.47.1](https://github.com/hegeldev/hegel-rust/releases/tag/libhegel-v0.47.1)
 directly from upstream into the ignored `.hegel/` cache. The current source tree
 does not include its binary, and the NRC server does not require it. The full
 development history retained on Amp contains the previously included 0.33.3 and
 0.23.2 binaries; the single-commit GitHub snapshot does not.
 
 Release digests and collected crate, Rust runtime and Unicode notices remain in
-[vendor/libhegel](vendor/libhegel/README.md). That collection is not an exact
+[vendor/libhegel](vendor/libhegel/README.md). The historical notice collection has
+not been audited for 0.47.1. That collection is not an exact
 artifact SBOM or a complete licensing clearance: it also records the unresolved
 Hypothesis source-port licensing question. If you redistribute Hegel in a bundle
 or image, resolve that question and retain the applicable notices; Hegel's own

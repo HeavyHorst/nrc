@@ -58,7 +58,7 @@ npm run test:build --prefix client
 The test wrapper releases compiler memory before running tests and requires
 Hegel by default, so an unloadable library does not silently skip properties.
 For offline setup or another platform, set `HEGEL_LIBHEGEL_PATH` to a trusted
-libhegel 0.33.3 build. Explicit overrides are not checked against the Linux digest;
+libhegel 0.47.1 build. Explicit overrides are not checked against the Linux digest;
 the Odin loader checks the version. Direct `odin test` does not download anything:
 run `./test/fetch_libhegel.sh` first from the repository root on Linux amd64,
 or export its returned path for tests launched elsewhere.

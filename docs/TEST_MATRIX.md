@@ -375,20 +375,20 @@ odin test hegel/ -o:speed -define:HEGEL_REQUIRED=true -define:ODIN_TEST_LOG_LEVE
 
 ## Hegel availability and diagnostics
 
-Hegel properties use `libhegel` 0.33.3; no library binary ships in the current
+Hegel properties use `libhegel` 0.47.1; no library binary ships in the current
 source tree. The test wrapper, seed campaign and mutation runner fetch the pinned
-Linux amd64 release into `.hegel/libhegel-0.33.3/` and verify its SHA256. A valid
+Linux amd64 release into `.hegel/libhegel-0.47.1/` and verify its SHA256. A valid
 cache works offline. Failed downloads and corrupt cache files stop the runner;
 remove a corrupt cached file to download it again.
 
 `./test/run_odin_tests.sh` sets `HEGEL_REQUIRED=true` unless a caller explicitly
 supplies that define. Direct Odin commands should set it too, so a missing,
 unloadable or incorrectly versioned library fails rather than skipping properties.
-The wrapper accepts `HEGEL_LIBHEGEL_PATH` for a trusted local 0.33.3 library on
+The wrapper accepts `HEGEL_LIBHEGEL_PATH` for a trusted local 0.47.1 library on
 other platforms or offline installations. Campaign and mutation runners always
 use the pinned Linux download, not a caller override.
 
-The reproduction database remains separate under `.hegel/examples/0.33.3/`;
+The reproduction database remains separate under `.hegel/examples/0.47.1/`;
 native reproduction blobs are only compatible with the library version that
 created them. Server builds and starts do not fetch or load Hegel.
 
@@ -471,7 +471,7 @@ saved. To reproduce a failure, create a disposable worktree at the recorded comm
 apply that case's patch with `git apply`, and use its recorded build flags (replace the
 temporary `-out:` path). Run with `HEGEL_SEED=12345 HEGEL_DIAGNOSTICS=1
 HEGEL_TEST_CASE_MULTIPLIER=1` and `HEGEL_LIBHEGEL_PATH` pointing to the downloaded
-0.33.3 library; the test log retains native
+library version used by that run (currently 0.47.1); the test log retains native
 minimized reproduction blobs when Hegel produces them.
 
 ## Local simulation stress

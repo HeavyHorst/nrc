@@ -1,9 +1,14 @@
 # libhegel test dependency and notices
 
 The current source tree does not include a libhegel binary. Test runners download
-the pinned 0.33.3 Linux amd64 release directly from upstream, verify its SHA256
-and cache it under `.hegel/libhegel-0.33.3/`. Run `test/fetch_libhegel.sh` to prepare
+the pinned [0.47.1 Linux amd64 release](https://github.com/hegeldev/hegel-rust/releases/tag/libhegel-v0.47.1)
+directly from upstream, verify its SHA256
+and cache it under `.hegel/libhegel-0.47.1/`. Run `test/fetch_libhegel.sh` to prepare
 the cache without compiling tests. The server does not use Hegel.
+
+The current download's SHA256 is
+`280753533a47f4b226cf9665f4de52a35562aa9918194db5ed6db97608cb6113`.
+The historical notice collection below has not been audited for 0.47.1.
 
 The binaries in the table below remain reachable through the full development
 history retained on Amp, not the single-commit GitHub snapshot. This directory
