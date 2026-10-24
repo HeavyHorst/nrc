@@ -368,6 +368,79 @@ when NRC_SIMULATION {
 	}
 
 	@(test)
+	test_message_daily_idle_rotation_and_expiry :: proc(t: ^testing.T) {
+		for retention in ([2]time.Duration{time.Hour, 7 * 24 * time.Hour}) {
+			ctx: Sim_Test_Context
+			simulation_test_begin(&ctx, 0)
+			defer simulation_test_end(&ctx)
+			ctx.sim.compaction_job_event_submission = true
+			server: NRC_Server
+			td.server = &server
+			testing.expect(t, nbio.init(&td.io) == .NONE)
+			defer nbio.destroy(&td.io)
+			workspace := "daily-idle"
+			storage := sim_world_storage_context(&ctx.sim.world)
+			dir := "/daily-idle"
+			testing.expect(t, storage_io.make_directory(storage, dir) == nil)
+			testing.expect(t, storage_io.sync_directory(storage, "/") == nil)
+			shard := int(shard_for_workspace(transmute([]byte)workspace))
+			append(&td.message_stores.stores, Message_Store{})
+			store := &td.message_stores.stores[0]
+			testing.expect(t, init_message_store_with_storage(store, storage, dir, shard, retention, 0))
+			td.message_stores.enabled = true
+			td.message_stores.store_index[shard] = 0
+			defer shutdown_message_store_registry(&td.message_stores)
+
+			day := i64(24 * time.Hour)
+			start := (NRC_SIM_TIME_EPOCH_NANOS / day + 2) * day
+			ctx.sim.world.now = time.Duration(start - NRC_SIM_TIME_EPOCH_NANOS)
+			_, ok := maintain_message_store_registry(&td.message_stores)
+			testing.expect(t, ok && !store.rotation_pending, "an empty idle WAL must not rotate")
+			for marker in 1 ..= 2 {
+				ctx.sim.world.now = time.Duration(start + i64(9 + marker) * i64(time.Hour) - NRC_SIM_TIME_EPOCH_NANOS)
+				message := test_retained_message(workspace, 42, u64(marker), nrc_time_unix_nanos())
+				result, _ := append_or_deduplicate_message(store, &message)
+				testing.expect_value(t, result, Message_Store_Result.Appended)
+			}
+			testing.expect(t, simulation_test_commit_messages(&ctx.sim))
+			testing.expect(t, store.active_generation == 1 && len(store.segments) == 0, "crossing an hour must not seal")
+			last_message := nrc_time_unix_nanos()
+			rotate_at := retention == time.Hour ? last_message + i64(retention) + 1 : start + day
+			ctx.sim.world.now = time.Duration(rotate_at - 1 - NRC_SIM_TIME_EPOCH_NANOS)
+			_, ok = maintain_message_store_registry(&td.message_stores)
+			testing.expect(t, ok && !store.rotation_pending)
+			ctx.sim.world.now += time.Nanosecond
+			store.async_readers = 1
+			_, ok = maintain_message_store_registry(&td.message_stores)
+			testing.expect(t, ok && store.rotation_pending && !store.lifecycle_in_flight)
+			store.async_readers = 0
+			_, ok = maintain_message_store_registry(&td.message_stores)
+			testing.expect(t, ok && simulation_test_commit_messages(&ctx.sim))
+			testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll))
+			testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Job))
+			testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Result))
+			testing.expect(t, simulation_test_flush_message_writes(&ctx.sim))
+			testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Seal))
+			for sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Job) {}
+			testing.expect(t, store.active_generation == 3 && store.wal.record_count == 0 && len(store.segments) == 1)
+
+			// No more appends: retention must still remove both sealed files.
+			ctx.sim.world.now = time.Duration(last_message + i64(retention) + 1 - NRC_SIM_TIME_EPOCH_NANOS)
+			_, ok = maintain_message_store_registry(&td.message_stores)
+			testing.expect(t, ok && simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Retain))
+			for suffix in ([2]string{"wal", "idx"}) {
+				path := message_store_path(dir, 2, suffix)
+				exists, err := storage_io.exists(storage, path)
+				delete(path)
+				testing.expect(t, err == nil && !exists)
+			}
+			ctx.sim.world.now += 3 * 24 * time.Hour
+			_, ok = maintain_message_store_registry(&td.message_stores)
+			testing.expect(t, ok && !store.rotation_pending && store.active_generation == 3 && len(store.segments) == 0)
+		}
+	}
+
+	@(test)
 	test_message_seal_failure_releases_staged_handler_context :: proc(t: ^testing.T) {
 		for scenario in 0 ..< 2 {
 			failed_build := scenario == 1

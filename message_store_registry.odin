@@ -80,6 +80,13 @@ maintain_message_store_registry :: proc(registry: ^Message_Store_Registry) -> (d
 		if store.frozen != nil && !store.frozen_published && !store.seal_in_flight {
 			if !enqueue_message_seal(&store, now) do return did_work, false
 		}
+		// Use the normal drain/roll/seal path even without another append.
+		// Short retention may expire an idle WAL before the next UTC day.
+		if store.frozen == nil &&
+		   store.wal.record_count > 0 &&
+		   (now / i64(MESSAGE_SEGMENT_INTERVAL) != store.active_started_day || store.active_max_time < max(store.purge_floor_ns, now - i64(store.retention))) {
+			store.rotation_pending = true
+		}
 		if store.seal_ready || store.rotation_pending && store.frozen == nil && store.async_readers == 0 {
 			retained_message_schedule_store_flush(&store)
 			did_work = true

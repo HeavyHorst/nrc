@@ -245,6 +245,14 @@ dropped. Shutdown never overwrites a manifest while its publication is pending.
 Startup, recovery, standalone stores without a service, and shutdown retain
 synchronous filesystem operations.
 
+Retained-message WALs rotate at UTC day boundaries, or earlier at the existing
+size/index limits. Worker maintenance also rotates nonempty idle WALs at the day
+boundary, or once all their messages have expired for shorter retention periods;
+no new append is required. Empty WALs do not produce daily segments. Rotation
+uses the same write/fsync and reader drain gates as append-triggered rotation.
+History hides expired messages at the retention cutoff; physical cleanup removes
+a whole sealed segment only after its newest message expires and readers drain.
+
 The sealing service deletes obsolete source WALs after durable manifest
 publication and reader drain. Queue refusal retries later. An accepted deletion
 can leave a safe, unreferenced file on failure or shutdown; this does not add
