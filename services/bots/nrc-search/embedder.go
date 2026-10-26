@@ -107,6 +107,15 @@ func newGenerationEmbedder(modelPath, tokenizerPath string, legacy bool) (*ONNXE
 }
 
 func (e *ONNXEmbedder) Embed(text string) ([]float32, error) {
+	tokenIDs := e.Tokenize(text)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.run(tokenIDs, "", nil)
+}
+
+// Tokenize also supplies the remote backend with NRC's exact literal-special-
+// token handling, BOS/EOS and truncation, instead of re-tokenizing remotely.
+func (e *ONNXEmbedder) Tokenize(text string) []uint32 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	tokenIDs, _ := e.tokenizer.Encode(text, true)
@@ -116,7 +125,7 @@ func (e *ONNXEmbedder) Embed(text string) ([]float32, error) {
 		seqLen = e.maxSeqLen
 		tokenIDs = tokenIDs[:seqLen]
 	}
-	return e.run(tokenIDs, "", nil)
+	return tokenIDs
 }
 
 func (e *ONNXEmbedder) EmbedMedia(kind, path string, offset int) ([]float32, error) {

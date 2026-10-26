@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 export const MODEL_REVISION = 'daa72c51243991dfcaf9f9137d2c573d8f7790c0';
 export const MAX_SAMPLES = 480000;
 export const MAX_LINE = 8192;
+const MAX_RESPONSE = 16 * 1024 * 1024;
 const MAX_FILE = 128 * 1024 * 1024;
 const MAX_PIXELS = 16 * 1024 * 1024;
 env.allowRemoteModels = false;
@@ -20,6 +21,7 @@ sharp.cache(false);
 export function validateRequest(request) {
   if (!request || !['image', 'audio'].includes(request.kind)) throw new Error('invalid kind');
   if (typeof request.path !== 'string' || !isAbsolute(request.path) || request.path.includes('\0')) throw new Error('local absolute path required');
+  if (request.prepare !== undefined && typeof request.prepare !== 'boolean') throw new Error('invalid prepare flag');
   const offset = request.offset ?? 0;
   if (!Number.isFinite(offset) || offset < 0 || offset > 1e9) throw new Error('invalid offset');
   return { ...request, offset };
@@ -100,6 +102,25 @@ export function createWorker(modelDir = process.env.MEDIA_MODEL_DIR) {
   async function processRequest(input) {
     const request = validateRequest(input);
     const media = request.kind === 'image' ? await decodeImage(request.path) : await decodeAudio(request.path, request.offset);
+    if (request.prepare) {
+      // Reuse local decoding/limits, but leave encoder inference to vLLM.
+      // A lossless PNG and IEEE-float WAV preserve the decoded pixels/samples.
+      if (request.kind === 'image') {
+        const png = await sharp(Buffer.from(media.data), { raw: { width: media.width, height: media.height, channels: media.channels } }).png().toBuffer();
+        // Base64 plus {"data":""} and newline must fit Go's bounded scanner.
+        // This input can still use the local encoder; it is not a server outage.
+        if (4 * Math.ceil(png.length / 3) + 12 > MAX_RESPONSE) return { local_only: true };
+        return { data: png.toString('base64') };
+      }
+      if (media.length === 0) return { data: '' };
+      const wav = Buffer.alloc(44 + media.length * 4);
+      wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
+      wav.writeUInt32LE(16, 16); wav.writeUInt16LE(3, 20); wav.writeUInt16LE(1, 22);
+      wav.writeUInt32LE(16000, 24); wav.writeUInt32LE(64000, 28); wav.writeUInt16LE(4, 32); wav.writeUInt16LE(32, 34);
+      wav.write('data', 36); wav.writeUInt32LE(media.length * 4, 40);
+      for (let i = 0; i < media.length; i++) wav.writeFloatLE(media[i], 44 + i * 4);
+      return { data: wav.toString('base64') };
+    }
     if (request.kind === 'audio' && media.length === 0) return { features: [], tokens: 0 };
     if (!modelDir || !isAbsolute(modelDir)) throw new Error('MEDIA_MODEL_DIR must be a local absolute directory');
     processor ??= await AutoProcessor.from_pretrained(modelDir, { local_files_only: true, revision: MODEL_REVISION });
@@ -147,7 +168,7 @@ export async function runProtocol(input, output, worker) {
       catch { response = { error: 'invalid JSON request' }; }
     }
     let line = JSON.stringify(response);
-    if (Buffer.byteLength(line) > 16 * 1024 * 1024) line = JSON.stringify({ error: 'response exceeds limit' });
+    if (Buffer.byteLength(line) + 1 > MAX_RESPONSE) line = JSON.stringify({ error: 'response exceeds limit' });
     if (!output.write(line + '\n')) await new Promise(resolve => output.once('drain', resolve));
     chunks = []; size = 0; oversized = false;
   }
