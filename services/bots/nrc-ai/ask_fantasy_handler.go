@@ -773,7 +773,7 @@ func newADKListAssetsTool(wm *WorkspaceManager, assetSourceCache *adkAssetSource
 	})
 }
 
-func newADKListTasksTool(wm *WorkspaceManager) (tool.Tool, error) {
+func newADKListTasksTool(wm *WorkspaceManager, taskSourceCache *adkAssetSourceCache) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "list_tasks",
 		Description: "Lists tasks directly from the workspace server, including Done and legacy Note tasks by default; no search index or loaded-cache fallback. Optional statuses filter. Returns created_at/updated_at as decimal Unix-nanosecond strings, total_count, has_more and next_cursor. Pass next_cursor unchanged as cursor, keeping statuses unchanged. Server ordering is descending sort_at/task_id: sort_at is completed_at for Done, updated_at otherwise. For date questions filter created_at or updated_at yourself and read ALL pages; do not stop based on an old updated_at because Done ordering differs. total_count is the status-filtered total, not the date-filtered count.",
@@ -816,9 +816,12 @@ func newADKListTasksTool(wm *WorkspaceManager) (tool.Tool, error) {
 		if page.HasMore {
 			out.NextCursor = &adkTaskPageCursor{SortAt: strconv.FormatInt(page.NextCursor.SortAt, 10), TaskID: strconv.FormatUint(page.NextCursor.TaskID, 10)}
 		}
+		titles := make(map[uint64]string, len(page.Tasks))
 		for _, task := range page.Tasks {
+			titles[task.ID] = task.Title
 			out.Results = append(out.Results, adkSearchTaskResult{TaskID: strconv.FormatUint(task.ID, 10), Title: task.Title, Status: taskStatusName(task.Status), Priority: taskPriorityName(task.Priority), Assignee: task.Assignee, BlockedBy: strconv.FormatUint(task.BlockedBy, 10), Snippet: trimForTool(task.Description, 320), CreatedAt: strconv.FormatInt(task.CreatedAt, 10), UpdatedAt: strconv.FormatInt(task.UpdatedAt, 10)})
 		}
+		taskSourceCache.put(workspace, convID, titles)
 		recordToolTrace(ctx, "list_tasks", started, workspace, convID, map[string]any{"statuses": input.Statuses, "cursor": input.Cursor, "limit": limit}, map[string]any{"result_count": out.Count, "total_count": out.TotalCount, "has_more": out.HasMore}, nil)
 		return out, nil
 	})
@@ -870,24 +873,14 @@ func handleAskFantasy(wm *WorkspaceManager, search *SearchClient, sourcebot *Sou
 			recordToolTrace(ctx, "room_context", started, workspace, convID, traceArgs, nil, err)
 			return adkRoomContextOutput{}, err
 		}
-		if !client.IsSubscribed(convID) {
-			if err := client.SubscribeRoom(convID); err != nil {
-				recordToolTrace(ctx, "room_context", started, workspace, convID, traceArgs, nil, err)
-				return adkRoomContextOutput{}, err
-			}
-			waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-			if err := client.WaitForTasks(waitCtx, convID); err != nil {
-				slog.Warn("adk room_context wait for tasks failed", "conv_id", convID, "error", err)
-			}
-		}
 
-		contextBlock, assetTitles := buildContext(ctx, client, search, askRequest{
+		contextBlock, assetTitles, taskTitles := buildContext(ctx, client, search, askRequest{
 			Workspace: workspace,
 			ConvID:    convID,
 			Question:  query,
 		}, maxContextTokens)
 		assetSourceCache.put(workspace, convID, assetTitles)
+		taskSourceCache.put(workspace, convID, taskTitles)
 		recordToolTrace(ctx, "room_context", started, workspace, convID, traceArgs, map[string]any{
 			"context_chars": len(contextBlock),
 			"asset_titles":  len(assetTitles),
@@ -979,7 +972,7 @@ func handleAskFantasy(wm *WorkspaceManager, search *SearchClient, sourcebot *Sou
 	if err != nil {
 		return nil, fmt.Errorf("create list_assets tool: %w", err)
 	}
-	listTasksTool, err := newADKListTasksTool(wm)
+	listTasksTool, err := newADKListTasksTool(wm, taskSourceCache)
 	if err != nil {
 		return nil, err
 	}
@@ -1156,6 +1149,12 @@ func handleAskFantasy(wm *WorkspaceManager, search *SearchClient, sourcebot *Sou
 			recordToolTrace(ctx, "search_tasks", started, workspace, convID, traceArgs, nil, err)
 			return adkSearchTasksOutput{}, err
 		}
+		titles := make(map[uint64]string, len(out.Results))
+		for _, result := range out.Results {
+			id, _ := strconv.ParseUint(result.TaskID, 10, 64)
+			titles[id] = result.Title
+		}
+		taskSourceCache.put(workspace, convID, titles)
 		recordToolTrace(ctx, "search_tasks", started, workspace, convID, traceArgs, map[string]any{
 			"result_count": len(out.Results), "limit_used": limit, "source": out.Source, "complete": out.Complete,
 		}, nil)
@@ -1188,12 +1187,6 @@ func handleAskFantasy(wm *WorkspaceManager, search *SearchClient, sourcebot *Sou
 		if err != nil {
 			recordToolTrace(ctx, "get_task", started, workspace, convID, traceArgs, nil, err)
 			return adkGetTaskOutput{}, err
-		}
-		if !client.IsSubscribed(convID) {
-			if err := client.SubscribeRoom(convID); err != nil {
-				recordToolTrace(ctx, "get_task", started, workspace, convID, traceArgs, nil, err)
-				return adkGetTaskOutput{}, err
-			}
 		}
 
 		task, err := client.GetTask(ctx, convID, input.TaskID)
@@ -1276,12 +1269,6 @@ func handleAskFantasy(wm *WorkspaceManager, search *SearchClient, sourcebot *Sou
 			recordToolTrace(ctx, "graph_walk", started, workspace, convID, traceArgs, nil, err)
 			return adkGraphWalkOutput{}, err
 		}
-		if !client.IsSubscribed(convID) {
-			if err := client.SubscribeRoom(convID); err != nil {
-				recordToolTrace(ctx, "graph_walk", started, workspace, convID, traceArgs, nil, err)
-				return adkGraphWalkOutput{}, err
-			}
-		}
 
 		resp, err := client.GetGraphNeighborhood(ctx, convID, startType, input.StartID, depth, relationMask, 0, 0)
 		if err != nil {
@@ -1289,10 +1276,7 @@ func handleAskFantasy(wm *WorkspaceManager, search *SearchClient, sourcebot *Sou
 			return adkGraphWalkOutput{}, err
 		}
 
-		tasksByID := make(map[uint64]string)
-		for _, t := range client.GetTasks(convID) {
-			tasksByID[t.ID] = t.Title
-		}
+		tasksByID := taskSourceCache.get(workspace, convID)
 
 		sort.Slice(resp.Nodes, func(i, j int) bool {
 			if resp.Nodes[i].Depth != resp.Nodes[j].Depth {
@@ -1385,12 +1369,6 @@ func handleAskFantasy(wm *WorkspaceManager, search *SearchClient, sourcebot *Sou
 			recordToolTrace(ctx, "task_neighbors", started, workspace, convID, traceArgs, nil, err)
 			return adkTaskNeighborsOutput{}, err
 		}
-		if !client.IsSubscribed(convID) {
-			if err := client.SubscribeRoom(convID); err != nil {
-				recordToolTrace(ctx, "task_neighbors", started, workspace, convID, traceArgs, nil, err)
-				return adkTaskNeighborsOutput{}, err
-			}
-		}
 
 		result, err := client.GetGraphNeighborhood(ctx, convID, entityTypeTask, input.TaskID, depth, allRelationMask, 0, 0)
 		if err != nil {
@@ -1398,13 +1376,7 @@ func handleAskFantasy(wm *WorkspaceManager, search *SearchClient, sourcebot *Sou
 			return adkTaskNeighborsOutput{}, err
 		}
 
-		taskTitle := ""
-		for _, t := range client.GetTasks(convID) {
-			if t.ID == input.TaskID {
-				taskTitle = t.Title
-				break
-			}
-		}
+		taskTitle := taskSourceCache.get(workspace, convID)[input.TaskID]
 
 		relatedSet := make(map[uint64]struct{})
 		relations := make([]string, 0, len(result.Edges))
@@ -1987,10 +1959,10 @@ When mode=plan and you have proposed actions, include a compact PROPOSED ACTIONS
 
 The only customer-write exception is ticket_group: read_ticket_groups then propose_ticket_group in plan mode with expected_updated_at and explicit approval. Disclose sensitive mutual read/reply access to all existing/future tickets including public attachments for direct fellow-members only, no transitive sharing. Other customer writes remain unsupported.
 
-Always ground your answer in current workspace data by calling tools.
+Always ground your answer in current workspace evidence. INITIAL WORKSPACE CONTEXT is retrieved for this request, not a complete inventory. Use it directly when sufficient; call tools for missing or more precise evidence.
 - For creation/modification date questions, use list_notes/list_assets/list_tasks directly rather than semantic search or dates in content. created_at is creation; updated_at is LAST modification, not an audit history. Resolve calendar dates in the request's timezone (default Europe/Berlin), using an inclusive start and exclusive next-day start, not a rolling 24 hours.
 - Follow next_cursor with unchanged filters when has_more=true; deduplicate by ID. Assets are updated_at-descending: for today's created/updated records you may stop once updated_at falls before today's start. For older creation periods scan all pages. Tasks use completed_at for Done ordering, so read all task pages for date questions rather than stopping on updated_at. If tool/time/context budgets prevent completing the scan, explicitly say the answer is partial; never describe a limited page or a search complete flag as all matches. Listings are live, not an atomic snapshot.
-- Usually call room_context(query=<non-empty user question or focused summary>) first to bootstrap context. Do not call room_context without a query.
+- Initial context is already supplied. Call room_context(query=<focused query>) only to refine or broaden retrieval when needed; do not repeat the initial search by default. Do not call room_context without a query.
 - Treat room_context ranking as evidence from the full indexed entity body. Do not dismiss a strong result merely because its static title or teaser looks unrelated to the question.
 - When the question contains an exact domain identifier such as a media/product number, ticket ID, ISBN, hostname, or commit, inspect the strongest result that could contain that identifier before concluding that no memory exists. For an asset, call get_asset to load its full content before answering when the identifier match or decisive passage is not visible in the bootstrap excerpt.
 - Every room_context result reports payload=complete, payload=omitted, or payload=truncated. If a relevant result is omitted or truncated, call get_asset for an asset or get_task for a task before drawing conclusions about its full content. Response or display clipping is not evidence that the indexed passage is absent.
@@ -2125,18 +2097,6 @@ Sourcebot code research:
 		emitAskProgress(client, statusConvID, "RECEIVED REQUEST. PREPARING CONTEXT ...")
 		emitAskProgress(client, statusConvID, "SEARCHING WORKSPACE CONTEXT + TRAVERSING GRAPH ...")
 
-		if !client.IsSubscribed(req.ConvID) {
-			if err := client.SubscribeRoom(req.ConvID); err != nil {
-				emitAskProgress(client, statusConvID, "FAILED TO SUBSCRIBE TO CONTEXT ROOM.")
-				slog.Error("failed to subscribe room", "conv_id", req.ConvID, "error", err)
-				http.Error(w, `{"error":"failed to subscribe to room"}`, http.StatusInternalServerError)
-				return
-			}
-			if err := client.WaitForTasks(ctx, req.ConvID); err != nil {
-				slog.Warn("failed to wait for tasks", "conv_id", req.ConvID, "error", err)
-			}
-		}
-
 		sessionSnapshot, _ := agentSessions.getOrCreate(req.Workspace, req.ConvID, req.DisplayConvID, req.SessionID, req.Mode)
 		history := append([]AgentTurn(nil), sessionSnapshot.Turns...)
 
@@ -2172,10 +2132,20 @@ Sourcebot code research:
 		runCtx = context.WithValue(runCtx, askProgressClientKey{}, client)
 		runCtx = context.WithValue(runCtx, askProgressConvIDKey{}, statusConvID)
 
-		emitAskProgress(client, statusConvID, "RUNNING REASONING PASS ...")
-
-		modelPrompt := buildAgentModelInput(req, sessionSnapshot, activePlan)
 		logger.Info("ask phase timing", "phase", phase, "duration_ms", time.Since(phaseStarted).Milliseconds())
+		phase, phaseStarted = "retrieve", time.Now()
+		retrieveReq := req
+		retrieveReq.Question = initialRetrieveQuery(req, sessionSnapshot)
+		contextBlock, assetTitles, taskTitles := buildContext(runCtx, client, search, retrieveReq, maxContextTokens)
+		assetSourceCache.put(req.Workspace, req.ConvID, assetTitles)
+		taskSourceCache.put(req.Workspace, req.ConvID, taskTitles)
+		if ctx.Err() != nil {
+			agentSessions.reset(sessionSnapshot.ID)
+			return
+		}
+		modelPrompt := buildAgentModelInput(req, sessionSnapshot, activePlan) + "\nINITIAL WORKSPACE CONTEXT\n" + contextBlock
+		logger.Info("ask phase timing", "phase", phase, "duration_ms", time.Since(phaseStarted).Milliseconds())
+		emitAskProgress(client, statusConvID, "RUNNING REASONING PASS ...")
 		phase, phaseStarted = "agent", time.Now()
 		answerText, attempts, runErr := runFantasyAskWithRetry(runCtx, askAgent, modelPrompt)
 		if runErr != nil {
@@ -2222,8 +2192,8 @@ Sourcebot code research:
 		}
 		toolTrace := traceCollector.snapshot()
 
-		assetTitles := assetSourceCache.get(req.Workspace, req.ConvID)
-		sourceTasks := client.GetTasks(req.ConvID)
+		assetTitles = assetSourceCache.get(req.Workspace, req.ConvID)
+		var sourceTasks []protocol.Task
 		for id, title := range taskSourceCache.get(req.Workspace, req.ConvID) {
 			sourceTasks = append(sourceTasks, protocol.Task{ID: id, Title: title})
 		}
@@ -2261,6 +2231,17 @@ Sourcebot code research:
 		}
 		status = "ok"
 	}, nil
+}
+
+// Include bounded recent context for elliptical follow-ups without another LLM call.
+func initialRetrieveQuery(req askRequest, session AgentSession) string {
+	query := req.Question
+	if len(session.Turns) > 0 {
+		last := session.Turns[len(session.Turns)-1]
+		query += "\nPrevious question: " + trimForTool(last.UserText, 600)
+		query += "\nPrevious answer (context only, verify current facts): " + trimForTool(last.Answer, 1200)
+	}
+	return query
 }
 
 func buildAgentModelInput(req askRequest, sessionSnapshot AgentSession, plan ActionPlan) string {
@@ -2960,11 +2941,6 @@ func searchTasksForTool(ctx context.Context, wm *WorkspaceManager, search *Searc
 	client, err := wm.GetOrCreateClient(workspace)
 	if err != nil {
 		return adkSearchTasksOutput{Query: query, Results: []adkSearchTaskResult{}, Source: "loaded-task-cache", Complete: false, Warning: warning}, nil
-	}
-	if !client.IsSubscribed(convID) {
-		if err := client.SubscribeRoom(convID); err != nil {
-			return adkSearchTasksOutput{Query: query, Results: []adkSearchTaskResult{}, Source: "loaded-task-cache", Complete: false, Warning: warning}, nil
-		}
 	}
 	tasks := filterFallbackTasks(client.GetTasks(convID), input)
 	results := searchTasksInRoom(tasks, query, limit, statusFilter, parseAssigneeFilter(input.Assignees))

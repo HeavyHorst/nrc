@@ -34,6 +34,19 @@ Health alone does not prove that your provider can complete requests.
 
 ## Use
 
+Before its first model call, Sullivan retrieves bounded workspace evidence using
+the same retrieval core as `nrc retrieve`: ten ranked results, graph depth one,
+payloads for the top three results, and at most 30,000 payload bytes (less when
+the configured context budget is smaller). Existing sessions include a bounded
+excerpt of the latest question and answer in the retrieval query to resolve
+follow-up references. That excerpt is context, not authoritative workspace data.
+
+Ask does not load or wait for a complete task snapshot. The model can answer
+directly from the initial evidence, refine retrieval with `room_context`, or load
+individual records and filtered pages as needed. Retrieval is not an inventory.
+Search failure is explicitly marked as partial/unavailable and never triggers a
+full task load; the shared retrieve fallback uses only bounded asset search.
+
 `search_tickets(query, limit, status, assignee, company_id)` provides internal
 staff-only conversation search through Search. Query is required; limit defaults
 to 6 and caps at 12. Exact parent filters apply before ranking; original requests,
@@ -284,7 +297,7 @@ Ask emits INFO timing logs correlated by `request_id` (also returned in the
 include prompts, answers or tool arguments.
 
 - `ask request timing`: total handler time and success/error status, including early failures.
-- `ask phase timing`: `prepare` (connection/context/session setup), `agent`
+- `ask phase timing`: `prepare` (connection/session setup), `retrieve` (initial evidence), `agent`
   (all model/tool rounds and retry waits), and `response` (sources, session update and response write).
 - `ask attempt timing`: each complete agent attempt, with its `attempt` number.
 - `ask model timing`: each provider Generate call, including failed calls and

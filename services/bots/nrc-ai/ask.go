@@ -290,24 +290,31 @@ func compactTurnSources(sources []askSource) []askTurnSource {
 	return compact
 }
 
-func buildContext(ctx context.Context, client *NRCClient, search *SearchClient, req askRequest, maxTokens int) (string, map[uint64]string) {
+func buildContext(ctx context.Context, client *NRCClient, search *SearchClient, req askRequest, maxTokens int) (string, map[uint64]string, map[uint64]string) {
 	if req.ConvID != protocol.WorkspaceDataConvID {
-		return errWorkspaceDataScope.Error(), nil
+		return errWorkspaceDataScope.Error(), nil, nil
 	}
 	response, err := retrieveRoom(ctx, client, search, protocol.RetrieveRequest{
 		Workspace: req.Workspace, ConvID: protocol.WorkspaceDataConvID, Query: req.Question,
-		TopN: 12, Depth: 1, Direction: "both", PayloadMode: protocol.RetrievePayloadAll,
+		TopN: retrieveDefaultTopN, Depth: 1, Direction: "both", PayloadMode: protocol.RetrievePayloadTop, PayloadTop: retrieveDefaultPayloadTop,
 		MaxPayloadBytes: retrieveContextPayloadBudget(maxTokens), PathMode: protocol.RetrievePathsBest,
 	})
-	if err == nil {
-		return formatRetrieveContext(response, maxTokens)
+	if err != nil {
+		slog.Warn("ask retrieval unavailable", "error", err)
+		return "Workspace retrieval unavailable. This is not evidence that no matching records exist. Use targeted read/search tools as needed and disclose missing evidence.", nil, nil
 	}
-	slog.Warn("fused retrieval failed; using legacy context fallback", "error", err)
-	return buildLegacyContext(ctx, client, search, req, maxTokens)
+	taskTitles := make(map[uint64]string)
+	for _, result := range response.Results {
+		if result.Type == protocol.SearchEntityTask {
+			taskTitles[result.ID] = result.Title
+		}
+	}
+	text, assetTitles := formatRetrieveContext(response, maxTokens)
+	return text, assetTitles, taskTitles
 }
 
 func retrieveContextPayloadBudget(maxTokens int) int {
-	return min(maxTokens, retrieveMaxPayloadBytes/4) * 4
+	return min(maxTokens, retrieveDefaultMaxPayloadBytes/4) * 4
 }
 
 func buildLegacyContext(ctx context.Context, client *NRCClient, search *SearchClient, req askRequest, maxTokens int) (string, map[uint64]string) {
@@ -553,6 +560,13 @@ func formatRetrieveContext(response protocol.RetrieveResponse, maxTokens int) (s
 	assetSourceTitles := make(map[uint64]string)
 	var sb strings.Builder
 	sb.WriteString("== Fused Workspace Retrieval ==\n")
+	// Preserve degraded-search evidence even for empty results or a full payload budget.
+	if len(response.Warnings) > 0 {
+		sb.WriteString("Retrieval warnings: " + strings.Join(response.Warnings, "; ") + "\n")
+	}
+	if len(response.Results) == 0 {
+		sb.WriteString("No matching context retrieved; this is not a complete workspace inventory.\n")
+	}
 	for _, result := range response.Results {
 		assetLabel := "Asset"
 		if result.Metadata != nil && result.Metadata.AssetType != 0 {
@@ -581,6 +595,7 @@ func formatRetrieveContext(response protocol.RetrieveResponse, maxTokens int) (s
 		}
 		line := fmt.Sprintf("%s (%s) %s\n", entityLabel, meta, content)
 		if sb.Len()+len(line) > maxChars {
+			sb.WriteString("Context display budget reached; load missing records with targeted tools.\n")
 			break
 		}
 		sb.WriteString(line)
@@ -611,15 +626,6 @@ func formatRetrieveContext(response protocol.RetrieveResponse, maxTokens int) (s
 		}
 	}
 
-	if len(response.Warnings) > 0 && sb.Len() < maxChars {
-		line := "\nRetrieval warnings: " + strings.Join(response.Warnings, "; ") + "\n"
-		if sb.Len()+len(line) <= maxChars {
-			sb.WriteString(line)
-		}
-	}
-	if len(response.Results) == 0 {
-		return "No context available for this workspace.", assetSourceTitles
-	}
 	return sb.String(), assetSourceTitles
 }
 

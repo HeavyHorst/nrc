@@ -91,11 +91,18 @@ func TestFormatRetrievePathOrientsMixedDirectionsFromAnchor(t *testing.T) {
 }
 
 func TestRetrieveContextPayloadBudgetCapsLargeContexts(t *testing.T) {
-	if got := retrieveContextPayloadBudget(300_000); got != retrieveMaxPayloadBytes {
-		t.Fatalf("large context payload budget = %d, want %d", got, retrieveMaxPayloadBytes)
+	if got := retrieveContextPayloadBudget(300_000); got != 30_000 {
+		t.Fatalf("large context payload budget = %d, want 30000", got)
 	}
-	if got := retrieveContextPayloadBudget(8_000); got != 32_000 {
-		t.Fatalf("ordinary context payload budget = %d, want 32000", got)
+	if got := retrieveContextPayloadBudget(4_000); got != 16_000 {
+		t.Fatalf("small context payload budget = %d, want 16000", got)
+	}
+}
+
+func TestRetrieveContextPreservesWarningsWithoutResults(t *testing.T) {
+	text, _ := formatRetrieveContext(protocol.RetrieveResponse{Warnings: []string{"search unavailable; results are partial"}}, 1000)
+	if !strings.Contains(text, "search unavailable; results are partial") || !strings.Contains(text, "not a complete workspace inventory") {
+		t.Fatalf("lost degraded retrieval evidence: %s", text)
 	}
 }
 

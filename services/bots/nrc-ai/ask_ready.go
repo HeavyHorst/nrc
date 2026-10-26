@@ -1,13 +1,11 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 )
 
 type askReadyRequest struct {
@@ -55,31 +53,16 @@ func handleAskReady(wm *WorkspaceManager) http.HandlerFunc {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-		defer cancel()
+		if req.ContextConvID != 0 {
+			http.Error(w, `{"error":"context_conv_id must be 0 (workspace scope)"}`, http.StatusBadRequest)
+			return
+		}
 
 		client, err := wm.GetOrCreateClient(req.Workspace)
 		if err != nil {
 			slog.Error("failed to get NRC client for ask ready", "workspace", req.Workspace, "error", err)
 			http.Error(w, `{"error":"failed to connect to workspace"}`, http.StatusInternalServerError)
 			return
-		}
-
-		subscribedContext := req.ContextConvID == 0
-		if req.ContextConvID != 0 {
-			subscribedContext = client.IsSubscribed(req.ContextConvID)
-			if !subscribedContext {
-				if err := client.SubscribeRoom(req.ContextConvID); err != nil {
-					slog.Warn("failed to subscribe context conversation during ask ready", "workspace", req.Workspace, "conv_id", req.ContextConvID, "error", err)
-					http.Error(w, `{"error":"failed to subscribe context conversation"}`, http.StatusInternalServerError)
-					return
-				}
-				subscribedContext = true
-
-				if err := client.WaitForTasks(ctx, req.ContextConvID); err != nil {
-					slog.Warn("ask ready wait for tasks failed", "workspace", req.Workspace, "conv_id", req.ContextConvID, "error", err)
-				}
-			}
 		}
 
 		aiUsername := strings.TrimSpace(client.nickname)
@@ -92,7 +75,7 @@ func handleAskReady(wm *WorkspaceManager) http.HandlerFunc {
 		json.NewEncoder(w).Encode(askReadyResponse{
 			OK:                true,
 			AIUsername:        aiUsername,
-			SubscribedContext: subscribedContext,
+			SubscribedContext: true,
 		})
 	}
 }

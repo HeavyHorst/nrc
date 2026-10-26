@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 	"unicode/utf8"
 
 	protocol "github.com/heavyhorst/nrc/protocol-go"
@@ -30,10 +29,6 @@ type retrievalSearch interface {
 }
 
 type retrievalClient interface {
-	IsSubscribed(uint64) bool
-	SubscribeRoom(uint64) error
-	WaitForTasks(context.Context, uint64) error
-	GetTasks(uint64) []protocol.Task
 	GetGraphRank(context.Context, uint64, []protocol.GraphRankEntity, []protocol.GraphRankEntity, uint8, uint16, uint8, uint8) (protocol.GraphRankResult, error)
 	GetAsset(context.Context, uint64, uint64) (protocol.Asset, error)
 }
@@ -163,19 +158,11 @@ func retrieveRoom(ctx context.Context, client retrievalClient, search retrievalS
 	})
 	if searchErr != nil {
 		response.Stale = true
-		response.Warnings = append(response.Warnings, "typed search unavailable; using asset search and loaded-task fallback")
-		if !client.IsSubscribed(request.ConvID) {
-			if err := client.SubscribeRoom(request.ConvID); err != nil {
-				response.Warnings = append(response.Warnings, "room subscription unavailable; loaded-task fallback may be incomplete")
-			} else {
-				waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-				if err := client.WaitForTasks(waitCtx, request.ConvID); err != nil {
-					response.Warnings = append(response.Warnings, "task cache did not become ready; loaded-task fallback may be incomplete")
-				}
-				cancel()
-			}
+		response.Warnings = append(response.Warnings, "typed search unavailable; results are partial: task search omitted, using bounded asset search fallback")
+		searchResponse.Results, searchErr = fallbackRetrieveSearch(ctx, search, request, searchLimit)
+		if searchErr != nil {
+			response.Warnings = append(response.Warnings, "asset search fallback unavailable; empty results do not imply no matching records")
 		}
-		searchResponse.Results = fallbackRetrieveSearch(ctx, client, search, request, searchLimit)
 	} else if searchResponse.Stale {
 		response.Stale = true
 		response.Warnings = append(response.Warnings, "search index reports stale results")
@@ -278,17 +265,12 @@ func retrieveRoom(ctx context.Context, client retrievalClient, search retrievalS
 	return response, nil
 }
 
-func fallbackRetrieveSearch(ctx context.Context, client retrievalClient, search retrievalSearch, request protocol.RetrieveRequest, limit int) []protocol.SearchResult {
-	assets, _ := search.Search(ctx, request.Workspace, request.Query, request.ConvID, limit, true)
-	results := append([]protocol.SearchResult(nil), assets...)
-	tasks := rankTasksForContext(client.GetTasks(request.ConvID), classifyAskIntent(request.Query), request.Query)
-	for _, task := range tasks {
-		if len(results) >= limit {
-			break
-		}
-		results = append(results, searchResultFromTask(request.Workspace, request.ConvID, task))
+func fallbackRetrieveSearch(ctx context.Context, search retrievalSearch, request protocol.RetrieveRequest, limit int) ([]protocol.SearchResult, error) {
+	assets, err := search.Search(ctx, request.Workspace, request.Query, request.ConvID, limit, true)
+	if err != nil {
+		return nil, err
 	}
-	return results
+	return assets[:min(len(assets), limit)], nil
 }
 
 func normalizeRetrieveIdentity(result protocol.SearchResult, request protocol.RetrieveRequest) protocol.SearchEntityIdentity {
@@ -390,11 +372,6 @@ func selectRetrieveCandidates(candidates map[retrieveEntityKey]*retrieveCandidat
 }
 
 func hydrateRetrieveCandidates(ctx context.Context, client retrievalClient, search retrievalSearch, request protocol.RetrieveRequest, candidates []*retrieveCandidate, response *protocol.RetrieveResponse) {
-	tasks := client.GetTasks(request.ConvID)
-	taskByID := make(map[uint64]protocol.Task, len(tasks))
-	for _, task := range tasks {
-		taskByID[task.ID] = task
-	}
 	missingTaskIDs := make(protocol.SearchIDs, 0)
 	assetCandidates := make([]*retrieveCandidate, 0)
 	for _, candidate := range candidates {
@@ -403,11 +380,7 @@ func hydrateRetrieveCandidates(ctx context.Context, client retrievalClient, sear
 		}
 		switch candidate.entity.EntityType {
 		case protocol.SearchEntityTask:
-			if task, ok := taskByID[candidate.entity.EntityID]; ok {
-				hydrateRetrieveTask(candidate, task)
-			} else {
-				missingTaskIDs = append(missingTaskIDs, candidate.entity.EntityID)
-			}
+			missingTaskIDs = append(missingTaskIDs, candidate.entity.EntityID)
 		case protocol.SearchEntityAsset:
 			assetCandidates = append(assetCandidates, candidate)
 		}
@@ -419,17 +392,34 @@ func hydrateRetrieveCandidates(ctx context.Context, client retrievalClient, sear
 			Filters: &protocol.SearchFilters{EntityTypes: []protocol.SearchEntityType{protocol.SearchEntityTask}, Task: &protocol.SearchTaskFilters{TaskIDs: missingTaskIDs}},
 		})
 		if err != nil {
-			response.Warnings = append(response.Warnings, "some graph-linked tasks could not be hydrated")
+			response.Stale = true
+			response.Warnings = append(response.Warnings, "results are partial: some tasks could not be hydrated by ID")
 		} else {
+			if result.Stale {
+				response.Stale = true
+				response.Warnings = append(response.Warnings, "task hydration search index reports stale results")
+			}
 			byID := make(map[uint64]protocol.SearchResult, len(result.Results))
 			for _, item := range result.Results {
-				byID[item.Entity.EntityID] = item
+				if item.Entity.EntityType == protocol.SearchEntityTask {
+					byID[item.Entity.EntityID] = item
+				}
 			}
 			for _, candidate := range candidates {
+				if candidate.preview != "" || candidate.result.Payload != "" {
+					continue
+				}
 				if item, ok := byID[candidate.entity.EntityID]; ok && candidate.entity.EntityType == protocol.SearchEntityTask {
 					candidate.result.Metadata = retrieveMetadata(item.Metadata)
 					candidate.preview = item.Preview
 					candidate.result.Payload = item.Payload
+				}
+			}
+			for _, id := range missingTaskIDs {
+				if item, ok := byID[id]; !ok || (item.Preview == "" && item.Payload == "") {
+					response.Stale = true
+					response.Warnings = append(response.Warnings, "results are partial: some tasks were missing from hydration search")
+					break
 				}
 			}
 		}

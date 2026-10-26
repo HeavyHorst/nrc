@@ -172,14 +172,9 @@ func handleAskApply(wm *WorkspaceManager, store *AgentSessionStore) http.Handler
 			}
 		}
 
-		if !client.IsSubscribed(sessionSnapshot.ContextConvID) {
-			if err := client.SubscribeRoom(sessionSnapshot.ContextConvID); err != nil {
-				http.Error(w, `{"error":"failed to subscribe to context room"}`, http.StatusInternalServerError)
-				return
-			}
-			if err := client.WaitForTasks(ctx, sessionSnapshot.ContextConvID); err != nil {
-				slog.Warn("ask apply wait for tasks failed", "conv_id", sessionSnapshot.ContextConvID, "error", err)
-			}
+		if err := client.SubscribeConversation(sessionSnapshot.ContextConvID); err != nil {
+			http.Error(w, `{"error":"failed to subscribe to context room"}`, http.StatusInternalServerError)
+			return
 		}
 
 		_, _, toApply, alreadyApplied, earlyFailures, err := store.prepareApply(req.AgentSessionID, planID, req.ActionIDs)
@@ -620,12 +615,8 @@ func resolveActionEndpoint(typeName string, id uint64, actionID string, plan Act
 func precheckActionEndpointExists(ctx context.Context, client *NRCClient, convID uint64, targetType uint16, id uint64) error {
 	switch targetType {
 	case protocol.TargetTypeTask:
-		for _, task := range client.GetTasks(convID) {
-			if task.ID == id {
-				return nil
-			}
-		}
-		return fmt.Errorf("task %d not found", id)
+		_, err := client.GetTask(ctx, convID, id)
+		return err
 	case protocol.TargetTypeAsset:
 		asset, err := client.GetAsset(ctx, convID, id)
 		if err != nil {

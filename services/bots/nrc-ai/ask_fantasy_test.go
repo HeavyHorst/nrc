@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -118,7 +121,7 @@ func TestListTasksToolPaginationAndMetadata(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	wm := &WorkspaceManager{ctx: ctx, clients: map[string]*NRCClient{"ws": c}}
-	listing, err := newADKListTasksTool(wm)
+	listing, err := newADKListTasksTool(wm, newADKAssetSourceCache(time.Minute, 10))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,6 +381,223 @@ func TestAskHandlerRegistersListingTools(t *testing.T) {
 	handler, err := handleAskFantasy(nil, nil, nil, Config{LLMProvider: "openai", LLMModel: "gpt-5.6", LLMAPIKey: "test-key"}, 4096, newAgentSessionStore(time.Minute, 1))
 	if err != nil || handler == nil {
 		t.Fatalf("tool registration failed: %v", err)
+	}
+}
+
+func TestAskStartsWithRetrieveAndLoadsOnlyRequestedTask(t *testing.T) {
+	for _, scenario := range []string{"initial", "follow-up", "search-unavailable", "graph", "list_tasks", "search_tasks"} {
+		t.Run(scenario, func(t *testing.T) {
+			client, requests := connectedListingTestClient(t)
+			if scenario == "graph" {
+				client.protocolVersion.Store(graphRankProtocolVersion)
+			}
+			answer := "See #7."
+			if scenario == "list_tasks" || scenario == "search_tasks" {
+				answer = "See #11."
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			wm := &WorkspaceManager{ctx: ctx, clients: map[string]*NRCClient{"ws": client}}
+			store := newAgentSessionStore(time.Minute, 10)
+			session, _ := store.getOrCreate("ws", 0, 0, "", agentModeAsk)
+			question := "What is the rollout status?"
+			if scenario == "follow-up" {
+				store.appendTurn(session.ID, AgentTurn{UserText: question, Answer: "Release task #7 covers the rollout."})
+				question = "And who owns it?"
+			}
+			var searchCalls atomic.Int32
+			searchServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				searchCalls.Add(1)
+				if scenario == "search-unavailable" {
+					http.Error(w, "offline", http.StatusServiceUnavailable)
+					return
+				}
+				var request protocol.SearchRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				w.Header().Set(protocol.SearchAPIVersionHeader, protocol.SearchAPIVersion)
+				if request.Filters != nil && request.Filters.Task != nil {
+					id, title, payload := uint64(11), "Discovered task", "Tool search evidence"
+					if scenario == "graph" {
+						id, title, payload = 70, "Graph task", "Graph-only task evidence"
+						if len(request.Filters.Task.TaskIDs) != 1 || request.Filters.Task.TaskIDs[0] != 70 {
+							t.Errorf("unexpected graph hydration query: %+v", request)
+						}
+					}
+					_ = json.NewEncoder(w).Encode(protocol.SearchResponse{Results: []protocol.SearchResult{{Entity: protocol.SearchEntityIdentity{Workspace: "ws", EntityType: protocol.SearchEntityTask, EntityID: id}, Preview: title, Payload: payload, Metadata: protocol.SearchMetadata{Task: &protocol.SearchTaskMetadata{}}}}})
+					return
+				}
+				if request.TopN != 10 || !strings.Contains(request.Query, question) {
+					t.Errorf("wrong initial retrieval: %+v", request)
+				}
+				if scenario == "follow-up" && !strings.Contains(request.Query, "Release task #7") {
+					t.Error("follow-up lost its referent")
+				}
+				w.Header().Set(protocol.SearchAPIVersionHeader, protocol.SearchAPIVersion)
+				var results []protocol.SearchResult
+				for id := uint64(7); id <= 10; id++ {
+					results = append(results, protocol.SearchResult{Entity: protocol.SearchEntityIdentity{Workspace: "ws", ConvID: 0, EntityType: protocol.SearchEntityTask, EntityID: id},
+						Preview: fmt.Sprintf("Release task %d", id), Payload: strings.Repeat("evidence ", 100) + fmt.Sprintf("END %d", id), Metadata: protocol.SearchMetadata{Task: &protocol.SearchTaskMetadata{}}})
+				}
+				_ = json.NewEncoder(w).Encode(protocol.SearchResponse{Results: results})
+			}))
+			defer searchServer.Close()
+			var modelCalls atomic.Int32
+			modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				call := modelCalls.Add(1)
+				var request struct {
+					Messages []struct {
+						Role    string
+						Content json.RawMessage
+					}
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				if searchCalls.Load() == 0 {
+					t.Error("model called before initial retrieval")
+				}
+				prompt := string(request.Messages[1].Content)
+				if !strings.Contains(prompt, "INITIAL WORKSPACE CONTEXT") {
+					t.Error("missing initial context")
+				}
+				if scenario == "graph" && (!strings.Contains(prompt, "Graph-only task evidence") || !strings.Contains(prompt, "Graph-only asset evidence") || strings.Contains(prompt, "graph ranking unavailable")) {
+					t.Error("successful graph hydration missing from first model context")
+				}
+				if scenario == "search-unavailable" {
+					if !strings.Contains(prompt, "results are partial") || !strings.Contains(prompt, "empty results do not imply") {
+						t.Error("lost retrieval failure warning")
+					}
+				} else if !strings.Contains(prompt, "END 7") || strings.Contains(prompt, "END 10") {
+					t.Error("initial context did not apply top-three payload policy")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if (scenario == "list_tasks" || scenario == "search_tasks") && call == 1 {
+					args := `{}`
+					if scenario == "search_tasks" {
+						args = `{"query":"Discovered","limit":8,"statuses":[],"assignees":[],"projects":[],"priorities":[],"colors":[],"created_by":[],"completed_by":[],"task_ids":[],"external_refs":[],"blocked_by":[]}`
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"id": "discover", "type": "function", "function": map[string]any{"name": scenario, "arguments": args}}}}, "finish_reason": "tool_calls"}}})
+					return
+				}
+				if scenario == "follow-up" && call == 1 {
+					fmt.Fprint(w, `{"choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"read-7","type":"function","function":{"name":"get_task","arguments":"{\"task_id\":7}"}}]},"finish_reason":"tool_calls"}]}`)
+					return
+				}
+				if scenario == "follow-up" && !strings.Contains(string(request.Messages[len(request.Messages)-1].Content), "fresh description") {
+					t.Error("targeted task result did not reach model")
+				}
+				fmt.Fprintf(w, `{"choices":[{"index":0,"message":{"role":"assistant","content":%q},"finish_reason":"stop"}]}`, answer)
+			}))
+			defer modelServer.Close()
+			handler, err := handleAskFantasy(wm, NewSearchClient(searchServer.URL), nil, Config{LLMProvider: "openai-compat", LLMModel: "fixture", LLMAPIKey: "test", LLMBaseURL: modelServer.URL, LLMMaxOutputTokens: 1024}, 128000, store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := json.Marshal(askRequest{Workspace: "ws", Question: question, SessionID: session.ID})
+			recorder := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				handler(recorder, httptest.NewRequest("POST", "/ask", bytes.NewReader(body)).WithContext(ctx))
+			}()
+			reads, graphReads, assetReads, pageReads := 0, 0, 0, 0
+		loop:
+			for {
+				select {
+				case msg := <-requests:
+					if scenario == "graph" && msg.Opcode == protocol.C_GraphRank {
+						graphReads++
+						var b bytes.Buffer
+						write := func(v any) { _ = binary.Write(&b, binary.BigEndian, v) }
+						write(uint64(0))
+						write(uint8(0))
+						write(uint16(2))
+						for _, entity := range []protocol.GraphRankEntity{{Type: entityTypeTask, ID: 70}, {Type: entityTypeAsset, ID: 71}} {
+							write(entity.Type)
+							write(entity.ID)
+							write(float64(100))
+							write(uint8(0))
+						}
+						write(uint16(0))
+						write(binary.BigEndian.Uint32(msg.Data[len(msg.Data)-4:]))
+						client.handleGraphRankResult(b.Bytes())
+						continue
+					}
+					if scenario == "graph" && msg.Opcode == protocol.C_GetAsset {
+						assetReads++
+						if binary.BigEndian.Uint64(msg.Data[8:]) != 71 {
+							t.Errorf("unexpected asset request: %x", msg.Data)
+						}
+						var b bytes.Buffer
+						write := func(v any) { _ = binary.Write(&b, binary.BigEndian, v) }
+						write(uint16(protocol.AssetTypeNote))
+						write(uint64(71))
+						write(uint16(0))
+						write(uint64(0))
+						write(uint16(0))
+						write(int64(1))
+						write(int64(2))
+						write(uint64(0))
+						write(uint8(0))
+						write(uint32(len("Graph-only asset evidence")))
+						for _, text := range []string{`{"title":"Graph note"}`, "Graph-only asset evidence"} {
+							write(uint16(len(text)))
+							b.WriteString(text)
+						}
+						write(uint16(0))
+						client.handleAssetFull(b.Bytes())
+						continue
+					}
+					if scenario == "list_tasks" && msg.Opcode == protocol.C_ListTasksPaged {
+						pageReads++
+						client.settleTaskPage(binary.BigEndian.Uint32(msg.Data[len(msg.Data)-4:]), &protocol.TaskListPage{Success: true, TotalCount: 1, Tasks: []*protocol.Task{{ID: 11, Title: "Discovered task"}}}, nil)
+						continue
+					}
+					if msg.Opcode != protocol.C_GetTask {
+						t.Errorf("unexpected NRC request (must not load task snapshot): %d", msg.Opcode)
+						cancel()
+						continue
+					}
+					reads++
+					id := binary.BigEndian.Uint64(msg.Data[8:])
+					if id != 7 {
+						t.Errorf("requested task %d, want 7", id)
+					}
+					client.handleDataRead(protocol.S_TaskFull, dataTaskPayload(binary.BigEndian.Uint32(msg.Data[16:]), id))
+				case <-done:
+					break loop
+				}
+			}
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("ask failed: %d %s", recorder.Code, recorder.Body.String())
+			}
+			var response askResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil || response.Answer != answer {
+				t.Fatalf("missing answer: %s (%v)", recorder.Body.String(), err)
+			}
+			if scenario == "follow-up" {
+				if reads != 1 || modelCalls.Load() != 2 {
+					t.Fatalf("targeted reads=%d model calls=%d", reads, modelCalls.Load())
+				}
+			} else if scenario == "list_tasks" || scenario == "search_tasks" {
+				if reads != 0 || modelCalls.Load() != 2 || len(response.Sources) != 1 || response.Sources[0].ID != 11 || response.Sources[0].Title != "Discovered task" {
+					t.Fatalf("discovered title lost without get_task: reads=%d sources=%+v", reads, response.Sources)
+				}
+				if scenario == "list_tasks" && pageReads != 1 {
+					t.Fatalf("page reads=%d", pageReads)
+				}
+			} else if reads != 0 || modelCalls.Load() != 1 {
+				t.Fatalf("unexpected bootstrap work: reads=%d model calls=%d", reads, modelCalls.Load())
+			}
+			if scenario == "graph" && (graphReads != 1 || assetReads != 1) {
+				t.Fatalf("graph reads=%d asset reads=%d", graphReads, assetReads)
+			}
+			if answer == "See #7." && scenario != "search-unavailable" && (len(response.Sources) != 1 || response.Sources[0].ID != 7 || response.Sources[0].Title == "") {
+				t.Fatalf("lost task citation without snapshot: %+v", response.Sources)
+			}
+		})
 	}
 }
 

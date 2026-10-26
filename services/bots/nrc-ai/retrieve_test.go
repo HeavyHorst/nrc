@@ -11,44 +11,49 @@ import (
 )
 
 type retrieveSearchStub struct {
-	response protocol.SearchResponse
-	err      error
-	requests []protocol.SearchRequest
+	response          protocol.SearchResponse
+	err               error
+	requests          []protocol.SearchRequest
+	assetResults      []SearchResult
+	assetErr          error
+	assetLimits       []int
+	hydrationResponse protocol.SearchResponse
+	hydrationErr      error
 }
 
-func (s *retrieveSearchStub) Search(_ context.Context, _, _ string, _ uint64, _ int, _ bool, _ ...uint16) ([]SearchResult, error) {
-	return s.response.Results, s.err
+func (s *retrieveSearchStub) Search(_ context.Context, _, _ string, _ uint64, limit int, _ bool, _ ...uint16) ([]SearchResult, error) {
+	s.assetLimits = append(s.assetLimits, limit)
+	return s.assetResults, s.assetErr
 }
 
 func (s *retrieveSearchStub) SearchEntities(_ context.Context, request protocol.SearchRequest) (protocol.SearchResponse, error) {
 	s.requests = append(s.requests, request)
+	if request.Filters != nil && request.Filters.Task != nil {
+		return s.hydrationResponse, s.hydrationErr
+	}
 	return s.response, s.err
 }
 
 type retrieveClientStub struct {
-	subscribed      bool
-	subscribeErr    error
-	tasks           []protocol.Task
 	graphResult     protocol.GraphRankResult
 	graphErr        error
 	assets          map[uint64]protocol.Asset
 	graphCalls      int
 	graphAnchors    []protocol.GraphRankEntity
 	graphCandidates []protocol.GraphRankEntity
-	subscribeCalls  int
 }
 
-func (c *retrieveClientStub) IsSubscribed(uint64) bool { return c.subscribed }
+// Snapshot operations must never be used, including on degraded retrieval paths.
+func (c *retrieveClientStub) IsSubscribed(uint64) bool { panic("unexpected subscription check") }
 func (c *retrieveClientStub) SubscribeRoom(uint64) error {
-	c.subscribeCalls++
-	if c.subscribeErr != nil {
-		return c.subscribeErr
-	}
-	c.subscribed = true
-	return nil
+	panic("unexpected room subscription")
 }
-func (c *retrieveClientStub) WaitForTasks(context.Context, uint64) error { return nil }
-func (c *retrieveClientStub) GetTasks(uint64) []protocol.Task            { return c.tasks }
+func (c *retrieveClientStub) WaitForTasks(context.Context, uint64) error {
+	panic("unexpected task snapshot wait")
+}
+func (c *retrieveClientStub) GetTasks(uint64) []protocol.Task {
+	panic("unexpected global task read")
+}
 func (c *retrieveClientStub) GetGraphRank(_ context.Context, _ uint64, anchors, candidates []protocol.GraphRankEntity, _ uint8, _ uint16, _ uint8, _ uint8) (protocol.GraphRankResult, error) {
 	c.graphCalls++
 	c.graphAnchors = append([]protocol.GraphRankEntity(nil), anchors...)
@@ -70,7 +75,6 @@ func TestRetrieveRoomAlwaysExpandsAndHydratesGraphEvidence(t *testing.T) {
 	}}}}
 	edge := protocol.Edge{EdgeID: 70, ConvID: protocol.WorkspaceDataConvID, SourceType: entityTypeAsset, SourceID: 1, TargetType: entityTypeAsset, TargetID: 3, Relation: 1, CreatedBy: "alice"}
 	client := &retrieveClientStub{
-		subscribed: true,
 		graphResult: protocol.GraphRankResult{
 			Entries: []protocol.GraphRankEntry{{Entity: protocol.GraphRankEntity{Type: entityTypeAsset, ID: 1}, Score: 1}, {Entity: protocol.GraphRankEntity{Type: entityTypeAsset, ID: 3}, Score: 0.5, Paths: []protocol.GraphRankPath{{AnchorIndex: 0, Depth: 1, EdgeIDs: []uint64{70}}}}},
 			Edges:   []protocol.Edge{edge},
@@ -113,7 +117,7 @@ func TestRetrieveRoomNoGraphProvidesSearchOnlyAblation(t *testing.T) {
 	search := &retrieveSearchStub{response: protocol.SearchResponse{Results: []protocol.SearchResult{{
 		Entity: protocol.SearchEntityIdentity{EntityType: protocol.SearchEntityTask, EntityID: 2}, Preview: "task",
 	}}}}
-	client := &retrieveClientStub{subscribed: true}
+	client := &retrieveClientStub{}
 	response, err := retrieveRoom(context.Background(), client, search, protocol.RetrieveRequest{
 		Workspace: "ws", ConvID: protocol.WorkspaceDataConvID, Query: "task", NoGraph: true,
 	})
@@ -122,9 +126,6 @@ func TestRetrieveRoomNoGraphProvidesSearchOnlyAblation(t *testing.T) {
 	}
 	if response.GraphEnabled || response.GraphContributed || client.graphCalls != 0 || len(response.Results[0].Evidence) != 0 {
 		t.Fatalf("search-only ablation used graph: %#v calls=%d", response, client.graphCalls)
-	}
-	if client.subscribeCalls != 0 {
-		t.Fatalf("successful typed search subscribed to room %d times, want 0", client.subscribeCalls)
 	}
 }
 
@@ -146,17 +147,107 @@ func TestRetrieveRoomReportsServerGraphRankFailure(t *testing.T) {
 	}
 }
 
-func TestRetrieveRoomDegradesWhenFallbackSubscriptionFails(t *testing.T) {
-	search := &retrieveSearchStub{err: errors.New("search unavailable")}
-	client := &retrieveClientStub{subscribeErr: errors.New("not connected")}
+func TestRetrieveRoomReportsBothSearchFailuresWithoutSnapshot(t *testing.T) {
+	search := &retrieveSearchStub{err: errors.New("search unavailable"), assetErr: errors.New("asset search unavailable")}
+	client := &retrieveClientStub{}
 	response, err := retrieveRoom(context.Background(), client, search, protocol.RetrieveRequest{
 		Workspace: "ws", ConvID: protocol.WorkspaceDataConvID, Query: "task", NoGraph: true,
 	})
 	if err != nil {
 		t.Fatalf("retrieve should degrade instead of failing: %v", err)
 	}
-	if client.subscribeCalls != 1 || len(response.Warnings) < 2 {
-		t.Fatalf("missing degraded fallback warnings: calls=%d response=%#v", client.subscribeCalls, response)
+	if !response.Stale || len(response.Results) != 0 || len(response.Warnings) != 2 ||
+		!strings.Contains(response.Warnings[0], "results are partial: task search omitted") ||
+		!strings.Contains(response.Warnings[1], "empty results do not imply no matching records") {
+		t.Fatalf("missing degraded fallback warnings: %#v", response)
+	}
+}
+
+func TestRetrieveRoomKeepsBoundedAssetFallbackWithoutSnapshot(t *testing.T) {
+	search := &retrieveSearchStub{err: errors.New("typed search unavailable")}
+	for i := 0; i < retrieveMaxTopN+10; i++ {
+		search.assetResults = append(search.assetResults, protocol.SearchResult{AssetID: uint64(i + 1), Preview: "fallback note", Payload: "evidence"})
+	}
+	response, err := retrieveRoom(context.Background(), &retrieveClientStub{}, search, protocol.RetrieveRequest{
+		Workspace: "ws", Query: "note", TopN: 1000, NoGraph: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(search.assetLimits) != 1 || search.assetLimits[0] != retrieveMaxTopN || len(response.Results) != retrieveMaxTopN {
+		t.Fatalf("fallback not bounded: limits=%v results=%d", search.assetLimits, len(response.Results))
+	}
+	if !response.Stale || len(response.Warnings) != 1 || !strings.Contains(response.Warnings[0], "results are partial: task search omitted") {
+		t.Fatalf("fallback did not disclose missing task search: %#v", response)
+	}
+	for _, result := range response.Results {
+		if result.Type != protocol.SearchEntityAsset || result.Title != "fallback note" {
+			t.Fatalf("lost fallback evidence: %#v", result)
+		}
+	}
+}
+
+func TestRetrieveRoomHydratesOnlyBoundedTaskIDs(t *testing.T) {
+	search := &retrieveSearchStub{response: protocol.SearchResponse{Results: []protocol.SearchResult{
+		{Entity: protocol.SearchEntityIdentity{EntityType: protocol.SearchEntityAsset, EntityID: 1}, Preview: "anchor"},
+	}}}
+	client := &retrieveClientStub{}
+	for i := 0; i < retrieveMaxHydrate+10; i++ {
+		id := uint64(i + 2)
+		client.graphResult.Entries = append(client.graphResult.Entries, protocol.GraphRankEntry{Entity: protocol.GraphRankEntity{Type: entityTypeTask, ID: id}, Score: 1})
+		search.hydrationResponse.Results = append(search.hydrationResponse.Results, protocol.SearchResult{
+			Entity: protocol.SearchEntityIdentity{EntityType: protocol.SearchEntityTask, EntityID: id}, Preview: "targeted task", Payload: "targeted description",
+		})
+	}
+	response, err := retrieveRoom(context.Background(), client, search, protocol.RetrieveRequest{
+		Workspace: "ws", Query: "task", TopN: retrieveMaxTopN, PayloadMode: protocol.RetrievePayloadAll,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(search.requests) != 2 {
+		t.Fatalf("expected initial search and one targeted hydration, got %#v", search.requests)
+	}
+	request := search.requests[1]
+	if request.Query != "" || request.Filters == nil || request.Filters.Task == nil || len(request.Filters.Task.TaskIDs) == 0 ||
+		len(request.Filters.Task.TaskIDs) > retrieveMaxHydrate || request.TopN != len(request.Filters.Task.TaskIDs) || !request.IncludePayload {
+		t.Fatalf("hydration not bounded by selected IDs: %#v", request)
+	}
+	if response.Stale || len(response.Warnings) != 0 || !response.Truncation.Results {
+		t.Fatalf("unexpected hydration response: %#v", response)
+	}
+	for _, result := range response.Results {
+		if result.Type == protocol.SearchEntityTask && (result.Title != "targeted task" || result.Payload != "targeted description") {
+			t.Fatalf("task was not hydrated: %#v", result)
+		}
+	}
+}
+
+func TestRetrieveRoomReportsDegradedTaskHydration(t *testing.T) {
+	for _, scenario := range []string{"error", "missing", "stale"} {
+		t.Run(scenario, func(t *testing.T) {
+			search := &retrieveSearchStub{response: protocol.SearchResponse{Results: []protocol.SearchResult{
+				{Entity: protocol.SearchEntityIdentity{EntityType: protocol.SearchEntityTask, EntityID: 2}},
+			}}}
+			switch scenario {
+			case "error":
+				search.hydrationErr = errors.New("unavailable")
+			case "stale":
+				search.hydrationResponse = protocol.SearchResponse{Stale: true, Results: []protocol.SearchResult{
+					{Entity: protocol.SearchEntityIdentity{EntityType: protocol.SearchEntityTask, EntityID: 2}, Preview: "task"},
+				}}
+			}
+			response, err := retrieveRoom(context.Background(), &retrieveClientStub{}, search, protocol.RetrieveRequest{Workspace: "ws", Query: "task", NoGraph: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !response.Stale || len(response.Warnings) != 1 || len(response.Results) != 1 {
+				t.Fatalf("missing hydration degradation: %#v", response)
+			}
+			if scenario != "stale" && !strings.Contains(response.Warnings[0], "results are partial") {
+				t.Fatalf("incomplete hydration not disclosed: %v", response.Warnings)
+			}
+		})
 	}
 }
 
