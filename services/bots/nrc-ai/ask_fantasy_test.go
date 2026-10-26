@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,49 @@ import (
 
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
+
+type timingTestModel struct {
+	fantasy.LanguageModel
+	response *fantasy.Response
+	err      error
+}
+
+func (m timingTestModel) Generate(context.Context, fantasy.Call) (*fantasy.Response, error) {
+	time.Sleep(15 * time.Millisecond)
+	return m.response, m.err
+}
+
+func TestAskModelTiming(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprint(failed), func(t *testing.T) {
+			var logs bytes.Buffer
+			ctx := context.WithValue(t.Context(), askTimingLoggerKey{}, slog.New(slog.NewJSONHandler(&logs, nil)).With("request_id", "request-17", "attempt", 2))
+			response := &fantasy.Response{Usage: fantasy.Usage{InputTokens: 31, OutputTokens: 19, ReasoningTokens: 7, CacheReadTokens: 11}}
+			var wantErr error
+			status := "ok"
+			if failed {
+				response, wantErr, status = nil, context.DeadlineExceeded, "error"
+			}
+			got, err := (timedAskModel{timingTestModel{response: response, err: wantErr}}).Generate(ctx, fantasy.Call{})
+			if got != response || err != wantErr {
+				t.Fatal("instrumentation changed the provider result")
+			}
+			var entry map[string]any
+			if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+				t.Fatal(err)
+			}
+			if entry["request_id"] != "request-17" || entry["attempt"] != float64(2) || entry["status"] != status || entry["duration_ms"] == nil {
+				t.Fatalf("missing timing/correlation: %v", entry)
+			}
+			if entry["duration_ms"].(float64) < 15 {
+				t.Fatalf("provider wait not measured: %v", entry)
+			}
+			if !failed && (entry["input_tokens"] != float64(31) || entry["output_tokens"] != float64(19) || entry["reasoning_tokens"] != float64(7) || entry["cache_read_tokens"] != float64(11)) {
+				t.Fatalf("incorrect provider usage: %v", entry)
+			}
+		})
+	}
+}
 
 type fantasyToolInfoTestTool struct {
 	declaration *genai.FunctionDeclaration

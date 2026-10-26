@@ -277,6 +277,28 @@ These are standalone defaults. Compose overrides service addresses and the nickn
 | `SOURCEBOT_API_KEY` | None | Optional `X-Sourcebot-Api-Key` credential |
 | `SOURCEBOT_BEARER_TOKEN` | None | Optional bearer credential |
 
+## Ask latency diagnostics
+
+Ask emits INFO timing logs correlated by `request_id` (also returned in the
+`X-NRC-Request-ID` response header), provider and model. New timing records do not
+include prompts, answers or tool arguments.
+
+- `ask request timing`: total handler time and success/error status, including early failures.
+- `ask phase timing`: `prepare` (connection/context/session setup), `agent`
+  (all model/tool rounds and retry waits), and `response` (sources, session update and response write).
+- `ask attempt timing`: each complete agent attempt, with its `attempt` number.
+- `ask model timing`: each provider Generate call, including failed calls and
+  provider retries; token counts include input, output, reasoning and cache reads.
+- `ask tool timing`: individual tool execution times with the same request and
+  attempt identifiers.
+
+Model time includes network and provider processing; it is not pure reasoning
+time. Zero reasoning tokens can mean the provider did not report them. Phase,
+attempt, model and tool times are nested, not additive. Parallel tool durations
+must not be summed as wall time. Agent time also includes retry backoff and
+orchestration. These measurements stop at the server response write, not browser
+rendering. Streaming is unchanged.
+
 ## Development
 
 Requires Go 1.27.0 or newer (Fantasy v0.45.2). No native libraries are required.

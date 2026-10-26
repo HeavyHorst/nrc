@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2058,7 +2059,7 @@ Sourcebot code research:
 	fantasyTools = append(fantasyTools, newTicketTools(wm, agentSessions)...)
 	fantasyTools = append(fantasyTools, newTicketGroupTools(wm, agentSessions)...)
 
-	askAgent := fantasy.NewAgent(fantasyModel,
+	askAgent := fantasy.NewAgent(timedAskModel{fantasyModel},
 		fantasy.WithSystemPrompt(askSystemPrompt),
 		fantasy.WithTools(fantasyTools...),
 		fantasy.WithStopConditions(fantasy.StepCountIs(10), fantasy.FinishReasonIs(fantasy.FinishReasonStop)),
@@ -2070,6 +2071,18 @@ Sourcebot code research:
 	)
 
 	return func(w http.ResponseWriter, rHTTP *http.Request) {
+		started := time.Now()
+		requestID := rand.Text()
+		logger := slog.Default().With("request_id", requestID, "provider", cfg.LLMProvider, "model", cfg.LLMModel)
+		w.Header().Set("X-NRC-Request-ID", requestID)
+		phase := "prepare"
+		phaseStarted := started
+		status := "error"
+		defer func() {
+			logger.Info("ask phase timing", "phase", phase, "duration_ms", time.Since(phaseStarted).Milliseconds())
+			logger.Info("ask request timing", "duration_ms", time.Since(started).Milliseconds(), "status", status,
+				"cancelled", rHTTP.Context().Err() != nil)
+		}()
 		var req askRequest
 		if err := json.NewDecoder(rHTTP.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -2093,7 +2106,7 @@ Sourcebot code research:
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(rHTTP.Context(), adkAskRequestTimeout)
+		ctx, cancel := context.WithTimeout(context.WithValue(rHTTP.Context(), askTimingLoggerKey{}, logger), adkAskRequestTimeout)
 		defer cancel()
 
 		client, err := wm.GetOrCreateClient(req.Workspace)
@@ -2162,6 +2175,8 @@ Sourcebot code research:
 		emitAskProgress(client, statusConvID, "RUNNING REASONING PASS ...")
 
 		modelPrompt := buildAgentModelInput(req, sessionSnapshot, activePlan)
+		logger.Info("ask phase timing", "phase", phase, "duration_ms", time.Since(phaseStarted).Milliseconds())
+		phase, phaseStarted = "agent", time.Now()
 		answerText, attempts, runErr := runFantasyAskWithRetry(runCtx, askAgent, modelPrompt)
 		if runErr != nil {
 			if ctx.Err() != nil {
@@ -2184,6 +2199,8 @@ Sourcebot code research:
 			return
 		}
 
+		logger.Info("ask phase timing", "phase", phase, "duration_ms", time.Since(phaseStarted).Milliseconds(), "attempts", attempts)
+		phase, phaseStarted = "response", time.Now()
 		answerText = strings.TrimSpace(answerText)
 		if answerText == "" {
 			answerText = "I couldn't produce a grounded answer for this question."
@@ -2240,7 +2257,9 @@ Sourcebot code research:
 		if err := json.NewEncoder(w).Encode(result); err != nil || ctx.Err() != nil {
 			agentSessions.reset(sessionSnapshot.ID)
 			slog.Info("discarded ask session after interrupted response", "session_id", sessionSnapshot.ID, "error", errors.Join(err, ctx.Err()))
+			return
 		}
+		status = "ok"
 	}, nil
 }
 
@@ -2477,7 +2496,11 @@ func runFantasyAskWithRetry(ctx context.Context, askAgent fantasy.Agent, prompt 
 			attemptCtx, attemptCancel = context.WithTimeout(ctx, attemptBudget)
 		}
 
+		logger := askTimingLogger(ctx).With("attempt", attempt)
+		attemptCtx = context.WithValue(attemptCtx, askTimingLoggerKey{}, logger)
+		started := time.Now()
 		result, err := askAgent.Generate(attemptCtx, fantasy.AgentCall{Prompt: prompt})
+		logger.Info("ask attempt timing", "duration_ms", time.Since(started).Milliseconds(), "failed", err != nil)
 		attemptCancel()
 		if err == nil {
 			if result == nil {
@@ -2496,7 +2519,7 @@ func runFantasyAskWithRetry(ctx context.Context, askAgent fantasy.Agent, prompt 
 			delay = adkAskRetryMaxDelay
 		}
 
-		slog.Warn("fantasy ask transient failure, retrying", "attempt", attempt, "max_attempts", adkAskRetryMaxAttempts, "delay", delay, "error", err)
+		logger.Warn("fantasy ask transient failure, retrying", "max_attempts", adkAskRetryMaxAttempts, "delay", delay, "error", err)
 
 		select {
 		case <-ctx.Done():
@@ -2634,6 +2657,7 @@ func recordToolTrace(ctx context.Context, toolName string, started time.Time, wo
 		collector.add(entry)
 	}
 	logToolTraceEntry(entry)
+	askTimingLogger(ctx).Info("ask tool timing", "tool", toolName, "duration_ms", entry.DurationMS, "status", entry.Status)
 
 	progressClient, _ := ctx.Value(askProgressClientKey{}).(*NRCClient)
 	progressConvID, _ := ctx.Value(askProgressConvIDKey{}).(uint64)

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"strings"
+	"time"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/anthropic"
@@ -22,6 +24,37 @@ import (
 )
 
 const fantasyAskAppName = "nrc-ai-ask"
+
+type askTimingLoggerKey struct{}
+
+func askTimingLogger(ctx context.Context) *slog.Logger {
+	if logger, ok := ctx.Value(askTimingLoggerKey{}).(*slog.Logger); ok {
+		return logger
+	}
+	return slog.Default()
+}
+
+// Measure provider calls rather than agent steps, which also include tool I/O.
+// Embedding preserves the model's streaming and metadata interfaces.
+type timedAskModel struct {
+	fantasy.LanguageModel
+}
+
+func (m timedAskModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	started := time.Now()
+	response, err := m.LanguageModel.Generate(ctx, call)
+	attrs := []any{"duration_ms", time.Since(started).Milliseconds(), "status", "ok"}
+	if err != nil {
+		attrs = []any{"duration_ms", time.Since(started).Milliseconds(), "status", "error"}
+	}
+	if response != nil {
+		attrs = append(attrs, "input_tokens", response.Usage.InputTokens,
+			"output_tokens", response.Usage.OutputTokens, "reasoning_tokens", response.Usage.ReasoningTokens,
+			"cache_read_tokens", response.Usage.CacheReadTokens, "finish_reason", response.FinishReason)
+	}
+	askTimingLogger(ctx).Info("ask model timing", attrs...)
+	return response, err
+}
 
 type adkRunnableTool interface {
 	tool.Tool
