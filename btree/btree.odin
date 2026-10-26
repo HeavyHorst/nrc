@@ -130,6 +130,13 @@ init_ordered_projection :: proc(
 ) {
 	#assert(Order.Item == T)
 	#assert(Order.Projection == Projection)
+	// Reinitializing a live tree would orphan its nodes; if the degree or cache
+	// mode changed, those nodes would also no longer match the tree's layout.
+	// Require an empty or destroyed tree so misuse fails here instead of
+	// corrupting later operations.
+	if tr.root != nil {
+		panic("init_ordered requires an empty or destroyed tree; destroy it first")
+	}
 	tr.cache = cache
 	tr.descending = descending
 	tr.projection = projection

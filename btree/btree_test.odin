@@ -1026,6 +1026,35 @@ test_btree_clear_and_reuse :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_btree_init_ordered_after_destroy :: proc(t: ^testing.T) {
+	tr: BTreeG(int, Test_Int_Order)
+	init_ordered(&tr, Options{degree = 4})
+	defer destroy(&tr)
+
+	for i := 0; i < 128; i += 1 {
+		_, _ = set(&tr, i)
+	}
+	destroy(&tr)
+	testing.expect(t, tr.root == nil, "destroy should drop root")
+
+	// Reinitializing a destroyed tree is supported and may change the degree.
+	init_ordered(&tr, Options{degree = 8})
+	testing.expect_value(t, count(&tr), 0)
+
+	for i := 1000; i < 1128; i += 1 {
+		_, replaced := set(&tr, i)
+		testing.expect(t, !replaced, "reinitialized tree should accept fresh keys")
+	}
+	for i := 1000; i < 1128; i += 1 {
+		v, ok := get(&tr, i)
+		testing.expect(t, ok, "reinitialized tree must return inserted keys")
+		testing.expect_value(t, v, i)
+	}
+
+	btree_test_assert_tree_sane(t, &tr)
+}
+
+@(test)
 test_btree_split_merge_boundaries :: proc(t: ^testing.T) {
 	tr := create_ordered(int, Test_Int_Order, Options{degree = 4})
 	defer destroy(&tr)

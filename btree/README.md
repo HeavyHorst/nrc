@@ -58,12 +58,43 @@ main :: proc() {
 ## Construction And Lifecycle
 
 - `create_ordered(T, Policy, opts := Options{}, allocator := context.allocator, cache = .None, descending = false)` creates a tree with its policy's zero-value projection.
-- `init_ordered(&tree, opts := Options{}, allocator := context.allocator, cache = .None, descending = false)` initializes a pre-existing tree value with its declared policy.
+- `init_ordered(&tree, opts := Options{}, allocator := context.allocator, cache = .None, descending = false)` initializes an empty or destroyed tree value with its declared policy; it panics if the tree still owns nodes.
 - Both constructors also accept a named `projection` argument. Its type must exactly match `Policy.Projection`; a mismatched enum or integer fails compilation. Pass a typed value, such as `projection = My_Projection(.Time)`, or a variable of that type.
 - `destroy(&tree)` frees all node memory owned by the tree.
 - `clear_tree(&tree)` clears all contents (same effect as `destroy` for current contents) while keeping the tree value reusable.
 
 The tree allocates internal node storage and must be destroyed to avoid leaks.
+
+## Ownership And Copying
+
+A `BTreeG` value owns its node storage through `root`. There is no clone
+operation, and the struct must not be duplicated as a value.
+
+- **Do not copy a tree.** `b := a` gives two structs the same `root`: mutations
+  through one are visible through the other, and destroying both double-frees.
+  Pass `^BTreeG` between procedures instead. The value returned by
+  `create_ordered` is safe because that tree is still empty; assigning it over a
+  live tree drops the only reference to the old nodes.
+- **`init_ordered` requires an empty or destroyed tree.** It sets `cache`,
+  `descending`, `projection`, `allocator`, the degree limits and stats, but
+  leaves `root` and `count` untouched, so it panics when `root` is non-nil.
+  Reinitializing a live tree would leak its nodes; if the new degree or cache
+  mode differed, the surviving nodes would no longer match the tree's layout and
+  later inserts or cache updates could write outside their original allocation
+  or into their item array.
+- **Moving is explicit.** If a tree must move, assign the struct and zero the
+  source (`moved := tr; tr = {}`) so the source's `destroy` is a no-op.
+- **Item payloads are borrowed.** `set` copies `T` into the node but never
+  deep-copies strings, slices or pointers, and `remove`, `clear_tree` and
+  `destroy` never free them. Referenced storage must stay alive and immutable
+  while the item is in the tree; changing a comparator field in place breaks
+  ordering. The caller owns all payload memory.
+- **Iterators are non-owning cursors.** `IterG` stores node pointers and indices,
+  not storage. Copying an iterator is harmless, but any mutation invalidates
+  every copy. `iter_destroy` only clears the cursor.
+- **The allocator must outlive the tree.** It is captured at construction and
+  used for every node allocation and free; destroy a tree exactly once with the
+  allocator it was created with.
 
 ## CRUD API
 
