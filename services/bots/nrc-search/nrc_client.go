@@ -1199,6 +1199,10 @@ func (c *NRCClient) Reconcile(ctx context.Context, convID uint64) error {
 }
 
 func (c *NRCClient) DrainEmbedQueue(ctx context.Context) {
+	if _, remote := c.embedder.(*vllmEmbedder); remote {
+		c.drainParallelEmbedQueue(ctx)
+		return
+	}
 	// Drain persistent queues from previous runs (peek + process + delete).
 	for {
 		if ctx.Err() != nil {
@@ -1242,6 +1246,54 @@ func (c *NRCClient) DrainEmbedQueue(ctx context.Context) {
 			}
 		case <-c.diskSignal:
 			c.drainPersistentQueue()
+		}
+	}
+}
+
+func (c *NRCClient) drainParallelEmbedQueue(ctx context.Context) {
+	type result struct {
+		key      entityKey
+		consumed bool
+	}
+	completed := make(chan result, vllmConcurrency)
+	active := make(map[entityKey]bool)
+	failed := make(map[entityKey]bool)
+	var workers sync.WaitGroup
+	defer workers.Wait() // Shutdown must finish before storage/embedders close.
+	for ctx.Err() == nil {
+		if len(active) < vllmConcurrency {
+			skip := make(map[entityKey]bool, len(active)+len(failed))
+			for key := range active {
+				skip[key] = true
+			}
+			for key := range failed {
+				skip[key] = true
+			}
+			jobs, err := c.storage.PeekEmbedJobs(c.workspace, skip, vllmConcurrency-len(active))
+			if err != nil {
+				slog.Error("failed to peek persistent embedding queues", "error", err)
+				c.schedulePersistentQueueRetry()
+			} else {
+				for _, job := range jobs {
+					key := job.identity().key()
+					active[key] = true
+					workers.Go(func() { completed <- result{key, c.processEmbedJob(job)} })
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case result := <-completed:
+			delete(active, result.key)
+			if !result.consumed {
+				failed[result.key] = true
+				c.schedulePersistentQueueRetry()
+			}
+		case <-c.embedCh:
+			// Notifications only: read the current durable version on dispatch.
+		case <-c.diskSignal:
+			clear(failed)
 		}
 	}
 }
@@ -1423,14 +1475,30 @@ func embedDocumentChunks(embedder Embedder, preview, content string) ([]IndexChu
 		docChunks = []DocumentChunk{{Index: 0, Text: strings.TrimSpace(content)}}
 	}
 
-	chunks := make([]IndexChunk, 0, len(docChunks))
-	for _, chunk := range docChunks {
-		text := format_document_for_embedding(preview, chunk.Text)
-		vec, err := embedder.Embed(text)
+	chunks := make([]IndexChunk, len(docChunks))
+	errs := make([]error, len(docChunks))
+	concurrency := 1
+	if _, remote := embedder.(*vllmEmbedder); remote {
+		concurrency = min(vllmConcurrency, len(docChunks))
+	}
+	var workers sync.WaitGroup
+	for worker := range concurrency {
+		workers.Go(func() {
+			for i := worker; i < len(docChunks); i += concurrency {
+				chunk := docChunks[i]
+				vec, err := embedder.Embed(format_document_for_embedding(preview, chunk.Text))
+				chunks[i], errs[i] = IndexChunk{Index: chunk.Index, Vector: vec}, err
+				if err != nil {
+					return
+				}
+			}
+		})
+	}
+	workers.Wait()
+	for _, err := range errs {
 		if err != nil {
 			return nil, nil, err
 		}
-		chunks = append(chunks, IndexChunk{Index: chunk.Index, Vector: vec})
 	}
 
 	vec := aggregateChunkVectors(chunks)

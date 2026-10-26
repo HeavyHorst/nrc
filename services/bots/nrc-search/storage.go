@@ -903,6 +903,42 @@ func (s *Storage) PeekEntityQueueEntry(workspace string) (identity EntityIdentit
 	return
 }
 
+// PeekEmbedJobs leaves entries durable until processEmbedJob commits them.
+func (s *Storage) PeekEmbedJobs(workspace string, skip map[entityKey]bool, limit int) ([]EmbedJob, error) {
+	var jobs []EmbedJob
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		for _, name := range [][]byte{bucketEntityQueue, bucketQueue} {
+			bucket := s.workspaceBucketRead(tx, name, workspace)
+			if bucket == nil {
+				continue
+			}
+			cursor := bucket.Cursor()
+			for key, value := cursor.First(); key != nil && len(jobs) < limit; key, value = cursor.Next() {
+				var entry QueueEntry
+				if err := gobDecode(value, &entry); err != nil {
+					return err
+				}
+				var identity EntityIdentity
+				if bytes.Equal(name, bucketEntityQueue) {
+					var err error
+					identity, err = identityFromStorageKey(workspace, key)
+					if err != nil {
+						return err
+					}
+				} else {
+					identity = assetIdentity(workspace, keyToUint64(key), entry.ConvID)
+				}
+				if !skip[identity.key()] {
+					jobs = append(jobs, EmbedJob{Workspace: workspace, AssetID: identity.EntityID, Identity: identity, Entry: entry})
+					skip[identity.key()] = true
+				}
+			}
+		}
+		return nil
+	})
+	return jobs, err
+}
+
 func (s *Storage) GetEntityQueueEntry(identity EntityIdentity) (entry QueueEntry, ok bool, err error) {
 	if err := identity.Validate(); err != nil {
 		return entry, false, err

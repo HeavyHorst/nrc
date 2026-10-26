@@ -331,7 +331,10 @@ back to ONNX for the same text or media segment, without exposing the remote
 error to callers. A warning is logged without input/response contents. That
 modality uses ONNX for 30 seconds before retrying vLLM automatically. Verified
 requests run concurrently, with a shared limit of four in-flight vLLM requests
-across workspaces, media and searches.
+across workspaces, chunks, media and searches. Indexing processes up to four
+different records per workspace and up to four chunks per document concurrently;
+both share that same HTTP limit, rather than multiplying it. Queue entries remain
+durable until their current version commits, and shutdown waits for active jobs.
 Slot waiting and HTTP share one timeout budget. A waiting call rechecks the
 modality cooldown before sending, so an outage does not cause successive timeout
 waves. Admission expiry and per-input preparation failures do not disable the

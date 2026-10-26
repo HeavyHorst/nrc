@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -115,6 +117,210 @@ func TestVLLMTextFallbackRecoveryAndConcurrency(t *testing.T) {
 	assertRemoteVector(t, vec, err)
 	if requests.Load() != 24 || local.calls.Load() != 5 {
 		t.Fatal("recovery must recheck compatibility")
+	}
+}
+
+func TestVLLMParallelIndexing(t *testing.T) {
+	for _, mode := range []string{"queue", "chunks", "shutdown"} {
+		t.Run(mode, func(t *testing.T) {
+			var blocking, unavailable atomic.Bool
+			var active, peak atomic.Int32
+			entered := make(chan struct{}, 32)
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if unavailable.Load() {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				var req struct {
+					Input string `json:"input"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+				}
+				if blocking.Load() {
+					n := active.Add(1)
+					defer active.Add(-1)
+					for old := peak.Load(); n > old; old = peak.Load() {
+						if peak.CompareAndSwap(old, n) {
+							break
+						}
+					}
+					entered <- struct{}{}
+					<-release
+				}
+				vec := make([]float32, 768)
+				vec[0], vec[1], vec[2] = 3, 4.1, float32(len(req.Input)%17)/100
+				json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]any{"index": 0, "embedding": vec}}})
+			}))
+			defer server.Close()
+			defer unblock()
+			e := testVLLM(&vllmLocal{}, server.URL)
+			e.client.Timeout = 5 * time.Second
+			defer e.Close()
+			if _, err := e.Embed("warm document"); err != nil {
+				t.Fatal(err)
+			}
+			blocking.Store(true)
+			ctx, cancel := context.WithCancel(context.Background())
+			var workers sync.WaitGroup
+			defer func() { cancel(); unblock(); workers.Wait() }()
+			storage := newTestStorage(t)
+			client := newTaskClient(t, storage, e)
+			drained := make(chan struct{})
+			if mode != "chunks" {
+				for id := uint64(1); id <= 8; id++ {
+					entry := QueueEntry{ConvID: 7, Preview: fmt.Sprintf("original %d", id), Version: 1}
+					var err error
+					if id <= 4 {
+						err = storage.EnqueueEntity(taskIdentity("ws", id, 7), entry)
+					} else {
+						err = storage.EnqueueAsset("ws", id, entry)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				workers.Go(func() { client.DrainEmbedQueue(ctx); close(drained) })
+			} else {
+				for doc := range 2 {
+					workers.Go(func() {
+						text := strings.Repeat(fmt.Sprintf("document%d ", doc), 4201+doc)
+						chunks, _, err := embedDocumentChunks(e, "test", text)
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						expected := chunkDocumentForEmbedding(text)
+						if len(chunks) != len(expected) || len(chunks) < 4 {
+							t.Errorf("unexpected chunk count %d", len(chunks))
+							return
+						}
+						for i, chunk := range chunks {
+							x := float64(float32(len(format_document_for_embedding("test", expected[i].Text))%17) / 100)
+							want := x / math.Sqrt(9+float64(float32(4.1))*float64(float32(4.1))+x*x)
+							if chunk.Index != i || math.Abs(float64(chunk.Vector[2])-want) > 1e-6 {
+								t.Errorf("chunk %d changed order/vector", i)
+							}
+						}
+					})
+				}
+			}
+			for range 4 {
+				select {
+				case <-entered:
+				case <-time.After(2 * time.Second):
+					t.Fatal("indexing did not issue four concurrent requests")
+				}
+			}
+			select {
+			case <-entered:
+				t.Fatal("more than four requests in flight")
+			case <-time.After(50 * time.Millisecond):
+			}
+			if mode == "queue" {
+				if err := storage.EnqueueEntity(taskIdentity("ws", 1, 7), QueueEntry{ConvID: 7, Preview: "updated", Version: 2}); err != nil {
+					t.Fatal(err)
+				}
+				if err := storage.DeleteEntityQueueEntry(taskIdentity("ws", 2, 7)); err != nil {
+					t.Fatal(err)
+				}
+				client.signalPersistentQueue()
+			}
+			if mode == "shutdown" {
+				cancel()
+				select {
+				case <-drained:
+					t.Fatal("shutdown returned while indexing was active")
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+			unblock()
+			if mode == "queue" {
+				deadline := time.Now().Add(3 * time.Second)
+				for {
+					empty, err := storage.QueuesEmpty("ws")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if empty {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("persistent queue did not drain")
+					}
+					time.Sleep(time.Millisecond)
+				}
+				cancel()
+				workers.Wait()
+				entry, ok := client.index.GetEntity(taskIdentity("ws", 1, 7))
+				if !ok || entry.Preview != "updated" {
+					t.Fatal("newer version was lost")
+				}
+				if _, ok := client.index.GetEntity(taskIdentity("ws", 2, 7)); ok {
+					t.Fatal("deleted job was published")
+				}
+				for id := uint64(5); id <= 8; id++ {
+					if _, ok := client.index.GetEntity(assetIdentity("ws", id, 7)); !ok {
+						t.Fatal("legacy queue entry lost")
+					}
+				}
+			} else {
+				workers.Wait()
+			}
+			if mode == "shutdown" {
+				if size, err := storage.QueueSize("ws"); err != nil || size != 4 {
+					t.Fatalf("shutdown lost pending jobs: size=%d error=%v", size, err)
+				}
+			}
+			if peak.Load() != 4 {
+				t.Fatalf("peak concurrent requests = %d", peak.Load())
+			}
+			unavailable.Store(true)
+			chunks, _, err := embedDocumentChunks(e, "fallback", strings.Repeat("word ", 3000))
+			if err != nil || len(chunks) < 4 {
+				t.Fatalf("parallel fallback failed: %v", err)
+			}
+			for _, chunk := range chunks {
+				if chunk.Vector[0] != 0.6 {
+					t.Fatal("missing ONNX fallback")
+				}
+			}
+		})
+	}
+}
+
+func TestVLLMIndexingRetriesLocalFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	defer server.Close()
+	local := &flakyEmbedder{failures: 2}
+	e := testVLLM(local, server.URL)
+	defer e.Close()
+	storage := newTestStorage(t)
+	client := newTaskClient(t, storage, e)
+	identity := taskIdentity("ws", 99, 7)
+	if err := storage.EnqueueEntity(identity, QueueEntry{ConvID: 7, Preview: "retry", Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { client.DrainEmbedQueue(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	for deadline := time.Now().Add(3 * time.Second); ; {
+		if _, ok := client.index.GetEntity(identity); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("parallel queue did not retry without unrelated work")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	local.mu.Lock()
+	defer local.mu.Unlock()
+	if local.attempts != 3 {
+		t.Fatalf("attempts=%d, want 3", local.attempts)
 	}
 }
 
