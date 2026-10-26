@@ -326,7 +326,7 @@ benchmark_note_index_btree :: proc(t: ^testing.T) {
 		allocator = btree_bench_counting_allocator(&node_counter)
 	}
 
-	tree := btree.create_ordered(Note_Sort_Key, Note_Sort_Order, btree.Options{degree = degree}, allocator)
+	tree := btree.create_ordered(Note_Sort_Key, Note_Sort_Order, btree.Options{degree = degree}, allocator, cache = .Numeric)
 	defer btree.destroy(&tree)
 
 	baseline_rss_mb := get_rss_memory_mb()
@@ -347,7 +347,7 @@ benchmark_note_index_btree :: proc(t: ^testing.T) {
 		btree_bench_counting_allocator_init(&random_counter)
 		random_allocator = btree_bench_counting_allocator(&random_counter)
 	}
-	random_tree := btree.create_ordered(Note_Sort_Key, Note_Sort_Order, btree.Options{degree = degree}, random_allocator)
+	random_tree := btree.create_ordered(Note_Sort_Key, Note_Sort_Order, btree.Options{degree = degree}, random_allocator, cache = .Numeric)
 	random_insert_hint := btree.Path_Hint{}
 	random_insert_hint_ptr: ^btree.Path_Hint = nil
 	if use_hints {

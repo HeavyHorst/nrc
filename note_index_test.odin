@@ -664,6 +664,65 @@ note_pagination_test_expect_ids :: proc(t: ^testing.T, page: Note_Pagination_Tes
 }
 
 @(test)
+test_note_pagination_signed_extremes_and_ties :: proc(t: ^testing.T) {
+	workspace_id := "note-pagination-extremes"
+	if !init_room_mapping_test_state("note_pagination_extremes.log", workspace_id) {
+		testing.expect(t, false, "pagination fixture should initialize")
+		return
+	}
+	defer cleanup_room_mapping_test_state()
+	c := make_room_mapping_test_connection(workspace_id)
+	defer send_queue_destroy(&c)
+	c.state = .Idle
+	c.is_sending = true
+	conv_id := pr.ConversationID(77)
+	conv := get_or_create_conversation(get_or_create_workspace(workspace_id), conv_id)
+	// Explicit ascending full-width order; adjacent timestamps must not collapse.
+	fixtures := [?]Note_Sort_Key {
+		{updated_at = min(i64), asset_id = 1},
+		{updated_at = min(i64) + 1, asset_id = 2},
+		{updated_at = -1, asset_id = 3},
+		{updated_at = 0, asset_id = 4},
+		{updated_at = 1, asset_id = 5},
+		{updated_at = max(i64) - 1, asset_id = 6},
+		{updated_at = max(i64), asset_id = 1 << 54},
+		{updated_at = max(i64), asset_id = max(u64)},
+	}
+	for fixture in fixtures {
+		testing.expect(t, note_pagination_test_install(conv, fixture.asset_id, fixture.updated_at, `{"project":"alpha","tags":["odin"]}`))
+	}
+	testing.expect_value(t, conv.note_index.cache, btree.Cache_Mode.Numeric)
+	testing.expect_value(t, conv.note_index.projection, btree.No_Projection.None)
+	testing.expect_value(t, conv.note_project_assets["alpha"].tree.cache, btree.Cache_Mode.Numeric)
+	testing.expect_value(t, conv.note_project_assets["alpha"].tree.projection, btree.No_Projection.None)
+	testing.expect_value(t, conv.note_tag_assets["odin"].tree.cache, btree.Cache_Mode.Numeric)
+	testing.expect_value(t, conv.note_tag_assets["odin"].tree.projection, btree.No_Projection.None)
+	for pass in 0 ..< 2 {
+		for scope in ([?]Note_Pagination_Test_Scope{.Global, .Project, .Tag}) {
+			filter := scope == .Project ? "alpha" : "odin"
+			cursor: Note_Sort_Key
+			for i := len(fixtures) - 1; i >= 0; i -= 1 {
+				page, ok := note_pagination_test_query(&c, conv_id, scope, filter, 1, i != len(fixtures) - 1, cursor.updated_at, cursor.asset_id)
+				testing.expect(t, ok)
+				note_pagination_test_expect_ids(t, page, []pr.AssetID{fixtures[i].asset_id})
+				testing.expect_value(t, page.has_more, i != 0)
+				testing.expect_value(t, page.total_count, u32(len(fixtures)))
+				cursor = {
+					updated_at = page.next_cursor_updated_at,
+					asset_id   = page.next_cursor_asset_id,
+				}
+			}
+		}
+		if pass == 0 {
+			for fixture in fixtures {
+				remove_note_asset_from_index(conv, fixture.asset_id)
+				index_note_asset(conv, conv.assets[fixture.asset_id])
+			}
+		}
+	}
+}
+
+@(test)
 test_note_pagination_handlers_keep_cursors_stable_across_index_changes :: proc(t: ^testing.T) {
 	workspace_id := "note-pagination-handlers"
 	if !init_room_mapping_test_state("note_pagination_handlers.log", workspace_id) {

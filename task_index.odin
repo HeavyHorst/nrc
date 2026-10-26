@@ -4,12 +4,48 @@ import "btree"
 import "core:strings"
 import pr "protocol"
 
-Task_Query_Order :: btree.Static_Order(Task_Query_Key, btree.No_Projection, task_query_compare_static)
-Task_Sort_Order :: btree.Static_Order(Task_Sort_Key, btree.No_Projection, task_sort_compare_static)
+Task_Numeric_Projection :: enum u8 {
+	Time,
+	Enum_Value,
+}
 
-task_query_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
+Task_Query_Order :: btree.Static_Order(Task_Query_Key, Task_Numeric_Projection, task_query_compare_static, task_query_text_key_static, task_query_numeric_key)
+Task_Sort_Order :: btree.Static_Order(Task_Sort_Key, btree.No_Projection, task_sort_compare_static, btree.static_no_text, task_sort_numeric_key)
+
+task_query_numeric_key :: #force_inline proc(item: rawptr, descending: bool, projection: rawptr) -> u64 {
+	key := (cast(^Task_Query_Key)item)^
+	missing := key.due_missing ? u64(1) << 63 : 0
+	if (cast(^Task_Numeric_Projection)projection)^ == .Enum_Value {
+		// 1 missing bit, 8 ordered number bits, 1 text-emptiness bit, 54 ID bits.
+		// Saturated number buckets omit ALL suffix fields, including at the
+		// endpoints: distinct numbers there must never be reordered by an ID.
+		number := u64(clamp(key.number, -128, 127) + 128)
+		suffix: u64
+		if number != 0 && number != 255 {
+			nonempty := len(key.text) != 0
+			if nonempty != descending do suffix = u64(1) << 54
+			if !nonempty do suffix |= min(u64(key.task_id), (u64(1) << 54) - 1)
+		}
+		if descending do number = 255 - number
+		return missing | (number << 55) | suffix
+	}
+	number := u64(key.number) ~ (u64(1) << 63)
+	if descending do number = ~number
+	// Retain missing-last for arbitrary cursors; lost low bits only create ties.
+	return missing | (number >> 1)
+}
+
+task_sort_numeric_key :: #force_inline proc(item: rawptr, descending: bool, projection: rawptr) -> u64 {
+	return u64((cast(^Task_Sort_Key)item)^.sort_at) ~ (u64(1) << 63)
+}
+
+task_query_compare_static :: #force_inline proc(a, b: rawptr, descending: bool) -> int {
 	if descending do return task_query_key_compare_desc((cast(^Task_Query_Key)a)^, (cast(^Task_Query_Key)b)^)
 	return task_query_key_compare_asc((cast(^Task_Query_Key)a)^, (cast(^Task_Query_Key)b)^)
+}
+
+task_query_text_key_static :: proc(item: rawptr) -> (text: string, ok: bool) {
+	return task_query_text_key((cast(^Task_Query_Key)item)^)
 }
 
 task_sort_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
@@ -17,17 +53,21 @@ task_sort_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
 }
 
 task_query_bytes_compare :: proc(a, b: []byte) -> int {
-	count := min(len(a), len(b))
-	for i in 0 ..< count {
-		if a[i] < b[i] do return -1
-		if a[i] > b[i] do return 1
+	// Empty slices compare equally regardless of their backing pointer.
+	if len(a) == 0 || len(b) == 0 {
+		if len(a) < len(b) do return -1
+		if len(a) > len(b) do return 1
+		return 0
 	}
-	if len(a) < len(b) do return -1
-	if len(a) > len(b) do return 1
-	return 0
+	return strings.compare(string(a), string(b))
 }
 
-task_query_key_compare_asc :: proc(a, b: Task_Query_Key) -> int {
+task_query_text_key :: proc(key: Task_Query_Key) -> (text: string, ok: bool) {
+	// Non-text cursor fields retain the full comparator's ordering semantics.
+	return string(key.text), key.number == 0 && !key.due_missing
+}
+
+task_query_key_compare_asc :: #force_inline proc(a, b: Task_Query_Key) -> int {
 	if a.due_missing != b.due_missing do return a.due_missing ? 1 : -1
 	if a.number < b.number do return -1
 	if a.number > b.number do return 1
@@ -35,7 +75,7 @@ task_query_key_compare_asc :: proc(a, b: Task_Query_Key) -> int {
 	if a.task_id < b.task_id do return -1; if a.task_id > b.task_id do return 1; return 0
 }
 
-task_query_key_compare_desc :: proc(a, b: Task_Query_Key) -> int {
+task_query_key_compare_desc :: #force_inline proc(a, b: Task_Query_Key) -> int {
 	if a.due_missing != b.due_missing do return a.due_missing ? 1 : -1
 	if a.number > b.number do return -1
 	if a.number < b.number do return 1
@@ -44,7 +84,13 @@ task_query_key_compare_desc :: proc(a, b: Task_Query_Key) -> int {
 }
 
 task_query_index_set_init :: proc(set: ^Task_Query_Index_Set) {
-	set.trees[0][0] = btree.create_ordered(Task_Query_Key, Task_Query_Order, btree.Options{degree = 32})
+	set.trees[0][0] = btree.create_ordered(
+		Task_Query_Key,
+		Task_Query_Order,
+		btree.Options{degree = 32},
+		cache = .Numeric,
+		projection = Task_Numeric_Projection(.Enum_Value),
+	)
 	set.initialized[0][0] = true
 }
 task_query_index_set_destroy :: proc(set: ^Task_Query_Index_Set) {
@@ -114,7 +160,22 @@ task_query_index_set_ensure_order :: proc(
 	direction := descending ? 1 : 0
 	sort_index := int(sort_kind)
 	if set.initialized[sort_index][direction] do return &set.trees[sort_index][direction]
-	set.trees[sort_index][direction] = btree.create_ordered(Task_Query_Key, Task_Query_Order, btree.Options{degree = 32}, descending = descending)
+	cache: btree.Cache_Mode = .None
+	projection: Task_Numeric_Projection = .Time
+	if sort_kind == .Title || sort_kind == .Project || sort_kind == .Assignee do cache = .Text
+	if sort_kind == .CreatedAt do cache = .Numeric
+	if sort_kind == .Priority || sort_kind == .Status || sort_kind == .Color {
+		cache = .Numeric
+		projection = .Enum_Value
+	}
+	set.trees[sort_index][direction] = btree.create_ordered(
+		Task_Query_Key,
+		Task_Query_Order,
+		btree.Options{degree = 32},
+		cache = cache,
+		descending = descending,
+		projection = projection,
+	)
 	membership := &set.trees[0][0]
 	it := btree.iter(membership)
 	defer btree.iter_destroy(&it)
@@ -165,7 +226,7 @@ make_task_sort_key :: proc(task: ^pr.Task) -> Task_Sort_Key {
 }
 
 init_task_index :: proc(conv: ^Conversation_State) {
-	conv.task_index = btree.create_ordered(Task_Sort_Key, Task_Sort_Order, btree.Options{degree = 32})
+	conv.task_index = btree.create_ordered(Task_Sort_Key, Task_Sort_Order, btree.Options{degree = 32}, cache = .Numeric)
 	conv.task_index_keys = make(map[pr.TaskID]Task_Sort_Key, 128)
 	task_query_index_set_init(&conv.task_query_indexes)
 	for status in 0 ..< 4 do task_query_index_set_init(&conv.task_status_indexes[status])

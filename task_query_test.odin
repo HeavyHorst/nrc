@@ -2,6 +2,7 @@ package main
 
 import "btree"
 import "core:testing"
+import hgl "hegel"
 import pr "protocol"
 
 task_query_test_add :: proc(conv: ^Conversation_State, task: ^pr.Task) {
@@ -10,6 +11,502 @@ task_query_test_add :: proc(conv: ^Conversation_State, task: ^pr.Task) {
 }
 
 task_query_test_bytes :: proc(value: string) -> []byte {return transmute([]byte)value}
+
+// Independent full ordering, without the production comparator or adapter.
+task_query_test_less :: proc(a, b: Task_Query_Key, descending: bool) -> bool {
+	if a.due_missing != b.due_missing do return !a.due_missing
+	if a.number != b.number do return descending ? a.number > b.number : a.number < b.number
+	// Compare bytes independently, including nil and nonnil empty slices.
+	for i in 0 ..< min(len(a.text), len(b.text)) {
+		if a.text[i] != b.text[i] do return descending ? a.text[i] > b.text[i] : a.text[i] < b.text[i]
+	}
+	if len(a.text) != len(b.text) do return descending ? len(a.text) > len(b.text) : len(a.text) < len(b.text)
+	return a.task_id < b.task_id
+}
+
+task_query_test_expect_key :: proc(t: ^testing.T, actual, expected: Task_Query_Key) {
+	testing.expect_value(t, actual.number, expected.number)
+	testing.expect_value(t, actual.due_missing, expected.due_missing)
+	testing.expect_value(t, string(actual.text), string(expected.text))
+	testing.expect_value(t, actual.task_id, expected.task_id)
+}
+
+task_numeric_model_equal :: proc(a, b: Task_Query_Key) -> bool {
+	return a.number == b.number && a.due_missing == b.due_missing && string(a.text) == string(b.text) && a.task_id == b.task_id
+}
+
+task_numeric_model_lower :: proc(model: []Task_Query_Key, key: Task_Query_Key, descending: bool) -> int {
+	i := 0
+	for i < len(model) && task_query_test_less(model[i], key, descending) do i += 1
+	return i
+}
+
+// Both implementations receive the same operation; only the independently
+// ordered slice decides presence, prior values and the resulting state.
+task_numeric_model_mutate :: proc(
+	trees: []btree.BTreeG(Task_Query_Key, Task_Query_Order),
+	hints: []btree.Path_Hint,
+	model: ^[dynamic]Task_Query_Key,
+	key: Task_Query_Key,
+	descending, remove, hinted: bool,
+) -> string {
+	i := task_numeric_model_lower(model^[:], key, descending)
+	present := i < len(model^) && task_numeric_model_equal(model^[i], key)
+	for &tree, n in trees {
+		prior: Task_Query_Key
+		found: bool
+		if remove {
+			if hinted {
+				prior, found = btree.remove_hint(&tree, key, &hints[n])
+			} else {
+				prior, found = btree.remove(&tree, key)
+			}
+		} else {
+			if hinted {
+				prior, found = btree.set_hint(&tree, key, &hints[n])
+			} else {
+				prior, found = btree.set(&tree, key)
+			}
+		}
+		if found != present do return "mutation presence/prior flag"
+		if found && !task_numeric_model_equal(prior, model^[i]) do return "mutation prior value"
+	}
+	if remove {
+		if present {
+			for j in i ..< len(model^) - 1 do model^[j] = model^[j + 1]
+			resize(model, len(model^) - 1)
+		}
+	} else if present {
+		model^[i] = key
+	} else {
+		append(model, key)
+		for j := len(model^) - 1; j > i; j -= 1 do model^[j] = model^[j - 1]
+		model^[i] = key
+	}
+	return ""
+}
+
+task_numeric_model_check :: proc(
+	trees: []btree.BTreeG(Task_Query_Key, Task_Query_Order),
+	model: []Task_Query_Key,
+	probe: Task_Query_Key,
+	descending: bool,
+	page_size: int,
+) -> string {
+	lower := task_numeric_model_lower(model, probe, descending)
+	present := lower < len(model) && task_numeric_model_equal(model[lower], probe)
+	for &tree in trees {
+		if btree.count(&tree) != len(model) do return "count"
+		got, found := btree.get(&tree, probe)
+		if found != present do return "get presence"
+		if found && !task_numeric_model_equal(got, model[lower]) do return "get value"
+		// Iteration alone need not build search caches: search every live key.
+		for key in model {
+			value, exists := btree.get(&tree, key)
+			if !exists || !task_numeric_model_equal(value, key) do return "live get value"
+		}
+		it := btree.iter(&tree)
+		defer btree.iter_destroy(&it)
+		// Full walks independently check count/order in both directions.
+		for reverse in ([?]bool{false, true}) {
+			has := reverse ? btree.iter_last(&it) : btree.iter_first(&it)
+			for j in 0 ..< len(model) {
+				i := reverse ? len(model) - 1 - j : j
+				if !has do return "short full walk"
+				if !task_numeric_model_equal(btree.item(&it), model[i]) do return "full walk order"
+				has = reverse ? btree.iter_prev(&it) : btree.iter_next(&it)
+			}
+			if has do return "long full walk"
+		}
+		// Pages start at lower_bound, including absent/gap/out-of-range probes.
+		for reverse in ([?]bool{false, true}) {
+			i := lower
+			has := btree.iter_seek(&it, probe)
+			if has != (lower < len(model)) do return "seek presence"
+			if has && !task_numeric_model_equal(btree.item(&it), model[lower]) do return "seek value"
+			if reverse {
+				// Reverse page is strictly before the probe (exclusive cursor).
+				i -= 1
+				has = has ? btree.iter_prev(&it) : btree.iter_last(&it)
+			}
+			for j in 0 ..< page_size {
+				if has != (i >= 0 && i < len(model)) do return "page presence"
+				if !has do break
+				if !task_numeric_model_equal(btree.item(&it), model[i]) do return "page value"
+				i += reverse ? -1 : 1
+				has = reverse ? btree.iter_prev(&it) : btree.iter_next(&it)
+			}
+		}
+	}
+	return ""
+}
+
+@(test)
+test_hegel_task_query_numeric_model :: proc(t: ^testing.T) {
+	if !hgl.can_run() do return
+	result, err := hgl.run(prop_task_query_numeric_model, nil, {test_cases = 144})
+	testing.expectf(t, err == nil, "numeric task model: err=%v interesting=%v", err, result.interesting_test_cases)
+}
+
+prop_task_query_numeric_model :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.Body_Result {
+	config, err := hgl.draw_i64(tc, 0, 11)
+	if err == .Stop_Test do return hgl.abort()
+	if err != nil do return hgl.interesting("draw numeric configuration")
+	degrees := [?]int{2, 3, 32}
+	descending := config % 2 != 0
+	projection: Task_Numeric_Projection = config / 6 == 0 ? .Time : .Enum_Value
+	trees := [2]btree.BTreeG(Task_Query_Key, Task_Query_Order) {
+		btree.create_ordered(
+			Task_Query_Key,
+			Task_Query_Order,
+			{degree = degrees[(config / 2) % 3]},
+			cache = .Numeric,
+			descending = descending,
+			projection = projection,
+		),
+		btree.create_ordered(
+			Task_Query_Key,
+			Task_Query_Order,
+			{degree = degrees[(config / 2) % 3]},
+			cache = .None,
+			descending = descending,
+			projection = projection,
+		),
+	}
+	defer for &tree in trees do btree.destroy(&tree)
+	hints: [2]btree.Path_Hint
+	model := make([dynamic]Task_Query_Key)
+	defer delete(model)
+	generated_text, text_err := hgl.draw_bytes(tc, 0, 24)
+	if text_err == .Stop_Test do return hgl.abort()
+	if text_err != nil do return hgl.interesting("draw numeric text")
+	defer delete(generated_text)
+	texts := [?]string{"", "a", "aa", "\x00", "\xff", string(generated_text)}
+	numbers := [?]i64{min(i64), min(i64) + 1, -129, -128, -127, -1, 0, 1, 126, 127, 128, 129, max(i64) - 1, max(i64)}
+	ids := [?]u64{0, (1 << 54) - 1, 1 << 54, (1 << 54) + 1, max(u64)}
+	pool: [96]Task_Query_Key
+	for &key, i in pool {
+		number, e1 := hgl.draw_i64(tc, min(i64), max(i64))
+		choice, e2 := hgl.draw_i64(tc, 0, 83)
+		if e1 == .Stop_Test || e2 == .Stop_Test do return hgl.abort()
+		if e1 != nil || e2 != nil do return hgl.interesting("draw numeric pool")
+		key = {
+			number      = i < 28 ? numbers[i % len(numbers)] : number,
+			text        = task_query_test_bytes(texts[i < 28 ? i % len(texts) : int(choice) % len(texts)]),
+			due_missing = i < 28 ? i >= 14 : choice % 2 != 0,
+			task_id     = u64(i),
+		}
+		if i < len(ids) {
+			key.task_id = ids[i]
+		} else if choice % 3 == 1 {
+			key.task_id += 1 << 54
+		} else if choice % 3 == 2 {
+			key.task_id = max(u64) - u64(i)
+		}
+		// Further pool keys deliberately collide in the saturated projections.
+		if i >= 28 && choice % 2 == 0 do key.number = numbers[choice % len(numbers)]
+	}
+	// Unique IDs guarantee 96 records: enough to split even degree 32.
+	for j in 0 ..< len(pool) {
+		key := pool[(j * 37) % len(pool)]
+		failure := task_numeric_model_mutate(trees[:], hints[:], &model, key, descending, false, j % 2 == 0)
+		if failure != "" do return hgl.interesting(failure)
+	}
+	for round in 0 ..< 16 {
+		choice, e1 := hgl.draw_i64(tc, 0, 95)
+		burst, e2 := hgl.draw_i64(tc, 1, 8)
+		if e1 == .Stop_Test || e2 == .Stop_Test do return hgl.abort()
+		if e1 != nil || e2 != nil do return hgl.interesting("draw numeric burst")
+		key := pool[choice]
+		failure := task_numeric_model_check(trees[:], model[:], key, descending, int(burst))
+		if failure != "" do return hgl.interesting(failure)
+		for step in 0 ..< int(burst) {
+			index, e3 := hgl.draw_i64(tc, 0, 95)
+			op, e4 := hgl.draw_i64(tc, 0, 3)
+			if e3 == .Stop_Test || e4 == .Stop_Test do return hgl.abort()
+			if e3 != nil || e4 != nil do return hgl.interesting("draw numeric operation")
+			failure = task_numeric_model_mutate(trees[:], hints[:], &model, pool[index], descending, op >= 2, op % 2 == 0)
+			if failure != "" do return hgl.interesting(failure)
+		}
+		// Guaranteed replacement, successful removal, absent removal and restore,
+		// with reads warming the cache between every operation and both hint modes.
+		for step in 0 ..< 5 {
+			failure = task_numeric_model_check(trees[:], model[:], key, descending, int(burst))
+			if failure != "" do return hgl.interesting(failure)
+			failure = task_numeric_model_mutate(trees[:], hints[:], &model, key, descending, step == 2 || step == 3, (round + step) % 2 == 0)
+			if failure != "" do return hgl.interesting(failure)
+		}
+		// A guaranteed absent ID also supplies a noncanonical seek cursor.
+		key.task_id = 1 << 53
+		failure = task_numeric_model_check(trees[:], model[:], key, descending, int(burst))
+		if failure != "" do return hgl.interesting(failure)
+	}
+	for len(model) > 0 {
+		key := model[len(model) / 2]
+		failure := task_numeric_model_check(trees[:], model[:], key, descending, 7)
+		if failure != "" do return hgl.interesting(failure)
+		failure = task_numeric_model_mutate(trees[:], hints[:], &model, key, descending, true, len(model) % 2 == 0)
+		if failure != "" do return hgl.interesting(failure)
+	}
+	failure := task_numeric_model_check(trees[:], model[:], pool[0], descending, 7)
+	if failure != "" do return hgl.interesting(failure)
+	return hgl.valid()
+}
+
+@(test)
+test_task_query_numeric_cache_full_order_boundaries :: proc(t: ^testing.T) {
+	numbers := [?]i64{min(i64), min(i64) + 1, -129, -128, -127, -1, 0, 1, 126, 127, 128, max(i64) - 1, max(i64)}
+	ids := [?]pr.TaskID{1, (1 << 54) - 1, 1 << 54, (1 << 54) + 1, max(u64)}
+	texts := [?]string{"", "a", "aa", "b"}
+	for projection in ([?]Task_Numeric_Projection{.Time, .Enum_Value}) {
+		for descending in ([?]bool{false, true}) {
+			tree := btree.create_ordered(
+				Task_Query_Key,
+				Task_Query_Order,
+				btree.Options{degree = 4},
+				cache = .Numeric,
+				descending = descending,
+				projection = projection,
+			)
+			defer btree.destroy(&tree)
+			testing.expect_value(t, tree.cache, btree.Cache_Mode.Numeric)
+			testing.expect_value(t, tree.projection, projection)
+			testing.expect_value(t, tree.descending, descending)
+			expected := make([dynamic]Task_Query_Key)
+			defer delete(expected)
+			for missing in ([?]bool{false, true}) {
+				for number in numbers {
+					for text in texts {
+						for id in ids {
+							key := Task_Query_Key {
+								number      = number,
+								text        = task_query_test_bytes(text),
+								task_id     = id,
+								due_missing = missing,
+							}
+							append(&expected, key)
+							// Insertion-sort the independent model.
+							j := len(expected) - 1
+							for j > 0 && task_query_test_less(key, expected[j - 1], descending) {
+								expected[j] = expected[j - 1]
+								j -= 1
+							}
+							expected[j] = key
+						}
+					}
+				}
+			}
+			for i := len(expected) - 1; i >= 0; i -= 1 {_, _ = btree.set(&tree, expected[i])}
+			for pass in 0 ..< 2 {
+				it := btree.iter(&tree)
+				has := btree.iter_first(&it)
+				for key in expected {
+					testing.expect(t, has)
+					if has do task_query_test_expect_key(t, btree.item(&it), key)
+					has = btree.iter_next(&it)
+					got, found := btree.get(&tree, key)
+					testing.expect(t, found)
+					if found do task_query_test_expect_key(t, got, key)
+				}
+				testing.expect(t, !has)
+				for key in expected {
+					for gap in ([?]bool{false, true}) {
+						probe := key
+						if gap do probe.task_id -= 1
+						lower := 0
+						for lower < len(expected) && task_query_test_less(expected[lower], probe, descending) do lower += 1
+						found := btree.iter_seek(&it, probe)
+						testing.expect_value(t, found, lower < len(expected))
+						if found && lower < len(expected) do task_query_test_expect_key(t, btree.item(&it), expected[lower])
+					}
+				}
+				btree.iter_destroy(&it)
+				if pass == 0 {
+					for key, i in expected {
+						if i % 2 != 0 do continue
+						removed, ok := btree.remove(&tree, key)
+						testing.expect(t, ok)
+						if ok do task_query_test_expect_key(t, removed, key)
+						_, present := btree.get(&tree, key)
+						testing.expect(t, !present)
+					}
+					for key, i in expected {if i % 2 == 0 {_, _ = btree.set(&tree, key)}}
+				}
+			}
+		}
+	}
+}
+
+@(test)
+test_task_query_numeric_public_cursors :: proc(t: ^testing.T) {
+	conv: Conversation_State
+	conv.tasks = make(map[pr.TaskID]^pr.Task)
+	defer delete(conv.tasks)
+	init_task_index(&conv)
+	defer destroy_task_index(&conv)
+	tasks := [?]pr.Task {
+		{id = 1, status = .Todo, priority = 126, created_at = min(i64), updated_at = min(i64)},
+		{id = (1 << 54) - 1, status = .Todo, priority = 127, created_at = -1, updated_at = -1},
+		{id = 1 << 54, status = .Todo, priority = 128, created_at = 0, updated_at = 0},
+		{id = (1 << 54) + 1, status = .Todo, priority = 255, created_at = max(i64), updated_at = max(i64)},
+		{id = max(u64), status = .Todo, priority = 255, created_at = max(i64), updated_at = max(i64)},
+	}
+	for &task in tasks do task_query_test_add(&conv, &task)
+	testing.expect_value(t, conv.task_index.cache, btree.Cache_Mode.Numeric)
+	testing.expect_value(t, conv.task_index.projection, btree.No_Projection.None)
+	rows := make([dynamic]pr.Task)
+	defer delete(rows)
+	legacy := pr.ListTasksPagedRequest {
+		status_mask = 15,
+		limit       = 1,
+	}
+	for i := len(tasks) - 1; i >= 0; i -= 1 {
+		clear(&rows)
+		page := collect_task_page(&conv, legacy, &rows)
+		testing.expect_value(t, len(rows), 1)
+		if len(rows) == 1 do testing.expect_value(t, rows[0].id, tasks[i].id)
+		testing.expect_value(t, page.has_more, i != 0)
+		legacy.has_cursor = true
+		legacy.cursor_sort_at = page.next_cursor_sort_at
+		legacy.cursor_task_id = page.next_cursor_task_id
+	}
+	for sort_kind in ([?]pr.TaskQuerySort{.Priority, .CreatedAt}) {
+		for descending in ([?]bool{false, true}) {
+			for number in ([?]i64{min(i64), -129, -128, -127, -1, 0, 126, 127, 128, 255, max(i64)}) {
+				for text in ([?]string{"", "noncanonical"}) {
+					clear(&rows)
+					req := pr.TaskQueryRequest {
+						status_mask    = 15,
+						limit          = 10,
+						color          = 255,
+						sort           = sort_kind,
+						descending     = descending,
+						has_cursor     = true,
+						cursor_number  = number,
+						cursor_text    = task_query_test_bytes(text),
+						cursor_task_id = 1 << 54,
+					}
+					page := collect_task_query_page(&conv, req, &rows)
+					testing.expect_value(t, page.total_count, u32(len(tasks)))
+					cursor := Task_Query_Key {
+						number  = number,
+						text    = req.cursor_text,
+						task_id = req.cursor_task_id,
+					}
+					count := 0
+					for task in tasks {
+						key := Task_Query_Key {
+							number  = sort_kind == .Priority ? i64(task.priority) : task.created_at,
+							task_id = task.id,
+						}
+						if task_query_test_less(cursor, key, descending) do count += 1
+					}
+					testing.expect_value(t, len(rows), count)
+					previous := cursor
+					for row in rows {
+						key := Task_Query_Key {
+							number  = sort_kind == .Priority ? i64(row.priority) : row.created_at,
+							task_id = row.id,
+						}
+						testing.expect(t, task_query_test_less(previous, key, descending))
+						previous = key
+					}
+				}
+			}
+		}
+	}
+}
+
+@(test)
+test_task_query_text_order_and_empty_filters :: proc(t: ^testing.T) {
+	conv: Conversation_State
+	conv.tasks = make(map[pr.TaskID]^pr.Task)
+	defer delete(conv.tasks)
+	init_task_index(&conv)
+	defer destroy_task_index(&conv)
+
+	// Explicit byte order, including embedded NUL, non-ASCII bytes, prefixes,
+	// and differences on either side of the runtime's 32-byte SIMD boundary.
+	titles := [?]string {
+		"",
+		"",
+		"\x00",
+		"\x00a",
+		"a",
+		"aa",
+		"a\x7f",
+		"a\x80",
+		"a\xff",
+		"012345678901234567890123456789012a",
+		"012345678901234567890123456789012b",
+		"012345678901234567890123456789012ba",
+		"ä",
+		"日本",
+	}
+	tasks: [len(titles)]pr.Task
+	empty_backing := [1]byte{'x'}
+	for title, i in titles {
+		tasks[i] = pr.Task {
+			id     = pr.TaskID(i + 1),
+			status = .Todo,
+			title  = task_query_test_bytes(title),
+		}
+		if i % 2 == 0 {
+			tasks[i].project = empty_backing[:0]
+			tasks[i].assignee = empty_backing[:0]
+		}
+	}
+	tasks[0].title = nil
+	tasks[1].title = empty_backing[:0]
+	for i := len(tasks) - 1; i >= 0; i -= 1 {task_query_test_add(&conv, &tasks[i])}
+
+	ascending := [?]pr.TaskID{1, 2, 3, 4, 10, 11, 12, 5, 6, 7, 8, 9, 13, 14}
+	descending := [?]pr.TaskID{14, 13, 9, 8, 7, 6, 5, 12, 11, 10, 4, 3, 1, 2}
+	rows := make([dynamic]pr.Task)
+	defer delete(rows)
+	for desc in ([?]bool{false, true}) {
+		for empty in ([?][]byte{nil, empty_backing[:0]}) {
+			req := pr.TaskQueryRequest {
+				status_mask  = 0x0f,
+				limit        = 3,
+				sort         = .Title,
+				descending   = desc,
+				color        = 255,
+				has_project  = true,
+				project      = empty,
+				has_assignee = true,
+				assignee     = empty,
+			}
+			expected := desc ? descending[:] : ascending[:]
+			seen := 0
+			for _ in 0 ..< len(tasks) {
+				clear(&rows)
+				page := collect_task_query_page(&conv, req, &rows)
+				testing.expect_value(t, page.total_count, u32(len(tasks)))
+				for row in rows {
+					if seen < len(expected) do testing.expect_value(t, row.id, expected[seen])
+					seen += 1
+				}
+				if !page.has_more do break
+				req.has_cursor = true
+				req.cursor_text = page.next_cursor_text
+				req.cursor_task_id = page.next_cursor_task_id
+			}
+			testing.expect_value(t, seen, len(expected))
+			// Text cursors with a nonzero numeric field must retain the full
+			// comparator's ordering, even when the text-search cache is warm.
+			for number in ([?]i64{-1, 1}) {
+				clear(&rows)
+				req.has_cursor = true
+				req.cursor_number = number
+				_ = collect_task_query_page(&conv, req, &rows)
+				before_all := desc ? number > 0 : number < 0
+				testing.expect_value(t, len(rows), before_all ? 3 : 0)
+				if before_all && len(rows) > 0 do testing.expect_value(t, rows[0].id, expected[0])
+			}
+		}
+	}
+}
 
 @(test)
 test_task_work_order_scope_and_pages :: proc(t: ^testing.T) {
@@ -175,6 +672,11 @@ test_task_query_order_filters_cursor_and_indexes :: proc(t: ^testing.T) {
 			for {
 				page := make([dynamic]pr.Task)
 				page_result := collect_task_query_page(&conv, reference_req, &page)
+				expected_cache := [8]btree.Cache_Mode{.Numeric, .Numeric, .Text, .None, .Numeric, .Text, .Numeric, .Text}
+				expected_projection := [8]Task_Numeric_Projection{.Enum_Value, .Enum_Value, .Time, .Time, .Time, .Time, .Enum_Value, .Time}
+				testing.expect_value(t, conv.task_query_indexes.trees[sort_kind][direction].cache, expected_cache[sort_kind])
+				testing.expect_value(t, conv.task_query_indexes.trees[sort_kind][direction].projection, expected_projection[sort_kind])
+				testing.expect_value(t, conv.task_query_indexes.trees[sort_kind][direction].descending, reference_req.descending)
 				for task in page do append(&actual, task.id)
 				if !page_result.has_more {
 					delete(page)
