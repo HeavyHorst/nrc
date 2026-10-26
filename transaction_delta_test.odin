@@ -53,7 +53,7 @@ transaction_delta_asset_preview_patch_body :: proc(conv_id: pr.ConversationID, a
 	return b
 }
 
-transaction_delta_relation_contains :: proc(tree: ^btree.BTreeG(Entity_Reference_Key), expected: Entity_Reference_Key) -> bool {
+transaction_delta_relation_contains :: proc(tree: ^btree.BTreeG(Entity_Reference_Key, Entity_Reference_Order), expected: Entity_Reference_Key) -> bool {
 	it := btree.iter(tree)
 	defer btree.iter_destroy(&it)
 	if !btree.iter_seek(&it, expected) do return false

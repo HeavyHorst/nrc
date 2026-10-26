@@ -9,6 +9,64 @@ import "core:testing"
 
 import hgl "../hegel"
 
+Test_Int_Order :: Static_Order(int, No_Projection, test_cmp_int_static)
+Test_I32_Order :: Static_Order(i32, No_Projection, test_cmp_i32_static)
+Test_U64_Order :: Static_Order(u64, No_Projection, test_cmp_u64_static)
+
+test_cmp_int_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return test_cmp_int((^int)(a)^, (^int)(b)^)
+}
+
+test_cmp_i32_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return test_cmp_i32((^i32)(a)^, (^i32)(b)^)
+}
+
+test_cmp_u64_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return test_cmp_u64((^u64)(a)^, (^u64)(b)^)
+}
+
+Test_Int_Descending_Order :: Static_Order(int, No_Projection, test_cmp_int_descending_static)
+
+test_cmp_int_descending_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return test_cmp_int((cast(^int)b)^, (cast(^int)a)^)
+}
+
+@(test)
+test_static_integer_descending_order :: proc(t: ^testing.T) {
+	// A primitive-key fast path must not override the static policy, even
+	// without a runtime comparator or the text-descending option.
+	tr := create_ordered(int, Test_Int_Descending_Order, Options{degree = 2})
+	defer destroy(&tr)
+	hint: Path_Hint
+	for key in ([?]int{4, 10, 2, 8, 6}) {
+		_, replaced := set_hint(&tr, key, &hint)
+		testing.expect(t, !replaced)
+	}
+	it := iter(&tr)
+	defer iter_destroy(&it)
+	expected := 10
+	for ok := iter_first(&it); ok; ok = iter_next(&it) {
+		testing.expect_value(t, item(&it), expected)
+		expected -= 2
+	}
+	testing.expect_value(t, expected, 0)
+	for key in ([?]int{2, 4, 6, 8, 10}) {
+		value, found := get_hint(&tr, key, &hint)
+		testing.expect(t, found)
+		testing.expect_value(t, value, key)
+	}
+	testing.expect(t, iter_seek(&it, 7))
+	testing.expect_value(t, item(&it), 6)
+	testing.expect(t, iter_seek_hint(&it, 5, &hint))
+	testing.expect_value(t, item(&it), 4)
+	removed, found := remove_hint(&tr, 6, &hint)
+	testing.expect(t, found)
+	testing.expect_value(t, removed, 6)
+	testing.expect(t, iter_seek(&it, 7))
+	testing.expect_value(t, item(&it), 4)
+	testing.expect_value(t, count(&tr), 4)
+}
+
 test_cmp_int :: proc(a, b: int) -> int {
 	if a < b {
 		return -1
@@ -111,7 +169,7 @@ btree_test_collect_cb :: proc(item: int) -> bool {
 	return true
 }
 
-btree_test_collect_scan :: proc(tr: ^BTreeG(int)) -> [dynamic]int {
+btree_test_collect_scan :: proc(tr: ^BTreeG(int, Test_Int_Order)) -> [dynamic]int {
 	items := make([dynamic]int, 0, max(count(tr), 1))
 	btree_test_collect_target = &items
 	scan(tr, btree_test_collect_cb)
@@ -119,7 +177,7 @@ btree_test_collect_scan :: proc(tr: ^BTreeG(int)) -> [dynamic]int {
 	return items
 }
 
-btree_test_collect_reverse :: proc(tr: ^BTreeG(int)) -> [dynamic]int {
+btree_test_collect_reverse :: proc(tr: ^BTreeG(int, Test_Int_Order)) -> [dynamic]int {
 	items := make([dynamic]int, 0, max(count(tr), 1))
 	btree_test_collect_target = &items
 	reverse(tr, btree_test_collect_cb)
@@ -127,7 +185,7 @@ btree_test_collect_reverse :: proc(tr: ^BTreeG(int)) -> [dynamic]int {
 	return items
 }
 
-btree_test_collect_ascend :: proc(tr: ^BTreeG(int), pivot: int) -> [dynamic]int {
+btree_test_collect_ascend :: proc(tr: ^BTreeG(int, Test_Int_Order), pivot: int) -> [dynamic]int {
 	items := make([dynamic]int, 0, max(count(tr), 1))
 	btree_test_collect_target = &items
 	ascend(tr, pivot, btree_test_collect_cb)
@@ -135,7 +193,7 @@ btree_test_collect_ascend :: proc(tr: ^BTreeG(int), pivot: int) -> [dynamic]int 
 	return items
 }
 
-btree_test_collect_descend :: proc(tr: ^BTreeG(int), pivot: int) -> [dynamic]int {
+btree_test_collect_descend :: proc(tr: ^BTreeG(int, Test_Int_Order), pivot: int) -> [dynamic]int {
 	items := make([dynamic]int, 0, max(count(tr), 1))
 	btree_test_collect_target = &items
 	descend(tr, pivot, btree_test_collect_cb)
@@ -143,7 +201,7 @@ btree_test_collect_descend :: proc(tr: ^BTreeG(int), pivot: int) -> [dynamic]int
 	return items
 }
 
-btree_test_collect_ascend_hint :: proc(tr: ^BTreeG(int), pivot: int, hint: ^Path_Hint) -> [dynamic]int {
+btree_test_collect_ascend_hint :: proc(tr: ^BTreeG(int, Test_Int_Order), pivot: int, hint: ^Path_Hint) -> [dynamic]int {
 	items := make([dynamic]int, 0, max(count(tr), 1))
 	btree_test_collect_target = &items
 	ascend_hint(tr, pivot, hint, btree_test_collect_cb)
@@ -151,7 +209,7 @@ btree_test_collect_ascend_hint :: proc(tr: ^BTreeG(int), pivot: int, hint: ^Path
 	return items
 }
 
-btree_test_collect_descend_hint :: proc(tr: ^BTreeG(int), pivot: int, hint: ^Path_Hint) -> [dynamic]int {
+btree_test_collect_descend_hint :: proc(tr: ^BTreeG(int, Test_Int_Order), pivot: int, hint: ^Path_Hint) -> [dynamic]int {
 	items := make([dynamic]int, 0, max(count(tr), 1))
 	btree_test_collect_target = &items
 	descend_hint(tr, pivot, hint, btree_test_collect_cb)
@@ -174,7 +232,7 @@ btree_test_model_keys_sorted :: proc(model: map[int]bool) -> [dynamic]int {
 
 btree_test_check_node :: proc(
 	t: ^testing.T,
-	tr: ^BTreeG(int),
+	tr: ^BTreeG(int, Test_Int_Order),
 	n: ^Node(int),
 	is_root: bool,
 	depth: int,
@@ -243,7 +301,7 @@ btree_test_check_node :: proc(
 	return
 }
 
-btree_test_assert_tree_sane :: proc(t: ^testing.T, tr: ^BTreeG(int)) {
+btree_test_assert_tree_sane :: proc(t: ^testing.T, tr: ^BTreeG(int, Test_Int_Order)) {
 	if tr.root == nil {
 		testing.expect_value(t, count(tr), 0)
 		return
@@ -290,7 +348,7 @@ btree_test_collect_metrics :: proc(n: ^Node(int), depth: int, metrics: ^BTREE_Te
 	}
 }
 
-btree_test_tree_metrics :: proc(tr: ^BTreeG(int)) -> BTREE_Test_Metrics {
+btree_test_tree_metrics :: proc(tr: ^BTreeG(int, Test_Int_Order)) -> BTREE_Test_Metrics {
 	metrics := BTREE_Test_Metrics{}
 	if tr.root == nil {
 		return metrics
@@ -300,7 +358,7 @@ btree_test_tree_metrics :: proc(tr: ^BTreeG(int)) -> BTREE_Test_Metrics {
 	return metrics
 }
 
-btree_test_assert_tree_matches_model :: proc(t: ^testing.T, tr: ^BTreeG(int), model: map[int]bool) {
+btree_test_assert_tree_matches_model :: proc(t: ^testing.T, tr: ^BTreeG(int, Test_Int_Order), model: map[int]bool) {
 	btree_test_assert_tree_sane(t, tr)
 	testing.expect_value(t, count(tr), len(model))
 
@@ -359,7 +417,7 @@ BTREE_Test_Node_Find_Case :: struct {
 
 @(test)
 test_btree_node_find_linear_search_positions :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 32})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 32})
 	defer destroy(&tr)
 
 	n := node_new(&tr, true)
@@ -390,8 +448,8 @@ test_btree_node_find_linear_search_positions :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_btree_node_find_linear_search_positions_i32_simd_path :: proc(t: ^testing.T) {
-	tr := create(i32, test_cmp_i32, Options{degree = 32})
+test_btree_node_find_linear_search_positions_i32 :: proc(t: ^testing.T) {
+	tr := create_ordered(i32, Test_I32_Order, Options{degree = 32})
 	defer destroy(&tr)
 
 	n := node_new(&tr, true)
@@ -425,8 +483,8 @@ test_btree_node_find_linear_search_positions_i32_simd_path :: proc(t: ^testing.T
 }
 
 @(test)
-test_btree_node_find_linear_search_positions_u64_simd_path :: proc(t: ^testing.T) {
-	tr := create(u64, test_cmp_u64, Options{degree = 32})
+test_btree_node_find_linear_search_positions_u64 :: proc(t: ^testing.T) {
+	tr := create_ordered(u64, Test_U64_Order, Options{degree = 32})
 	defer destroy(&tr)
 
 	n := node_new(&tr, true)
@@ -456,11 +514,11 @@ test_btree_node_find_linear_search_positions_u64_simd_path :: proc(t: ^testing.T
 }
 
 @(test)
-test_btree_node_lsearch_direct_i32_matches_scalar_boundaries :: proc(t: ^testing.T) {
-	tr := create(i32, test_cmp_i32, Options{degree = 32})
+test_btree_node_lsearch_i32_matches_scalar_boundaries :: proc(t: ^testing.T) {
+	tr := create_ordered(i32, Test_I32_Order, Options{degree = 32})
 	defer destroy(&tr)
 
-	sizes := [5]int{SIMD_LINEAR_SEARCH_MIN_ITEMS - 1, SIMD_LINEAR_SEARCH_MIN_ITEMS, SIMD_LINEAR_SEARCH_MIN_ITEMS + 1, 16, LINEAR_SEARCH_NODE_CUTOFF}
+	sizes := [5]int{7, 8, 9, 16, LINEAR_SEARCH_NODE_CUTOFF}
 
 	for size in sizes {
 		testing.expect(t, size > 0, "size fixture must be positive")
@@ -473,7 +531,7 @@ test_btree_node_lsearch_direct_i32_matches_scalar_boundaries :: proc(t: ^testing
 
 		max_key := i32((size - 1) * 3)
 		for k := i32(-6); k <= max_key + 6; k += 1 {
-			direct_index, direct_found := node_lsearch_direct_i32(n, k)
+			direct_index, direct_found := node_lsearch(&tr, n, k)
 			scalar_index, scalar_found := btree_test_node_lsearch_scalar_i32(n, k)
 			testing.expect_value(t, direct_index, scalar_index)
 			testing.expect_value(t, direct_found, scalar_found)
@@ -488,11 +546,11 @@ test_btree_node_lsearch_direct_i32_matches_scalar_boundaries :: proc(t: ^testing
 }
 
 @(test)
-test_btree_node_lsearch_direct_u64_matches_scalar_boundaries :: proc(t: ^testing.T) {
-	tr := create(u64, test_cmp_u64, Options{degree = 32})
+test_btree_node_lsearch_u64_matches_scalar_boundaries :: proc(t: ^testing.T) {
+	tr := create_ordered(u64, Test_U64_Order, Options{degree = 32})
 	defer destroy(&tr)
 
-	sizes := [5]int{SIMD_LINEAR_SEARCH_MIN_ITEMS - 1, SIMD_LINEAR_SEARCH_MIN_ITEMS, SIMD_LINEAR_SEARCH_MIN_ITEMS + 1, 18, LINEAR_SEARCH_NODE_CUTOFF}
+	sizes := [5]int{7, 8, 9, 18, LINEAR_SEARCH_NODE_CUTOFF}
 
 	for size in sizes {
 		testing.expect(t, size > 0, "size fixture must be positive")
@@ -505,7 +563,7 @@ test_btree_node_lsearch_direct_u64_matches_scalar_boundaries :: proc(t: ^testing
 
 		max_key := u64((size - 1) * 5)
 		for k := u64(0); k <= max_key + 9; k += 1 {
-			direct_index, direct_found := node_lsearch_direct_u64(n, k)
+			direct_index, direct_found := node_lsearch(&tr, n, k)
 			scalar_index, scalar_found := btree_test_node_lsearch_scalar_u64(n, k)
 			testing.expect_value(t, direct_index, scalar_index)
 			testing.expect_value(t, direct_found, scalar_found)
@@ -521,7 +579,7 @@ test_btree_node_lsearch_direct_u64_matches_scalar_boundaries :: proc(t: ^testing
 
 @(test)
 test_btree_linear_search_cutoff_get_remove_parity :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 16})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 16})
 	defer destroy(&tr)
 
 	for i := 0; i < 4000; i += 2 {
@@ -554,7 +612,7 @@ test_btree_linear_search_cutoff_get_remove_parity :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_set_get_remove :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int)
+	tr := create_ordered(int, Test_Int_Order)
 	defer destroy(&tr)
 
 	seed_values := [6]int{5, 1, 9, 3, 7, 2}
@@ -584,7 +642,7 @@ test_btree_set_get_remove :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_load_presorted_fast_path :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int)
+	tr := create_ordered(int, Test_Int_Order)
 	defer destroy(&tr)
 
 	for i := 1; i <= 500; i += 1 {
@@ -604,7 +662,7 @@ test_btree_load_presorted_fast_path :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_load_falls_back_for_out_of_order_and_replace :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int)
+	tr := create_ordered(int, Test_Int_Order)
 	defer destroy(&tr)
 
 	_, replaced := load(&tr, 10)
@@ -631,7 +689,7 @@ test_btree_load_falls_back_for_out_of_order_and_replace :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_iterator_seek_and_prev :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int)
+	tr := create_ordered(int, Test_Int_Order)
 	defer destroy(&tr)
 
 	for i := 1; i <= 10; i += 1 {
@@ -659,7 +717,7 @@ test_btree_iterator_seek_and_prev :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_scan_reverse_ascend_descend_and_hints :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 8})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 8})
 	defer destroy(&tr)
 
 	for i := 0; i < 1000; i += 10 {
@@ -715,7 +773,7 @@ test_btree_scan_reverse_ascend_descend_and_hints :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_iterator_seek_next_prev_sequences :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int)
+	tr := create_ordered(int, Test_Int_Order)
 	defer destroy(&tr)
 
 	for i := 0; i < 20000; i += 2 {
@@ -757,7 +815,7 @@ test_btree_iterator_seek_next_prev_sequences :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_random_ops_against_model :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 16})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 16})
 	defer destroy(&tr)
 
 	model := make(map[int]bool, 4096)
@@ -811,7 +869,7 @@ test_btree_random_ops_against_model :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_get_hint_parity_under_random_churn :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 8})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 8})
 	defer destroy(&tr)
 
 	model := make(map[int]bool, 8192)
@@ -901,7 +959,7 @@ test_btree_get_hint_parity_under_random_churn :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_insert_delete_cycles_and_hints :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 4})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 4})
 	defer destroy(&tr)
 
 	keys := make([dynamic]int, 0, 256)
@@ -941,7 +999,7 @@ test_btree_insert_delete_cycles_and_hints :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_clear_and_reuse :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int)
+	tr := create_ordered(int, Test_Int_Order)
 	defer destroy(&tr)
 
 	for i := 0; i < 128; i += 1 {
@@ -969,7 +1027,7 @@ test_btree_clear_and_reuse :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_split_merge_boundaries :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 4})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 4})
 	defer destroy(&tr)
 
 	for i := 0; i < 512; i += 1 {
@@ -1002,7 +1060,7 @@ test_btree_split_merge_boundaries :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_empty_tree_and_iterator_edges :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int)
+	tr := create_ordered(int, Test_Int_Order)
 	defer destroy(&tr)
 
 	_, ok := get(&tr, 42)
@@ -1035,7 +1093,7 @@ test_btree_empty_tree_and_iterator_edges :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_hint_fallback_with_stale_paths :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 8})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 8})
 	defer destroy(&tr)
 
 	for i := 0; i < 4096; i += 2 {
@@ -1062,7 +1120,7 @@ test_btree_hint_fallback_with_stale_paths :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_hint_generation_sync_after_structural_change :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 2})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 2})
 	defer destroy(&tr)
 
 	hint := Path_Hint{}
@@ -1098,7 +1156,7 @@ test_btree_hint_generation_sync_after_structural_change :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_hint_generation_advances_on_root_split :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 2})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 2})
 	defer destroy(&tr)
 
 	// degree=2 => max_items=3 at root
@@ -1118,7 +1176,7 @@ test_btree_hint_generation_advances_on_root_split :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_set_hint_heavy_split_insert_and_replace :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 2})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 2})
 	defer destroy(&tr)
 
 	model := make(map[int]bool, 8192)
@@ -1152,7 +1210,7 @@ test_btree_set_hint_heavy_split_insert_and_replace :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_top_down_insert_replaces_promoted_median :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 2})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 2})
 	defer destroy(&tr)
 
 	// Grow the tree until some internal node has a full child. Re-inserting that
@@ -1194,7 +1252,7 @@ test_btree_top_down_insert_replaces_promoted_median :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_delete_heavy_rebalance_with_and_without_hints :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 2})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 2})
 	defer destroy(&tr)
 
 	model := make(map[int]bool, 8192)
@@ -1240,7 +1298,7 @@ test_btree_delete_heavy_rebalance_with_and_without_hints :: proc(t: ^testing.T) 
 
 @(test)
 test_btree_large_random_insert_delete :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 16})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 16})
 	defer destroy(&tr)
 
 	N :: 20_000
@@ -1291,7 +1349,7 @@ test_btree_large_random_insert_delete :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_adversarial_delete_patterns :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 8})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 8})
 	defer destroy(&tr)
 
 	N :: 4096
@@ -1344,7 +1402,7 @@ test_btree_adversarial_delete_patterns :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_repeated_full_drain_and_repopulate :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 8})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 8})
 	defer destroy(&tr)
 
 	N :: 3000
@@ -1383,7 +1441,7 @@ test_btree_repeated_full_drain_and_repopulate :: proc(t: ^testing.T) {
 
 @(test)
 test_btree_iterator_mixed_direction_walk :: proc(t: ^testing.T) {
-	tr := create(int, test_cmp_int, Options{degree = 8})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = 8})
 	defer destroy(&tr)
 
 	N :: 1024
@@ -1445,7 +1503,7 @@ btree_test_next_permutation :: proc(values: []int) -> bool {
 	return true
 }
 
-btree_test_assert_present_keys :: proc(t: ^testing.T, tr: ^BTreeG(int), present: []bool) {
+btree_test_assert_present_keys :: proc(t: ^testing.T, tr: ^BTreeG(int, Test_Int_Order), present: []bool) {
 	btree_test_assert_tree_sane(t, tr)
 
 	expected := make([dynamic]int, 0, len(present))
@@ -1472,7 +1530,7 @@ btree_test_assert_present_keys :: proc(t: ^testing.T, tr: ^BTreeG(int), present:
 }
 
 btree_test_run_insert_delete_order :: proc(t: ^testing.T, degree: int, insert_order, delete_order: []int) {
-	tr := create(int, test_cmp_int, Options{degree = degree})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = degree})
 	defer destroy(&tr)
 
 	present := make([]bool, len(insert_order))
@@ -1597,7 +1655,7 @@ prop_model_equivalence_mixed_ops :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.B
 	}
 	key_range := int(key_range_raw)
 
-	tr := create(int, test_cmp_int, Options{degree = degree})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = degree})
 	defer destroy(&tr)
 
 	model := make(map[int]bool, key_range)
@@ -1700,6 +1758,460 @@ prop_model_equivalence_mixed_ops :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.B
 	return hgl.valid()
 }
 
+// Text eligibility is deliberately not part of identity: unsupported query
+// keys must still find eligible records, and replacements can change eligibility.
+Text_Test_Item :: struct {
+	text:        string,
+	id:          int,
+	version:     int,
+	unsupported: bool,
+}
+
+text_test_cmp :: proc(a, b: Text_Test_Item) -> int {
+	if a.text < b.text do return -1
+	if a.text > b.text do return 1
+	return test_cmp_int(a.id, b.id)
+}
+
+text_test_cmp_desc :: proc(a, b: Text_Test_Item) -> int {
+	if a.text < b.text do return 1
+	if a.text > b.text do return -1
+	return test_cmp_int(a.id, b.id)
+}
+
+text_test_key :: proc(a: Text_Test_Item) -> (string, bool) {
+	return a.text, !a.unsupported
+}
+
+Text_Test_Order :: Static_Order(Text_Test_Item, No_Projection, text_test_cmp_static, text_test_key_static)
+
+text_test_cmp_static :: proc(a, b: rawptr, descending: bool) -> int {
+	if descending do return text_test_cmp_desc((cast(^Text_Test_Item)a)^, (cast(^Text_Test_Item)b)^)
+	return text_test_cmp((cast(^Text_Test_Item)a)^, (cast(^Text_Test_Item)b)^)
+}
+
+text_test_key_static :: proc(item: rawptr) -> (text: string, ok: bool) {
+	return text_test_key((cast(^Text_Test_Item)item)^)
+}
+
+text_test_fixture :: proc(i: int) -> Text_Test_Item {
+	// Start with a long shared prefix, then progressively shorten it after
+	// reads have warmed the tree. Three IDs per text exercise comparator ties.
+	texts := [?]string {
+		"abcdefghijklmnopqrstuvwxyz/0123456789/common/prefix/alpha",
+		"abcdefghijklmnopqrstuvwxyz/0123456789/common/prefix/beta",
+		"abcdefghijklmnopqrstuvwxyz/0123456789/common/prefix/gamma",
+		"abcdefghijklmnopqrstuvwxyz/0123456789/common/prefix/",
+		"abcdefghijklmnopqrstuvwxyz/0123456789/common/",
+		"abc",
+		"ab",
+		"a",
+		"",
+		"a\x00",
+		"a\x00b",
+		"a\x7f",
+		"a\x80",
+		"a\xff",
+		"\x80",
+		"\xff",
+		"common/é",
+		"common/ê",
+		"common/\xc3",
+		"abcd1xxxA",
+		"abcd2xxxB",
+		"abcd\x00xxxA",
+		"abcd\x00xxxB",
+		"abcdefgh1",
+		"abcdefgh2",
+	}
+	return {text = texts[(i / 3) % len(texts)], id = i}
+}
+
+// Deliberately independent of the tree comparator: compare raw bytes explicitly,
+// reverse only text ordering, and retain ascending secondary IDs in both orders.
+text_test_model_compare :: proc(a, b: Text_Test_Item, descending: bool) -> int {
+	text_order := 0
+	for i in 0 ..< min(len(a.text), len(b.text)) {
+		if a.text[i] != b.text[i] {
+			text_order = a.text[i] < b.text[i] ? -1 : 1
+			break
+		}
+	}
+	if text_order == 0 && len(a.text) != len(b.text) do text_order = len(a.text) < len(b.text) ? -1 : 1
+	if text_order != 0 do return descending ? -text_order : text_order
+	if a.id == b.id do return 0
+	return a.id < b.id ? -1 : 1
+}
+
+// The oracle uses only an independently sorted slice and public tree APIs.
+// Looking up every fixture (including missing and ineligible queries) after
+// every mutation both verifies lower bounds and warms caches for the next write.
+text_test_check :: proc(tr: ^BTreeG(Text_Test_Item, $Order), model: []Text_Test_Item, descending: bool, hint: ^Path_Hint) -> string {
+	want := make([]Text_Test_Item, len(model))
+	defer delete(want)
+	copy(want, model)
+	slice.sort_by(want, proc(a, b: Text_Test_Item) -> bool {return text_test_model_compare(a, b, false) < 0})
+	if descending {
+		slice.sort_by(want, proc(a, b: Text_Test_Item) -> bool {return text_test_model_compare(a, b, true) < 0})
+	}
+	if count(tr) != len(want) do return "text count mismatch"
+	it := iter(tr)
+	defer iter_destroy(&it)
+	n := 0
+	for ok := iter_first(&it); ok; ok = iter_next(&it) {
+		if n >= len(want) do return "extra forward item"
+		if item(&it) != want[n] do return "text forward mismatch"
+		n += 1
+	}
+	if n != len(want) do return "missing forward item"
+	n = len(want)
+	for ok := iter_last(&it); ok; ok = iter_prev(&it) {
+		n -= 1
+		if n < 0 do return "extra reverse item"
+		if item(&it) != want[n] do return "text reverse mismatch"
+	}
+	if n != 0 do return "missing reverse item"
+	// Also query every live model key, including keys outside the fixed fixture.
+	// An absent secondary ID for each text checks lower bounds within tie runs.
+	for i in 0 ..< 102 + 2 * len(want) {
+		key := text_test_fixture(i)
+		// Include both an absent tie-breaker and a key beyond the entire tree.
+		if i == 96 do key = {
+			text = "a",
+			id   = -1,
+		}
+		if i == 97 do key = {
+			text = "\xff\xff",
+			id   = 999,
+		}
+		if i >= 98 && i < 102 {
+			// Misses inside and outside long-prefix intervals must preserve
+			// lower bounds, including descents through outer children.
+			misses := [?]string {
+				"aa",
+				"abcdefghijklmnopqrstuvwxyz/0123456789/common/prefix/alph",
+				"abcdefghijklmnopqrstuvwxyz/0123456789/common/prefix/alphaz",
+				"abcdefghijklmnopqrstuvwxyz/0123456789/common/prefiy",
+			}
+			key.text = misses[i - 98]
+			key.id = -1
+		}
+		if i >= 102 {
+			key = want[(i - 102) / 2]
+			if i % 2 != 0 do key.id = -1
+		}
+		lower := 0
+		for lower < len(want) {
+			c := text_test_model_compare(want[lower], key, descending)
+			if c >= 0 do break
+			lower += 1
+		}
+		exists := lower < len(want) && text_test_model_compare(want[lower], key, descending) == 0
+		for unsupported in ([?]bool{false, true}) {
+			key.unsupported = unsupported
+			v, ok := get(tr, key)
+			if ok != exists do return "text get presence mismatch"
+			if ok && v != want[lower] do return "text get value mismatch"
+			v, ok = get_hint(tr, key, hint)
+			if ok != exists do return "text hinted get presence mismatch"
+			if ok && v != want[lower] do return "text hinted get value mismatch"
+			ok = iter_seek(&it, key)
+			if ok != (lower < len(want)) do return "text seek presence mismatch"
+			if ok && item(&it) != want[lower] do return "text seek lower bound mismatch"
+			ok = iter_seek_hint(&it, key, hint)
+			if ok != (lower < len(want)) do return "text hinted seek presence mismatch"
+			if ok && item(&it) != want[lower] do return "text hinted seek lower bound mismatch"
+		}
+		// Exclusive pages around present AND absent cursors. Compare every item,
+		// including crossing child boundaries and exhausting either tree end.
+		key.unsupported = i % 2 != 0
+		for reverse in ([?]bool{false, true}) {
+			ok := iter_seek(&it, key)
+			index := lower
+			if reverse {
+				index -= 1
+				ok = ok ? iter_prev(&it) : iter_last(&it)
+			} else if exists {
+				index += 1
+				ok = iter_next(&it)
+			}
+			for offset in 0 ..< 1 + i % 7 {
+				if ok != (index >= 0 && index < len(want)) do return "text page length mismatch"
+				if !ok do break
+				if item(&it) != want[index] do return "text page item mismatch"
+				index += reverse ? -1 : 1
+				ok = reverse ? iter_prev(&it) : iter_next(&it)
+			}
+		}
+	}
+	return ""
+}
+
+text_test_mutate :: proc(
+	tr: ^BTreeG(Text_Test_Item, $Order),
+	model: ^[dynamic]Text_Test_Item,
+	value: Text_Test_Item,
+	op: int,
+	hint: ^Path_Hint,
+	other: ^BTreeG(Text_Test_Item, Order) = nil,
+	other_hint: ^Path_Hint = nil,
+) -> string {
+	index := -1
+	for v, i in model^ {
+		if text_test_model_compare(v, value, false) == 0 {index = i; break}
+	}
+	prev: Text_Test_Item
+	found: bool
+	switch op {
+	case 0:
+		prev, found = set(tr, value)
+	case 1:
+		prev, found = set_hint(tr, value, hint)
+	case 2:
+		prev, found = load(tr, value)
+	case 3:
+		prev, found = remove(tr, value)
+	case 4:
+		prev, found = remove_hint(tr, value, hint)
+	}
+	if found != (index >= 0) do return "text mutation presence mismatch"
+	if found && prev != model^[index] do return "text mutation previous value mismatch"
+	if other != nil {
+		other_prev: Text_Test_Item
+		other_found: bool
+		switch op {
+		case 0:
+			other_prev, other_found = set(other, value)
+		case 1:
+			other_prev, other_found = set_hint(other, value, other_hint)
+		case 2:
+			other_prev, other_found = load(other, value)
+		case 3:
+			other_prev, other_found = remove(other, value)
+		case 4:
+			other_prev, other_found = remove_hint(other, value, other_hint)
+		}
+		if other_found != found do return "text cached/uncached mutation presence differs"
+		if found && other_prev != prev do return "text cached/uncached mutation previous value differs"
+	}
+	if op >= 3 {
+		if index >= 0 do ordered_remove(model, index)
+	} else if index >= 0 {
+		model^[index] = value
+	} else {
+		append(model, value)
+	}
+	return ""
+}
+
+@(test)
+test_text_search_mutations :: proc(t: ^testing.T) {
+	text_test_search_mutations_order(t, Text_Test_Order)
+}
+
+@(test)
+test_text_remove_prefix_boundaries :: proc(t: ^testing.T) {
+	for descending in ([?]bool{false, true}) {
+		tr := create_ordered(Text_Test_Item, Text_Test_Order, Options{degree = 3}, cache = .Text, descending = descending)
+		defer destroy(&tr)
+		model := make([dynamic]Text_Test_Item)
+		defer delete(model)
+		hint: Path_Hint
+		texts := [?]string {
+			"middle/common/a",
+			"middle/common/b",
+			"middle/common/c",
+			"middle/common/d",
+			"middle/common/e",
+			"middle/common/f",
+			"middle/common/g",
+			"middle/common/h",
+		}
+		for i in 0 ..< 128 {
+			value := Text_Test_Item {
+				text = texts[i / 16],
+				id   = i,
+			}
+			testing.expect_value(t, text_test_mutate(&tr, &model, value, 0, &hint), "")
+		}
+		// Border subtrees need not share the internal separators' prefix.
+		// The short right-border key forces an optimistic wrong descent in
+		// ascending order; no item may be removed before a full-key match.
+		for text in ([?]string{"a", "z"}) {
+			testing.expect_value(t, text_test_mutate(&tr, &model, {text = text, id = 200}, 0, &hint), "")
+		}
+		testing.expect_value(t, text_test_check(&tr, model[:], descending, &hint), "")
+		for text in ([?]string{"z", "a", "", "middle/common/", "middle/common/z", "zzzz"}) {
+			value := Text_Test_Item {
+				text = text,
+				id   = 200,
+			}
+			for _ in 0 ..< 2 {
+				testing.expect_value(t, text_test_mutate(&tr, &model, value, 3, &hint), "")
+				testing.expect_value(t, text_test_check(&tr, model[:], descending, &hint), "")
+			}
+		}
+	}
+}
+
+text_test_search_mutations_order :: proc(t: ^testing.T, $Order: typeid) {
+	for degree in ([?]int{2, 3, 0}) {
+		for descending in ([?]bool{false, true}) {
+			tr: BTreeG(Text_Test_Item, Order)
+			init_ordered(&tr, Options{degree = degree}, cache = .Text, descending = descending)
+			defer destroy(&tr)
+			model := make([dynamic]Text_Test_Item)
+			defer delete(model)
+			hint: Path_Hint
+			// Splits, eligibility-changing replacements, merges to empty, then
+			// ascending/descending ordered load into a previously used tree.
+			for phase in 0 ..< 4 {
+				for j in 0 ..< 96 {
+					i := j
+					if phase == 2 do i = (j * 37) % 96
+					v := text_test_fixture(i)
+					op := j % 2
+					if phase == 1 {
+						v.version = 1
+						v.unsupported = j % 7 == 0
+					}
+					if phase == 2 do op = 3 + j % 2
+					if phase == 3 {
+						// Identical text and ascending IDs are sorted in both modes.
+						v = {
+							text = "reload/common/prefix",
+							id   = j,
+						}
+						op = 2
+					}
+					testing.expect_value(t, text_test_mutate(&tr, &model, v, op, &hint), "")
+					// Warm the new load keys as well as the original fixture keys.
+					_, _ = get(&tr, v)
+					testing.expect_value(t, text_test_check(&tr, model[:], descending, &hint), "")
+				}
+			}
+		}
+	}
+}
+
+@(test)
+test_hegel_text_search_model :: proc(t: ^testing.T) {
+	if !hgl.can_run() do return
+	result, err := hgl.run(prop_text_search_model, nil, {test_cases = 200})
+	testing.expectf(t, err == nil, "text model property failed: err=%v interesting=%v", err, result.interesting_test_cases)
+}
+
+prop_text_search_model :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.Body_Result {
+	config, err := hgl.draw_i64(tc, 0, 11)
+	if err == .Stop_Test do return hgl.abort()
+	if err != nil do return hgl.interesting("draw text configuration")
+	degrees := [?]int{2, 3, 0}
+	descending := config % 2 != 0
+	// Reuse generated texts across mutations so random bytes exercise successful
+	// replacements/deletions and ID ties, not just unrelated insertion misses.
+	prefix, prefix_err := hgl.draw_bytes(tc, 0, 40)
+	if prefix_err == .Stop_Test do return hgl.abort()
+	if prefix_err != nil do return hgl.interesting("draw text prefix")
+	defer delete(prefix)
+	storage: [16][104]byte
+	texts: [16]string
+	for &text, i in texts {
+		suffix, suffix_err := hgl.draw_bytes(tc, 0, 64)
+		if suffix_err == .Stop_Test do return hgl.abort()
+		if suffix_err != nil do return hgl.interesting("draw text suffix")
+		prefix_text := string(prefix)
+		switch i % 4 {
+		case 1:
+			prefix_text = "\x00\x00\x00\x00\x00\x00\x00\x00"
+		case 2:
+			prefix_text = "\xff\xff\xff\xff\xff\xff\xff\xff"
+		case 3:
+			prefix_text = ""
+		}
+		copy(storage[i][:], transmute([]byte)prefix_text)
+		copy(storage[i][len(prefix_text):], suffix)
+		length := len(prefix_text) + len(suffix)
+		text = length == 0 ? "" : string(storage[i][:length])
+		delete(suffix)
+	}
+	// Compare uncached and cached instances of the same static policy.
+	tr := create_ordered(Text_Test_Item, Text_Test_Order, Options{degree = degrees[(config / 2) % len(degrees)]}, descending = descending)
+	defer destroy(&tr)
+	static_tr := create_ordered(
+		Text_Test_Item,
+		Text_Test_Order,
+		Options{degree = degrees[(config / 2) % len(degrees)]},
+		cache = .Text,
+		descending = descending,
+	)
+	defer destroy(&static_tr)
+	static_hint: Path_Hint
+	model := make([dynamic]Text_Test_Item)
+	defer delete(model)
+	hint: Path_Hint
+	// Start above a full degree-32 leaf, then warm every key before mutations.
+	// Generated texts share three IDs each, so both word and full-text ties occur.
+	for i in 0 ..< 96 {
+		v := text_test_fixture(i)
+		if i >= 48 do v.text = texts[(i - 48) / 3]
+		if failure := text_test_mutate(&tr, &model, v, 0, &hint, &static_tr, &static_hint); failure != "" {
+			return hgl.interesting(failure)
+		}
+	}
+	if failure := text_test_check(&static_tr, model[:], descending, &static_hint); failure != "" {
+		return hgl.interesting(failure)
+	}
+	// Exercise both read-after-write and mutation bursts without intervening
+	// reads that could refresh a stale cache before the next mutation.
+	check_interval := config < 6 ? 1 : 8
+	for step in 0 ..< 128 {
+		draw, draw_err := hgl.draw_i64(tc, 0, 959)
+		if draw_err == .Stop_Test do return hgl.abort()
+		if draw_err != nil do return hgl.interesting("draw text operation")
+		v := text_test_fixture(int(draw % 96))
+		if draw % 96 >= 48 do v.text = texts[(int(draw % 96) - 48) / 3]
+		// Force some operations onto live keys even when the generated stream
+		// otherwise keeps selecting absent keys. Payload changes check replacement.
+		if step % 4 == 0 && len(model) > 0 do v = model[int(draw) % len(model)]
+		v.version = step
+		// Keep burst cases mostly eligible so they exercise maintained words,
+		// rather than spending almost every search in the fallback comparator.
+		v.unsupported = draw >= 480 && (config < 6 || step % 17 == 0)
+		op := int(draw / 96) % 5
+		if failure := text_test_mutate(&tr, &model, v, op, &hint, &static_tr, &static_hint); failure != "" {
+			return hgl.interesting(failure)
+		}
+		if (step + 1) % check_interval == 0 {
+			if failure := text_test_check(&tr, model[:], descending, &hint); failure != "" {
+				return hgl.interesting(failure)
+			}
+			if failure := text_test_check(&static_tr, model[:], descending, &static_hint); failure != "" {
+				return hgl.interesting(failure)
+			}
+		}
+	}
+	// Generated successful deletions force shrinking and root collapse, with
+	// warmed searches between batches. Both trees keep sharing the same oracle.
+	for len(model) > 0 {
+		index, draw_err := hgl.draw_i64(tc, 0, i64(len(model) - 1))
+		if draw_err == .Stop_Test do return hgl.abort()
+		if draw_err != nil do return hgl.interesting("draw text drain")
+		v := model[int(index)]
+		if failure := text_test_mutate(&tr, &model, v, 3 + int(index % 2), &hint, &static_tr, &static_hint); failure != "" {
+			return hgl.interesting(failure)
+		}
+		if len(model) % check_interval == 0 {
+			if failure := text_test_check(&tr, model[:], descending, &hint); failure != "" {
+				return hgl.interesting(failure)
+			}
+			if failure := text_test_check(&static_tr, model[:], descending, &static_hint); failure != "" {
+				return hgl.interesting(failure)
+			}
+		}
+	}
+	return hgl.valid()
+}
+
 @(test)
 test_hegel_insert_order_independence :: proc(t: ^testing.T) {
 	if !hgl.can_run() {
@@ -1726,7 +2238,7 @@ prop_insert_order_independence :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.Bod
 	}
 	key_count := int(count_raw)
 
-	tr := create(int, test_cmp_int, Options{degree = degree})
+	tr := create_ordered(int, Test_Int_Order, Options{degree = degree})
 	defer destroy(&tr)
 
 	insert_order, insert_order_err := btree_test_draw_permutation(tc, key_count)
@@ -1807,4 +2319,74 @@ prop_insert_order_independence :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.Bod
 	}
 
 	return hgl.valid()
+}
+
+Numeric_Test_Projection :: enum u8 {
+	Partial,
+	All_Tied,
+}
+Numeric_Test_Order :: Static_Order(u64, Numeric_Test_Projection, numeric_test_compare, static_no_text, numeric_test_word)
+
+numeric_test_compare :: proc(a, b: rawptr, descending: bool) -> int {
+	cmp := test_cmp_u64((^u64)(a)^, (^u64)(b)^)
+	return descending ? -cmp : cmp
+}
+
+numeric_test_word :: proc(item: rawptr, descending: bool, projection: rawptr) -> u64 {
+	// One policy supports both partial collisions and completely tied nodes.
+	word := (^Numeric_Test_Projection)(projection)^ == .Partial ? (^u64)(item)^ >> 4 : 0
+	return descending ? ~word : word
+}
+
+@(test)
+test_numeric_cache_mutations_and_seeks :: proc(t: ^testing.T) {
+	for config in ([?]struct {
+			cache:      Cache_Mode,
+			projection: Numeric_Test_Projection,
+		}{{.None, .Partial}, {.Numeric, .Partial}, {.Numeric, .All_Tied}}) {
+		for descending in ([?]bool{false, true}) {
+			for degree in ([?]int{2, 3, 32}) {
+				tr := create_ordered(
+					u64,
+					Numeric_Test_Order,
+					Options{degree = degree},
+					descending = descending,
+					cache = config.cache,
+					projection = config.projection,
+				)
+				defer destroy(&tr)
+				present: [129]bool
+				hint: Path_Hint
+				it := iter(&tr)
+				defer iter_destroy(&it)
+				for step in 0 ..< 2 * len(present) {
+					key := u64((step * 73) % len(present))
+					if step < len(present) {
+						_, replaced := set(&tr, key)
+						testing.expect(t, !replaced)
+						present[key] = true
+						_, replaced = set_hint(&tr, key, &hint)
+						testing.expect(t, replaced)
+					} else {
+						_, removed := remove(&tr, key)
+						testing.expect(t, removed)
+						present[key] = false
+					}
+					for query in 0 ..< len(present) + 1 {
+						value, found := get(&tr, u64(query))
+						testing.expect_value(t, found, query < len(present) && present[query])
+						if found do testing.expect_value(t, value, u64(query))
+						expected := descending ? min(query, len(present) - 1) : query
+						for expected >= 0 && expected < len(present) && !present[expected] {
+							expected += descending ? -1 : 1
+						}
+						ok := iter_seek(&it, u64(query))
+						testing.expect_value(t, ok, expected >= 0 && expected < len(present))
+						if ok do testing.expect_value(t, item(&it), u64(expected))
+					}
+				}
+				testing.expect_value(t, count(&tr), 0)
+			}
+		}
+	}
 }

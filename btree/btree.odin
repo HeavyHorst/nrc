@@ -1,18 +1,13 @@
 package btree
 
-import "base:intrinsics"
 import "core:mem"
-import "core:simd"
 
 DEFAULT_DEGREE :: 32
 MAX_HINT_DEPTH :: 8
+// A degree-2 tree with L levels needs at least 2^L - 1 items. The signed
+// int count therefore bounds its height below this many stack entries.
+MAX_ITER_DEPTH :: size_of(int) * 8
 LINEAR_SEARCH_NODE_CUTOFF :: 31
-SIMD_LINEAR_SEARCH_MIN_ITEMS :: 8
-
-SIMD_I32_LANE_INDICES :: simd.u32x8{0, 1, 2, 3, 4, 5, 6, 7}
-SIMD_I32_LANE_SENTINEL :: simd.u32x8{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
-SIMD_I64_LANE_INDICES :: simd.u64x4{0, 1, 2, 3}
-SIMD_I64_LANE_SENTINEL :: simd.u64x4{0xff, 0xff, 0xff, 0xff}
 
 CACHE_LINE_BYTES :: 64
 
@@ -34,6 +29,35 @@ Options :: struct {
 	degree: int,
 }
 
+Cache_Mode :: enum u8 {
+	None,
+	Text,
+	Numeric,
+}
+
+// Policies without selectable numeric projections use this single-value type.
+No_Projection :: enum u8 {
+	None,
+}
+
+// Construction checks the policy's item type against the tree. Adapters must
+// cast item/projection pointers to the declared types. Procedure constants must
+// pass through a polymorphic procedure before invocation on this Odin version.
+Static_Order :: struct(
+	$Item: typeid,
+	$Projection: typeid,
+	$Compare: proc(a, b: rawptr, descending: bool) -> int,
+	$Text_Key: proc(item: rawptr) -> (text: string, ok: bool) = static_no_text,
+	$Numeric_Key: proc(item: rawptr, descending: bool, projection: rawptr) -> u64 = static_no_numeric,
+) {}
+
+// A procedure sentinel avoids this Odin version's nil-polymorphic-proc codegen bug.
+static_no_numeric :: proc(item: rawptr, descending: bool, projection: rawptr) -> u64 {return 0}
+
+static_no_text :: proc(item: rawptr) -> (text: string, ok: bool) {
+	return "", false
+}
+
 Node :: struct($T: typeid) {
 	items:       [^]T,
 	children:    [^]^Node(T),
@@ -42,14 +66,16 @@ Node :: struct($T: typeid) {
 	leaf:        bool,
 }
 
-BTreeG :: struct($T: typeid) {
+BTreeG :: struct($T: typeid, $Order: typeid) {
 	root:            ^Node(T),
 	count:           int,
 	min_items:       int,
 	max_items:       int,
 	hint_generation: u64,
 	stats:           BTree_Stats,
-	compare:         proc(a, b: T) -> int,
+	cache:           Cache_Mode,
+	descending:      bool,
+	projection:      Order.Projection,
 	empty:           T,
 	allocator:       mem.Allocator,
 }
@@ -59,12 +85,13 @@ Iter_Stack_Item :: struct($T: typeid) {
 	i: int,
 }
 
-IterG :: struct($T: typeid) {
-	tr:      ^BTreeG(T),
+IterG :: struct($T: typeid, $Order: typeid) {
+	tr:      ^BTreeG(T, Order),
 	seeked:  bool,
 	atstart: bool,
 	atend:   bool,
-	stack:   [dynamic]Iter_Stack_Item(T),
+	stack:   [MAX_ITER_DEPTH]Iter_Stack_Item(T),
+	depth:   int,
 	item:    T,
 }
 
@@ -81,8 +108,31 @@ degree_to_min_max :: proc(degree: int) -> (min_items: int, max_items: int) {
 	return
 }
 
-init :: proc(tr: ^BTreeG($T), compare: proc(a, b: T) -> int, opts := Options{}, allocator := context.allocator) {
-	tr.compare = compare
+init_ordered :: proc {
+	init_ordered_default,
+	init_ordered_projection,
+}
+
+// Resolve the policy's default projection in the body: this Odin version cannot
+// resolve Order.Projection in a procedure parameter type or infer a generic default.
+init_ordered_default :: proc(tr: ^BTreeG($T, $Order), opts := Options{}, allocator := context.allocator, cache: Cache_Mode = .None, descending := false) {
+	projection: Order.Projection
+	init_ordered_projection(tr, opts, allocator, cache, descending, projection)
+}
+
+init_ordered_projection :: proc(
+	tr: ^BTreeG($T, $Order),
+	opts := Options{},
+	allocator := context.allocator,
+	cache: Cache_Mode = .None,
+	descending := false,
+	projection: $Projection,
+) {
+	#assert(Order.Item == T)
+	#assert(Order.Projection == Projection)
+	tr.cache = cache
+	tr.descending = descending
+	tr.projection = projection
 	tr.allocator = allocator
 	tr.min_items, tr.max_items = degree_to_min_max(opts.degree)
 	if tr.max_items > 65534 {
@@ -92,13 +142,39 @@ init :: proc(tr: ^BTreeG($T), compare: proc(a, b: T) -> int, opts := Options{}, 
 	tr.stats = BTree_Stats{}
 }
 
-create :: proc($T: typeid, compare: proc(a, b: T) -> int, opts := Options{}, allocator := context.allocator) -> BTreeG(T) {
-	tr := BTreeG(T){}
-	init(&tr, compare, opts, allocator)
+create_ordered :: proc {
+	create_ordered_default,
+	create_ordered_projection,
+}
+
+create_ordered_default :: proc(
+	$T: typeid,
+	$order: typeid,
+	opts := Options{},
+	allocator := context.allocator,
+	cache: Cache_Mode = .None,
+	descending := false,
+) -> BTreeG(T, order) {
+	tr := BTreeG(T, order){}
+	init_ordered_default(&tr, opts, allocator, cache, descending)
 	return tr
 }
 
-destroy :: proc(tr: ^BTreeG($T)) {
+create_ordered_projection :: proc(
+	$T: typeid,
+	$order: typeid,
+	opts := Options{},
+	allocator := context.allocator,
+	cache: Cache_Mode = .None,
+	descending := false,
+	projection: $Projection,
+) -> BTreeG(T, order) {
+	tr := BTreeG(T, order){}
+	init_ordered_projection(&tr, opts, allocator, cache, descending, projection)
+	return tr
+}
+
+destroy :: proc(tr: ^BTreeG($T, $Order)) {
 	if tr.root != nil {
 		node_destroy(tr, tr.root)
 		tr.root = nil
@@ -107,7 +183,7 @@ destroy :: proc(tr: ^BTreeG($T)) {
 	tr.hint_generation += 1
 }
 
-path_hint_sync_generation :: proc(tr: ^BTreeG($T), hint: ^Path_Hint) {
+path_hint_sync_generation :: proc(tr: ^BTreeG($T, $Order), hint: ^Path_Hint) {
 	if hint == nil {
 		return
 	}
@@ -123,48 +199,46 @@ path_hint_sync_generation :: proc(tr: ^BTreeG($T), hint: ^Path_Hint) {
 	}
 }
 
-count :: proc(tr: ^BTreeG($T)) -> int {
+count :: proc(tr: ^BTreeG($T, $Order)) -> int {
 	return tr.count
 }
 
-stats :: proc(tr: ^BTreeG($T)) -> BTree_Stats {
+stats :: proc(tr: ^BTreeG($T, $Order)) -> BTree_Stats {
 	return tr.stats
 }
 
-reset_stats :: proc(tr: ^BTreeG($T)) {
+reset_stats :: proc(tr: ^BTreeG($T, $Order)) {
 	tr.stats = BTree_Stats{}
 }
 
-clear_tree :: proc(tr: ^BTreeG($T)) {
+clear_tree :: proc(tr: ^BTreeG($T, $Order)) {
 	destroy(tr)
 }
 
-iter :: proc(tr: ^BTreeG($T)) -> IterG(T) {
-	it := IterG(T) {
+iter :: proc(tr: ^BTreeG($T, $Order)) -> IterG(T, Order) {
+	it := IterG(T, Order) {
 		tr = tr,
 	}
-	it.stack = make([dynamic]Iter_Stack_Item(T), 0, 16, tr.allocator)
-	if cap(it.stack) < 16 do panic("failed to allocate BTree iterator stack")
 	return it
 }
 
-iter_destroy :: proc(it: ^IterG($T)) {
-	delete(it.stack)
+iter_destroy :: proc(it: ^IterG($T, $Order)) {
+	it.depth = 0
 	it.tr = nil
 	it.seeked = false
 	it.atstart = false
 	it.atend = false
 }
 
-item :: proc(it: ^IterG($T)) -> T {
+item :: proc(it: ^IterG($T, $Order)) -> T {
 	return it.item
 }
 
-set :: proc(tr: ^BTreeG($T), item: T) -> (prev: T, replaced: bool) {
+set :: proc(tr: ^BTreeG($T, $Order), item: T) -> (prev: T, replaced: bool) {
 	return set_hint(tr, item, nil)
 }
 
-set_hint :: proc(tr: ^BTreeG($T), item: T, hint: ^Path_Hint) -> (prev: T, replaced: bool) {
+set_hint :: proc(tr: ^BTreeG($T, $Order), item: T, hint: ^Path_Hint) -> (prev: T, replaced: bool) {
 	path_hint_sync_generation(tr, hint)
 
 	if tr.root == nil {
@@ -199,7 +273,7 @@ set_hint :: proc(tr: ^BTreeG($T), item: T, hint: ^Path_Hint) -> (prev: T, replac
 
 // load appends pre-sorted items quickly. If the key is out-of-order or the
 // rightmost leaf is full, it falls back to the regular insert path.
-load :: proc(tr: ^BTreeG($T), item: T) -> (prev: T, replaced: bool) {
+load :: proc(tr: ^BTreeG($T, $Order), item: T) -> (prev: T, replaced: bool) {
 	if tr.root == nil {
 		return set_hint(tr, item, nil)
 	}
@@ -212,6 +286,7 @@ load :: proc(tr: ^BTreeG($T), item: T) -> (prev: T, replaced: bool) {
 	if int(n.item_count) < tr.max_items {
 		last_item := n.items[int(n.item_count) - 1]
 		if node_compare(tr, last_item, item) < 0 {
+			node_search_set(tr, n, int(n.item_count), item)
 			n.items[int(n.item_count)] = item
 			n.item_count += 1
 			tr.count += 1
@@ -222,11 +297,11 @@ load :: proc(tr: ^BTreeG($T), item: T) -> (prev: T, replaced: bool) {
 	return set_hint(tr, item, nil)
 }
 
-get :: proc(tr: ^BTreeG($T), key: T) -> (value: T, ok: bool) {
+get :: proc(tr: ^BTreeG($T, $Order), key: T) -> (value: T, ok: bool) {
 	return get_hint(tr, key, nil)
 }
 
-get_hint :: proc(tr: ^BTreeG($T), key: T, hint: ^Path_Hint) -> (value: T, ok: bool) {
+get_hint :: proc(tr: ^BTreeG($T, $Order), key: T, hint: ^Path_Hint) -> (value: T, ok: bool) {
 	path_hint_sync_generation(tr, hint)
 
 	if tr.root == nil {
@@ -235,8 +310,9 @@ get_hint :: proc(tr: ^BTreeG($T), key: T, hint: ^Path_Hint) -> (value: T, ok: bo
 
 	n := tr.root
 	depth := 0
+	known_prefix := 0
 	for {
-		i, found := node_find(tr, n, key, hint, depth)
+		i, found := node_find_read(tr, n, key, hint, depth, &known_prefix)
 		if found {
 			return n.items[i], true
 		}
@@ -248,23 +324,30 @@ get_hint :: proc(tr: ^BTreeG($T), key: T, hint: ^Path_Hint) -> (value: T, ok: bo
 	}
 }
 
-contains :: proc(tr: ^BTreeG($T), key: T) -> bool {
+contains :: proc(tr: ^BTreeG($T, $Order), key: T) -> bool {
 	_, ok := get(tr, key)
 	return ok
 }
 
-remove :: proc(tr: ^BTreeG($T), key: T) -> (prev: T, removed: bool) {
+remove :: proc(tr: ^BTreeG($T, $Order), key: T) -> (prev: T, removed: bool) {
 	return remove_hint(tr, key, nil)
 }
 
-remove_hint :: proc(tr: ^BTreeG($T), key: T, hint: ^Path_Hint) -> (prev: T, removed: bool) {
+remove_hint :: proc(tr: ^BTreeG($T, $Order), key: T, hint: ^Path_Hint) -> (prev: T, removed: bool) {
 	path_hint_sync_generation(tr, hint)
 
 	if tr.root == nil {
 		return tr.empty, false
 	}
 
-	prev, removed = node_delete(tr, &tr.root, false, key, hint, 0)
+	// Exact matches are proven by the full comparator. A failed optimistic
+	// descent has not mutated any items, so retry from the root with checks.
+	if hint == nil && tr.cache == .Text {
+		prev, removed = node_delete(tr, &tr.root, false, key, nil, 0, optimistic = true)
+	}
+	if !removed {
+		prev, removed = node_delete(tr, &tr.root, false, key, hint, 0, optimistic = false)
+	}
 	if !removed {
 		return tr.empty, false
 	}
@@ -288,42 +371,42 @@ remove_hint :: proc(tr: ^BTreeG($T), key: T, hint: ^Path_Hint) -> (prev: T, remo
 	return prev, true
 }
 
-scan :: proc(tr: ^BTreeG($T), f: proc(item: T) -> bool) {
+scan :: proc(tr: ^BTreeG($T, $Order), f: proc(item: T) -> bool) {
 	if tr.root == nil {
 		return
 	}
 	_ = node_scan(tr.root, f)
 }
 
-scan_ctx :: proc(tr: ^BTreeG($T), ctx: rawptr, f: proc(ctx: rawptr, item: T) -> bool) {
+scan_ctx :: proc(tr: ^BTreeG($T, $Order), ctx: rawptr, f: proc(ctx: rawptr, item: T) -> bool) {
 	if tr.root == nil {
 		return
 	}
 	_ = node_scan_ctx(tr.root, ctx, f)
 }
 
-scan_ctx_with_prefetch :: proc(tr: ^BTreeG($T), ctx: rawptr, f: proc(ctx: rawptr, item: T) -> bool, prefetch: proc(ctx: rawptr, item: T)) {
+scan_ctx_with_prefetch :: proc(tr: ^BTreeG($T, $Order), ctx: rawptr, f: proc(ctx: rawptr, item: T) -> bool, prefetch: proc(ctx: rawptr, item: T)) {
 	if tr.root == nil {
 		return
 	}
 	_ = node_scan_ctx_with_prefetch(tr.root, ctx, f, prefetch)
 }
 
-reverse :: proc(tr: ^BTreeG($T), f: proc(item: T) -> bool) {
+reverse :: proc(tr: ^BTreeG($T, $Order), f: proc(item: T) -> bool) {
 	if tr.root == nil {
 		return
 	}
 	_ = node_reverse(tr.root, f)
 }
 
-ascend :: proc(tr: ^BTreeG($T), pivot: T, f: proc(item: T) -> bool) {
+ascend :: proc(tr: ^BTreeG($T, $Order), pivot: T, f: proc(item: T) -> bool) {
 	if tr.root == nil {
 		return
 	}
 	_ = node_ascend(tr, tr.root, pivot, nil, 0, f)
 }
 
-ascend_hint :: proc(tr: ^BTreeG($T), pivot: T, hint: ^Path_Hint, f: proc(item: T) -> bool) {
+ascend_hint :: proc(tr: ^BTreeG($T, $Order), pivot: T, hint: ^Path_Hint, f: proc(item: T) -> bool) {
 	path_hint_sync_generation(tr, hint)
 
 	if tr.root == nil {
@@ -332,14 +415,14 @@ ascend_hint :: proc(tr: ^BTreeG($T), pivot: T, hint: ^Path_Hint, f: proc(item: T
 	_ = node_ascend(tr, tr.root, pivot, hint, 0, f)
 }
 
-descend :: proc(tr: ^BTreeG($T), pivot: T, f: proc(item: T) -> bool) {
+descend :: proc(tr: ^BTreeG($T, $Order), pivot: T, f: proc(item: T) -> bool) {
 	if tr.root == nil {
 		return
 	}
 	_ = node_descend(tr, tr.root, pivot, nil, 0, f)
 }
 
-descend_hint :: proc(tr: ^BTreeG($T), pivot: T, hint: ^Path_Hint, f: proc(item: T) -> bool) {
+descend_hint :: proc(tr: ^BTreeG($T, $Order), pivot: T, hint: ^Path_Hint, f: proc(item: T) -> bool) {
 	path_hint_sync_generation(tr, hint)
 
 	if tr.root == nil {
@@ -348,11 +431,11 @@ descend_hint :: proc(tr: ^BTreeG($T), pivot: T, hint: ^Path_Hint, f: proc(item: 
 	_ = node_descend(tr, tr.root, pivot, hint, 0, f)
 }
 
-iter_seek :: proc(it: ^IterG($T), key: T) -> bool {
+iter_seek :: proc(it: ^IterG($T, $Order), key: T) -> bool {
 	return iter_seek_hint(it, key, nil)
 }
 
-iter_seek_hint :: proc(it: ^IterG($T), key: T, hint: ^Path_Hint) -> bool {
+iter_seek_hint :: proc(it: ^IterG($T, $Order), key: T, hint: ^Path_Hint) -> bool {
 	if it.tr == nil {
 		return false
 	}
@@ -361,7 +444,7 @@ iter_seek_hint :: proc(it: ^IterG($T), key: T, hint: ^Path_Hint) -> bool {
 	it.seeked = true
 	it.atstart = false
 	it.atend = false
-	clear(&it.stack)
+	it.depth = 0
 
 	if it.tr.root == nil {
 		return false
@@ -369,15 +452,20 @@ iter_seek_hint :: proc(it: ^IterG($T), key: T, hint: ^Path_Hint) -> bool {
 
 	n := it.tr.root
 	depth := 0
+	known_prefix := 0
 	for {
-		i, found := node_find(it.tr, n, key, hint, depth)
-		if _, err := append(&it.stack, Iter_Stack_Item(T){n = n, i = i}); err != nil do panic("failed to grow BTree iterator stack")
+		i, found := node_find_read(it.tr, n, key, hint, depth, &known_prefix)
+		it.stack[it.depth] = Iter_Stack_Item(T) {
+			n = n,
+			i = i,
+		}
+		it.depth += 1
 		if found {
 			it.item = n.items[i]
 			return true
 		}
 		if n.leaf {
-			it.stack[len(it.stack) - 1].i -= 1
+			it.stack[it.depth - 1].i -= 1
 			return iter_next(it)
 		}
 		n = n.children[i]
@@ -385,7 +473,7 @@ iter_seek_hint :: proc(it: ^IterG($T), key: T, hint: ^Path_Hint) -> bool {
 	}
 }
 
-iter_first :: proc(it: ^IterG($T)) -> bool {
+iter_first :: proc(it: ^IterG($T, $Order)) -> bool {
 	if it.tr == nil {
 		return false
 	}
@@ -393,7 +481,7 @@ iter_first :: proc(it: ^IterG($T)) -> bool {
 	it.seeked = true
 	it.atstart = false
 	it.atend = false
-	clear(&it.stack)
+	it.depth = 0
 
 	if it.tr.root == nil {
 		return false
@@ -401,19 +489,23 @@ iter_first :: proc(it: ^IterG($T)) -> bool {
 
 	n := it.tr.root
 	for {
-		if _, err := append(&it.stack, Iter_Stack_Item(T){n = n, i = 0}); err != nil do panic("failed to grow BTree iterator stack")
+		it.stack[it.depth] = Iter_Stack_Item(T) {
+			n = n,
+			i = 0,
+		}
+		it.depth += 1
 		if n.leaf {
 			break
 		}
 		n = n.children[0]
 	}
 
-	s := &it.stack[len(it.stack) - 1]
+	s := &it.stack[it.depth - 1]
 	it.item = s.n.items[s.i]
 	return true
 }
 
-iter_last :: proc(it: ^IterG($T)) -> bool {
+iter_last :: proc(it: ^IterG($T, $Order)) -> bool {
 	if it.tr == nil {
 		return false
 	}
@@ -421,7 +513,7 @@ iter_last :: proc(it: ^IterG($T)) -> bool {
 	it.seeked = true
 	it.atstart = false
 	it.atend = false
-	clear(&it.stack)
+	it.depth = 0
 
 	if it.tr.root == nil {
 		return false
@@ -429,44 +521,48 @@ iter_last :: proc(it: ^IterG($T)) -> bool {
 
 	n := it.tr.root
 	for {
-		if _, err := append(&it.stack, Iter_Stack_Item(T){n = n, i = int(n.item_count)}); err != nil do panic("failed to grow BTree iterator stack")
+		it.stack[it.depth] = Iter_Stack_Item(T) {
+			n = n,
+			i = int(n.item_count),
+		}
+		it.depth += 1
 		if n.leaf {
-			it.stack[len(it.stack) - 1].i -= 1
+			it.stack[it.depth - 1].i -= 1
 			break
 		}
 		n = n.children[int(n.item_count)]
 	}
 
-	s := &it.stack[len(it.stack) - 1]
+	s := &it.stack[it.depth - 1]
 	it.item = s.n.items[s.i]
 	return true
 }
 
-iter_next :: proc(it: ^IterG($T)) -> bool {
+iter_next :: proc(it: ^IterG($T, $Order)) -> bool {
 	if it.tr == nil {
 		return false
 	}
 	if !it.seeked {
 		return iter_first(it)
 	}
-	if len(it.stack) == 0 {
+	if it.depth == 0 {
 		if it.atstart {
 			return iter_first(it) && iter_next(it)
 		}
 		return false
 	}
 
-	s := &it.stack[len(it.stack) - 1]
+	s := &it.stack[it.depth - 1]
 	s.i += 1
 	if s.n.leaf {
 		if s.i == int(s.n.item_count) {
 			for {
-				resize(&it.stack, len(it.stack) - 1)
-				if len(it.stack) == 0 {
+				it.depth -= 1
+				if it.depth == 0 {
 					it.atend = true
 					return false
 				}
-				s = &it.stack[len(it.stack) - 1]
+				s = &it.stack[it.depth - 1]
 				if s.i < int(s.n.item_count) {
 					break
 				}
@@ -475,7 +571,11 @@ iter_next :: proc(it: ^IterG($T)) -> bool {
 	} else {
 		n := s.n.children[s.i]
 		for {
-			if _, err := append(&it.stack, Iter_Stack_Item(T){n = n, i = 0}); err != nil do panic("failed to grow BTree iterator stack")
+			it.stack[it.depth] = Iter_Stack_Item(T) {
+				n = n,
+				i = 0,
+			}
+			it.depth += 1
 			if n.leaf {
 				break
 			}
@@ -483,36 +583,36 @@ iter_next :: proc(it: ^IterG($T)) -> bool {
 		}
 	}
 
-	s = &it.stack[len(it.stack) - 1]
+	s = &it.stack[it.depth - 1]
 	it.item = s.n.items[s.i]
 	return true
 }
 
-iter_prev :: proc(it: ^IterG($T)) -> bool {
+iter_prev :: proc(it: ^IterG($T, $Order)) -> bool {
 	if it.tr == nil {
 		return false
 	}
 	if !it.seeked {
 		return false
 	}
-	if len(it.stack) == 0 {
+	if it.depth == 0 {
 		if it.atend {
 			return iter_last(it) && iter_prev(it)
 		}
 		return false
 	}
 
-	s := &it.stack[len(it.stack) - 1]
+	s := &it.stack[it.depth - 1]
 	if s.n.leaf {
 		s.i -= 1
 		if s.i == -1 {
 			for {
-				resize(&it.stack, len(it.stack) - 1)
-				if len(it.stack) == 0 {
+				it.depth -= 1
+				if it.depth == 0 {
 					it.atstart = true
 					return false
 				}
-				s = &it.stack[len(it.stack) - 1]
+				s = &it.stack[it.depth - 1]
 				s.i -= 1
 				if s.i > -1 {
 					break
@@ -522,23 +622,32 @@ iter_prev :: proc(it: ^IterG($T)) -> bool {
 	} else {
 		n := s.n.children[s.i]
 		for {
-			if _, err := append(&it.stack, Iter_Stack_Item(T){n = n, i = int(n.item_count)}); err != nil do panic("failed to grow BTree iterator stack")
+			it.stack[it.depth] = Iter_Stack_Item(T) {
+				n = n,
+				i = int(n.item_count),
+			}
+			it.depth += 1
 			if n.leaf {
-				it.stack[len(it.stack) - 1].i -= 1
+				it.stack[it.depth - 1].i -= 1
 				break
 			}
 			n = n.children[int(n.item_count)]
 		}
 	}
 
-	s = &it.stack[len(it.stack) - 1]
+	s = &it.stack[it.depth - 1]
 	it.item = s.n.items[s.i]
 	return true
 }
 
-node_new :: proc(tr: ^BTreeG($T), leaf: bool) -> ^Node(T) {
+node_new :: proc(tr: ^BTreeG($T, $Order), leaf: bool) -> ^Node(T) {
 	node_size := size_of(Node(T))
 	items_offset := mem.align_forward_int(node_size, align_of(T))
+	if tr.cache != .None {
+		cache_offset := mem.align_forward_int(node_size, align_of(Text_Node))
+		word_bytes := leaf && tr.cache == .Text ? size_of(u32) : size_of(u64)
+		items_offset = mem.align_forward_int(cache_offset + size_of(Text_Node) + word_bytes * tr.max_items, align_of(T))
+	}
 	items_bytes := size_of(T) * tr.max_items
 
 	children_offset := items_offset + items_bytes
@@ -567,6 +676,9 @@ node_new :: proc(tr: ^BTreeG($T), leaf: bool) -> ^Node(T) {
 	items_data := raw_data(storage[items_offset:])
 	n.items = ([^]T)(items_data)
 	n.item_count = 0
+	if tr.cache != .None {
+		node_text_cache(tr, n)^ = {}
+	}
 
 	if !leaf {
 		children_data := raw_data(storage[children_offset:])
@@ -577,7 +689,7 @@ node_new :: proc(tr: ^BTreeG($T), leaf: bool) -> ^Node(T) {
 	return n
 }
 
-node_destroy_header :: proc(tr: ^BTreeG($T), n: ^Node(T)) {
+node_destroy_header :: proc(tr: ^BTreeG($T, $Order), n: ^Node(T)) {
 	if n == nil {
 		return
 	}
@@ -588,7 +700,7 @@ node_destroy_header :: proc(tr: ^BTreeG($T), n: ^Node(T)) {
 	}
 }
 
-node_destroy :: proc(tr: ^BTreeG($T), n: ^Node(T)) {
+node_destroy :: proc(tr: ^BTreeG($T, $Order), n: ^Node(T)) {
 	if n == nil {
 		return
 	}
@@ -602,7 +714,7 @@ node_destroy :: proc(tr: ^BTreeG($T), n: ^Node(T)) {
 	node_destroy_header(tr, n)
 }
 
-node_bsearch :: proc(tr: ^BTreeG($T), n: ^Node(T), key: T) -> (index: int, found: bool) {
+node_bsearch :: proc(tr: ^BTreeG($T, $Order), n: ^Node(T), key: T) -> (index: int, found: bool) {
 	low := 0
 	high := int(n.item_count)
 	for low < high {
@@ -623,7 +735,7 @@ node_bsearch :: proc(tr: ^BTreeG($T), n: ^Node(T), key: T) -> (index: int, found
 	return low, false
 }
 
-node_lsearch :: proc(tr: ^BTreeG($T), n: ^Node(T), key: T) -> (index: int, found: bool) {
+node_lsearch :: proc(tr: ^BTreeG($T, $Order), n: ^Node(T), key: T) -> (index: int, found: bool) {
 	for i := 0; i < int(n.item_count); i += 1 {
 		cmp: int
 		#no_bounds_check {
@@ -640,258 +752,32 @@ node_lsearch :: proc(tr: ^BTreeG($T), n: ^Node(T), key: T) -> (index: int, found
 	return int(n.item_count), false
 }
 
-// SIMD linear scan overview (8x32-bit lane example):
-//
-//   key = 37
-//
-//   chunk @ i=0
-//   lanes:   [10|18|27|36|37|45|52|60]
-//   >= key:  [ 0| 0| 0| 0| 1| 1| 1| 1]
-//   select:  [ff|ff|ff|ff| 4| 5| 6| 7]  (ff = sentinel)
-//   min idx: 4
-//   result:  global index = i + 4
-//
-// We process fixed-width chunks and stop at the first lane where item >= key.
-// If no lane matches, we advance by the SIMD width and continue. Tail elements
-// are handled by the scalar fallback loop.
-//
-// i64x4 loop instruction breakdown:
-//
-//   block := unaligned_load(...)
-//     Loads four consecutive i64 values from items[i..i+4) into one SIMD
-//     register. "unaligned" means the source address does not need 32-byte
-//     alignment.
-//
-//   ge := lanes_ge(block, key_vec)
-//     Compares each lane against key_vec (which contains key replicated in all
-//     lanes). Result is a per-lane boolean mask: true where items[lane] >= key.
-//
-//   if reduce_or(ge) > 0
-//     Fast "any-match" check. If no lane is >= key, skip the expensive steps
-//     and continue to the next 4-lane chunk.
-//
-//   sel := select(ge, LANE_INDICES, LANE_SENTINEL)
-//     Converts the boolean mask into lane numbers: matching lanes get their
-//     index (0..3), non-matching lanes get sentinel 0xff.
-//
-//   off := reduce_min(sel)
-//     Picks the smallest surviving lane index, i.e. the first lane in this
-//     chunk where value >= key.
-//
-//   index = i + int(off)
-//     Turns chunk-local lane offset into the absolute index in node.items.
-//
-//   return index, items[index] == key
-//     Reports both insertion/search position and whether it is an exact hit.
-
-node_lsearch_direct_int :: proc(n: ^Node(int), key: int) -> (index: int, found: bool) {
-	item_count := int(n.item_count)
-	items := n.items[:item_count]
-	i := 0
-
-	if item_count >= SIMD_LINEAR_SEARCH_MIN_ITEMS {
-		when simd.HAS_HARDWARE_SIMD {
-			when size_of(int) == 8 {
-				key_vec: simd.i64x4 = i64(key)
-				for ; i + 4 <= item_count; i += 4 {
-					block := intrinsics.unaligned_load((^simd.i64x4)(raw_data(items[i:])))
-					ge := simd.lanes_ge(block, key_vec)
-					if simd.reduce_or(ge) > 0 {
-						sel := simd.select(ge, SIMD_I64_LANE_INDICES, SIMD_I64_LANE_SENTINEL)
-						off := simd.reduce_min(sel)
-						index = i + int(off)
-						return index, items[index] == key
-					}
-				}
-			} else {
-				key_vec: simd.i32x8 = i32(key)
-				for ; i + 8 <= item_count; i += 8 {
-					block := intrinsics.unaligned_load((^simd.i32x8)(raw_data(items[i:])))
-					ge := simd.lanes_ge(block, key_vec)
-					if simd.reduce_or(ge) > 0 {
-						sel := simd.select(ge, SIMD_I32_LANE_INDICES, SIMD_I32_LANE_SENTINEL)
-						off := simd.reduce_min(sel)
-						index = i + int(off)
-						return index, items[index] == key
-					}
-				}
-			}
-		}
+node_find_read :: #force_inline proc(
+	tr: ^BTreeG($T, $Order),
+	n: ^Node(T),
+	key: T,
+	hint: ^Path_Hint,
+	depth: int,
+	known_prefix: ^int,
+) -> (
+	index: int,
+	found: bool,
+) {
+	if hint == nil && tr.cache == .Text {
+		return node_text_find(tr, n, key, known_prefix, false)
 	}
-
-	#no_bounds_check {
-		for ; i < item_count; i += 1 {
-			v := items[i]
-			if v == key {
-				return i, true
-			}
-			if v > key {
-				return i, false
-			}
-		}
-	}
-
-	return item_count, false
+	return node_find(tr, n, key, hint, depth)
 }
 
-node_lsearch_direct_i32 :: proc(n: ^Node(i32), key: i32) -> (index: int, found: bool) {
-	item_count := int(n.item_count)
-	items := n.items[:item_count]
-	i := 0
-
-	if item_count >= SIMD_LINEAR_SEARCH_MIN_ITEMS {
-		when simd.HAS_HARDWARE_SIMD {
-			key_vec: simd.i32x8 = key
-			for ; i + 8 <= item_count; i += 8 {
-				block := intrinsics.unaligned_load((^simd.i32x8)(raw_data(items[i:])))
-				ge := simd.lanes_ge(block, key_vec)
-				if simd.reduce_or(ge) > 0 {
-					sel := simd.select(ge, SIMD_I32_LANE_INDICES, SIMD_I32_LANE_SENTINEL)
-					off := simd.reduce_min(sel)
-					index = i + int(off)
-					return index, items[index] == key
-				}
-			}
-		}
-	}
-
-	#no_bounds_check {
-		for ; i < item_count; i += 1 {
-			v := items[i]
-			if v == key {
-				return i, true
-			}
-			if v > key {
-				return i, false
-			}
-		}
-	}
-
-	return item_count, false
-}
-
-node_lsearch_direct_u32 :: proc(n: ^Node(u32), key: u32) -> (index: int, found: bool) {
-	item_count := int(n.item_count)
-	items := n.items[:item_count]
-	i := 0
-
-	if item_count >= SIMD_LINEAR_SEARCH_MIN_ITEMS {
-		when simd.HAS_HARDWARE_SIMD {
-			key_vec: simd.u32x8 = key
-			for ; i + 8 <= item_count; i += 8 {
-				block := intrinsics.unaligned_load((^simd.u32x8)(raw_data(items[i:])))
-				ge := simd.lanes_ge(block, key_vec)
-				if simd.reduce_or(ge) > 0 {
-					sel := simd.select(ge, SIMD_I32_LANE_INDICES, SIMD_I32_LANE_SENTINEL)
-					off := simd.reduce_min(sel)
-					index = i + int(off)
-					return index, items[index] == key
-				}
-			}
-		}
-	}
-
-	#no_bounds_check {
-		for ; i < item_count; i += 1 {
-			v := items[i]
-			if v == key {
-				return i, true
-			}
-			if v > key {
-				return i, false
-			}
-		}
-	}
-
-	return item_count, false
-}
-
-node_lsearch_direct_i64 :: proc(n: ^Node(i64), key: i64) -> (index: int, found: bool) {
-	item_count := int(n.item_count)
-	items := n.items[:item_count]
-	i := 0
-
-	if item_count >= SIMD_LINEAR_SEARCH_MIN_ITEMS {
-		when simd.HAS_HARDWARE_SIMD {
-			key_vec: simd.i64x4 = key
-			for ; i + 4 <= item_count; i += 4 {
-				block := intrinsics.unaligned_load((^simd.i64x4)(raw_data(items[i:])))
-				ge := simd.lanes_ge(block, key_vec)
-				if simd.reduce_or(ge) > 0 {
-					sel := simd.select(ge, SIMD_I64_LANE_INDICES, SIMD_I64_LANE_SENTINEL)
-					off := simd.reduce_min(sel)
-					index = i + int(off)
-					return index, items[index] == key
-				}
-			}
-		}
-	}
-
-	#no_bounds_check {
-		for ; i < item_count; i += 1 {
-			v := items[i]
-			if v == key {
-				return i, true
-			}
-			if v > key {
-				return i, false
-			}
-		}
-	}
-
-	return item_count, false
-}
-
-node_lsearch_direct_u64 :: proc(n: ^Node(u64), key: u64) -> (index: int, found: bool) {
-	item_count := int(n.item_count)
-	items := n.items[:item_count]
-	i := 0
-
-	if item_count >= SIMD_LINEAR_SEARCH_MIN_ITEMS {
-		when simd.HAS_HARDWARE_SIMD {
-			key_vec: simd.u64x4 = key
-			for ; i + 4 <= item_count; i += 4 {
-				block := intrinsics.unaligned_load((^simd.u64x4)(raw_data(items[i:])))
-				ge := simd.lanes_ge(block, key_vec)
-				if simd.reduce_or(ge) > 0 {
-					sel := simd.select(ge, SIMD_I64_LANE_INDICES, SIMD_I64_LANE_SENTINEL)
-					off := simd.reduce_min(sel)
-					index = i + int(off)
-					return index, items[index] == key
-				}
-			}
-		}
-	}
-
-	#no_bounds_check {
-		for ; i < item_count; i += 1 {
-			v := items[i]
-			if v == key {
-				return i, true
-			}
-			if v > key {
-				return i, false
-			}
-		}
-	}
-
-	return item_count, false
-}
-
-node_find :: proc(tr: ^BTreeG($T), n: ^Node(T), key: T, hint: ^Path_Hint, depth: int) -> (index: int, found: bool) {
+node_find :: proc(tr: ^BTreeG($T, $Order), n: ^Node(T), key: T, hint: ^Path_Hint, depth: int, known_prefix: ^int = nil) -> (index: int, found: bool) {
 	if hint == nil {
+		if tr.cache == .Numeric {
+			return node_numeric_find(tr, n, key)
+		}
+		if tr.cache == .Text {
+			return node_text_find(tr, n, key, known_prefix, false)
+		}
 		if int(n.item_count) <= LINEAR_SEARCH_NODE_CUTOFF {
-			when T == int {
-				return node_lsearch_direct_int(n, key)
-			} else when T == i32 {
-				return node_lsearch_direct_i32(n, key)
-			} else when T == u32 {
-				return node_lsearch_direct_u32(n, key)
-			} else when T == i64 {
-				return node_lsearch_direct_i64(n, key)
-			} else when T == u64 {
-				return node_lsearch_direct_u64(n, key)
-			}
 			return node_lsearch(tr, n, key)
 		}
 		return node_bsearch(tr, n, key)
@@ -899,8 +785,13 @@ node_find :: proc(tr: ^BTreeG($T), n: ^Node(T), key: T, hint: ^Path_Hint, depth:
 	return node_hintsearch(tr, n, key, hint, depth)
 }
 
-node_compare :: proc(tr: ^BTreeG($T), a, b: T) -> int {
-	return tr.compare(a, b)
+node_compare :: #force_inline proc(tr: ^BTreeG($T, $Order), a, b: T) -> int {
+	return static_compare(a, b, tr.descending, Order.Compare)
+}
+
+static_compare :: #force_inline proc(a, b: $T, descending: bool, $compare: proc(a, b: rawptr, descending: bool) -> int) -> int {
+	a_copy, b_copy := a, b
+	return compare(&a_copy, &b_copy, descending)
 }
 
 node_items_insert_at :: proc(n: ^Node($T), index: int, value: T) {
@@ -961,7 +852,7 @@ node_children_pop_last :: proc(n: ^Node($T)) -> ^Node(T) {
 	return last
 }
 
-node_hintsearch :: proc(tr: ^BTreeG($T), n: ^Node(T), key: T, hint: ^Path_Hint, depth: int) -> (index: int, found: bool) {
+node_hintsearch :: proc(tr: ^BTreeG($T, $Order), n: ^Node(T), key: T, hint: ^Path_Hint, depth: int) -> (index: int, found: bool) {
 	// Hint path visualization (per depth):
 	//
 	//   depth:       0    1    2    3
@@ -1086,10 +977,11 @@ node_hintsearch :: proc(tr: ^BTreeG($T), n: ^Node(T), key: T, hint: ^Path_Hint, 
 	return index, found
 }
 
-node_split :: proc(tr: ^BTreeG($T), n: ^Node(T)) -> (right: ^Node(T), median: T) {
+node_split :: proc(tr: ^BTreeG($T, $Order), n: ^Node(T)) -> (right: ^Node(T), median: T) {
 	tr.stats.split_count += 1
 	// Split changes child boundaries/path topology; invalidate all path hints.
 	tr.hint_generation += 1
+	node_search_invalidate(tr, n)
 
 	mid := tr.max_items / 2
 	median = n.items[mid]
@@ -1117,31 +1009,37 @@ node_split :: proc(tr: ^BTreeG($T), n: ^Node(T)) -> (right: ^Node(T), median: T)
 	return
 }
 
-node_split_child :: proc(tr: ^BTreeG($T), parent: ^Node(T), child_index: int) {
+node_split_child :: proc(tr: ^BTreeG($T, $Order), parent: ^Node(T), child_index: int) {
 	right, median := node_split(tr, parent.children[child_index])
 
+	node_search_set(tr, parent, child_index, median)
 	node_children_insert_at(parent, child_index + 1, right)
 	node_items_insert_at(parent, child_index, median)
 }
 
-node_set_top_down :: proc(tr: ^BTreeG($T), root: ^Node(T), item: T, hint: ^Path_Hint) -> (prev: T, replaced: bool) {
+node_set_top_down :: proc(tr: ^BTreeG($T, $Order), root: ^Node(T), item: T, hint: ^Path_Hint) -> (prev: T, replaced: bool) {
 	n := root
 	depth := 0
+	known_prefix := 0
 
 	for {
-		i, found := node_find(tr, n, item, hint, depth)
+		i, found := node_find(tr, n, item, hint, depth, &known_prefix)
 		if found {
 			prev = n.items[i]
+			node_search_set(tr, n, i, item, true)
 			n.items[i] = item
 			return prev, true
 		}
 
 		if n.leaf {
+			node_search_set(tr, n, i, item)
 			node_items_insert_at(n, i, item)
 			return tr.empty, false
 		}
 
 		if int(n.children[i].item_count) == tr.max_items {
+			// Splitting only partitions the child: its ancestor prefix guarantee
+			// still holds for both halves. Cache maintenance remains checked.
 			node_split_child(tr, n, i)
 
 			cmp := node_compare(tr, item, n.items[i])
@@ -1149,6 +1047,7 @@ node_set_top_down :: proc(tr: ^BTreeG($T), root: ^Node(T), item: T, hint: ^Path_
 				i += 1
 			} else if cmp == 0 {
 				prev = n.items[i]
+				node_search_set(tr, n, i, item, true)
 				n.items[i] = item
 				return prev, true
 			}
@@ -1159,8 +1058,21 @@ node_set_top_down :: proc(tr: ^BTreeG($T), root: ^Node(T), item: T, hint: ^Path_
 	}
 }
 
-node_delete :: proc(tr: ^BTreeG($T), cn: ^^Node(T), take_max: bool, key: T, hint: ^Path_Hint, depth: int) -> (prev: T, deleted: bool) {
+node_delete :: proc(
+	tr: ^BTreeG($T, $Order),
+	cn: ^^Node(T),
+	take_max: bool,
+	key: T,
+	hint: ^Path_Hint,
+	depth: int,
+	ancestor_prefix: int = 0,
+	$optimistic: bool,
+) -> (
+	prev: T,
+	deleted: bool,
+) {
 	n := cn^
+	known_prefix := ancestor_prefix
 
 	i: int
 	found: bool
@@ -1168,11 +1080,16 @@ node_delete :: proc(tr: ^BTreeG($T), cn: ^^Node(T), take_max: bool, key: T, hint
 		i = int(n.item_count) - 1
 		found = true
 	} else {
-		i, found = node_find(tr, n, key, hint, depth)
+		when optimistic {
+			i, found = node_text_find(tr, n, key, nil, true)
+		} else {
+			i, found = node_find(tr, n, key, hint, depth, &known_prefix)
+		}
 	}
 
 	if n.leaf {
 		if found {
+			node_search_remove(tr, n, i)
 			prev = node_items_remove_at(n, i)
 			return prev, true
 		}
@@ -1182,15 +1099,16 @@ node_delete :: proc(tr: ^BTreeG($T), cn: ^^Node(T), take_max: bool, key: T, hint
 	if found {
 		if take_max {
 			i += 1
-			prev, deleted = node_delete(tr, &n.children[i], true, tr.empty, nil, 0)
+			prev, deleted = node_delete(tr, &n.children[i], true, tr.empty, nil, 0, optimistic = false)
 		} else {
 			prev = n.items[i]
-			max_item, _ := node_delete(tr, &n.children[i], true, tr.empty, nil, 0)
+			max_item, _ := node_delete(tr, &n.children[i], true, tr.empty, nil, 0, optimistic = false)
 			deleted = true
+			node_search_set(tr, n, i, max_item, true)
 			n.items[i] = max_item
 		}
 	} else {
-		prev, deleted = node_delete(tr, &n.children[i], take_max, key, hint, depth + 1)
+		prev, deleted = node_delete(tr, &n.children[i], take_max, key, hint, depth + 1, known_prefix, optimistic)
 	}
 
 	if !deleted {
@@ -1204,7 +1122,7 @@ node_delete :: proc(tr: ^BTreeG($T), cn: ^^Node(T), take_max: bool, key: T, hint
 	return prev, true
 }
 
-node_rebalance :: proc(tr: ^BTreeG($T), n: ^Node(T), i: int) {
+node_rebalance :: proc(tr: ^BTreeG($T, $Order), n: ^Node(T), i: int) {
 	tr.stats.rebalance_count += 1
 	// Borrow/merge changes separator placement and sibling layout.
 	tr.hint_generation += 1
@@ -1219,6 +1137,8 @@ node_rebalance :: proc(tr: ^BTreeG($T), n: ^Node(T), i: int) {
 
 	if int(left.item_count) + int(right.item_count) < tr.max_items {
 		tr.stats.merge_count += 1
+		node_search_invalidate(tr, left)
+		node_search_remove(tr, n, idx)
 
 		left_old_items := int(left.item_count)
 		merged_item_count := left_old_items + 1 + int(right.item_count)
@@ -1243,6 +1163,9 @@ node_rebalance :: proc(tr: ^BTreeG($T), n: ^Node(T), i: int) {
 	} else if int(left.item_count) > int(right.item_count) {
 		tr.stats.borrow_left_count += 1
 
+		node_search_set(tr, right, 0, n.items[idx])
+		node_search_set(tr, n, idx, left.items[int(left.item_count) - 1], true)
+		node_search_remove(tr, left, int(left.item_count) - 1)
 		node_items_insert_at(right, 0, n.items[idx])
 
 		n.items[idx] = node_items_pop_last(left)
@@ -1254,6 +1177,9 @@ node_rebalance :: proc(tr: ^BTreeG($T), n: ^Node(T), i: int) {
 		tr.stats.borrow_right_count += 1
 
 		left_old_items := int(left.item_count)
+		node_search_set(tr, left, left_old_items, n.items[idx])
+		node_search_set(tr, n, idx, right.items[0], true)
+		node_search_remove(tr, right, 0)
 		left.item_count = u16(left_old_items + 1)
 		left.items[left_old_items] = n.items[idx]
 
@@ -1365,7 +1291,7 @@ node_reverse :: proc(n: ^Node($T), f: proc(item: T) -> bool) -> bool {
 	return true
 }
 
-node_ascend :: proc(tr: ^BTreeG($T), n: ^Node(T), pivot: T, hint: ^Path_Hint, depth: int, f: proc(item: T) -> bool) -> bool {
+node_ascend :: proc(tr: ^BTreeG($T, $Order), n: ^Node(T), pivot: T, hint: ^Path_Hint, depth: int, f: proc(item: T) -> bool) -> bool {
 	i, found := node_find(tr, n, pivot, hint, depth)
 	if !found {
 		if !n.leaf {
@@ -1389,7 +1315,7 @@ node_ascend :: proc(tr: ^BTreeG($T), n: ^Node(T), pivot: T, hint: ^Path_Hint, de
 	return true
 }
 
-node_descend :: proc(tr: ^BTreeG($T), n: ^Node(T), pivot: T, hint: ^Path_Hint, depth: int, f: proc(item: T) -> bool) -> bool {
+node_descend :: proc(tr: ^BTreeG($T, $Order), n: ^Node(T), pivot: T, hint: ^Path_Hint, depth: int, f: proc(item: T) -> bool) -> bool {
 	i, found := node_find(tr, n, pivot, hint, depth)
 	if !found {
 		if !n.leaf {

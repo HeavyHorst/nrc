@@ -161,7 +161,7 @@ Task_Query_Key :: struct {
 Task_Query_Index_Set :: struct {
 	// Priority ascending is the canonical membership/count tree. Other orders
 	// are materialized on first use and then kept current by mutations.
-	trees:       [8][2]btree.BTreeG(Task_Query_Key),
+	trees:       [8][2]btree.BTreeG(Task_Query_Key, Task_Query_Order),
 	initialized: [8][2]bool,
 }
 
@@ -185,26 +185,26 @@ Conversation_State :: struct {
 	subscribers_dirty:         bool, // dense list needs optional re-sort by handle index
 	agenda:                    string, // agenda content (cloned, owned)
 	tasks:                     map[pr.TaskID]^pr.Task, // task_id -> task
-	task_index:                btree.BTreeG(Task_Sort_Key), // task ordering index for keyset pagination
+	task_index:                btree.BTreeG(Task_Sort_Key, Task_Sort_Order), // task ordering index for keyset pagination
 	task_index_keys:           map[pr.TaskID]Task_Sort_Key, // task_id -> current sort key
 	task_query_indexes:        Task_Query_Index_Set, // all sortable task query orders
 	task_status_indexes:       [4]Task_Query_Index_Set, // status-filtered sortable indexes
 	task_project_indexes:      map[string]^Task_Query_Secondary_Index,
 	task_assignee_indexes:     map[string]^Task_Query_Secondary_Index,
-	task_blockers:             btree.BTreeG(Entity_Reference_Key), // blocker task -> blocked tasks
-	calendar_index:            btree.BTreeG(pr.CalendarKey),
+	task_blockers:             btree.BTreeG(Entity_Reference_Key, Entity_Reference_Order), // blocker task -> blocked tasks
+	calendar_index:            btree.BTreeG(pr.CalendarKey, Calendar_Order),
 	calendar_reminder_keys:    map[pr.AssetID]pr.CalendarKey,
-	calendar_appointments:     btree.BTreeG(Appointment_Index_Key),
+	calendar_appointments:     btree.BTreeG(Appointment_Index_Key, Appointment_Index_Order),
 	calendar_appointment_keys: map[pr.AssetID]Appointment_Index_Key,
 	calendar_ready:            bool,
 	assets:                    map[pr.AssetID]^pr.Asset, // asset_id -> asset
-	note_index:                btree.BTreeG(Note_Sort_Key), // note ordering index for pagination
+	note_index:                btree.BTreeG(Note_Sort_Key, Note_Sort_Order), // note ordering index for pagination
 	note_index_keys:           map[pr.AssetID]Note_Sort_Key, // asset_id -> current note sort key
 	note_project_assets:       map[string]^Note_Secondary_Index, // project name -> sorted note index
 	note_tag_assets:           map[string]^Note_Secondary_Index, // tag name -> sorted note index
-	asset_parents:             btree.BTreeG(Entity_Reference_Key), // parent kind/id -> child assets
+	asset_parents:             btree.BTreeG(Entity_Reference_Key, Entity_Reference_Order), // parent kind/id -> child assets
 	ticket_index:              map[pr.AssetID]^Ticket_Index_Row,
-	ticket_assignees:          btree.BTreeG(Ticket_Assignee_Key),
+	ticket_assignees:          btree.BTreeG(Ticket_Assignee_Key, Ticket_Assignee_Order),
 	slice_owners:              map[string]Person_Count,
 	appointment_people:        map[string]Person_Count,
 	edges:                     map[pr.EdgeID]^pr.Edge, // edge_id -> edge (knowledge graph links)

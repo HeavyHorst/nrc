@@ -23,6 +23,17 @@ Appointment_Index_Key :: struct {
 	id:               pr.AssetID,
 }
 
+Appointment_Index_Order :: btree.Static_Order(Appointment_Index_Key, btree.No_Projection, appointment_index_compare_static)
+Calendar_Order :: btree.Static_Order(pr.CalendarKey, btree.No_Projection, calendar_compare_static)
+
+appointment_index_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return appointment_index_compare((cast(^Appointment_Index_Key)a)^, (cast(^Appointment_Index_Key)b)^)
+}
+
+calendar_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return calendar_key_compare((cast(^pr.CalendarKey)a)^, (cast(^pr.CalendarKey)b)^)
+}
+
 appointment_index_compare :: proc(a, b: Appointment_Index_Key) -> int {
 	if a.bucket != b.bucket do return a.bucket < b.bucket ? -1 : 1
 	if a.slot != b.slot do return a.slot < b.slot ? -1 : 1
@@ -129,9 +140,9 @@ calendar_index_asset :: proc(conv: ^Conversation_State, asset: ^pr.Asset, remove
 }
 calendar_index_ensure :: proc(conv: ^Conversation_State) {
 	if conv.calendar_ready do return
-	conv.calendar_index = btree.create(pr.CalendarKey, calendar_key_compare, btree.Options{degree = 32})
+	conv.calendar_index = btree.create_ordered(pr.CalendarKey, Calendar_Order, btree.Options{degree = 32})
 	conv.calendar_reminder_keys = make(map[pr.AssetID]pr.CalendarKey)
-	conv.calendar_appointments = btree.create(Appointment_Index_Key, appointment_index_compare, btree.Options{degree = 32})
+	conv.calendar_appointments = btree.create_ordered(Appointment_Index_Key, Appointment_Index_Order, btree.Options{degree = 32})
 	conv.calendar_appointment_keys = make(map[pr.AssetID]Appointment_Index_Key)
 	conv.calendar_ready = true
 	for _, task in conv.tasks do calendar_index_task(conv, task)

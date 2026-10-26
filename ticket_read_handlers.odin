@@ -255,7 +255,7 @@ collect_ticket_attention_indexed :: proc(
 	page.total_count_omitted = true
 	if conv.ticket_index == nil do return
 	owners := [2]string{username, ""}
-	its := [2]btree.IterG(Ticket_Assignee_Key){btree.iter(&conv.ticket_assignees), btree.iter(&conv.ticket_assignees)}
+	its := [2]btree.IterG(Ticket_Assignee_Key, Ticket_Assignee_Order){btree.iter(&conv.ticket_assignees), btree.iter(&conv.ticket_assignees)}
 	defer for &it in its do btree.iter_destroy(&it)
 	active: [2]bool
 	cursor, _ := strconv.parse_u64(q.cursor.id)

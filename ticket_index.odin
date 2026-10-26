@@ -11,6 +11,12 @@ Ticket_Assignee_Key :: struct {
 	id:       pr.AssetID,
 }
 
+Ticket_Assignee_Order :: btree.Static_Order(Ticket_Assignee_Key, btree.No_Projection, ticket_assignee_compare_static)
+
+ticket_assignee_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return ticket_assignee_compare((cast(^Ticket_Assignee_Key)a)^, (cast(^Ticket_Assignee_Key)b)^)
+}
+
 Ticket_Index_Row :: struct {
 	metadata:  Ticket_Metadata, // owned decoded strings; never borrows the asset/request
 	follow_up: i64,
@@ -185,7 +191,7 @@ ticket_index_put :: proc(conv: ^Conversation_State, asset: ^pr.Asset) {
 	if asset.asset_type == .Ticket {
 		if conv.ticket_index == nil {
 			conv.ticket_index = make(map[pr.AssetID]^Ticket_Index_Row)
-			conv.ticket_assignees = btree.create(Ticket_Assignee_Key, ticket_assignee_compare, btree.Options{degree = 32})
+			conv.ticket_assignees = btree.create_ordered(Ticket_Assignee_Key, Ticket_Assignee_Order, btree.Options{degree = 32})
 		}
 		row := conv.ticket_index[asset.asset_id]
 		if row == nil {

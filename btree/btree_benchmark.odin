@@ -34,6 +34,22 @@ BTB_Int_Item :: struct {
 	key: int,
 }
 
+BTB_Item_Order :: Static_Order(BTB_Item, No_Projection, btree_pkg_bench_item_compare_static)
+BTB_U64_Item_Order :: Static_Order(BTB_U64_Item, No_Projection, btree_pkg_bench_u64_item_compare_static)
+BTB_U32_Order :: Static_Order(u32, No_Projection, btree_pkg_bench_u32_compare_static)
+
+btree_pkg_bench_item_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return btree_pkg_bench_cmp_item((^BTB_Item)(a)^, (^BTB_Item)(b)^)
+}
+
+btree_pkg_bench_u64_item_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return btree_pkg_bench_cmp_u64_item((^BTB_U64_Item)(a)^, (^BTB_U64_Item)(b)^)
+}
+
+btree_pkg_bench_u32_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return btree_pkg_bench_cmp_u32((^u32)(a)^, (^u32)(b)^)
+}
+
 btree_pkg_bench_less_item :: proc(a, b: BTB_Item) -> bool {
 	return a.key < b.key
 }
@@ -341,7 +357,7 @@ btree_pkg_benchmark_u32_core_ops_run :: proc(bench_count, degree, seek_window, s
 		expected_scan_sum += u64(v)
 	}
 
-	seq_set_tree := create(u32, btree_pkg_bench_cmp_u32, Options{degree = degree})
+	seq_set_tree := create_ordered(u32, BTB_U32_Order, Options{degree = degree})
 	seq_set_replaced := 0
 	seq_set_start := time.now()
 	for v in seq_vals {
@@ -353,7 +369,7 @@ btree_pkg_benchmark_u32_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_log_rate("u32-set-seq", bench_count, seq_set_seconds)
 	destroy(&seq_set_tree)
 
-	seq_set_hint_tree := create(u32, btree_pkg_bench_cmp_u32, Options{degree = degree})
+	seq_set_hint_tree := create_ordered(u32, BTB_U32_Order, Options{degree = degree})
 	seq_set_hint := Path_Hint{}
 	seq_set_hint_replaced := 0
 	seq_set_hint_start := time.now()
@@ -366,7 +382,7 @@ btree_pkg_benchmark_u32_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_log_rate("u32-set-seq-hint", bench_count, seq_set_hint_seconds)
 	destroy(&seq_set_hint_tree)
 
-	seq_load_tree := create(u32, btree_pkg_bench_cmp_u32, Options{degree = degree})
+	seq_load_tree := create_ordered(u32, BTB_U32_Order, Options{degree = degree})
 	defer destroy(&seq_load_tree)
 	seq_load_replaced := 0
 	seq_load_start := time.now()
@@ -378,7 +394,7 @@ btree_pkg_benchmark_u32_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_assert_eq_int(seq_load_replaced, 0, "u32 sequential load should not replace")
 	btree_pkg_bench_log_rate("u32-load-seq", bench_count, seq_load_seconds)
 
-	rand_set_tree := create(u32, btree_pkg_bench_cmp_u32, Options{degree = degree})
+	rand_set_tree := create_ordered(u32, BTB_U32_Order, Options{degree = degree})
 	rand_set_replaced := 0
 	rand_set_start := time.now()
 	for v in rand_vals {
@@ -390,7 +406,7 @@ btree_pkg_benchmark_u32_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_log_rate("u32-set-rand", bench_count, rand_set_seconds)
 	destroy(&rand_set_tree)
 
-	rand_set_hint_tree := create(u32, btree_pkg_bench_cmp_u32, Options{degree = degree})
+	rand_set_hint_tree := create_ordered(u32, BTB_U32_Order, Options{degree = degree})
 	rand_set_hint := Path_Hint{}
 	rand_set_hint_replaced := 0
 	rand_set_hint_start := time.now()
@@ -413,7 +429,7 @@ btree_pkg_benchmark_u32_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_assert_eq_int(get_rand_valid, bench_count, "u32 random get result mismatch")
 	btree_pkg_bench_log_rate("u32-get-rand", bench_count, get_rand_seconds)
 
-	remove_rand_tree := create(u32, btree_pkg_bench_cmp_u32, Options{degree = degree})
+	remove_rand_tree := create_ordered(u32, BTB_U32_Order, Options{degree = degree})
 	defer destroy(&remove_rand_tree)
 	for v in seq_vals {
 		_, replaced := load(&remove_rand_tree, v)
@@ -429,7 +445,7 @@ btree_pkg_benchmark_u32_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_assert_eq_int(remove_rand_valid, bench_count, "u32 random remove result mismatch")
 	btree_pkg_bench_log_rate("u32-remove-rand", bench_count, remove_rand_seconds)
 
-	pivot_tree := create(u32, btree_pkg_bench_cmp_u32, Options{degree = degree})
+	pivot_tree := create_ordered(u32, BTB_U32_Order, Options{degree = degree})
 	defer destroy(&pivot_tree)
 	for v in seq_vals {
 		_, replaced := load(&pivot_tree, v)
@@ -473,7 +489,7 @@ btree_pkg_benchmark_u32_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_log_rate("u32-scan", scan_ops, scan_seconds)
 }
 
-btree_pkg_bench_insert_items :: proc(tr: ^BTreeG(BTB_Item), items: []BTB_Item, use_load, use_hints: bool, hint: ^Path_Hint) {
+btree_pkg_bench_insert_items :: proc(tr: ^BTreeG(BTB_Item, BTB_Item_Order), items: []BTB_Item, use_load, use_hints: bool, hint: ^Path_Hint) {
 	for item in items {
 		replaced := false
 		if use_load {
@@ -489,7 +505,7 @@ btree_pkg_bench_insert_items :: proc(tr: ^BTreeG(BTB_Item), items: []BTB_Item, u
 	}
 }
 
-btree_pkg_bench_insert_u64_items :: proc(tr: ^BTreeG(BTB_U64_Item), items: []BTB_U64_Item, use_load, use_hints: bool, hint: ^Path_Hint) {
+btree_pkg_bench_insert_u64_items :: proc(tr: ^BTreeG(BTB_U64_Item, BTB_U64_Item_Order), items: []BTB_U64_Item, use_load, use_hints: bool, hint: ^Path_Hint) {
 	for item in items {
 		replaced := false
 		if use_load {
@@ -530,7 +546,7 @@ btree_pkg_benchmark_u64_core_ops_run :: proc(bench_count, degree, seek_window, s
 		expected_scan_sum += item.val
 	}
 
-	seq_set_tree := create(BTB_U64_Item, btree_pkg_bench_cmp_u64_item, Options{degree = degree})
+	seq_set_tree := create_ordered(BTB_U64_Item, BTB_U64_Item_Order, Options{degree = degree})
 	defer destroy(&seq_set_tree)
 	seq_set_valid := true
 	seq_set_start := time.now()
@@ -542,7 +558,7 @@ btree_pkg_benchmark_u64_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_assert(seq_set_valid, "u64 sequential set should not replace")
 	btree_pkg_bench_log_rate("u64-set-seq", bench_count, seq_set_seconds)
 
-	seq_set_hint_tree := create(BTB_U64_Item, btree_pkg_bench_cmp_u64_item, Options{degree = degree})
+	seq_set_hint_tree := create_ordered(BTB_U64_Item, BTB_U64_Item_Order, Options{degree = degree})
 	defer destroy(&seq_set_hint_tree)
 	seq_set_hint := Path_Hint{}
 	seq_set_hint_valid := true
@@ -555,7 +571,7 @@ btree_pkg_benchmark_u64_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_assert(seq_set_hint_valid, "u64 sequential set_hint should not replace")
 	btree_pkg_bench_log_rate("u64-set-seq-hint", bench_count, seq_set_hint_seconds)
 
-	seq_load_tree := create(BTB_U64_Item, btree_pkg_bench_cmp_u64_item, Options{degree = degree})
+	seq_load_tree := create_ordered(BTB_U64_Item, BTB_U64_Item_Order, Options{degree = degree})
 	defer destroy(&seq_load_tree)
 	seq_load_valid := true
 	seq_load_start := time.now()
@@ -567,7 +583,7 @@ btree_pkg_benchmark_u64_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_assert(seq_load_valid, "u64 sequential load should not replace")
 	btree_pkg_bench_log_rate("u64-load-seq", bench_count, seq_load_seconds)
 
-	rand_set_tree := create(BTB_U64_Item, btree_pkg_bench_cmp_u64_item, Options{degree = degree})
+	rand_set_tree := create_ordered(BTB_U64_Item, BTB_U64_Item_Order, Options{degree = degree})
 	defer destroy(&rand_set_tree)
 	rand_set_valid := true
 	rand_set_start := time.now()
@@ -579,7 +595,7 @@ btree_pkg_benchmark_u64_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_assert(rand_set_valid, "u64 random set should not replace")
 	btree_pkg_bench_log_rate("u64-set-rand", bench_count, rand_set_seconds)
 
-	rand_set_hint_tree := create(BTB_U64_Item, btree_pkg_bench_cmp_u64_item, Options{degree = degree})
+	rand_set_hint_tree := create_ordered(BTB_U64_Item, BTB_U64_Item_Order, Options{degree = degree})
 	defer destroy(&rand_set_hint_tree)
 	rand_set_hint := Path_Hint{}
 	rand_set_hint_valid := true
@@ -602,7 +618,7 @@ btree_pkg_benchmark_u64_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_assert_eq_int(get_rand_valid, bench_count, "u64 random get result mismatch")
 	btree_pkg_bench_log_rate("u64-get-rand", bench_count, get_rand_seconds)
 
-	remove_rand_tree := create(BTB_U64_Item, btree_pkg_bench_cmp_u64_item, Options{degree = degree})
+	remove_rand_tree := create_ordered(BTB_U64_Item, BTB_U64_Item_Order, Options{degree = degree})
 	defer destroy(&remove_rand_tree)
 	btree_pkg_bench_insert_u64_items(&remove_rand_tree, seq_items[:], true, false, nil)
 	remove_rand_start := time.now()
@@ -615,7 +631,7 @@ btree_pkg_benchmark_u64_core_ops_run :: proc(bench_count, degree, seek_window, s
 	btree_pkg_bench_assert_eq_int(remove_rand_valid, bench_count, "u64 random remove result mismatch")
 	btree_pkg_bench_log_rate("u64-remove-rand", bench_count, remove_rand_seconds)
 
-	pivot_tree := create(BTB_U64_Item, btree_pkg_bench_cmp_u64_item, Options{degree = degree})
+	pivot_tree := create_ordered(BTB_U64_Item, BTB_U64_Item_Order, Options{degree = degree})
 	defer destroy(&pivot_tree)
 	btree_pkg_bench_insert_u64_items(&pivot_tree, seq_items[:], true, false, nil)
 
@@ -697,7 +713,7 @@ btree_pkg_benchmark_core_ops_run :: proc() {
 	}
 
 	// Inserts
-	seq_set_tree := create(BTB_Item, btree_pkg_bench_cmp_item, Options{degree = degree})
+	seq_set_tree := create_ordered(BTB_Item, BTB_Item_Order, Options{degree = degree})
 	defer destroy(&seq_set_tree)
 	seq_set_valid := true
 	seq_set_start := time.now()
@@ -710,7 +726,7 @@ btree_pkg_benchmark_core_ops_run :: proc() {
 	btree_pkg_bench_assert_eq_int(count(&seq_set_tree), bench_count, "sequential set count mismatch")
 	btree_pkg_bench_log_rate("set-seq", bench_count, seq_set_seconds)
 
-	seq_set_hint_tree := create(BTB_Item, btree_pkg_bench_cmp_item, Options{degree = degree})
+	seq_set_hint_tree := create_ordered(BTB_Item, BTB_Item_Order, Options{degree = degree})
 	defer destroy(&seq_set_hint_tree)
 	seq_set_hint := Path_Hint{}
 	seq_set_hint_valid := true
@@ -724,7 +740,7 @@ btree_pkg_benchmark_core_ops_run :: proc() {
 	btree_pkg_bench_assert_eq_int(count(&seq_set_hint_tree), bench_count, "sequential set_hint count mismatch")
 	btree_pkg_bench_log_rate("set-seq-hint", bench_count, seq_set_hint_seconds)
 
-	seq_load_tree := create(BTB_Item, btree_pkg_bench_cmp_item, Options{degree = degree})
+	seq_load_tree := create_ordered(BTB_Item, BTB_Item_Order, Options{degree = degree})
 	defer destroy(&seq_load_tree)
 	seq_load_valid := true
 	seq_load_start := time.now()
@@ -737,7 +753,7 @@ btree_pkg_benchmark_core_ops_run :: proc() {
 	btree_pkg_bench_assert_eq_int(count(&seq_load_tree), bench_count, "sequential load count mismatch")
 	btree_pkg_bench_log_rate("load-seq", bench_count, seq_load_seconds)
 
-	rand_set_tree := create(BTB_Item, btree_pkg_bench_cmp_item, Options{degree = degree})
+	rand_set_tree := create_ordered(BTB_Item, BTB_Item_Order, Options{degree = degree})
 	defer destroy(&rand_set_tree)
 	rand_set_valid := true
 	rand_set_start := time.now()
@@ -750,7 +766,7 @@ btree_pkg_benchmark_core_ops_run :: proc() {
 	btree_pkg_bench_assert_eq_int(count(&rand_set_tree), bench_count, "random set count mismatch")
 	btree_pkg_bench_log_rate("set-rand", bench_count, rand_set_seconds)
 
-	rand_set_hint_tree := create(BTB_Item, btree_pkg_bench_cmp_item, Options{degree = degree})
+	rand_set_hint_tree := create_ordered(BTB_Item, BTB_Item_Order, Options{degree = degree})
 	defer destroy(&rand_set_hint_tree)
 	rand_set_hint := Path_Hint{}
 	rand_set_hint_valid := true
@@ -764,7 +780,7 @@ btree_pkg_benchmark_core_ops_run :: proc() {
 	btree_pkg_bench_assert_eq_int(count(&rand_set_hint_tree), bench_count, "random set_hint count mismatch")
 	btree_pkg_bench_log_rate("set-rand-hint-control", bench_count, rand_set_hint_seconds)
 
-	rand_load_tree := create(BTB_Item, btree_pkg_bench_cmp_item, Options{degree = degree})
+	rand_load_tree := create_ordered(BTB_Item, BTB_Item_Order, Options{degree = degree})
 	defer destroy(&rand_load_tree)
 	rand_load_valid := true
 	rand_load_start := time.now()
@@ -821,7 +837,7 @@ btree_pkg_benchmark_core_ops_run :: proc() {
 	btree_pkg_bench_log_rate("get-rand-hint-control", bench_count, get_rand_hint_seconds)
 
 	// Removes
-	remove_rand_tree := create(BTB_Item, btree_pkg_bench_cmp_item, Options{degree = degree})
+	remove_rand_tree := create_ordered(BTB_Item, BTB_Item_Order, Options{degree = degree})
 	defer destroy(&remove_rand_tree)
 	btree_pkg_bench_insert_items(&remove_rand_tree, seq_items[:], true, false, nil)
 	remove_rand_valid := 0
@@ -835,7 +851,7 @@ btree_pkg_benchmark_core_ops_run :: proc() {
 	btree_pkg_bench_assert_eq_int(count(&remove_rand_tree), 0, "random remove did not empty tree")
 	btree_pkg_bench_log_rate("remove-rand", bench_count, remove_rand_seconds)
 
-	remove_rand_hint_tree := create(BTB_Item, btree_pkg_bench_cmp_item, Options{degree = degree})
+	remove_rand_hint_tree := create_ordered(BTB_Item, BTB_Item_Order, Options{degree = degree})
 	defer destroy(&remove_rand_hint_tree)
 	btree_pkg_bench_insert_items(&remove_rand_hint_tree, seq_items[:], true, false, nil)
 	remove_rand_hint := Path_Hint{}
@@ -851,7 +867,7 @@ btree_pkg_benchmark_core_ops_run :: proc() {
 	btree_pkg_bench_log_rate("remove-rand-hint-control", bench_count, remove_rand_hint_seconds)
 
 	// Iterator random-seek + forward-window pagination-like walks.
-	pivot_tree := create(BTB_Item, btree_pkg_bench_cmp_item, Options{degree = degree})
+	pivot_tree := create_ordered(BTB_Item, BTB_Item_Order, Options{degree = degree})
 	defer destroy(&pivot_tree)
 	btree_pkg_bench_insert_items(&pivot_tree, seq_items[:], true, false, nil)
 

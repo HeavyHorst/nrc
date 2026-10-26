@@ -124,7 +124,7 @@ btree_bench_env_bool :: proc(name: string) -> bool {
 }
 
 btree_bench_set_with_optional_hint :: proc(
-	tr: ^btree.BTreeG(Note_Sort_Key),
+	tr: ^btree.BTreeG(Note_Sort_Key, Note_Sort_Order),
 	key: Note_Sort_Key,
 	use_hints: bool,
 	hint: ^btree.Path_Hint,
@@ -139,7 +139,7 @@ btree_bench_set_with_optional_hint :: proc(
 }
 
 btree_bench_remove_with_optional_hint :: proc(
-	tr: ^btree.BTreeG(Note_Sort_Key),
+	tr: ^btree.BTreeG(Note_Sort_Key, Note_Sort_Order),
 	key: Note_Sort_Key,
 	use_hints: bool,
 	hint: ^btree.Path_Hint,
@@ -153,7 +153,12 @@ btree_bench_remove_with_optional_hint :: proc(
 	return btree.remove(tr, key)
 }
 
-btree_bench_iter_seek_with_optional_hint :: proc(it: ^btree.IterG(Note_Sort_Key), key: Note_Sort_Key, use_hints: bool, hint: ^btree.Path_Hint) -> bool {
+btree_bench_iter_seek_with_optional_hint :: proc(
+	it: ^btree.IterG(Note_Sort_Key, Note_Sort_Order),
+	key: Note_Sort_Key,
+	use_hints: bool,
+	hint: ^btree.Path_Hint,
+) -> bool {
 	if use_hints {
 		return btree.iter_seek_hint(it, key, hint)
 	}
@@ -280,7 +285,7 @@ btree_bench_log_allocator_snapshot :: proc(label: string, ca: ^BTB_Counting_Allo
 	)
 }
 
-btree_bench_log_structure_snapshot :: proc(label: string, tr: ^btree.BTreeG(Note_Sort_Key)) {
+btree_bench_log_structure_snapshot :: proc(label: string, tr: ^btree.BTreeG(Note_Sort_Key, Note_Sort_Order)) {
 	stats := btree.stats(tr)
 	log.infof(
 		"%s Structure: split=%d rebalance=%d merge=%d borrow_left=%d borrow_right=%d",
@@ -321,7 +326,7 @@ benchmark_note_index_btree :: proc(t: ^testing.T) {
 		allocator = btree_bench_counting_allocator(&node_counter)
 	}
 
-	tree := btree.create(Note_Sort_Key, btree_bench_note_sort_key_compare, btree.Options{degree = degree}, allocator)
+	tree := btree.create_ordered(Note_Sort_Key, Note_Sort_Order, btree.Options{degree = degree}, allocator)
 	defer btree.destroy(&tree)
 
 	baseline_rss_mb := get_rss_memory_mb()
@@ -342,7 +347,7 @@ benchmark_note_index_btree :: proc(t: ^testing.T) {
 		btree_bench_counting_allocator_init(&random_counter)
 		random_allocator = btree_bench_counting_allocator(&random_counter)
 	}
-	random_tree := btree.create(Note_Sort_Key, btree_bench_note_sort_key_compare, btree.Options{degree = degree}, random_allocator)
+	random_tree := btree.create_ordered(Note_Sort_Key, Note_Sort_Order, btree.Options{degree = degree}, random_allocator)
 	random_insert_hint := btree.Path_Hint{}
 	random_insert_hint_ptr: ^btree.Path_Hint = nil
 	if use_hints {

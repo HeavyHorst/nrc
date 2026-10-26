@@ -12,6 +12,12 @@ Entity_Reference_Key :: struct {
 	entity_id: u64,
 }
 
+Entity_Reference_Order :: btree.Static_Order(Entity_Reference_Key, btree.No_Projection, entity_reference_compare_static)
+
+entity_reference_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return entity_reference_key_compare((cast(^Entity_Reference_Key)a)^, (cast(^Entity_Reference_Key)b)^)
+}
+
 entity_reference_key_compare :: proc(a, b: Entity_Reference_Key) -> int {
 	if a.kind < b.kind do return -1
 	if a.kind > b.kind do return 1
@@ -27,16 +33,16 @@ state_map_set :: proc(m: ^map[$K]$V, key: K, value: V) {
 	if value_ptr == nil do panic("failed to insert state map entry")
 }
 
-relation_tree_create :: proc() -> btree.BTreeG(Entity_Reference_Key) {
-	return btree.create(Entity_Reference_Key, entity_reference_key_compare, btree.Options{degree = 32})
+relation_tree_create :: proc() -> btree.BTreeG(Entity_Reference_Key, Entity_Reference_Order) {
+	return btree.create_ordered(Entity_Reference_Key, Entity_Reference_Order, btree.Options{degree = 32})
 }
 
-relation_tree_index :: proc(tree: ^btree.BTreeG(Entity_Reference_Key), key: Entity_Reference_Key) {
+relation_tree_index :: proc(tree: ^btree.BTreeG(Entity_Reference_Key, Entity_Reference_Order), key: Entity_Reference_Key) {
 	_, replaced := btree.set(tree, key)
 	if replaced do panic("duplicate reverse relation index entry")
 }
 
-relation_tree_remove :: proc(tree: ^btree.BTreeG(Entity_Reference_Key), key: Entity_Reference_Key) {
+relation_tree_remove :: proc(tree: ^btree.BTreeG(Entity_Reference_Key, Entity_Reference_Order), key: Entity_Reference_Key) {
 	_, _ = btree.remove(tree, key)
 }
 

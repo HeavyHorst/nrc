@@ -143,7 +143,7 @@ replay_bench_worker :: proc(raw: rawptr) {
 			}
 			d.ok = d.ok && position == tasks
 			btree.iter_destroy(&it)
-			query_trees := [3]^btree.BTreeG(Task_Query_Key){&conv.task_query_indexes.trees[0][0], nil, nil}
+			query_trees := [3]^btree.BTreeG(Task_Query_Key, Task_Query_Order){&conv.task_query_indexes.trees[0][0], nil, nil}
 			if tasks > 0 {
 				query_trees[1] = &conv.task_project_indexes[""].indexes.trees[0][0]
 				query_trees[2] = &conv.task_assignee_indexes[""].indexes.trees[0][0]

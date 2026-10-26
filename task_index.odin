@@ -4,6 +4,18 @@ import "btree"
 import "core:strings"
 import pr "protocol"
 
+Task_Query_Order :: btree.Static_Order(Task_Query_Key, btree.No_Projection, task_query_compare_static)
+Task_Sort_Order :: btree.Static_Order(Task_Sort_Key, btree.No_Projection, task_sort_compare_static)
+
+task_query_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
+	if descending do return task_query_key_compare_desc((cast(^Task_Query_Key)a)^, (cast(^Task_Query_Key)b)^)
+	return task_query_key_compare_asc((cast(^Task_Query_Key)a)^, (cast(^Task_Query_Key)b)^)
+}
+
+task_sort_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return task_sort_key_compare((cast(^Task_Sort_Key)a)^, (cast(^Task_Sort_Key)b)^)
+}
+
 task_query_bytes_compare :: proc(a, b: []byte) -> int {
 	count := min(len(a), len(b))
 	for i in 0 ..< count {
@@ -32,7 +44,7 @@ task_query_key_compare_desc :: proc(a, b: Task_Query_Key) -> int {
 }
 
 task_query_index_set_init :: proc(set: ^Task_Query_Index_Set) {
-	set.trees[0][0] = btree.create(Task_Query_Key, task_query_key_compare_asc, btree.Options{degree = 32})
+	set.trees[0][0] = btree.create_ordered(Task_Query_Key, Task_Query_Order, btree.Options{degree = 32})
 	set.initialized[0][0] = true
 }
 task_query_index_set_destroy :: proc(set: ^Task_Query_Index_Set) {
@@ -98,12 +110,11 @@ task_query_index_set_ensure_order :: proc(
 	tasks: ^map[pr.TaskID]^pr.Task,
 	sort_kind: pr.TaskQuerySort,
 	descending: bool,
-) -> ^btree.BTreeG(Task_Query_Key) {
+) -> ^btree.BTreeG(Task_Query_Key, Task_Query_Order) {
 	direction := descending ? 1 : 0
 	sort_index := int(sort_kind)
 	if set.initialized[sort_index][direction] do return &set.trees[sort_index][direction]
-	compare := descending ? task_query_key_compare_desc : task_query_key_compare_asc
-	set.trees[sort_index][direction] = btree.create(Task_Query_Key, compare, btree.Options{degree = 32})
+	set.trees[sort_index][direction] = btree.create_ordered(Task_Query_Key, Task_Query_Order, btree.Options{degree = 32}, descending = descending)
 	membership := &set.trees[0][0]
 	it := btree.iter(membership)
 	defer btree.iter_destroy(&it)
@@ -154,7 +165,7 @@ make_task_sort_key :: proc(task: ^pr.Task) -> Task_Sort_Key {
 }
 
 init_task_index :: proc(conv: ^Conversation_State) {
-	conv.task_index = btree.create(Task_Sort_Key, task_sort_key_compare, btree.Options{degree = 32})
+	conv.task_index = btree.create_ordered(Task_Sort_Key, Task_Sort_Order, btree.Options{degree = 32})
 	conv.task_index_keys = make(map[pr.TaskID]Task_Sort_Key, 128)
 	task_query_index_set_init(&conv.task_query_indexes)
 	for status in 0 ..< 4 do task_query_index_set_init(&conv.task_status_indexes[status])

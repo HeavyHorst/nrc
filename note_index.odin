@@ -9,9 +9,15 @@ import "core:strings"
 
 import pr "protocol"
 
+Note_Sort_Order :: btree.Static_Order(Note_Sort_Key, btree.No_Projection, note_sort_compare_static)
+
+note_sort_compare_static :: proc(a, b: rawptr, descending: bool) -> int {
+	return note_sort_key_compare((cast(^Note_Sort_Key)a)^, (cast(^Note_Sort_Key)b)^)
+}
+
 Note_Secondary_Index :: struct {
 	key:  string,
-	tree: btree.BTreeG(Note_Sort_Key),
+	tree: btree.BTreeG(Note_Sort_Key, Note_Sort_Order),
 }
 
 note_sort_key_compare :: proc(a, b: Note_Sort_Key) -> int {
@@ -33,7 +39,7 @@ note_sort_key_compare :: proc(a, b: Note_Sort_Key) -> int {
 }
 
 init_note_index :: proc(conv: ^Conversation_State) {
-	conv.note_index = btree.create(Note_Sort_Key, note_sort_key_compare, btree.Options{degree = 32})
+	conv.note_index = btree.create_ordered(Note_Sort_Key, Note_Sort_Order, btree.Options{degree = 32})
 	conv.note_index_keys = make(map[pr.AssetID]Note_Sort_Key, 64)
 	conv.note_project_assets = make(map[string]^Note_Secondary_Index, 8)
 	conv.note_tag_assets = make(map[string]^Note_Secondary_Index, 16)
@@ -161,7 +167,7 @@ note_secondary_index_create :: proc(key: string) -> ^Note_Secondary_Index {
 	index := new(Note_Secondary_Index)
 	if index == nil do panic("failed to allocate note secondary index")
 	index.key = owned_key
-	index.tree = btree.create(Note_Sort_Key, note_sort_key_compare, btree.Options{degree = 32})
+	index.tree = btree.create_ordered(Note_Sort_Key, Note_Sort_Order, btree.Options{degree = 32})
 	return index
 }
 
