@@ -15,7 +15,10 @@ package main
 
 import "btree"
 
-cmp_int :: proc(a, b: int) -> int {
+Int_Order :: btree.Static_Order(int, btree.No_Projection, cmp_int)
+
+cmp_int :: proc(a_ptr, b_ptr: rawptr, descending: bool) -> int {
+        a, b := (^int)(a_ptr)^, (^int)(b_ptr)^
         if a < b {
                 return -1
         }
@@ -26,7 +29,7 @@ cmp_int :: proc(a, b: int) -> int {
 }
 
 main :: proc() {
-        tr := btree.create(int, cmp_int, btree.Options{degree = 32})
+        tr := btree.create_ordered(int, Int_Order, btree.Options{degree = 32})
         defer btree.destroy(&tr)
 
         _, _ = btree.set(&tr, 10)
@@ -44,16 +47,19 @@ main :: proc() {
 
 ## Core Types
 
-- `BTreeG(T)`: Generic tree container.
+- `BTreeG(T, Order)`: Generic tree container with an explicit order policy.
+- `Static_Order(T, Projection, compare_adapter, text_adapter, numeric_adapter)`: Compile-time policy with an explicit projection type; both search adapters are optional. Use `No_Projection` when there is no projection choice.
+- `Cache_Mode`: `.None`, `.Text`, or `.Numeric`; these modes are mutually exclusive.
 - `Options`: Construction options (`degree` controls node fanout).
 - `Path_Hint`: Optional reusable lookup/insert/remove hint for locality-heavy workloads.
 - `BTree_Stats`: Internal operation counters (`split_count`, `merge_count`, rebalancing counters).
-- `IterG(T)`: Stateful bidirectional iterator.
+- `IterG(T, Order)`: Stateful bidirectional iterator using the tree's policy.
 
 ## Construction And Lifecycle
 
-- `create(T, compare, opts := Options{}, allocator := context.allocator) -> BTreeG(T)` creates a tree.
-- `init(&tree, compare, opts := Options{}, allocator := context.allocator)` initializes a pre-existing tree value.
+- `create_ordered(T, Policy, opts := Options{}, allocator := context.allocator, cache = .None, descending = false)` creates a tree with its policy's zero-value projection.
+- `init_ordered(&tree, opts := Options{}, allocator := context.allocator, cache = .None, descending = false)` initializes a pre-existing tree value with its declared policy.
+- Both constructors also accept a named `projection` argument. Its type must exactly match `Policy.Projection`; a mismatched enum or integer fails compilation. Pass a typed value, such as `projection = My_Projection(.Time)`, or a variable of that type.
 - `destroy(&tree)` frees all node memory owned by the tree.
 - `clear_tree(&tree)` clears all contents (same effect as `destroy` for current contents) while keeping the tree value reusable.
 
@@ -91,6 +97,13 @@ Create/destroy:
 
 - `iter(&tree) -> IterG(T)`
 - `iter_destroy(&it)`
+
+The iterator keeps its traversal stack inline and does not allocate. On a
+64-bit target the stack holds 64 node/index pairs (1 KiB); the iterator also
+stores its current item and position flags. Even at minimum degree 2, a tree
+with L levels needs at least 2^L - 1 items, so the signed `int` item count bounds
+the required depth. `iter_destroy` invalidates the iterator without freeing
+heap storage. Mutating the tree still invalidates existing iterator positions.
 
 Positioning:
 
@@ -182,10 +195,167 @@ note_key_compare :: proc(a, b: Note_Key) -> int {
 }
 ```
 
+## Static Ordering
+
+Use a fixed policy when the ordering is known at compile time. This allows the
+compiler to inline comparison instead of loading a runtime procedure pointer:
+
+```odin
+note_order_compare :: proc(a, b: rawptr, descending: bool) -> int {
+        return note_key_compare((^Note_Key)(a)^, (^Note_Key)(b)^)
+}
+
+Note_Order :: btree.Static_Order(Note_Key, btree.No_Projection, note_order_compare)
+tree := btree.create_ordered(Note_Key, Note_Order)
+defer btree.destroy(&tree)
+```
+
+Adapters must cast to the policy's declared item type. Their pointers borrow
+temporary item copies: treat them as read-only and never retain them. Construction
+checks that the policy's item and projection types match the tree, but cannot check raw-pointer
+casts inside adapters. The comparator receives the tree's `descending` flag;
+it may ignore it for a fixed order, as above. Keep ordering configuration fixed
+for the tree's lifetime. A static policy also controls hinted searches.
+
+For static text search, supply a fourth policy argument with signature
+`proc(rawptr) -> (string, bool)` and pass `cache = .Text` at construction.
+The cache is off by default, even when the policy supplies a text adapter. This
+allows mixed numeric/text policies to opt in only for text-ordered instances.
+Without a text adapter, the static policy reports all items ineligible.
+
+Explicit type annotations must include the policy:
+`BTreeG(Note_Key, Note_Order)` and `IterG(Note_Key, Note_Order)`. Types from
+`create_ordered` and `iter` can be inferred. There is no runtime comparator API.
+
 ## Notes
 
 - Not thread-safe; external synchronization is required for concurrent mutation/access.
 - In-memory only; persistence must be handled by the caller.
+
+## Text Search
+
+`create_ordered` and `init_ordered` accept a `cache` enum and a
+`descending` boolean. Text extraction comes from the policy's text adapter,
+with signature `proc(item: rawptr) -> (text: string, ok: bool)`.
+Select `cache = .Text` to enable it, or `.None` for ordinary nodes with unchanged allocation layout.
+
+For eligible items, text must be the primary comparator key, ordered by raw
+bytes (reverse byte order when `descending = true`). The original comparator
+still resolves equal text and truncated-key collisions, including secondary ID
+ordering. Return `ok = false` for unsupported query forms or records; queries or
+nodes containing these records fall back to the original comparator. Keep the
+accessor and its configuration fixed for the tree's lifetime, and do not mutate
+stored key bytes outside tree operations.
+
+Text nodes cache their common-prefix length and a search word per slot: four
+bytes in leaves, eight bytes in internal nodes. The cache and contiguous search
+words follow the node header, before the full items and child pointers, within
+the same allocation. Item alignment is preserved; nodes without text caching
+keep their original layout.
+Non-hinted searches, including those during mutations, lazily populate this
+cache and compare eight leaf words or four internal words at once on SIMD-capable
+targets. Ordinary insertions,
+replacements and deletions maintain valid search words in place. The common prefix
+may stay conservatively short after deletion; inserting a key that does not share
+it invalidates the cache. Sibling borrowing maintains words through the same
+checked helpers; merging retains the parent's cache but invalidates the merged
+child. After internal word maintenance, equal leading bytes in the endpoint
+words trigger lazy rebuilding when neither endpoint could be entirely padding:
+they prove that the common prefix can grow. This avoids keeping unnecessarily
+short internal prefixes without reading key bytes during the check. Entirely
+padding-like words (including eight NUL bytes) are conservatively skipped, and
+leaf prefixes may remain short. Splits and eligibility changes can also require
+a refresh. Hints retain the ordinary search
+path. Even reads therefore require external synchronization. Each opt-in node uses
+additional memory, and structural changes still incur cache-rebuilding costs.
+
+Unhinted checked searches (`get`, `iter_seek`, `set`, and the `remove` fallback)
+carry a prefix guarantee down the search path.
+Two neighboring separators bound an interior child; their common cached bytes
+can extend this guarantee, stopping before zero bytes that might be padding.
+Outer children retain only ancestor guarantees. Descendants compare only the
+remaining prefix bytes. This state lasts for one descent and adds no node storage.
+Splitting a child preserves its ancestor bounds; extracting a predecessor for
+deletion starts without the original query's prefix guarantee. Cache maintenance
+still validates incoming text, and hinted searches keep their existing behavior.
+
+Unhinted text `remove` first attempts an exact descent without prefix checks.
+Only a full-comparator match permits an item mutation. If that descent finds
+nothing, it retries from the root with checked prefix propagation. This targets
+deletion of existing keys; absent keys may pay for two descents. `get`, `set`,
+and lower-bound searches never use the optimistic path.
+
+NRC's title, project, and assignee task indexes always use the text cache.
+There is no uncached text-index configuration. Comparator fallback for unsupported
+text query forms and collisions remains necessary for correctness.
+
+## Numeric Search
+
+The fifth optional `Static_Order` argument is a numeric adapter:
+`proc(item: rawptr, descending: bool, projection: rawptr) -> u64`. Enable it with
+`cache = .Numeric`. The tree stores the policy's declared projection type, not
+an integer mode. A policy can serve several projection values without changing
+the tree's type. For example:
+
+```odin
+Projection :: enum u8 {Time, Enum_Value}
+Order :: btree.Static_Order(Key, Projection, compare, btree.static_no_text, numeric_key)
+tree := btree.create_ordered(Key, Order, cache = .Numeric, projection = Projection(.Enum_Value))
+```
+
+The numeric adapter casts `projection` to `^Projection`, just as it casts `item`
+to `^Key`. Both pointers borrow temporary copies: do not modify or retain them.
+This raw-pointer boundary avoids this Odin version's unsupported dependent
+callback parameter type. The constructor checks the projection type at compile
+time; it cannot verify casts inside the adapter. Policies with only one projection
+use `No_Projection` and ignore that pointer.
+
+Keep cache, direction and projection fixed for the tree's lifetime. Text and numeric
+caches cannot be selected together. The default adapter is a procedure sentinel
+because this Odin version cannot generate code for a nil polymorphic-procedure
+default; without a custom adapter all words collide and use the full comparator.
+
+Words must preserve comparator order: `compare(a,b) < 0` requires `word(a) <= word(b)`;
+equal keys must have equal words. This includes query keys, descending order and
+out-of-range values. Collisions are permitted; SIMD finds a word's lower bound,
+then the original comparator searches its equal-word interval. No text conversion,
+prefix processing or optimistic removal is used. Hints keep comparator search.
+
+Numeric nodes reuse the cache layout and mutation helpers, storing contiguous
+`u64` words in both leaves and internal nodes. At degree 32 this adds 520 bytes
+per node on x86-64: 16 metadata bytes plus 63 words. Insert/remove/replace maintain
+warm words, while splits and merges can require a lazy rebuild. Reads therefore
+still require external synchronization.
+
+NRC enables numeric caching only for Task Priority/Status/Color (enum projection),
+Task CreatedAt, and chronological Task/Note indexes, including secondary Note
+indexes. DueAt, calendar, appointment, relation and ticket indexes remain unchanged.
+The enum projection includes secondary IDs when text is empty, and conservatively
+collapses saturated-number buckets and nonempty text to comparator ties. Numeric
+cache modes do not change the original comparator or cursor semantics.
+
+## Cache Differential Tests
+
+`test_hegel_text_search_model` in this package and
+`test_hegel_task_query_numeric_model` in the root package apply identical
+operations to cached and uncached trees, checked against one independent slice
+model. The numeric property uses the actual Task projections. Both properties
+prefill past a degree-32 leaf, warm search caches, mix hinted/unhinted mutations
+and bursts, check lookup and bounded pages in both directions, and drain to empty.
+The text oracle compares bytes explicitly; neither oracle uses a search-word
+projection or the tree's comparator to determine expected order.
+
+The normal budgets are 200 text cases and 144 numeric cases. For a larger,
+reproducible run, execute these sequentially from the repository root:
+
+```bash
+HEGEL_SEED=20261027 HEGEL_TEST_CASE_MULTIPLIER=5 HEGEL_DIAGNOSTICS=1 \
+  ./test/run_odin_tests.sh btree/ -o:speed -define:ODIN_TEST_LOG_LEVEL=error \
+  -define:ODIN_TEST_NAMES=btree.test_hegel_text_search_model
+HEGEL_SEED=20261027 HEGEL_TEST_CASE_MULTIPLIER=5 HEGEL_DIAGNOSTICS=1 \
+  ./test/run_odin_tests.sh . -o:speed -define:ODIN_TEST_LOG_LEVEL=error \
+  -define:ODIN_TEST_NAMES=main.test_hegel_task_query_numeric_model
+```
 
 ## Benchmarking
 
