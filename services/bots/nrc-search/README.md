@@ -271,6 +271,10 @@ These are standalone defaults. Compose sets container paths and the NRC server U
 | `SEARCH_PORT` | `8090` | Internal HTTP port |
 | `MODEL_PATH` | `./models/model.onnx` | ONNX model path |
 | `TOKENIZER_PATH` | `./models/tokenizer.json` | Tokenizer path |
+| `SEARCH_VLLM_URL` | Unset | Optional trusted vLLM endpoint, including `/v1/embeddings` |
+| `SEARCH_VLLM_MODEL` | `google/embeddinggemma-2` | Served model matching the local ONNX weights |
+| `SEARCH_VLLM_TIMEOUT` | `3s` | Positive shared budget for waiting for an HTTP slot, upload and response reading (not local preparation/inference) |
+| `SEARCH_VLLM_MEDIA` | `false` | Experimental image/audio offload; opt in only after validating your corpus |
 | `DATA_DIR` | `./data` | Persistent index directory |
 | `EMBED_ASSET_TYPES` | `1,2,3,4,5,8,9,10,13,14` | Comments, documents, files, workspace memos, notes, companies, contacts, activities, tickets and ticket entries |
 | `EMBED_TASKS` | `true` | Index tasks, including Done history |
@@ -279,6 +283,71 @@ These are standalone defaults. Compose sets container paths and the NRC server U
 | `MEDIA_WORKER_PATH` | `./media_worker.mjs` | Local Node media worker |
 | `RECONCILE_INTERVAL` | `15m` | Reconciliation interval |
 | `EMBEDDING_SCHEMA` | `embeddinggemma-2-v3-customers` | Change to rebuild embeddings after model/prompt/index-content changes |
+
+### Optional vLLM GPU acceleration
+
+Set `SEARCH_VLLM_URL` in `.env` (Compose already passes that file to Search), or
+in the standalone environment, to the complete endpoint, for example
+`http://gpu-server:18080/v1/embeddings`. Leave it empty for exclusively local
+inference. The NRC Search container must itself be able to reach that address;
+a Tailscale connection in an unrelated proxy container is not sufficient.
+
+Use a vLLM build supporting `google/embeddinggemma-2` with text, vision and audio
+encoders, an 8,192-token context and 768-dimensional output. Retain any required
+GPU fixes when upgrading (the initial deployment uses the pinned fix from
+[vLLM PR #60942](https://github.com/vllm-project/vllm/pull/60942)). This integration
+uses `/v1/embeddings`, not Ollama's `/api/embed`. Arctic Embed and older
+EmbeddingGemma 300M vectors are not compatible with the current index.
+
+Text retains NRC's existing query/document prompts and uses the local tokenizer's
+token IDs, including BOS/EOS and the same truncation as ONNX. This also preserves
+literal media-marker text instead of letting the remote processor reinterpret it.
+Images, including rendered PDF pages, are decoded with the existing size checks and sent as lossless PNG
+data URIs. Audio uses the existing FFmpeg decoder and 30-second, mono 16 kHz
+segments, sent as float32 WAV in `input_audio`. No file URLs, filesystem paths
+or download credentials are sent. Multimodal `messages` explicitly set
+`add_special_tokens: true`; they contain no extra text or chat instructions.
+Video ingestion remains unsupported.
+
+**Media offload is experimental and disabled by default.** With
+`SEARCH_VLLM_MEDIA=true`, a real-photo and speech sample matched ONNX at cosine
+0.999168 and 0.999920, but a small synthetic gradient and constant audio differed
+at 0.878537 and 0.936174. Those media differences remain unresolved; do not assume
+interchangeable vectors for every input. The first-input guard below rejects
+these examples if encountered during verification, but does not check every
+later input after a modality passes. Keep media local for strict index consistency.
+
+vLLM accelerates the **same model**, not an independent embedding space. Pin
+weights and preprocessing matching the local ONNX export. On first use, Search
+compares the actual input against ONNX separately for query, document, image
+and audio (cosine similarity at least 0.995). A failed modality stays local;
+other modalities can continue remotely. Checks repeat after failures. This is
+a mismatch guard, not proof of general equivalence: verify representative
+text, image and speech retrieval against NRC's ONNX path before deployment.
+Changing the underlying model still requires a schema change and index rebuild.
+
+Network failures, timeouts, HTTP errors and invalid/incompatible vectors fall
+back to ONNX for the same text or media segment, without exposing the remote
+error to callers. A warning is logged without input/response contents. That
+modality uses ONNX for 30 seconds before retrying vLLM automatically. Verified
+requests run concurrently, with a shared limit of four in-flight vLLM requests
+across workspaces, media and searches.
+Slot waiting and HTTP share one timeout budget. A waiting call rechecks the
+modality cooldown before sending, so an outage does not cause successive timeout
+waves. Admission expiry and per-input preparation failures do not disable the
+remote modality. Images whose lossless PNG/base64 representation would exceed
+the worker's 16 MiB response limit use ONNX only for that input; subsequent small
+images can still use vLLM.
+Without vLLM, indexing stays serial. Requests arriving during a modality's compatibility
+check use ONNX. Text truncation is applied by NRC before sending token IDs.
+Previous index generations during rebuilds stay local. The local model remains
+a startup dependency, media dependencies are still required, and genuine local
+inference errors are not suppressed.
+
+Only enable this for a trusted endpoint: indexed text, queries, images and audio
+are transmitted to it. Use Tailscale/private networking or HTTPS; no API key is
+sent and redirects are not followed. Search does not configure the GPU service,
+Tailscale or access controls, and it does not pull remote models.
 
 ## Development
 
@@ -306,6 +375,16 @@ npm test
 Real inference tests are opt-in: set `TEST_MODEL_PATH`, `TEST_TOKENIZER_PATH`,
 `ONNXRUNTIME_PATH` (and the libtokenizers link path) for Go tests;
 also set `MEDIA_MODEL_DIR` to exercise image/audio inference in Go and Node tests.
+
+For a direct live comparison, also set `TEST_VLLM_URL` to the full embeddings
+endpoint and run `go test -run '^TestVLLMLiveONNXParity$' -v`. Set
+`TEST_VLLM_IMAGE` and `TEST_VLLM_AUDIO` to local absolute paths to include photo
+and speech cases; otherwise those cases skip. The test deliberately refuses
+fallback after the initial compatibility check so an outage or mismatch cannot
+pass by comparing ONNX to itself. For small-memory machines, compile with
+`go test -c -o /tmp/nrc-search.test`, then run each subtest in a separate process
+with `-test.run '^TestVLLMLiveONNXParity$/image$'` (likewise `query`, `document`,
+`long`, `literal-marker`, `audio`) to release native runtime memory between cases.
 
 The `noembed` build cannot run real model inference or serve semantic search.
 The normal service uses EmbeddingGemma 2 vectors and substring matches, merged

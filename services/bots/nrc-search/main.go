@@ -92,6 +92,10 @@ type Config struct {
 	ModelPath         string
 	TokenizerPath     string
 	EmbeddingSchema   string
+	VLLMURL           string
+	VLLMModel         string
+	VLLMTimeout       time.Duration
+	VLLMMedia         bool
 	EmbedAssetTypes   []uint16
 	EmbedTasks        bool
 	ReconcileInterval time.Duration
@@ -108,8 +112,19 @@ func loadConfig() Config {
 		ModelPath:       envOrDefault("MODEL_PATH", "./models/model.onnx"),
 		TokenizerPath:   envOrDefault("TOKENIZER_PATH", "./models/tokenizer.json"),
 		EmbeddingSchema: envOrDefault("EMBEDDING_SCHEMA", default_embedding_schema),
+		VLLMURL:         os.Getenv("SEARCH_VLLM_URL"),
+		VLLMModel:       envOrDefault("SEARCH_VLLM_MODEL", "google/embeddinggemma-2"),
+		VLLMTimeout:     3 * time.Second,
+		VLLMMedia:       parseBool(envOrDefault("SEARCH_VLLM_MEDIA", "false"), false),
 		DataDir:         envOrDefault("DATA_DIR", "./data"),
 		FilesURL:        os.Getenv("FILES_URL"),
+	}
+	if value := os.Getenv("SEARCH_VLLM_TIMEOUT"); value != "" {
+		if timeout, err := time.ParseDuration(value); err == nil && timeout > 0 {
+			cfg.VLLMTimeout = timeout
+		} else {
+			slog.Warn("invalid SEARCH_VLLM_TIMEOUT, using default 3s")
+		}
 	}
 
 	cfg.NRCBotSecret = envOrDefault("NRC_BOT_SECRET", "")
@@ -552,7 +567,17 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	router, err := startGenerationRouter(ctx, cfg, startTime, loadGenerationModel)
+	router, err := startGenerationRouter(ctx, cfg, startTime, func(spec generationSpec) (Embedder, error) {
+		local, err := loadGenerationModel(spec)
+		if err != nil {
+			return nil, err
+		}
+		// Previous generations must retain their own vector space during rebuilds.
+		if spec.Schema != cfg.EmbeddingSchema || spec.Legacy {
+			return local, nil
+		}
+		return withVLLM(local, cfg), nil
+	})
 	if err != nil {
 		slog.Error("failed to open active search generation", "error", err)
 		os.Exit(1)
