@@ -174,7 +174,9 @@ type atomicRefDefinition struct {
 func hydrateAtomicNoteMetadata(s *conn.Session, d *batchDocument, room func(string) (int64, error)) error {
 	for i := range d.Operations {
 		o := &d.Operations[i]
-		if o.Op != "note.update" || (o.Title == nil && o.Project == nil && o.Tags == nil && o.Format == nil) {
+		// Content-only note updates must refresh the derived teaser too.
+		// Preserve explicitly supplied previews for low-level callers.
+		if o.Op != "note.update" || (o.Title == nil && o.Project == nil && o.Tags == nil && o.Format == nil && (o.Content == nil || o.Preview != nil)) {
 			continue
 		}
 		id, err := numberID(o.ID)
