@@ -112,6 +112,15 @@ node_text_set_word :: proc(cache: ^Text_Node, count, index: int, word: $Word, re
 }
 
 text_word :: proc(text: string, offset: int, descending: bool, $Word: typeid) -> Word {
+	if len(text) <= offset do return descending ? ~Word(0) : Word(0)
+	if len(text) - offset >= size_of(Word) {
+		// Load only complete words; short tails below retain zero-padding without overreading.
+		word := intrinsics.unaligned_load((^Word)(raw_data(text[offset:])))
+		when ODIN_ENDIAN == .Little {
+			word = intrinsics.byte_swap(word)
+		}
+		return descending ? ~word : word
+	}
 	word: Word
 	for i in 0 ..< min(size_of(Word), len(text) - offset) {
 		word |= Word(text[offset + i]) << uint(8 * (size_of(Word) - 1 - i))

@@ -352,7 +352,7 @@ test_task_query_numeric_public_cursors :: proc(t: ^testing.T) {
 		{id = max(u64), status = .Todo, priority = 255, created_at = max(i64), updated_at = max(i64)},
 	}
 	for &task in tasks do task_query_test_add(&conv, &task)
-	testing.expect_value(t, conv.task_index.cache, btree.Cache_Mode.Numeric)
+	testing.expect_value(t, conv.task_index.cache, btree.Cache_Mode.None)
 	testing.expect_value(t, conv.task_index.projection, btree.No_Projection.None)
 	rows := make([dynamic]pr.Task)
 	defer delete(rows)

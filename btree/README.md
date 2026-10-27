@@ -359,8 +359,11 @@ warm words, while splits and merges can require a lazy rebuild. Reads therefore
 still require external synchronization.
 
 NRC enables numeric caching only for Task Priority/Status/Color (enum projection),
-Task CreatedAt, and chronological Task/Note indexes, including secondary Note
-indexes. DueAt, calendar, appointment, relation and ticket indexes remain unchanged.
+Task CreatedAt, and chronological Note indexes, including secondary Note indexes.
+The chronological Task index is uncached: paired local benchmarks favored ordinary
+nodes for its lookup and mutation workload. Note caches remain enabled for the
+normally smaller per-tree working sets. DueAt, calendar, appointment, relation and
+ticket indexes remain unchanged.
 The enum projection includes secondary IDs when text is empty, and conservatively
 collapses saturated-number buckets and nonempty text to comparator ties. Numeric
 cache modes do not change the original comparator or cursor semantics.

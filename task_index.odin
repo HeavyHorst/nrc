@@ -10,7 +10,7 @@ Task_Numeric_Projection :: enum u8 {
 }
 
 Task_Query_Order :: btree.Static_Order(Task_Query_Key, Task_Numeric_Projection, task_query_compare_static, task_query_text_key_static, task_query_numeric_key)
-Task_Sort_Order :: btree.Static_Order(Task_Sort_Key, btree.No_Projection, task_sort_compare_static, btree.static_no_text, task_sort_numeric_key)
+Task_Sort_Order :: btree.Static_Order(Task_Sort_Key, btree.No_Projection, task_sort_compare_static)
 
 task_query_numeric_key :: #force_inline proc(item: rawptr, descending: bool, projection: rawptr) -> u64 {
 	key := (cast(^Task_Query_Key)item)^
@@ -33,10 +33,6 @@ task_query_numeric_key :: #force_inline proc(item: rawptr, descending: bool, pro
 	if descending do number = ~number
 	// Retain missing-last for arbitrary cursors; lost low bits only create ties.
 	return missing | (number >> 1)
-}
-
-task_sort_numeric_key :: #force_inline proc(item: rawptr, descending: bool, projection: rawptr) -> u64 {
-	return u64((cast(^Task_Sort_Key)item)^.sort_at) ~ (u64(1) << 63)
 }
 
 task_query_compare_static :: #force_inline proc(a, b: rawptr, descending: bool) -> int {
@@ -226,7 +222,7 @@ make_task_sort_key :: proc(task: ^pr.Task) -> Task_Sort_Key {
 }
 
 init_task_index :: proc(conv: ^Conversation_State) {
-	conv.task_index = btree.create_ordered(Task_Sort_Key, Task_Sort_Order, btree.Options{degree = 32}, cache = .Numeric)
+	conv.task_index = btree.create_ordered(Task_Sort_Key, Task_Sort_Order, btree.Options{degree = 32})
 	conv.task_index_keys = make(map[pr.TaskID]Task_Sort_Key, 128)
 	task_query_index_set_init(&conv.task_query_indexes)
 	for status in 0 ..< 4 do task_query_index_set_init(&conv.task_status_indexes[status])
