@@ -334,12 +334,20 @@ func TestAssetListingRejectsNonNoteFilters(t *testing.T) {
 }
 
 func TestGenericAssetCitationKeepsNewTypesInSources(t *testing.T) {
-	for _, typeName := range []string{"Company", "Contact", "Activity", "Slice", "Appointment", "RoomMapping"} {
-		answer := typeName + " [Asset:9007199254740993]"
+	for _, typeName := range []string{"Comment", "Document", "File", "Agenda", "Note", "Reminder", "Company", "Contact", "Activity", "Slice", "Appointment", "RoomMapping", "room_mapping", "Ticket", "TicketEntry", "ticket_entry"} {
+		answer := "[" + typeName + ":9007199254740993] [Asset:9007199254740993]"
 		sources := sourcesFromAnswerRefs(answer, nil, map[uint64]string{9007199254740993: typeName + " record"})
-		if len(sources) != 1 || sources[0].ID != 9007199254740993 || sources[0].Title != typeName+" record" {
+		if len(sources) != 1 || sources[0].Type != "asset" || sources[0].ID != 9007199254740993 || sources[0].Title != typeName+" record" {
 			t.Fatalf("lost source: %+v", sources)
 		}
+		missing := sourcesFromAnswerRefs("["+typeName+":42]", nil, nil)
+		if len(missing) != 1 || missing[0].Type != "asset" {
+			t.Fatalf("lost uncached typed source: %+v", missing)
+		}
+	}
+	sources := sourcesFromAnswerRefs("[Task:42] #42 [Slice:42] [ task : 43 ]", []protocol.Task{{ID: 42, Title: "Task title"}}, map[uint64]string{42: "Slice name"})
+	if len(sources) != 3 || sources[0].Type != "task" || sources[0].Title != "Task title" || sources[1].Title != "Task #43" || sources[2].Type != "asset" || sources[2].Title != "Slice name" {
+		t.Fatalf("task and slice identities must stay separate: %+v", sources)
 	}
 }
 

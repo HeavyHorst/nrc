@@ -717,6 +717,67 @@ try {
   assert.equal(await page.locator("#aiSourcePanel").count(), 0);
   assert.equal(await page.locator("#logOutput").evaluate(node => node.inert), false);
   console.log("PASS: Sullivan requests/follow-up, clean answers, historical citations, research disclosure, source selection, keyboard focus, actions, light/dark desktop/mobile");
+
+  // Source labels use the same exact-read APIs as Markdown links. Delayed
+  // replies must keep citation numbers and distinguish equal task/asset IDs.
+  await page.evaluate(() => {
+    serverReady = true;
+    const id = 9007199254740993n;
+    window.sourceReadOriginals = [NRCTasks.requestTask, NRCAssets.requestAsset];
+    window.sourceReplies = [];
+    NRCTasks.roomTasks.get(0n)?.delete(id);
+    NRCAssets.roomAssets.get(0n)?.delete(id);
+    NRCTasks.requestTask = (room, requested, options) => {
+      window.sourceReplies.push(() => options.onSuccess?.({ task: { id: requested, title: "CA-Speicher reparieren" } }));
+    };
+    NRCAssets.requestAsset = (room, requested, options) => {
+      window.sourceReplies.push(() => requested === id
+        ? options.onSuccess?.({ asset: { assetId: requested, assetType: AssetType.Slice, preview: '{"name":"CA-Sanierung"}' } })
+        : options.onError?.());
+    };
+    const root = document.createElement("div");
+    root.id = "sourceResolutionTest";
+    document.getElementById("logOutput").append(root);
+    const message = {
+      type: "Message", author: "sullivan-ai", message: "**AI RESPONSE**\nSources", timestamp: Date.now(),
+      aiAnswer: "Task [Task:9007199254740993]. Slice [Slice:9007199254740993]. Kontakt [Contact:77].",
+      aiSources: [
+        { type: "task", id: String(id), title: `Task #${id}` },
+        { type: "asset", id: String(id), title: `[Slice:${id}]` },
+        { type: "asset", id: "77", title: "Bekannter Kontakt" },
+      ],
+    };
+    NRCAI.renderAnswer(root, message);
+    updateLedgerAnswer(message);
+  });
+  const resolved = page.locator("#sourceResolutionTest");
+  assert.deepEqual(await resolved.locator(".task-reference").allTextContents(), ["[1]", "[2]", "[3]"]);
+  await page.waitForFunction(() => window.sourceReplies.length >= 6);
+  await resolved.getByRole("link", { name: "Quelle: [Slice:9007199254740993]", exact: true }).click();
+  await page.evaluate(() => window.sourceReplies.splice(0).forEach(reply => reply()));
+  assert.deepEqual(await resolved.locator(".task-reference").evaluateAll(nodes => nodes.map(node => node.title)), ["CA-Speicher reparieren", "CA-Sanierung", "Bekannter Kontakt"]);
+  assert.deepEqual(await resolved.locator(".ai-source-item").allTextContents(), ["[1] CA-Speicher reparieren", "[2] CA-Sanierung", "[3] Bekannter Kontakt"]);
+  assert.deepEqual(await resolved.locator(".task-reference").allTextContents(), ["[1]", "[2]", "[3]"]);
+  assert.equal(await page.locator("#aiSourcePanel h2").innerText(), "CA-Sanierung");
+  assert.deepEqual(await page.locator("#aiSourcePanel .ai-source-item > span").allTextContents(), ["1  CA-Speicher reparieren", "2  CA-Sanierung", "3  Bekannter Kontakt"]);
+  assert.deepEqual(await page.locator("#ledgerSources .ledger-source-card > span").allTextContents(), ["CA-Speicher reparieren", "CA-Sanierung", "Bekannter Kontakt"]);
+  await page.getByRole("button", { name: "Quellen schließen", exact: true }).click();
+  await page.evaluate(() => {
+    [NRCTasks.requestTask, NRCAssets.requestAsset] = window.sourceReadOriginals;
+    document.getElementById("sourceResolutionTest").remove();
+  });
+  const openedEntries = await page.evaluate(() => {
+    const original = NRCInspector.openEntity;
+    const opened = [];
+    NRCInspector.openEntity = ref => opened.push({ type: ref.type, assetType: ref.assetType, id: String(ref.id) });
+    try {
+      NRCAssets.roomAssets.set(0n, new Map([[700n, { assetId: 700n, assetType: AssetType.TicketEntry, preview: "Entry" }]]));
+      NRCAI.navigateToSource({ type: "asset", id: "700" });
+    } finally { NRCInspector.openEntity = original; }
+    return opened;
+  });
+  assert.deepEqual(openedEntries, [{ type: "asset", assetType: 14, id: "700" }]);
+  console.log("PASS: Sullivan typed task/slice/contact references, delayed title reads, uint64 IDs, unavailable fallback and stable citation numbers");
   assert.deepEqual(errors, []);
   console.log("PASS: chat quotes/send, mouse/keyboard mentions, scroll/unread, local search, notification isolation, desktop/mobile light/dark");
 } finally {

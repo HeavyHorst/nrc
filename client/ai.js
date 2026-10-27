@@ -2187,7 +2187,10 @@
       }
     }
 
-    if ([AssetType.CustomerCompany, AssetType.CustomerContact, AssetType.CustomerActivity].includes(asset.assetType)) {
+    if ([AssetType.Slice, AssetType.Ticket, AssetType.Appointment, AssetType.File].includes(asset.assetType)) {
+      const type = asset.assetType === AssetType.Slice ? "slice" : asset.assetType === AssetType.Ticket ? "ticket" : asset.assetType === AssetType.Appointment ? "appointment" : "file";
+      window.NRCInspector?.openEntity({ roomId: targetRoomId, type, id: asset.assetId });
+    } else if ([AssetType.CustomerCompany, AssetType.CustomerContact, AssetType.CustomerActivity].includes(asset.assetType)) {
       const type = asset.assetType === AssetType.CustomerCompany ? "company" : asset.assetType === AssetType.CustomerContact ? "contact" : "activity";
       window.NRCInspector?.openEntity({ roomId: targetRoomId, type, id: asset.assetId });
     } else if (asset.assetType === AssetType.Comment) {
@@ -2221,7 +2224,7 @@
       if (window.NRCInspector) window.NRCInspector.openEntity({ roomId: targetRoomId, type: "reminder", id: asset.assetId });
       else window.NRCTasks?.selectReminder?.(asset.assetId, { roomId: targetRoomId });
     } else {
-      logSystem(`ASSET #${src.id} (${assetTypeLabel(asset.assetType)})`, "ai");
+      window.NRCInspector?.openEntity({ roomId: targetRoomId, type: "asset", assetType: asset.assetType, id: asset.assetId });
     }
   }
 
@@ -2451,6 +2454,15 @@
     }
   }
 
+  function bindSourceTitle(element, source, presentation = "title", prefix = "") {
+    element.dataset.nrcReference = "";
+    element.dataset.referenceType = source.type === "task" ? "task" : "asset";
+    element.dataset.referenceId = String(source.id);
+    element.dataset.referenceWorkspace = currentWorkspaceId;
+    element.dataset.referencePresentation = presentation;
+    element.dataset.referencePrefix = prefix;
+  }
+
   function processAssetReferences(rootEl, sources = [], contextRoomId = currentRoomId) {
     if (!rootEl) return;
 
@@ -2461,7 +2473,7 @@
     });
 
     const inAnswer = rootEl.classList.contains("ai-answer-body");
-    const assetRefRegex = /\[\s*(task|asset|comment|document|file|agenda|note|reminder)\s*:\s*(\d+)\s*\]|#(\d+)/gi;
+    const assetRefRegex = /\[\s*(task|asset|comment|document|file|agenda|note|reminder|company|contact|activity|slice|appointment|roommapping|room_mapping|ticket|ticketentry|ticket_entry)\s*:\s*(\d+)\s*\]|#(\d+)/gi;
     const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null);
     const textNodes = [];
     let current;
@@ -2507,6 +2519,7 @@
           if (index >= 0) link.textContent = `[${index + 1}]`;
           link.title = source.title || `${source.type}:${source.id}`;
           link.setAttribute("aria-label", `Quelle: ${link.title}`);
+          bindSourceTitle(link, source, "citation");
         } else {
           link.dataset.nrcReference = "";
           link.dataset.referenceType = refType;
@@ -2688,6 +2701,7 @@
     identity.textContent = `${source.type}:${source.id}`;
     const title = document.createElement("h2");
     title.textContent = source.title || source.preview || identity.textContent;
+    bindSourceTitle(title, source);
     const preview = document.createElement("p");
     preview.textContent = source.preview && source.preview !== title.textContent ? source.preview : "";
     const card = document.createElement("section");
@@ -2739,6 +2753,7 @@
       button.className = "ai-source-item";
       const name = document.createElement("span");
       name.textContent = `${index + 1}  ${item.title || item.preview || `${item.type}:${item.id}`}`;
+      bindSourceTitle(name, item, "title", `${index + 1}  `);
       const reference = document.createElement("small");
       reference.textContent = `${item.type}:${item.id}`;
       button.append(name, reference);
@@ -2779,6 +2794,7 @@
       button.type = "button";
       button.className = "ai-source-item";
       button.textContent = `[${index + 1}] ${source.title || source.preview || `${source.type}:${source.id}`}`;
+      bindSourceTitle(button, source, "title", `[${index + 1}] `);
       button.addEventListener("click", () => openSourcePanel(source, sources, messageData.aiContextRoomId ?? messageData.roomId, button));
       evidence.append(button);
     });
@@ -2937,6 +2953,7 @@
     clearSullivanShareMode,
     exitSullivanShareMode,
     navigateToSource,
+    bindSourceTitle,
     renderAnswer,
     closeSourcePanel,
     renderEmptyState,

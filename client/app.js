@@ -5600,6 +5600,7 @@ function updateLedgerAnswer(messageData) {
     reference.textContent = `${type}:${id}`.toUpperCase();
     const title = document.createElement("span");
     title.textContent = source?.title || source?.preview || "UNTITLED SOURCE";
+    if (source?.id != null) window.NRCAI?.bindSourceTitle(title, source);
 
     button.appendChild(reference);
     button.appendChild(title);
@@ -6928,16 +6929,26 @@ function resolveMarkdownReference(link) {
   const applyTitle = entity => {
     if (!link.isConnected || ref.workspaceId !== currentWorkspaceId) return;
     const title = markdownReferenceTitle(ref.type, ref.id, entity);
+    if (link.dataset.referencePresentation) {
+      // Sullivan keeps its citation numbers and supplied title when unavailable.
+      if (!title) return;
+      if (link.dataset.referencePresentation === "citation") {
+        link.title = title;
+        link.setAttribute("aria-label", `Quelle: ${title}`);
+      } else {
+        link.textContent = (link.dataset.referencePrefix || "") + title;
+      }
+      return;
+    }
     link.textContent = title || fallback;
     link.title = title ? tooltip : `${tooltip} · Not available`;
   };
   const title = markdownReferenceTitle(ref.type, ref.id);
   if (title) {
-    link.textContent = title;
-    link.title = tooltip;
+    applyTitle(null);
     return;
   }
-  link.textContent = fallback;
+  if (!link.dataset.referencePresentation) link.textContent = fallback;
   if (ref.type === "task") {
     window.NRCTasks?.requestTask(0n, ref.id, { onSuccess: detail => applyTitle(detail.task), onError: () => applyTitle(null) });
   } else {

@@ -1985,9 +1985,9 @@ Answer with dense, explicit markdown that exposes state.
 - Preserve the orthography of the user's language and source data exactly. Use ä, ö, ü, ß, Ä, Ö, Ü, é, è, ø, and æ as they appear in user questions, titles, note content, and cited evidence.
 - Never transliterate German umlauts or ß to ASCII. Kühlschrank stays Kühlschrank (not "Kuhlschrank" or "Kuehlschrank"); löst stays löst (not "lost" or "loest"); groß stays groß (not "gross"). This applies to summaries and paraphrases, not just direct quotes. Do not "simplify" or "normalize" German spelling.
 - Never use emoji, pictographs, or decorative symbols. Unicode box-drawing characters are allowed only inside plain text diagrams. Note: language diacritics are NOT decorative symbols — they are required orthography and must be preserved.
-- Reference tasks as #ID (example: #42)
+- Reference tasks as [Task:ID] (example: [Task:42]); #ID is reserved for tasks only, never slices or other assets.
 - Reference assets as [Type:ID] (example: [Document:123], [Note:55], [Asset:10])
-- Typed asset citations support only Comment, Document, File, Agenda, Note, and Reminder. For Company, Contact, Activity, Slice, Appointment, RoomMapping, or any other asset type, always cite [Asset:ID] and name the specific type in surrounding prose; do not write unsupported typed citations such as [Company:123]. Copy decimal ID strings exactly without rounding.
+- Typed asset citations support Comment, Document, File, Agenda, Note, Reminder, Company, Contact, Activity, Slice, Appointment, RoomMapping, Ticket, and TicketEntry. Cite slices as [Slice:ID], never #ID. For other asset types use [Asset:ID]. Copy decimal ID strings exactly without rounding.
 - When a diagram is useful or requested, use a fenced text code block. Unicode box-drawing characters ┌ ┐ └ ┘ ─ │ are allowed for box borders. Use only ASCII < > ^ v for arrowheads and + for connector junctions, with - and | for connector lines. Never use Unicode arrows or triangles. Preserve required source-language diacritics inside labels.
 - Use spaces, never tabs. Keep labels short, pad every box row to a fixed width, and align connected elements in the same character column. Nested boxes are allowed, but each outer row must retain its own closing │ aligned with the outer border.
 - Before sending any box diagram, self-check alignment: each ┌───┐ or └───┘ border line defines that box width, every enclosed │ content │ line must have exactly two vertical borders at the same columns as the border corners, padding spaces belong before the closing │, and every vertical connector, arrowhead, and junction must occupy the same character column as the element it connects to. Do not treat Markdown tables as diagrams or alter normal prose during this check.
@@ -3143,8 +3143,8 @@ func scoreTaskMatch(t protocol.Task, tokens []string) float64 {
 	return score
 }
 
-var answerTaskRefPattern = regexp.MustCompile(`#(\d+)`)
-var answerAssetRefPattern = regexp.MustCompile(`\[\s*(?i:(asset|comment|document|file|agenda|note|reminder))\s*:\s*(\d+)\s*\]`)
+var answerTaskRefPattern = regexp.MustCompile(`#(\d+)|\[\s*(?i:task)\s*:\s*(\d+)\s*\]`)
+var answerAssetRefPattern = regexp.MustCompile(`\[\s*(?i:(asset|comment|document|file|agenda|note|reminder|company|contact|activity|slice|appointment|roommapping|room_mapping|ticket|ticketentry|ticket_entry))\s*:\s*(\d+)\s*\]`)
 
 func sourcesFromAnswerRefs(answer string, tasks []protocol.Task, assetTitles map[uint64]string) []askSource {
 	if strings.TrimSpace(answer) == "" || len(tasks) == 0 {
@@ -3166,7 +3166,11 @@ func sourcesFromAnswerRefs(answer string, tasks []protocol.Task, assetTitles map
 		if len(m) < 2 {
 			continue
 		}
-		id, err := strconv.ParseUint(m[1], 10, 64)
+		idText := m[1]
+		if idText == "" {
+			idText = m[2]
+		}
+		id, err := strconv.ParseUint(idText, 10, 64)
 		if err != nil {
 			continue
 		}
@@ -3234,6 +3238,22 @@ func assetTypeLabel(typeName string) string {
 		return "Note"
 	case "reminder":
 		return "Reminder"
+	case "company":
+		return "Company"
+	case "contact":
+		return "Contact"
+	case "activity":
+		return "Activity"
+	case "slice":
+		return "Slice"
+	case "appointment":
+		return "Appointment"
+	case "roommapping", "room_mapping":
+		return "RoomMapping"
+	case "ticket":
+		return "Ticket"
+	case "ticketentry", "ticket_entry":
+		return "TicketEntry"
 	default:
 		return "Asset"
 	}
