@@ -439,12 +439,14 @@
     window.NRCColumnResize?.init({
       root: '#ticketsTable', headers: 'thead th', storageKey: 'nrc.ticket.columns.v3',
       viewport: '#ticketsRegister', flexible: 1,
+      independent: true, rows: '#ticketsList tr[data-ticket]', resetControl: '#ticketColumnsReset',
       defaults: [56, 280, 160, 104, 160, 100], minimums: [48, 160, 110, 88, 130, 88],
       maximums: [640, 4096],
-      apply: (table, widths) => {
+      apply: (table, widths, manual) => {
         table.style.tableLayout = 'fixed';
         const fixed = widths.reduce((sum, width, i) => sum + (i === 1 ? 0 : width), 0);
-        table.querySelectorAll('thead th').forEach((th, i) => th.style.width = i === 1 ? `max(${widths[i]}px, calc(100% - ${fixed}px))` : `${widths[i]}px`);
+        table.style.setProperty('--task-table-width', manual ? `${fixed + widths[1]}px` : '100%');
+        table.querySelectorAll('thead th').forEach((th, i) => th.style.width = i === 1 && !manual ? `max(${widths[i]}px, calc(100% - ${fixed}px))` : `${widths[i]}px`);
       },
     });
   }

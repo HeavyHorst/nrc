@@ -9,6 +9,70 @@ const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2, serviceWorkers: "block" });
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
+
+async function verifyIndependentColumns(view, theme) {
+  const config = {
+    tasks: ['#taskListView', 'thead th', 3, '#taskColumnsReset', '#taskListBody tr[data-task-id] .col-title'],
+    notes: ['#notesPanel .notes-container', '.notes-list-header > div', 2, '#noteColumnsReset', '#notesList .note-header'],
+    reminders: ['#reminderQueueBody', '.reminder-list-header > span', 2, '#reminderColumnsReset', '#reminderQueueBody .reminder-title'],
+    tickets: ['#ticketsRegister', 'thead th', 1, '#ticketColumnsReset', '#ticketsList tr[data-ticket] .col-title'],
+  }[view];
+  const [hostSelector, cellsSelector, titleIndex, resetSelector, contentSelector] = config;
+  const host = page.locator(hostSelector);
+  const cells = host.locator(cellsSelector);
+  const widths = () => cells.evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().width));
+  const reset = page.locator(resetSelector);
+  await reset.click();
+  await host.evaluate(el => { el.scrollLeft = 0; });
+  const initial = await widths();
+  const titleHandle = cells.nth(titleIndex).getByRole('separator');
+  const box = await titleHandle.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 93, box.y + box.height / 2, { steps: 12 });
+  await page.mouse.up();
+  const grown = await widths();
+  initial.forEach((width, index) => assert.ok(Math.abs(grown[index] - width - (index === titleIndex ? 93 : 0)) < 1, `${view}: pointer changes only TITLE`));
+  if (view === 'reminders') {
+    await page.evaluate(() => renderReminderQueue());
+    const refreshed = await widths();
+    grown.forEach((width, index) => assert.ok(Math.abs(refreshed[index] - width) < 1, 'reminder row refresh preserves manual widths'));
+  }
+  assert.equal(await host.evaluate(el => el.scrollWidth > el.clientWidth + 80), true, `${view}: wider table scrolls`);
+  await host.screenshot({ path: `.amp/in/artifacts/excel-${view}-${theme}-resized.png` });
+  const viewport = page.viewportSize();
+  await page.setViewportSize({ width: 2100, height: viewport.height });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const wider = await widths();
+  grown.forEach((width, index) => assert.ok(Math.abs(wider[index] - width) < 1, `${view}: manual widths do not stretch with the window`));
+  await page.setViewportSize({ width: 390, height: viewport.height });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await host.evaluate(el => el.scrollWidth <= el.clientWidth + 1), view !== 'reminders', `${view}: mobile keeps its existing stacked or scrolling layout`);
+  await host.screenshot({ path: `.amp/in/artifacts/excel-${view}-${theme}-mobile.png` });
+  await page.setViewportSize(viewport);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const returned = await widths();
+  grown.forEach((width, index) => assert.ok(Math.abs(returned[index] - width) < 1, `${view}: desktop widths survive mobile layout`));
+
+  // Auto-fit grows a deliberately narrow title and leaves an edited neighbor alone.
+  await titleHandle.focus();
+  for (let i = 0; i < 160; i++) await page.keyboard.press('ArrowLeft');
+  const narrow = await widths();
+  await titleHandle.dblclick();
+  const fitted = await widths();
+  assert.ok(fitted[titleIndex] > narrow[titleIndex] + 20, `${view}: content fit grows a truncated title`);
+  fitted.forEach((width, index) => { if (index !== titleIndex) assert.ok(Math.abs(width - narrow[index]) < 1, `${view}: content fit preserves other columns`); });
+  assert.equal(await page.locator(contentSelector).evaluateAll(cells => cells.every(cell => [ ...(cell.matches('button') ? [cell] : []), ...cell.querySelectorAll('button')].every(button => button.scrollWidth <= button.clientWidth + 1))), true, `${view}: fitted titles are not truncated`);
+  await host.screenshot({ path: `.amp/in/artifacts/excel-${view}-${theme}-fit.png` });
+  const last = cells.last().getByRole('separator');
+  const lastBefore = (await widths()).at(-1);
+  await last.focus(); await page.keyboard.press('ArrowRight');
+  assert.ok(Math.abs((await widths()).at(-1) - lastBefore - 8) < 1, `${view}: final column is resizable`);
+  await reset.click();
+  const restored = await widths();
+  initial.forEach((width, index) => assert.ok(Math.abs(restored[index] - width) < 1, `${view}: explicit reset restores automatic layout`));
+}
+
 try {
   await page.routeWebSocket("**/*", socket => socket.onMessage(() => {}));
   await page.route("http://nrc.test/**", async route => {
@@ -38,7 +102,7 @@ try {
     Object.assign(tasks.get(123456789012n), {
       status: 2,
       priority: 240,
-      color: 1,
+      color: 4,
       description: "Validate the responsive two-line register with complete operational metadata.",
       dueAt: stamp + 7n * 86400000000000n,
       blockedBy: 2n,
@@ -88,6 +152,12 @@ try {
             await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
             await page.waitForFunction(selector => { const el = document.querySelector(selector); return el.scrollWidth <= el.clientWidth + 1; }, { tasks: '#taskListView', notes: '#notesPanel .notes-container', reminders: '#reminderQueueBody' }[view]);
             assert.equal(await page.evaluate(key => localStorage.getItem(key), key), saved, `${view}: fitting never overwrites saved widths`);
+            if (view === 'tasks' && viewportWidth === 1600) {
+              assert.ok(Math.abs(await host.locator('th.col-status').evaluate(el => el.getBoundingClientRect().width) - 104) < 1, 'oversized saved TITLE shrinks before STATUS');
+              assert.ok(Math.abs(await host.locator('th.col-color').evaluate(el => el.getBoundingClientRect().width) - 100) < 1, 'oversized saved TITLE does not squeeze CAT');
+              const category = host.locator('td.col-color button').filter({ hasText: 'DEFERRED' });
+              assert.equal(await category.evaluate(el => el.scrollWidth <= el.clientWidth), true, 'longest category label fits without truncation');
+            }
             if (viewportWidth === 5200 && view === 'notes') {
               assert.ok(Math.abs(await page.locator('.notes-list-header > :nth-child(4)').evaluate(el => el.getBoundingClientRect().width) - 550) < 1, 'wide window restores preferred tag width');
             }
@@ -103,11 +173,16 @@ try {
           await host.screenshot({ path: `.amp/in/artifacts/fit-${view}-saved-widths.png` });
           const reset = host.getByRole('separator', { name: 'Resize ID column', exact: true });
           const compressed = Number(await reset.getAttribute('aria-valuenow'));
-          await reset.focus(); await page.keyboard.press('ArrowRight');
-          assert.ok(Number(await reset.getAttribute('aria-valuenow')) > compressed, `${view}: compressed ID grows when moved right`);
-          const edited = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), key);
-          JSON.parse(saved).forEach((value, index) => {
-            if (index !== 1 && index !== (view === 'tasks' ? 3 : 2)) assert.equal(edited[index], value, `${view}: unrelated preferences survive manual resizing`);
+          const cells = host.locator({ tasks: 'thead th', notes: '.notes-list-header > div', reminders: '.reminder-list-header > span' }[view]);
+          const beforeResize = await cells.evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().right));
+          // Notes have an oversized ID and TITLE is already at its minimum.
+          const direction = view === 'notes' ? -1 : 1;
+          await reset.focus(); await page.keyboard.press(direction > 0 ? 'ArrowRight' : 'ArrowLeft');
+          assert.ok((Number(await reset.getAttribute('aria-valuenow')) - compressed) * direction > 0, `${view}: compressed ID follows the requested direction`);
+          const afterResize = await cells.evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().right));
+          beforeResize.forEach((value, index) => {
+            const shift = index >= 1 ? direction * 8 : 0;
+            if (index !== 1) assert.ok(Math.abs(afterResize[index] - value - shift) < 1, `${view}: other columns retain their widths`);
           });
           if (view === 'notes') {
             for (const defaults of [false, true]) {
@@ -123,10 +198,9 @@ try {
               await page.mouse.move(after.x + after.width / 2 - 12, after.y + after.height / 2);
               await page.mouse.up();
               assert.ok(Math.abs((await tags.boundingBox()).x - before.x + 4) < 1, 'TAGS pointer moves the grabbed boundary');
-              assert.equal(await host.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
               if (preferences) {
-                const changed = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), key);
-                JSON.parse(preferences).slice(0, 3).forEach((value, index) => assert.equal(changed[index], value));
+                const changed = await page.evaluate(key => JSON.parse(localStorage.getItem(key)).widths, key);
+                JSON.parse(preferences).widths.slice(0, 3).forEach((value, index) => assert.ok(Math.abs(changed[index] - value) < 1));
               }
             }
           }
@@ -162,8 +236,9 @@ try {
           const handle = header.getByRole("separator", { name: "Resize ID column", exact: true });
           await handle.focus();
           await page.keyboard.press("ArrowRight");
-          assert.equal(await handle.getAttribute("aria-valuenow"), "56");
-          assert.ok(Math.abs(await header.locator(":scope > :nth-child(2)").evaluate(cell => cell.getBoundingClientRect().width) - 56) < 1, `${view} rendered ID width follows resize`);
+          const resizedId = 56;
+          assert.equal(await handle.getAttribute("aria-valuenow"), String(resizedId));
+          assert.ok(Math.abs(await header.locator(":scope > :nth-child(2)").evaluate(cell => cell.getBoundingClientRect().width) - resizedId) < 1, `${view} rendered ID width follows resize`);
           if (view === "reminders") {
             await page.evaluate(() => renderReminderQueue());
             assert.equal(await handle.getAttribute("aria-valuenow"), "56", "Reminder resize survives row refresh");
@@ -184,13 +259,16 @@ try {
               await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
               await page.mouse.down();
               await page.mouse.move(handleBox.x + handleBox.width / 2 - 37, handleBox.y + handleBox.height / 2);
+              await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+              assert.ok(Math.abs((await titleCell.boundingBox()).width - before) < 1, 'returning the pointer to its start restores the boundary');
+              await page.mouse.move(handleBox.x + handleBox.width / 2 - 37, handleBox.y + handleBox.height / 2);
               await page.mouse.up();
               assert.ok(Math.abs((await titleCell.boundingBox()).width - (before - 37)) < 1, 'pointer moves TITLE boundary without an empty strip');
-              await titleHandle.dblclick();
-              assert.equal((await titleCell.boundingBox()).width, before, 'double-click restores automatic width');
+              await page.locator('#taskColumnsReset').click();
+              assert.equal((await titleCell.boundingBox()).width, before, 'RESET COLUMNS restores automatic width');
             }
             await titleHandle.focus(); await page.keyboard.press('ArrowRight');
-            assert.ok(Math.abs((await titleCell.boundingBox()).width - (before + 8)) < 1, 'keyboard grows TITLE by exchanging space with the next column');
+            assert.ok(Math.abs((await titleCell.boundingBox()).width - (before + 8)) < 1, 'keyboard grows TITLE by 8px');
             const box = await titleHandle.boundingBox();
             await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
             await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 - 137, box.y + box.height / 2); await page.mouse.up();
@@ -200,7 +278,7 @@ try {
               await titleHandle.focus(); await page.keyboard.press('ArrowRight');
               assert.ok(Math.abs((await titleCell.boundingBox()).width - (before - 121)) < 1, 'keyboard resize starts at the current boundary');
               await page.setViewportSize({ width: 1900, height: 1000 });
-              assert.equal(await header.evaluate(el => Math.abs(el.lastElementChild.getBoundingClientRect().right - el.getBoundingClientRect().right) <= 1), true, `${view} saved widths expand to fill a wider register`);
+              assert.ok(Math.abs((await titleCell.boundingBox()).width - (before - 121)) < 1, `${view}: window resize preserves exact manual width`);
               const hostSelector = { tasks: '#taskListView', notes: '#notesPanel .notes-container', reminders: '#reminderQueueBody' }[view];
               await page.locator(hostSelector).screenshot({ path: `.amp/in/artifacts/${view}-table-fill-${theme}.png` });
               if (view !== 'reminders') {
@@ -216,6 +294,7 @@ try {
             assert.equal((await titleCell.boundingBox()).width, before, 'reset restores automatic/default title width');
             await header.screenshot({ path: `.amp/in/artifacts/resize-${view}-${theme}-default.png` });
           }
+          await verifyIndependentColumns(view, theme);
         }
         assert.equal(await page.locator(selector).getByRole("button", { name: /delete/i }).count(), 0);
         await page.screenshot({ path: `.amp/in/artifacts/entity-${view}-${theme}-${width}.png` });
@@ -360,13 +439,14 @@ try {
   const noteTitleHandle = page.getByRole('separator', { name: 'Resize TITLE column', exact: true });
   await noteTitleHandle.focus();
   for (let i = 0; i < 40; i++) await page.keyboard.press('ArrowRight');
-  assert.equal(await noteHost.evaluate(el => el.scrollWidth <= el.clientWidth + 1 && el.scrollLeft === 0), true, 'widening title keeps trailing columns visible without scrolling');
+  assert.equal(await noteHost.evaluate(el => el.scrollWidth > el.clientWidth + 1), true, 'widening title creates horizontal scrolling');
+  await noteHost.evaluate(el => { el.scrollLeft = el.scrollWidth; });
   const visibleAge = await page.locator('#notesList .note-card').first().evaluate(row => {
     const host = row.closest('.notes-container').getBoundingClientRect();
     const age = row.querySelector('.note-body').getBoundingClientRect();
     return age.right <= host.right + 1 && age.left >= host.left && age.right <= row.getBoundingClientRect().right + 1;
   });
-  assert.equal(visibleAge, true, 'widened note columns keep their trailing age fully in view');
+  assert.equal(visibleAge, true, 'horizontal scrolling reaches the trailing age column');
   await noteTitleHandle.focus(); await page.keyboard.press('Home');
   await noteHost.evaluate(el => { el.style.width = '380px'; el.scrollLeft = 0; });
   const narrowNote = page.locator('#notesList .note-card').first();
@@ -401,6 +481,9 @@ try {
   assert.deepEqual(restored, [0, 112, 333]);
   assert.deepEqual(errors, []);
   await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.evaluate(() => showNotesView());
+  await noteTitleHandle.focus(); await page.keyboard.press('ArrowLeft');
+  const savedNoteWidth = await page.locator('.notes-list-header > div').nth(2).evaluate(el => el.getBoundingClientRect().width);
   await page.evaluate(() => { setTaskGrouping("flat"); showKanban(); });
   const persistedTitle = page.locator('#taskListView th.col-title');
   const persistedHandle = persistedTitle.getByRole('separator');
@@ -419,10 +502,12 @@ try {
   assert.equal((await persistedTitle.boundingBox()).width, savedTitleWidth, 'manual title width survives page reload');
   assert.equal(await page.locator('#taskListView').evaluate(host => {
     const age = host.querySelector('th.col-age').getBoundingClientRect();
-    return Math.abs(age.right - host.getBoundingClientRect().left - host.clientWidth) <= 1;
+    return Math.abs(age.right - host.querySelector('table').getBoundingClientRect().right) <= 1;
   }), true, 'empty rows span only visible columns, without a phantom trailing column');
   await persistedHandle.focus();
   await page.keyboard.press('Home');
+  await page.evaluate(() => showNotesView());
+  assert.ok(Math.abs(await page.locator('.notes-list-header > div').nth(2).evaluate(el => el.getBoundingClientRect().width) - savedNoteWidth) < 1, 'manual note width survives reload');
   // An asymmetric token override catches a family reverting to panel/content
   // borders even when those happen to look alike in a particular theme.
   await page.goto("http://nrc.test/design-system/index.html");
@@ -454,11 +539,11 @@ try {
     }
   }
   await page.addInitScript(() => {
-    localStorage.setItem('nrc.ticket.columns.v3', JSON.stringify([600, 640, 550, 500, 450, 400]));
+    if (!localStorage.getItem('nrc.ticket.columns.v3')) localStorage.setItem('nrc.ticket.columns.v3', JSON.stringify([600, 640, 550, 500, 450, 400]));
   });
   await page.goto('http://nrc.test');
   await page.waitForFunction(() => window.NRCTickets);
-  await page.evaluate(() => {
+  const seedTicket = () => {
     const asset = { assetId: 81n, convId: 0n, assetType: 13, createdAt: BigInt(Date.now()) * 1000000n, updatedAt: BigInt(Date.now()) * 1000000n,
       preview: JSON.stringify({ version: 1, title: 'Ticket: Responsive register', requester: 'customer@example.test', status: 'open', assignee: 'tester' }), payload: '', attachments: [] };
     NRCAssets.requestTicketPage = async () => ({ assets: [asset], has_more: false, total_count: 1, cursor: {} });
@@ -466,7 +551,8 @@ try {
     NRCAssets.requestAssetsByIds = async () => [];
     NRCAssets.requestAllAssets = async () => ({ assets: [] });
     NRCTickets.open();
-  });
+  };
+  await page.evaluate(seedTicket);
   await page.locator('#ticketsList tr[data-ticket]').waitFor();
   const ticketSaved = await page.evaluate(() => localStorage.getItem('nrc.ticket.columns.v3'));
   for (const theme of ['lupine', 'matte-black']) {
@@ -486,7 +572,42 @@ try {
   await ticketTitle.getByRole('separator').focus();
   await page.keyboard.press('ArrowRight');
   assert.ok(Math.abs((await ticketTitle.boundingBox()).width - ticketTitleWidth - 8) < 1, 'compressed ticket title grows by 8px without overflow');
-  assert.equal(await page.locator('#ticketsRegister').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
+  assert.equal(await page.locator('#ticketsRegister').evaluate(el => el.scrollWidth > el.clientWidth + 1), true);
+  for (const theme of ['lupine', 'matte-black']) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await verifyIndependentColumns('tickets', theme);
+  }
+  await ticketTitle.getByRole('separator').focus(); await page.keyboard.press('ArrowRight');
+  const savedTicketWidths = await page.locator('#ticketsTable th').evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().width));
+  await page.reload();
+  await page.waitForFunction(() => window.NRCTickets);
+  await page.evaluate(seedTicket);
+  await page.locator('#ticketsList tr[data-ticket]').waitFor();
+  const restoredTicketWidths = await page.locator('#ticketsTable th').evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().width));
+  savedTicketWidths.forEach((width, index) => assert.ok(Math.abs(restoredTicketWidths[index] - width) < 1, 'manual ticket widths survive reload'));
+  const seedReminder = () => {
+    const stamp = BigInt(Date.now()) * 1000000n;
+    NRCAssets.roomAssets.set(0n, new Map([[91n, { assetId: 91n, convId: 0n, assetType: AssetType.Reminder, createdAt: stamp, updatedAt: stamp,
+      payload: JSON.stringify({ title: 'Reminder: Persist independent column widths', visibility: 'team', deadline_at: String(stamp + 86400000000000n), window_start_at: '0' }), attachments: [] }]]));
+    NRCViewManager.setActiveView('reminders');
+    renderReminderQueue();
+  };
+  await page.evaluate(seedReminder);
+  const reminderCells = page.locator('.reminder-list-header > span');
+  await reminderCells.nth(2).getByRole('separator').focus(); await page.keyboard.press('ArrowRight');
+  const reminderWidths = await reminderCells.evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().width));
+  await page.reload();
+  await page.waitForFunction(() => window.NRCAssets && window.NRCViewManager);
+  await page.evaluate(seedReminder);
+  const reminderRestored = await reminderCells.evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().width));
+  reminderWidths.forEach((width, index) => assert.ok(Math.abs(reminderRestored[index] - width) < 1, 'manual reminder widths survive reload'));
+  await page.locator('[data-reminder-filter="overdue"]').click();
+  assert.equal(await page.locator('#reminderColumnsReset').isDisabled(), true, 'empty filtered reminder table disables reset');
+  await page.locator('[data-reminder-filter="all"]').click();
+  const afterFilter = await reminderCells.evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().width));
+  reminderWidths.forEach((width, index) => assert.ok(Math.abs(afterFilter[index] - width) < 1, 'empty filter and return preserves reminder widths'));
+  await page.locator('#reminderColumnsReset').click();
+  assert.equal(await page.evaluate(() => localStorage.getItem('nrc.reminder.columns.v1')), null, 'reset after header recreation clears manual widths');
   assert.deepEqual(errors, []);
   console.log("PASS: saved widths fit notes/tasks/reminders/tickets without losing preferences; resize/reset, both themes, desktop/mobile and Inspector layouts");
 } finally {

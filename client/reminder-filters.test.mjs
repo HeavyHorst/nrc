@@ -40,7 +40,7 @@ function harness() {
     document: {
       addEventListener() {},
       createElement: () => ({ set textContent(value) { this.innerHTML = value; } }),
-      getElementById: (id) => ({ reminderQueueBody: body, reminderQueueCount: count })[id] || null,
+      getElementById: (id) => ({ reminderQueueBody: body, reminderQueueCount: count, reminderColumnsReset: {} })[id] || null,
       querySelectorAll: (selector) => selector === "[data-reminder-filter]" ? buttons : [],
     },
     Date: class extends Date { static now() { return now; } },

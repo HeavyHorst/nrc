@@ -936,6 +936,7 @@ function renderReminderQueue() {
     });
 
   countEl.textContent = `${reminders.length} RESULTS`;
+  document.getElementById("reminderColumnsReset").disabled = reminders.length === 0;
   window.NRCInspector?.refreshContext();
 
   if (reminders.length === 0) {
@@ -988,12 +989,13 @@ function renderReminderQueue() {
   window.NRCColumnResize?.init({
     root: ".reminder-list-header", headers: ":scope > span", storageKey: "nrc.reminder.columns.v1",
     viewport: "#reminderQueueBody", flexible: 2,
+    independent: true, rows: "#reminderQueueBody .reminder-row", resetControl: "#reminderColumnsReset",
     // Keep the hidden slot so saved data-column widths retain their indexes.
     defaults: [0, 48, 320, 160, 130, 130, 180],
     minimums: [16, 48, 160, 150, 110, 110, 120],
     maximums: [640, 640, 4096],
     locked: [0],
-    apply: (header, widths) => header.parentElement.style.setProperty("--reminder-columns", widths.map((width, index) => index === 2 ? `minmax(${width}px, 1fr)` : `${width}px`).join(" ")),
+    apply: (header, widths, manual) => header.parentElement.style.setProperty("--reminder-columns", widths.map((width, index) => index === 2 && !manual ? `minmax(${width}px, 1fr)` : `${width}px`).join(" ")),
   });
 
   queueBody.querySelectorAll("[data-note-id]").forEach((el) => {
@@ -2737,17 +2739,18 @@ function renderTaskList() {
   window.NRCColumnResize?.init({
     root: "#taskListView .task-table", headers: "thead th", storageKey: "nrc.task.columns.v2",
     viewport: "#taskListView", flexible: 3,
-    defaults: [0, 48, 64, null, 104, 86, 48, 64, 48, 48, 70, 72],
-    minimums: [16, 48, 60, 160, 84, 72, 40, 48, 40, 40, 56, 56],
+    independent: true, rows: "#taskListBody tr[data-task-id]", resetControl: "#taskColumnsReset",
+    defaults: [0, 48, 64, null, 104, 86, 48, 64, 48, 48, 100, 72],
+    minimums: [16, 48, 60, 160, 84, 72, 40, 48, 40, 40, 100, 56],
     maximums: [640, 640, 640, 4096],
     locked: [0],
-    apply: (table, widths) => {
+    apply: (table, widths, manual) => {
       table.style.tableLayout = "fixed";
       // Fitted widths respect the register; TITLE absorbs any spare space.
       const fixedWidth = widths.reduce((sum, width, index) => sum + (index === 0 || index === 3 ? 0 : width), 0);
-      table.style.setProperty("--task-table-width", `max(100%, ${fixedWidth + (widths[3] ?? 160)}px)`);
+      table.style.setProperty("--task-table-width", manual ? `${fixedWidth + widths[3]}px` : `max(100%, ${fixedWidth + widths[3]}px)`);
       table.querySelectorAll("thead th").forEach((cell, index) => {
-        cell.style.width = index === 3
+        cell.style.width = index === 3 && !manual
           ? `calc(100% - ${fixedWidth}px)`
           : `${widths[index]}px`;
       });

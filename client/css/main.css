@@ -104,6 +104,9 @@ body.sullivan-workbench #chatAttach {
 #ticketsPanel { font-size: var(--font-base); }
 #ticketsRegister { container: ticket-register / inline-size; }
 .ticket-table { min-width: 0; }
+/* Keep the final resize target inside the scrollable table edge. */
+:is(.task-table th, .notes-list-header > div, .reminder-list-header > span):last-child > .column-resize-handle { right: 0; width: 0.4375rem; }
+:is(.task-table th, .notes-list-header > div, .reminder-list-header > span):last-child > .column-resize-handle::after { left: auto; right: 0; }
 .ticket-table th > .task-row-open { display: inline; width: auto; max-width: 100%; vertical-align: middle; }
 .ticket-table :is(th, td) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ticket-table th:is(.sorted-asc, .sorted-desc) { color: var(--accent-highlight); }
@@ -153,7 +156,7 @@ body.sullivan-workbench #chatAttach {
     #ticketFields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     #ticketFields > :is(:first-child, .ticket-original-request, button) { grid-column: 1 / -1; }
     @container ticket-register (max-width: 900px) {
-        .ticket-table, .ticket-table :is(thead, tbody) { display: block; min-width: 0; }
+        .ticket-table, .ticket-table :is(thead, tbody) { display: block; min-width: 0; width: 100%; }
         .ticket-table thead tr, .ticket-table tr[data-ticket] { display: grid; grid-template-columns: 2.75rem minmax(0, 1fr) 6rem 4.5rem 8rem 5rem; align-items: center; }
         .ticket-table :is(th, td) { width: auto !important; max-width: none; min-width: 0; }
         .ticket-table td { height: auto; }

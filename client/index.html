@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20261013fold1">
     <link rel="icon" type="image/png" href="favicon.png?v=20261013fold1">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=20261013fold1">
-    <link rel="stylesheet" href="css/main.css?v=20261023chatgroup2">
+    <link rel="stylesheet" href="css/main.css?v=20261027columns3">
     <link rel="stylesheet" href="css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 </head>
@@ -136,6 +136,7 @@
                                         <option value="unread:desc">Unread ↓</option><option value="unread:asc">Unread ↑</option>
                                         <option value="activity:desc" selected>Activity: newest</option><option value="activity:asc">Activity: oldest</option>
                                     </select></label>
+                                    <button id="ticketColumnsReset" class="btn header-operation" type="button">RESET COLUMNS</button>
                                     <button id="ticketsRefresh" class="btn header-operation">REFRESH</button><button id="ticketNew" class="btn btn--primary header-operation">+ TICKET</button>
                                 </div>
                             </div>
@@ -294,6 +295,7 @@
                                         <span>HIDE LOCKED</span>
                                     </label>
                                 </div>
+                                <button id="reminderColumnsReset" class="btn header-operation header-register-control" type="button" disabled>RESET COLUMNS</button>
                                 <button id="createReminderBtn" class="btn btn--primary header-operation reminder-create-btn header-register-control header-create-action" title="Create reminder">+ REMINDER</button>
                             </div>
                         </div>
@@ -400,6 +402,7 @@
                                 </div>
                             </div>
                             <button id="filterReset" class="btn header-operation header-register-control" title="Reset filters">RESET</button>
+                            <button id="taskColumnsReset" class="btn header-operation header-register-control task-flat-only" type="button">RESET COLUMNS</button>
                             <button id="createTaskHeaderBtn" class="btn btn--primary header-operation header-register-control header-create-action" type="button" title="Create task">+ TASK</button>
                         </div>
                     </div>
@@ -468,6 +471,7 @@
                                     <option value="">ALL TAGS</option>
                                 </select></div>
                             </div>
+                            <button id="noteColumnsReset" class="btn header-operation header-register-control" type="button">RESET COLUMNS</button>
                             <button id="createNoteHeaderBtn" class="btn btn--primary header-operation header-register-control header-create-action" type="button" title="Create note">+ NOTE</button>
                         </div>
                     </div>
@@ -689,9 +693,9 @@
     <script src="workspace-search.js?v=20261018inspectors5"></script>
     <script src="task-search.js?v=20260917taskscroll1"></script>
     <script src="detail-ui.js?v=20261022cancel1"></script>
-    <script src="column-resize.js?v=20261021fit1"></script>
+    <script src="column-resize.js?v=20261027columns3"></script>
     <script src="record-activity.js?v=20261019ticketpages1"></script>
-    <script src="tasks.js?v=20261023protocol2"></script>
+    <script src="tasks.js?v=20261027columns3"></script>
     <script src="attention.js?v=20261019followupattention1"></script>
     <script src="calendar.js?v=20261023protocol2"></script>
     <script src="appointments.js?v=20261022cancel1"></script>
@@ -702,7 +706,7 @@
     <script src="overview.js?v=20261023protocol2"></script>
     <script src="history.js?v=20261023protocol2"></script>
     <script src="note-html.js?v=20261007fragments1"></script>
-    <script src="notes.js?v=20261022cancel1"></script>
+    <script src="notes.js?v=20261027columns2"></script>
     <script src="task-references.js?v=20260914workspace1"></script>
     <script src="ai.js?v=20261027sources1"></script>
     <script src="retained-messages.js?v=20261023protocol2"></script>
@@ -725,7 +729,7 @@
     <script src="calls.js?v=20261022cancel1"></script>
     <script src="newsletter.js?v=20261022cancel1"></script>
     <script src="customers.js?v=20261022cancel1"></script>
-    <script src="tickets.js?v=20261021fit1"></script>
+    <script src="tickets.js?v=20261027columns2"></script>
     <script src="mobile-shell.js?v=20261019registers1"></script>
     <script>
         if ("serviceWorker" in navigator) {
