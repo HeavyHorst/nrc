@@ -447,6 +447,84 @@ test_task_query_numeric_public_cursors :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_task_query_paging_sparse_matches :: proc(t: ^testing.T) {
+	conv: Conversation_State
+	conv.tasks = make(map[pr.TaskID]^pr.Task)
+	defer delete(conv.tasks)
+	init_task_index(&conv)
+	defer destroy_task_index(&conv)
+	// Force internal nodes and long runs of rejected candidates. Duplicate
+	// sort values retain ascending IDs even when the sort is descending.
+	fixture: [137]pr.Task
+	for &task, i in fixture {
+		task = pr.Task {
+			id         = pr.TaskID(i + 1),
+			status     = .Todo,
+			priority   = u8(i / 5),
+			created_at = i64(i / 5),
+			title      = task_query_test_bytes("same"),
+			color      = i % 17 == 3 ? .Red : .Gold,
+		}
+		task_query_test_add(&conv, &task)
+	}
+	rows := make([dynamic]pr.Task)
+	defer delete(rows)
+	for sort_kind in ([?]pr.TaskQuerySort{.Priority, .CreatedAt, .Title}) {
+		for descending in ([?]bool{false, true}) {
+			for filtered in ([?]bool{false, true}) {
+				expected: [len(fixture)]Task_Query_Key
+				count := 0
+				for task, i in fixture {
+					if filtered && i % 17 != 3 do continue
+					key := Task_Query_Key {
+						task_id = task.id,
+					}
+					if sort_kind == .Title {key.text = task.title} else {key.number = i64(i / 5)}
+					at := count
+					for at > 0 && task_query_test_less(key, expected[at - 1], descending) {
+						expected[at] = expected[at - 1]
+						at -= 1
+					}
+					expected[at] = key
+					count += 1
+				}
+				for limit in ([?]u16{1, 7, 8, 9, 50}) {
+					req := pr.TaskQueryRequest {
+						status_mask = 15,
+						color       = filtered ? u8(pr.TaskColor.Red) : 255,
+						sort        = sort_kind,
+						descending  = descending,
+						limit       = limit,
+					}
+					consumed := 0
+					for _ in 0 ..< count + 1 {
+						clear(&rows)
+						page := collect_task_query_page(&conv, req, &rows)
+						wanted := min(int(limit), count - consumed)
+						testing.expect_value(t, len(rows), wanted)
+						testing.expect_value(t, page.total_count, u32(count))
+						if len(rows) != wanted do break
+						for row, i in rows do testing.expect_value(t, row.id, expected[consumed + i].task_id)
+						consumed += len(rows)
+						testing.expect_value(t, page.has_more, consumed < count)
+						if len(rows) == 0 do break
+						last := expected[consumed - 1]
+						testing.expect_value(t, page.next_cursor_number, last.number)
+						testing.expect_value(t, string(page.next_cursor_text), string(last.text))
+						testing.expect_value(t, page.next_cursor_task_id, last.task_id)
+						req.has_cursor = true
+						req.cursor_number = page.next_cursor_number
+						req.cursor_text = page.next_cursor_text
+						req.cursor_task_id = page.next_cursor_task_id
+					}
+					testing.expect_value(t, consumed, count)
+				}
+			}
+		}
+	}
+}
+
+@(test)
 test_task_query_text_order_and_empty_filters :: proc(t: ^testing.T) {
 	conv: Conversation_State
 	conv.tasks = make(map[pr.TaskID]^pr.Task)

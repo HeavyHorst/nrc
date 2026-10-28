@@ -10,6 +10,7 @@
 //
 package main
 
+import "base:intrinsics"
 import "core:log"
 import "core:mem"
 import "core:net"
@@ -645,8 +646,36 @@ collect_task_query_tree_page :: proc(
 		    found = btree.iter_next(&count_it) {task := conv.tasks[btree.item(&count_it).task_id]; if task_matches_query(task, req) do result.total_count += 1}
 	}
 	page_size := pr.getSizeTaskQueryPage(pr.TaskQueryPage{})
-	for has_item {
-		key := task_query_expand_key(btree.item(&it)); has_item = btree.iter_next(&it); task := conv.tasks[key.task_id]
+	BATCH_SIZE :: 8
+	batch_keys: [BATCH_SIZE]Key
+	batch_tasks: [BATCH_SIZE]^pr.Task
+	batch_count, batch_pos := 0, 0
+	for has_item || batch_pos < batch_count {
+		if batch_pos == batch_count {
+			batch_count, batch_pos = 0, 0
+			// One extra matching candidate determines has_more. Residual
+			// predicates may require more batches, including after the page fills.
+			wanted := min(BATCH_SIZE, int(req.limit) - len(tasks) + 1)
+			for has_item && batch_count < wanted {
+				batch_keys[batch_count] = btree.item(&it)
+				batch_count += 1
+				has_item = btree.iter_next(&it)
+			}
+			// Resolve independent map lookups before consuming Tasks so their
+			// memory fetches can overlap. The worker owns Tasks throughout paging.
+			for i in 0 ..< batch_count {
+				task := conv.tasks[batch_keys[i].task_id]
+				batch_tasks[i] = task
+				if task != nil {
+					for offset := 0; offset < size_of(pr.Task); offset += 64 {
+						intrinsics.prefetch_read_data(rawptr(uintptr(task) + uintptr(offset)), 3)
+					}
+				}
+			}
+		}
+		key := task_query_expand_key(batch_keys[batch_pos])
+		task := batch_tasks[batch_pos]
+		batch_pos += 1
 		if !task_matches_query(task, req) do continue
 		task_size := pr.getSizeTask(task^)
 		projected_size := page_size + task_size + len(key.text) - len(result.next_cursor_text)
