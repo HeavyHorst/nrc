@@ -29,22 +29,43 @@ async function verifyIndependentColumns(view, theme) {
   const box = await titleHandle.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 + 93, box.y + box.height / 2, { steps: 12 });
+  await page.mouse.move(box.x + box.width / 2 - 93, box.y + box.height / 2, { steps: 12 });
   await page.mouse.up();
   const grown = await widths();
-  initial.forEach((width, index) => assert.ok(Math.abs(grown[index] - width - (index === titleIndex ? 93 : 0)) < 1, `${view}: pointer changes only TITLE`));
+  initial.forEach((width, index) => assert.ok(Math.abs(grown[index] - width + (index === titleIndex ? 93 : 0)) < 1, `${view}: shrinking TITLE leaves other columns unchanged`));
   if (view === 'reminders') {
     await page.evaluate(() => renderReminderQueue());
     const refreshed = await widths();
     grown.forEach((width, index) => assert.ok(Math.abs(refreshed[index] - width) < 1, 'reminder row refresh preserves manual widths'));
   }
-  assert.equal(await host.evaluate(el => el.scrollWidth > el.clientWidth + 80), true, `${view}: wider table scrolls`);
+  assert.equal(await host.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, `${view}: manual widths still fit`);
+  const dataRow = page.locator(contentSelector).first().locator('..');
+  const rowBox = await dataRow.boundingBox();
+  const lastBox = await cells.last().boundingBox();
+  assert.ok(rowBox.x + rowBox.width - lastBox.x - lastBox.width > 90, `${view}: shrinking TITLE creates the requested empty remainder`);
+  await page.mouse.move(rowBox.x + rowBox.width - 20, rowBox.y + 10);
+  assert.equal(await dataRow.evaluate(el => el.matches(':hover')), true, `${view}: the empty remainder belongs to the hovered row`);
   await host.screenshot({ path: `.amp/in/artifacts/excel-${view}-${theme}-resized.png` });
+  if (view === 'tasks' || view === 'notes') {
+    const preferences = await page.evaluate(() => JSON.stringify(localStorage));
+    await dataRow.click({ position: { x: rowBox.width - 20, y: 10 } });
+    await page.waitForFunction(() => !!NRCInspector.current());
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await host.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, `${view}: opening Inspector fits edited widths`);
+    await host.screenshot({ path: `.amp/in/artifacts/remainder-${view}-${theme}-inspector.png` });
+    await page.evaluate(() => NRCInspector.close());
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const closed = await widths();
+    grown.forEach((width, index) => assert.ok(Math.abs(closed[index] - width) < 1, `${view}: closing Inspector restores manual widths`));
+    // Inspector selection may persist separately; column preferences must not change.
+    const columnPrefs = value => Object.entries(JSON.parse(value)).filter(([key]) => key.includes('.columns.')).sort(([a], [b]) => a.localeCompare(b));
+    assert.deepEqual(columnPrefs(await page.evaluate(() => JSON.stringify(localStorage))), columnPrefs(preferences));
+  }
   const viewport = page.viewportSize();
   await page.setViewportSize({ width: 2100, height: viewport.height });
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const wider = await widths();
-  grown.forEach((width, index) => assert.ok(Math.abs(wider[index] - width) < 1, `${view}: manual widths do not stretch with the window`));
+  grown.forEach((width, index) => assert.ok(Math.abs(wider[index] - width) < 1, `${view}: expanding the pane retains manual widths`));
   await page.setViewportSize({ width: 390, height: viewport.height });
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(await host.evaluate(el => el.scrollWidth <= el.clientWidth + 1), view !== 'reminders', `${view}: mobile keeps its existing stacked or scrolling layout`);
@@ -54,13 +75,13 @@ async function verifyIndependentColumns(view, theme) {
   const returned = await widths();
   grown.forEach((width, index) => assert.ok(Math.abs(returned[index] - width) < 1, `${view}: desktop widths survive mobile layout`));
 
-  // Auto-fit grows a deliberately narrow title and leaves an edited neighbor alone.
+  // Content fit grows a narrow title without changing its neighbors.
   await titleHandle.focus();
   for (let i = 0; i < 160; i++) await page.keyboard.press('ArrowLeft');
   const narrow = await widths();
   await titleHandle.dblclick();
   const fitted = await widths();
-  assert.ok(fitted[titleIndex] > narrow[titleIndex] + 20, `${view}: content fit grows a truncated title`);
+  assert.ok(fitted[titleIndex] > narrow[titleIndex] + 20, `${view}: content fit grows the title`);
   fitted.forEach((width, index) => { if (index !== titleIndex) assert.ok(Math.abs(width - narrow[index]) < 1, `${view}: content fit preserves other columns`); });
   assert.equal(await page.locator(contentSelector).evaluateAll(cells => cells.every(cell => [ ...(cell.matches('button') ? [cell] : []), ...cell.querySelectorAll('button')].every(button => button.scrollWidth <= button.clientWidth + 1))), true, `${view}: fitted titles are not truncated`);
   await host.screenshot({ path: `.amp/in/artifacts/excel-${view}-${theme}-fit.png` });
@@ -68,6 +89,19 @@ async function verifyIndependentColumns(view, theme) {
   const lastBefore = (await widths()).at(-1);
   await last.focus(); await page.keyboard.press('ArrowRight');
   assert.ok(Math.abs((await widths()).at(-1) - lastBefore - 8) < 1, `${view}: final column is resizable`);
+  const edited = await widths();
+  const saved = await page.evaluate(() => JSON.stringify(localStorage));
+  await host.evaluate(el => { el.style.width = '1100px'; });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await host.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, `${view}: edited table fits a narrower pane`);
+  const row = page.locator(contentSelector).first().locator('..');
+  assert.ok(Math.abs(await row.evaluate(el => el.getBoundingClientRect().right) - await host.evaluate(el => el.getBoundingClientRect().left + el.clientWidth)) < 2, `${view}: row surface fills the pane beyond the data columns`);
+  await host.screenshot({ path: `.amp/in/artifacts/fitted-${view}-${theme}-narrow.png` });
+  await host.evaluate(el => { el.style.width = ''; });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const expanded = await widths();
+  edited.forEach((width, index) => assert.ok(Math.abs(expanded[index] - width) < 1, `${view}: expanding restores edited widths`));
+  assert.equal(await page.evaluate(() => JSON.stringify(localStorage)), saved, `${view}: resizing the pane never saves squeezed preferences`);
   await reset.click();
   const restored = await widths();
   initial.forEach((width, index) => assert.ok(Math.abs(restored[index] - width) < 1, `${view}: explicit reset restores automatic layout`));
@@ -87,9 +121,9 @@ try {
     currentWorkspaceId = "table-test";
     myNickname = "tester";
     window.NRCTaskQuery = undefined; // Render the fixture cache, without server paging.
-    localStorage.setItem('nrc.note.columns.v4', JSON.stringify([0, 600, 3000, 550, 500]));
-    localStorage.setItem('nrc.task.columns.v2', JSON.stringify([0, 48, 64, 3000, 104, 86, 48, 64, 48, 48, 70, 72]));
-    localStorage.setItem('nrc.reminder.columns.v1', JSON.stringify([0, 48, 3000, 160, 130, 130, 180]));
+    localStorage.setItem('nrc.note.columns.v4', JSON.stringify({ widths: [0, 600, 3000, 550, 500], manual: true }));
+    localStorage.setItem('nrc.task.columns.v2', JSON.stringify({ widths: [0, 48, 64, 3000, 104, 86, 48, 64, 48, 48, 70, 72], manual: true }));
+    localStorage.setItem('nrc.reminder.columns.v1', JSON.stringify({ widths: [0, 48, 3000, 160, 130, 130, 180], manual: true }));
     const stamp = BigInt(Date.now()) * 1000000n;
     const assets = new Map();
     const tasks = new Map();
@@ -173,31 +207,29 @@ try {
           await host.screenshot({ path: `.amp/in/artifacts/fit-${view}-saved-widths.png` });
           const reset = host.getByRole('separator', { name: 'Resize ID column', exact: true });
           const compressed = Number(await reset.getAttribute('aria-valuenow'));
-          const cells = host.locator({ tasks: 'thead th', notes: '.notes-list-header > div', reminders: '.reminder-list-header > span' }[view]);
-          const beforeResize = await cells.evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().right));
+          const beforePreferences = JSON.parse(await page.evaluate(key => localStorage.getItem(key), key)).widths;
           // Notes have an oversized ID and TITLE is already at its minimum.
           const direction = view === 'notes' ? -1 : 1;
           await reset.focus(); await page.keyboard.press(direction > 0 ? 'ArrowRight' : 'ArrowLeft');
           assert.ok((Number(await reset.getAttribute('aria-valuenow')) - compressed) * direction > 0, `${view}: compressed ID follows the requested direction`);
-          const afterResize = await cells.evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().right));
-          beforeResize.forEach((value, index) => {
-            const shift = index >= 1 ? direction * 8 : 0;
-            if (index !== 1) assert.ok(Math.abs(afterResize[index] - value - shift) < 1, `${view}: other columns retain their widths`);
+          const afterPreferences = await page.evaluate(key => JSON.parse(localStorage.getItem(key)).widths, key);
+          beforePreferences.forEach((value, index) => {
+            if (index !== 1) assert.equal(afterPreferences[index], value, `${view}: editing a squeezed column preserves other preferences`);
           });
+          assert.equal(await host.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, `${view}: editing a column retains the fitted layout`);
           if (view === 'notes') {
             for (const defaults of [false, true]) {
               if (defaults) { await reset.focus(); await page.keyboard.press('Home'); }
               const preferences = await page.evaluate(key => localStorage.getItem(key), key);
               const tags = host.getByRole('separator', { name: 'Resize TAGS column', exact: true });
-              const before = await tags.boundingBox();
               await tags.focus(); await page.keyboard.press('ArrowRight');
               const after = await tags.boundingBox();
-              assert.ok(Math.abs(after.x - before.x - 8) < 1, `TAGS boundary moves 8px at ${defaults ? 'default' : 'compressed'} widths`);
+              assert.equal(await host.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, 'keyboard resize fits the register');
               await page.mouse.move(after.x + after.width / 2, after.y + after.height / 2);
               await page.mouse.down();
               await page.mouse.move(after.x + after.width / 2 - 12, after.y + after.height / 2);
               await page.mouse.up();
-              assert.ok(Math.abs((await tags.boundingBox()).x - before.x + 4) < 1, 'TAGS pointer moves the grabbed boundary');
+              assert.equal(await host.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, 'pointer resize fits the register');
               if (preferences) {
                 const changed = await page.evaluate(key => JSON.parse(localStorage.getItem(key)).widths, key);
                 JSON.parse(preferences).widths.slice(0, 3).forEach((value, index) => assert.ok(Math.abs(changed[index] - value) < 1));
@@ -263,22 +295,23 @@ try {
               assert.ok(Math.abs((await titleCell.boundingBox()).width - before) < 1, 'returning the pointer to its start restores the boundary');
               await page.mouse.move(handleBox.x + handleBox.width / 2 - 37, handleBox.y + handleBox.height / 2);
               await page.mouse.up();
-              assert.ok(Math.abs((await titleCell.boundingBox()).width - (before - 37)) < 1, 'pointer moves TITLE boundary without an empty strip');
+              assert.ok(Math.abs((await titleCell.boundingBox()).width - (before - 37)) < 1, 'shrinking TITLE moves the boundary');
               await page.locator('#taskColumnsReset').click();
               assert.equal((await titleCell.boundingBox()).width, before, 'RESET COLUMNS restores automatic width');
             }
             await titleHandle.focus(); await page.keyboard.press('ArrowRight');
-            assert.ok(Math.abs((await titleCell.boundingBox()).width - (before + 8)) < 1, 'keyboard grows TITLE by 8px');
+            assert.ok(Math.abs((await titleCell.boundingBox()).width - before) < 1, 'keyboard TITLE preference remains bounded by the register');
             const box = await titleHandle.boundingBox();
             await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
             await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 - 137, box.y + box.height / 2); await page.mouse.up();
-            assert.ok(Math.abs((await titleCell.boundingBox()).width - (before - 129)) < 1, `${view} pointer moves TITLE without overflowing the register`);
+            assert.ok(Math.abs((await titleCell.boundingBox()).width - (before - 137)) < 1, `${view} pointer resize shrinks TITLE`);
             await header.screenshot({ path: `.amp/in/artifacts/resize-${view}-${theme}-manual.png` });
             {
               await titleHandle.focus(); await page.keyboard.press('ArrowRight');
-              assert.ok(Math.abs((await titleCell.boundingBox()).width - (before - 121)) < 1, 'keyboard resize starts at the current boundary');
+              assert.ok(Math.abs((await titleCell.boundingBox()).width - (before - 129)) < 1, 'keyboard resize starts at the fitted boundary');
               await page.setViewportSize({ width: 1900, height: 1000 });
-              assert.ok(Math.abs((await titleCell.boundingBox()).width - (before - 121)) < 1, `${view}: window resize preserves exact manual width`);
+              await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+              assert.ok(Math.abs((await titleCell.boundingBox()).width - (before - 129)) < 1, `${view}: enlarged register restores the manual width`);
               const hostSelector = { tasks: '#taskListView', notes: '#notesPanel .notes-container', reminders: '#reminderQueueBody' }[view];
               await page.locator(hostSelector).screenshot({ path: `.amp/in/artifacts/${view}-table-fill-${theme}.png` });
               if (view !== 'reminders') {
@@ -288,7 +321,7 @@ try {
                 assert.equal(await page.locator(hostSelector).evaluate(host => host.scrollWidth <= host.clientWidth + 1), true, 'manual desktop widths do not overflow the compact register');
               }
               await page.setViewportSize({ width, height: 1000 });
-              await page.waitForFunction(({ selector, before }) => Math.abs(document.querySelector(selector).getBoundingClientRect().width - before) < 1, { selector: `${headerSelector} > :nth-child(${view === 'tasks' ? 4 : 3})`, before: before - 121 });
+              await page.waitForFunction(({ selector, before }) => Math.abs(document.querySelector(selector).getBoundingClientRect().width - before) < 1, { selector: `${headerSelector} > :nth-child(${view === 'tasks' ? 4 : 3})`, before: before - 129 });
             }
             await titleHandle.focus(); await page.keyboard.press('Home');
             assert.equal((await titleCell.boundingBox()).width, before, 'reset restores automatic/default title width');
@@ -439,7 +472,7 @@ try {
   const noteTitleHandle = page.getByRole('separator', { name: 'Resize TITLE column', exact: true });
   await noteTitleHandle.focus();
   for (let i = 0; i < 40; i++) await page.keyboard.press('ArrowRight');
-  assert.equal(await noteHost.evaluate(el => el.scrollWidth > el.clientWidth + 1), true, 'widening title creates horizontal scrolling');
+  assert.equal(await noteHost.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, 'widening title remains bounded by the register');
   await noteHost.evaluate(el => { el.scrollLeft = el.scrollWidth; });
   const visibleAge = await page.locator('#notesList .note-card').first().evaluate(row => {
     const host = row.closest('.notes-container').getBoundingClientRect();
@@ -502,8 +535,9 @@ try {
   assert.equal((await persistedTitle.boundingBox()).width, savedTitleWidth, 'manual title width survives page reload');
   assert.equal(await page.locator('#taskListView').evaluate(host => {
     const age = host.querySelector('th.col-age').getBoundingClientRect();
-    return Math.abs(age.right - host.querySelector('table').getBoundingClientRect().right) <= 1;
-  }), true, 'empty rows span only visible columns, without a phantom trailing column');
+    const table = host.querySelector('table').getBoundingClientRect();
+    return Math.abs(table.right - age.right - 8) <= 1 && Math.abs(table.width - host.clientWidth) <= 1;
+  }), true, 'empty table preserves the 8px remainder without stretching saved data columns');
   await persistedHandle.focus();
   await page.keyboard.press('Home');
   await page.evaluate(() => showNotesView());
@@ -539,7 +573,7 @@ try {
     }
   }
   await page.addInitScript(() => {
-    if (!localStorage.getItem('nrc.ticket.columns.v3')) localStorage.setItem('nrc.ticket.columns.v3', JSON.stringify([600, 640, 550, 500, 450, 400]));
+    if (!localStorage.getItem('nrc.ticket.columns.v3')) localStorage.setItem('nrc.ticket.columns.v3', JSON.stringify({ widths: [600, 640, 550, 500, 450, 400], manual: true }));
   });
   await page.goto('http://nrc.test');
   await page.waitForFunction(() => window.NRCTickets);
@@ -571,8 +605,8 @@ try {
   const ticketTitleWidth = (await ticketTitle.boundingBox()).width;
   await ticketTitle.getByRole('separator').focus();
   await page.keyboard.press('ArrowRight');
-  assert.ok(Math.abs((await ticketTitle.boundingBox()).width - ticketTitleWidth - 8) < 1, 'compressed ticket title grows by 8px without overflow');
-  assert.equal(await page.locator('#ticketsRegister').evaluate(el => el.scrollWidth > el.clientWidth + 1), true);
+  assert.ok(Math.abs((await ticketTitle.boundingBox()).width - ticketTitleWidth) < 1, 'compressed ticket title stays within the register');
+  assert.equal(await page.locator('#ticketsRegister').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
   for (const theme of ['lupine', 'matte-black']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await verifyIndependentColumns('tickets', theme);

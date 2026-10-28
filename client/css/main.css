@@ -104,6 +104,21 @@ body.sullivan-workbench #chatAttach {
 #ticketsPanel { font-size: var(--font-base); }
 #ticketsRegister { container: ticket-register / inline-size; }
 .ticket-table { min-width: 0; }
+/* A generated, empty table cell absorbs unused width without adding a data
+   column, resize handle or accessibility-tree entry. Grid registers already
+   paint their full-width row behind their fixed tracks. Compact rows need none. */
+@media (min-width: 769px) {
+    @container task-register (width > 1040px) {
+        .task-table.column-resize-manual tr::after { content: ""; display: table-cell; }
+    }
+    @container ticket-register (width > 900px) {
+        .ticket-table.column-resize-manual tr::after { content: ""; display: table-cell; }
+    }
+}
+.task-table.column-resize-manual thead tr::after {
+    background: var(--surface-control);
+    border-bottom: var(--frame-border);
+}
 /* Keep the final resize target inside the scrollable table edge. */
 :is(.task-table th, .notes-list-header > div, .reminder-list-header > span):last-child > .column-resize-handle { right: 0; width: 0.4375rem; }
 :is(.task-table th, .notes-list-header > div, .reminder-list-header > span):last-child > .column-resize-handle::after { left: auto; right: 0; }

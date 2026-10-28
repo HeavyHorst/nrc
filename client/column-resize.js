@@ -43,11 +43,6 @@
       // Keep persisted preferences intact. Fit the rendered widths only, so a
       // larger window restores the user's choices instead of saving the squeeze.
       const preferred = preferences();
-      if (manual) {
-        apply(container, preferred, true);
-        handles.forEach(({ handle, index }) => handle.setAttribute("aria-valuenow", String(Math.round(currentWidth(index)))));
-        return;
-      }
       const total = preferred.reduce((sum, width) => sum + width, 0);
       if (host.clientWidth > 0) {
         preferred[flexible] -= Math.min(Math.max(0, total - host.clientWidth), preferred[flexible] - floor(flexible));
@@ -56,7 +51,8 @@
       const spare = preferred.reduce((sum, width, index) => sum + width - floor(index), 0);
       const scale = host.clientWidth > 0 && spare > 0 ? Math.max(0, Math.min(1, (host.clientWidth - minimum) / spare)) : 1;
       const fitted = preferred.map((width, index) => floor(index) + (width - floor(index)) * scale);
-      apply(container, fitted, false);
+      container.classList.toggle("column-resize-manual", manual);
+      apply(container, fitted, manual);
       handles.forEach(({ handle, index }) => handle.setAttribute("aria-valuenow", String(Math.round(currentWidth(index)))));
     };
     commit();
@@ -68,12 +64,12 @@
     observers.set(host, observer);
     observer.observe(host);
 
-    // Start at the visible widths, not the compressed preferences. Independent
-    // columns keep this pixel layout; dependent columns exchange neighbor space.
+    // Edit only the chosen preference, preserving the other saved widths even
+    // when the register currently squeezes them to fit beside the Inspector.
     const resizeStart = () => headerCells.map((_, index) => currentWidth(index));
     const resize = (index, pixels, start) => {
       if (independent) {
-        widths = start.slice();
+        if (!manual) widths = start.slice();
         widths[index] = clampWidth(start[index] + pixels, index);
         manual = true;
         commit();

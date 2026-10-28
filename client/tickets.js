@@ -445,7 +445,7 @@
       apply: (table, widths, manual) => {
         table.style.tableLayout = 'fixed';
         const fixed = widths.reduce((sum, width, i) => sum + (i === 1 ? 0 : width), 0);
-        table.style.setProperty('--task-table-width', manual ? `${fixed + widths[1]}px` : '100%');
+        table.style.setProperty('--task-table-width', `max(100%, ${fixed + widths[1]}px)`);
         table.querySelectorAll('thead th').forEach((th, i) => th.style.width = i === 1 && !manual ? `max(${widths[i]}px, calc(100% - ${fixed}px))` : `${widths[i]}px`);
       },
     });

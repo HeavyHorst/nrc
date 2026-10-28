@@ -2746,9 +2746,9 @@ function renderTaskList() {
     locked: [0],
     apply: (table, widths, manual) => {
       table.style.tableLayout = "fixed";
-      // Fitted widths respect the register; TITLE absorbs any spare space.
+      // Automatic TITLE fills spare space; manual columns leave a row-wide remainder.
       const fixedWidth = widths.reduce((sum, width, index) => sum + (index === 0 || index === 3 ? 0 : width), 0);
-      table.style.setProperty("--task-table-width", manual ? `${fixedWidth + widths[3]}px` : `max(100%, ${fixedWidth + widths[3]}px)`);
+      table.style.setProperty("--task-table-width", `max(100%, ${fixedWidth + widths[3]}px)`);
       table.querySelectorAll("thead th").forEach((cell, index) => {
         cell.style.width = index === 3 && !manual
           ? `calc(100% - ${fixedWidth}px)`
