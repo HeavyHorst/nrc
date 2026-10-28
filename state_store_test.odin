@@ -67,10 +67,19 @@ store_test_check_task_query :: proc(
 				case .Project:
 					key.text = task.project
 				}
-				_, found := btree.get(&set.trees[sort_kind][direction], key)
+				found: bool
+				if sort_kind == 0 || sort_kind == 4 {
+					_, found = btree.get(&set.trees[sort_kind][direction].numeric, Task_Numeric_Key{key.number, key.task_id})
+				} else {
+					_, found = btree.get(&set.trees[sort_kind][direction].general, key)
+				}
 				testing.expect(t, found, "map member missing from query index")
 			}
-			testing.expect_value(t, btree.count(&set.trees[sort_kind][direction]), expected_count)
+			if sort_kind == 0 || sort_kind == 4 {
+				testing.expect_value(t, btree.count(&set.trees[sort_kind][direction].numeric), expected_count)
+			} else {
+				testing.expect_value(t, btree.count(&set.trees[sort_kind][direction].general), expected_count)
+			}
 		}
 	}
 }
@@ -92,10 +101,10 @@ test_state_store_task_replace_move_remove :: proc(t: ^testing.T) {
 	// Materialize every lazy order before replacing string storage and sort fields.
 	for sort_kind in 0 ..< 8 {
 		for direction in 0 ..< 2 {
-			_ = task_query_index_set_ensure_order(&conv.task_query_indexes, &conv.tasks, pr.TaskQuerySort(sort_kind), direction == 1)
-			_ = task_query_index_set_ensure_order(&conv.task_status_indexes[1], &conv.tasks, pr.TaskQuerySort(sort_kind), direction == 1)
-			_ = task_query_index_set_ensure_order(&conv.task_project_indexes["alpha"].indexes, &conv.tasks, pr.TaskQuerySort(sort_kind), direction == 1)
-			_ = task_query_index_set_ensure_order(&conv.task_assignee_indexes["alice"].indexes, &conv.tasks, pr.TaskQuerySort(sort_kind), direction == 1)
+			task_query_index_set_ensure_order(&conv.task_query_indexes, &conv.tasks, pr.TaskQuerySort(sort_kind), direction == 1)
+			task_query_index_set_ensure_order(&conv.task_status_indexes[1], &conv.tasks, pr.TaskQuerySort(sort_kind), direction == 1)
+			task_query_index_set_ensure_order(&conv.task_project_indexes["alpha"].indexes, &conv.tasks, pr.TaskQuerySort(sort_kind), direction == 1)
+			task_query_index_set_ensure_order(&conv.task_assignee_indexes["alice"].indexes, &conv.tasks, pr.TaskQuerySort(sort_kind), direction == 1)
 		}
 	}
 	store_test_check_tasks(t, conv)

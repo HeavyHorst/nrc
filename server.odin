@@ -158,10 +158,17 @@ Task_Query_Key :: struct {
 	task_id:     pr.TaskID,
 }
 
+// The sort slot determines the active member; Priority and CreatedAt use numeric.
+// Share header storage rather than retaining unused full-key trees in every scope.
+Task_Query_Tree :: struct #raw_union {
+	general: btree.BTreeG(Task_Query_Key, Task_Query_Order),
+	numeric: btree.BTreeG(Task_Numeric_Key, Task_Numeric_Order),
+}
+
 Task_Query_Index_Set :: struct {
 	// Priority ascending is the canonical membership/count tree. Other orders
 	// are materialized on first use and then kept current by mutations.
-	trees:       [8][2]btree.BTreeG(Task_Query_Key, Task_Query_Order),
+	trees:       [8][2]Task_Query_Tree,
 	initialized: [8][2]bool,
 }
 
@@ -324,7 +331,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-10:7e7e72ac"
+BUILD_VERSION :: "dev-2026-10:e5fb13d7"
 PROTOCOL_VERSION :: 10 // Calendar kind 3 carries a stable series occurrence identity.
 
 jwt_auth_secret: string

@@ -12,6 +12,36 @@ Task_Numeric_Projection :: enum u8 {
 Task_Query_Order :: btree.Static_Order(Task_Query_Key, Task_Numeric_Projection, task_query_compare_static, task_query_text_key_static, task_query_numeric_key)
 Task_Sort_Order :: btree.Static_Order(Task_Sort_Key, btree.No_Projection, task_sort_compare_static)
 
+Task_Numeric_Key :: struct {
+	number:  i64,
+	task_id: pr.TaskID,
+}
+
+Task_Numeric_Order :: btree.Static_Order(Task_Numeric_Key, Task_Numeric_Projection, task_numeric_compare, btree.static_no_text, task_numeric_projection)
+
+task_query_expand_key :: #force_inline proc(key: $T) -> Task_Query_Key {
+	when T == Task_Query_Key {
+		return key
+	} else {
+		return Task_Query_Key{number = key.number, task_id = key.task_id}
+	}
+}
+
+task_numeric_compare :: #force_inline proc(a, b: rawptr, descending: bool) -> int {
+	x := task_query_expand_key((cast(^Task_Numeric_Key)a)^)
+	y := task_query_expand_key((cast(^Task_Numeric_Key)b)^)
+	return descending ? task_query_key_compare_desc(x, y) : task_query_key_compare_asc(x, y)
+}
+
+task_numeric_projection :: #force_inline proc(item: rawptr, descending: bool, projection: rawptr) -> u64 {
+	key := task_query_expand_key((cast(^Task_Numeric_Key)item)^)
+	return task_query_numeric_key(&key, descending, projection)
+}
+
+task_query_uses_compact_key :: proc(sort_kind: pr.TaskQuerySort) -> bool {
+	return sort_kind == .Priority || sort_kind == .CreatedAt
+}
+
 task_query_numeric_key :: #force_inline proc(item: rawptr, descending: bool, projection: rawptr) -> u64 {
 	key := (cast(^Task_Query_Key)item)^
 	missing := key.due_missing ? u64(1) << 63 : 0
@@ -80,9 +110,9 @@ task_query_key_compare_desc :: #force_inline proc(a, b: Task_Query_Key) -> int {
 }
 
 task_query_index_set_init :: proc(set: ^Task_Query_Index_Set) {
-	set.trees[0][0] = btree.create_ordered(
-		Task_Query_Key,
-		Task_Query_Order,
+	set.trees[0][0].numeric = btree.create_ordered(
+		Task_Numeric_Key,
+		Task_Numeric_Order,
 		btree.Options{degree = 32},
 		cache = .Numeric,
 		projection = Task_Numeric_Projection(.Enum_Value),
@@ -93,7 +123,11 @@ task_query_index_set_destroy :: proc(set: ^Task_Query_Index_Set) {
 	for sort_kind in 0 ..< 8 {
 		for direction in 0 ..< 2 {
 			if set.initialized[sort_kind][direction] {
-				btree.destroy(&set.trees[sort_kind][direction])
+				if task_query_uses_compact_key(pr.TaskQuerySort(sort_kind)) {
+					btree.destroy(&set.trees[sort_kind][direction].numeric)
+				} else {
+					btree.destroy(&set.trees[sort_kind][direction].general)
+				}
 				set.initialized[sort_kind][direction] = false
 			}
 		}
@@ -131,7 +165,12 @@ task_query_index_set_add :: proc(set: ^Task_Query_Index_Set, task: ^pr.Task) {
 	for sort_kind in 0 ..< 8 {
 		for direction in 0 ..< 2 {
 			if set.initialized[sort_kind][direction] {
-				_, _ = btree.set(&set.trees[sort_kind][direction], make_task_query_key(task, pr.TaskQuerySort(sort_kind)))
+				key := make_task_query_key(task, pr.TaskQuerySort(sort_kind))
+				if task_query_uses_compact_key(pr.TaskQuerySort(sort_kind)) {
+					_, _ = btree.set(&set.trees[sort_kind][direction].numeric, Task_Numeric_Key{key.number, key.task_id})
+				} else {
+					_, _ = btree.set(&set.trees[sort_kind][direction].general, key)
+				}
 			}
 		}
 	}
@@ -140,22 +179,23 @@ task_query_index_set_remove :: proc(set: ^Task_Query_Index_Set, task: ^pr.Task) 
 	for sort_kind in 0 ..< 8 {
 		for direction in 0 ..< 2 {
 			if set.initialized[sort_kind][direction] {
-				_, removed := btree.remove(&set.trees[sort_kind][direction], make_task_query_key(task, pr.TaskQuerySort(sort_kind)))
+				key := make_task_query_key(task, pr.TaskQuerySort(sort_kind))
+				removed: bool
+				if task_query_uses_compact_key(pr.TaskQuerySort(sort_kind)) {
+					_, removed = btree.remove(&set.trees[sort_kind][direction].numeric, Task_Numeric_Key{key.number, key.task_id})
+				} else {
+					_, removed = btree.remove(&set.trees[sort_kind][direction].general, key)
+				}
 				assert(!ODIN_DEBUG || removed, "task query key missing or changed without reindexing")
 			}
 		}
 	}
 }
 
-task_query_index_set_ensure_order :: proc(
-	set: ^Task_Query_Index_Set,
-	tasks: ^map[pr.TaskID]^pr.Task,
-	sort_kind: pr.TaskQuerySort,
-	descending: bool,
-) -> ^btree.BTreeG(Task_Query_Key, Task_Query_Order) {
+task_query_index_set_ensure_order :: proc(set: ^Task_Query_Index_Set, tasks: ^map[pr.TaskID]^pr.Task, sort_kind: pr.TaskQuerySort, descending: bool) {
 	direction := descending ? 1 : 0
 	sort_index := int(sort_kind)
-	if set.initialized[sort_index][direction] do return &set.trees[sort_index][direction]
+	if set.initialized[sort_index][direction] do return
 	cache: btree.Cache_Mode = .None
 	projection: Task_Numeric_Projection = .Time
 	if sort_kind == .Title do cache = .Text
@@ -164,25 +204,41 @@ task_query_index_set_ensure_order :: proc(
 		cache = .Numeric
 		projection = .Enum_Value
 	}
-	set.trees[sort_index][direction] = btree.create_ordered(
-		Task_Query_Key,
-		Task_Query_Order,
-		btree.Options{degree = 32},
-		cache = cache,
-		descending = descending,
-		projection = projection,
-	)
-	membership := &set.trees[0][0]
+	compact := task_query_uses_compact_key(sort_kind)
+	if compact {
+		set.trees[sort_index][direction].numeric = btree.create_ordered(
+			Task_Numeric_Key,
+			Task_Numeric_Order,
+			btree.Options{degree = 32},
+			cache = cache,
+			descending = descending,
+			projection = projection,
+		)
+	} else {
+		set.trees[sort_index][direction].general = btree.create_ordered(
+			Task_Query_Key,
+			Task_Query_Order,
+			btree.Options{degree = 32},
+			cache = cache,
+			descending = descending,
+			projection = projection,
+		)
+	}
+	membership := &set.trees[0][0].numeric
 	it := btree.iter(membership)
 	defer btree.iter_destroy(&it)
 	for found := btree.iter_first(&it); found; found = btree.iter_next(&it) {
 		task := tasks^[btree.item(&it).task_id]
 		if task != nil {
-			_, _ = btree.set(&set.trees[sort_index][direction], make_task_query_key(task, sort_kind))
+			key := make_task_query_key(task, sort_kind)
+			if compact {
+				_, _ = btree.set(&set.trees[sort_index][direction].numeric, Task_Numeric_Key{key.number, key.task_id})
+			} else {
+				_, _ = btree.set(&set.trees[sort_index][direction].general, key)
+			}
 		}
 	}
 	set.initialized[sort_index][direction] = true
-	return &set.trees[sort_index][direction]
 }
 
 task_query_secondary_get :: proc(indexes: ^map[string]^Task_Query_Secondary_Index, value: []byte) -> ^Task_Query_Secondary_Index {
@@ -194,7 +250,7 @@ task_query_secondary_get :: proc(indexes: ^map[string]^Task_Query_Secondary_Inde
 task_query_secondary_remove :: proc(indexes: ^map[string]^Task_Query_Secondary_Index, task: ^pr.Task, value: []byte) {
 	index := indexes^[string(value)]; if index == nil do return
 	task_query_index_set_remove(&index.indexes, task)
-	if btree.count(&index.indexes.trees[0][0]) ==
+	if btree.count(&index.indexes.trees[0][0].numeric) ==
 	   0 {delete_key(indexes, index.key); task_query_index_set_destroy(&index.indexes); delete(index.key); free(index)}
 }
 

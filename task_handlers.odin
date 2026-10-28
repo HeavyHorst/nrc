@@ -500,7 +500,7 @@ collect_task_page :: proc(conv: ^Conversation_State, req: pr.ListTasksPagedReque
 
 	indexed_count := 0
 	for status in 0 ..< 4 {
-		count := btree.count(&conv.task_status_indexes[status].trees[0][0])
+		count := btree.count(&conv.task_status_indexes[status].trees[0][0].numeric)
 		indexed_count += count
 		if req.status_mask & (u8(1) << u8(status)) != 0 do result.total_count += u32(count)
 	}
@@ -570,25 +570,25 @@ collect_task_query_page :: proc(conv: ^Conversation_State, req: pr.TaskQueryRequ
 	if conv == nil || tasks == nil do return result
 	if req.sort == .WorkOrder do return collect_task_work_order_page(conv, req, tasks)
 	set := &conv.task_query_indexes
-	candidate_count := btree.count(&set.trees[0][0])
+	candidate_count := btree.count(&set.trees[0][0].numeric)
 	if req.has_project {
 		index := conv.task_project_indexes[string(req.project)]; if index == nil do return result
-		count := btree.count(&index.indexes.trees[0][0])
+		count := btree.count(&index.indexes.trees[0][0].numeric)
 		if count < candidate_count {set = &index.indexes; candidate_count = count}
 	}
 	if req.has_assignee {
 		index := conv.task_assignee_indexes[string(req.assignee)]; if index == nil do return result
-		count := btree.count(&index.indexes.trees[0][0])
+		count := btree.count(&index.indexes.trees[0][0].numeric)
 		if count < candidate_count {set = &index.indexes; candidate_count = count}
 	}
 	// A single-status tree is often the narrowest available ordered scope.
 	status_index := -1
 	for status in 0 ..< 4 {if req.status_mask == (u8(1) << u8(status)) do status_index = status}
 	if status_index >= 0 {
-		count := btree.count(&conv.task_status_indexes[status_index].trees[0][0])
+		count := btree.count(&conv.task_status_indexes[status_index].trees[0][0].numeric)
 		if count < candidate_count {set = &conv.task_status_indexes[status_index]; candidate_count = count}
 	}
-	tree := task_query_index_set_ensure_order(set, &conv.tasks, req.sort, req.descending)
+	task_query_index_set_ensure_order(set, &conv.tasks, req.sort, req.descending)
 	fully_covered :=
 		req.color == 255 &&
 		req.blocked == 0 &&
@@ -596,6 +596,22 @@ collect_task_query_page :: proc(conv: ^Conversation_State, req: pr.TaskQueryRequ
 		(!req.has_project || set == &conv.task_project_indexes[string(req.project)].indexes) &&
 		(!req.has_assignee || set == &conv.task_assignee_indexes[string(req.assignee)].indexes) &&
 		(req.status_mask == 0x0f || (status_index >= 0 && set == &conv.task_status_indexes[status_index]))
+	direction := req.descending ? 1 : 0
+	if task_query_uses_compact_key(req.sort) {
+		return collect_task_query_tree_page(conv, req, tasks, &set.trees[int(req.sort)][direction].numeric, fully_covered, candidate_count)
+	}
+	return collect_task_query_tree_page(conv, req, tasks, &set.trees[int(req.sort)][direction].general, fully_covered, candidate_count)
+}
+
+collect_task_query_tree_page :: proc(
+	conv: ^Conversation_State,
+	req: pr.TaskQueryRequest,
+	tasks: ^[dynamic]pr.Task,
+	tree: ^btree.BTreeG($Key, $Order),
+	fully_covered: bool,
+	candidate_count: int,
+) -> Task_Query_Collection {
+	result: Task_Query_Collection
 	if fully_covered do result.total_count = u32(candidate_count)
 	it := btree.iter(tree); defer btree.iter_destroy(&it)
 	has_item := false
@@ -606,8 +622,20 @@ collect_task_query_page :: proc(conv: ^Conversation_State, req: pr.TaskQueryRequ
 			due_missing = req.sort == .DueAt && req.cursor_number == 0,
 			task_id     = req.cursor_task_id,
 		}
-		has_item = btree.iter_seek(&it, cursor)
-		if has_item && (req.descending ? task_query_key_compare_desc(btree.item(&it), cursor) : task_query_key_compare_asc(btree.item(&it), cursor)) <= 0 do has_item = btree.iter_next(&it)
+		when Key == Task_Numeric_Key {
+			probe := Task_Numeric_Key{cursor.number, cursor.task_id}
+			// Stored text is empty. Nonempty cursor text sorts after every
+			// equal-number row ascending, and before every such row descending.
+			// Use ID endpoints without number arithmetic (timestamps may be i64 extrema).
+			if len(cursor.text) != 0 do probe.task_id = req.descending ? 0 : max(pr.TaskID)
+			has_item = btree.iter_seek(&it, probe)
+		} else {
+			has_item = btree.iter_seek(&it, cursor)
+		}
+		if has_item {
+			key := task_query_expand_key(btree.item(&it))
+			if (req.descending ? task_query_key_compare_desc(key, cursor) : task_query_key_compare_asc(key, cursor)) <= 0 do has_item = btree.iter_next(&it)
+		}
 	} else {has_item = btree.iter_first(&it)}
 	// Count all candidates when residual predicates remain, while only paging rows after the cursor.
 	if !fully_covered {
@@ -618,7 +646,7 @@ collect_task_query_page :: proc(conv: ^Conversation_State, req: pr.TaskQueryRequ
 	}
 	page_size := pr.getSizeTaskQueryPage(pr.TaskQueryPage{})
 	for has_item {
-		key := btree.item(&it); has_item = btree.iter_next(&it); task := conv.tasks[key.task_id]
+		key := task_query_expand_key(btree.item(&it)); has_item = btree.iter_next(&it); task := conv.tasks[key.task_id]
 		if !task_matches_query(task, req) do continue
 		task_size := pr.getSizeTask(task^)
 		projected_size := page_size + task_size + len(key.text) - len(result.next_cursor_text)

@@ -345,6 +345,7 @@ test_task_query_numeric_public_cursors :: proc(t: ^testing.T) {
 	init_task_index(&conv)
 	defer destroy_task_index(&conv)
 	tasks := [?]pr.Task {
+		{id = 0, status = .Todo, priority = 126, created_at = min(i64), updated_at = min(i64)},
 		{id = 1, status = .Todo, priority = 126, created_at = min(i64), updated_at = min(i64)},
 		{id = (1 << 54) - 1, status = .Todo, priority = 127, created_at = -1, updated_at = -1},
 		{id = 1 << 54, status = .Todo, priority = 128, created_at = 0, updated_at = 0},
@@ -393,13 +394,21 @@ test_task_query_numeric_public_cursors :: proc(t: ^testing.T) {
 						text    = req.cursor_text,
 						task_id = req.cursor_task_id,
 					}
+					expected_storage: [len(tasks)]Task_Query_Key
 					count := 0
 					for task in tasks {
 						key := Task_Query_Key {
 							number  = sort_kind == .Priority ? i64(task.priority) : task.created_at,
 							task_id = task.id,
 						}
-						if task_query_test_less(cursor, key, descending) do count += 1
+						if !task_query_test_less(cursor, key, descending) do continue
+						at := count
+						for at > 0 && task_query_test_less(key, expected_storage[at - 1], descending) {
+							expected_storage[at] = expected_storage[at - 1]
+							at -= 1
+						}
+						expected_storage[at] = key
+						count += 1
 					}
 					testing.expect_value(t, len(rows), count)
 					previous := cursor
@@ -410,6 +419,26 @@ test_task_query_numeric_public_cursors :: proc(t: ^testing.T) {
 						}
 						testing.expect(t, task_query_test_less(previous, key, descending))
 						previous = key
+					}
+					// The same noncanonical boundary must also work with small
+					// pages and the canonical cursors returned by the server.
+					expected_rows := expected_storage[:count]
+					req.limit = 1
+					for i in 0 ..< max(1, len(expected_rows)) {
+						clear(&rows)
+						part := collect_task_query_page(&conv, req, &rows)
+						testing.expect_value(t, part.total_count, u32(len(tasks)))
+						testing.expect_value(t, len(rows), len(expected_rows) > 0 ? 1 : 0)
+						testing.expect_value(t, part.has_more, i + 1 < len(expected_rows))
+						if len(rows) == 1 && i < len(expected_rows) {
+							testing.expect_value(t, rows[0].id, expected_rows[i].task_id)
+							testing.expect_value(t, part.next_cursor_number, sort_kind == .Priority ? i64(rows[0].priority) : rows[0].created_at)
+							testing.expect_value(t, part.next_cursor_task_id, rows[0].id)
+							testing.expect_value(t, len(part.next_cursor_text), 0)
+						}
+						req.cursor_number = part.next_cursor_number
+						req.cursor_text = part.next_cursor_text
+						req.cursor_task_id = part.next_cursor_task_id
 					}
 				}
 			}
@@ -674,9 +703,17 @@ test_task_query_order_filters_cursor_and_indexes :: proc(t: ^testing.T) {
 				page_result := collect_task_query_page(&conv, reference_req, &page)
 				expected_cache := [8]btree.Cache_Mode{.Numeric, .Numeric, .None, .None, .Numeric, .Text, .Numeric, .None}
 				expected_projection := [8]Task_Numeric_Projection{.Enum_Value, .Enum_Value, .Time, .Time, .Time, .Time, .Enum_Value, .Time}
-				testing.expect_value(t, conv.task_query_indexes.trees[sort_kind][direction].cache, expected_cache[sort_kind])
-				testing.expect_value(t, conv.task_query_indexes.trees[sort_kind][direction].projection, expected_projection[sort_kind])
-				testing.expect_value(t, conv.task_query_indexes.trees[sort_kind][direction].descending, reference_req.descending)
+				if sort_kind == 0 || sort_kind == 4 {
+					tree := &conv.task_query_indexes.trees[sort_kind][direction].numeric
+					testing.expect_value(t, tree.cache, expected_cache[sort_kind])
+					testing.expect_value(t, tree.projection, expected_projection[sort_kind])
+					testing.expect_value(t, tree.descending, reference_req.descending)
+				} else {
+					tree := &conv.task_query_indexes.trees[sort_kind][direction].general
+					testing.expect_value(t, tree.cache, expected_cache[sort_kind])
+					testing.expect_value(t, tree.projection, expected_projection[sort_kind])
+					testing.expect_value(t, tree.descending, reference_req.descending)
+				}
 				for task in page do append(&actual, task.id)
 				if !page_result.has_more {
 					delete(page)
@@ -756,9 +793,9 @@ test_task_query_order_filters_cursor_and_indexes :: proc(t: ^testing.T) {
 
 	old := tasks[4]; tasks[4].project = task_query_test_bytes("Delta"); tasks[4].assignee = task_query_test_bytes("zoe")
 	replace_task_in_index(&conv, &old, &tasks[4])
-	testing.expect_value(t, btree.count(&conv.task_project_indexes["Alpha"].indexes.trees[0][0]), 1)
-	testing.expect_value(t, btree.count(&conv.task_assignee_indexes["ann"].indexes.trees[0][0]), 1)
-	testing.expect_value(t, btree.count(&conv.task_project_indexes["Delta"].indexes.trees[0][0]), 1)
+	testing.expect_value(t, btree.count(&conv.task_project_indexes["Alpha"].indexes.trees[0][0].numeric), 1)
+	testing.expect_value(t, btree.count(&conv.task_assignee_indexes["ann"].indexes.trees[0][0].numeric), 1)
+	testing.expect_value(t, btree.count(&conv.task_project_indexes["Delta"].indexes.trees[0][0].numeric), 1)
 
 	clear(&out)
 	empty := pr.TaskQueryRequest {
