@@ -99,6 +99,7 @@ try {
         hasOwner: view.getUint8(11) === 1,
         owner, hasName, name, limit, cursor,
         correlationId: view.getUint32(offset, false),
+        project: view.byteLength > offset + 4 ? decoder.decode(new Uint8Array(view.buffer, view.byteOffset + offset + 6, view.getUint16(offset + 4, false))) : "",
       };
     }
 
@@ -132,6 +133,16 @@ try {
       if (opcode !== 65) throw new Error(`Unexpected person facet ${opcode}`);
       return [...new Set(slices.map(slice => slice.owner).filter(Boolean))].sort();
     };
+    NRCTaskQuery.requestProjects = () => {};
+    NRCTaskQuery.getProjects = () => ["NRC", "srv"];
+    let noteProjects = ["Notes", "Unused"];
+    NRCAssets.sendListNoteProjects = (room, options) => options.onSuccess({ projects: noteProjects });
+    slices.forEach(slice => { slice.projects = slice.owner === "tester" ? ["NRC", "srv"] : slice.owner === "anke" ? ["Notes"] : []; });
+    window.__setNoteProject = (project, correlationId = 0) => {
+      noteProjects = [project, "Unused"];
+      slices.filter(slice => slice.owner === "anke").forEach(slice => { slice.projects = [project]; });
+      NRCSlices.onAssetChanged({ convId: 0n, assetId: 9999n, assetType: 5, preview: JSON.stringify({ project }) }, "mutation", correlationId);
+    };
     NRCEdges.getEdgesForEntity = () => [];
     NRCEdges.requestEdgePage = () => Promise.resolve({});
 
@@ -144,6 +155,7 @@ try {
       let matching = slices.slice()
         .filter((slice) => (request.includeClosed || !slice.closed) &&
           (!request.hasOwner || slice.owner === request.owner) &&
+          (!request.project || slice.projects.includes(request.project)) &&
           (!request.hasName || slice.name.toLowerCase().includes(request.name.toLowerCase())))
         .sort((left, right) => (less(key(left), key(right)) ? -1 : 1));
       const total = matching.length;
@@ -247,6 +259,66 @@ try {
   assert.equal(await page.locator("#sliceQuery").inputValue(), "");
   assert.equal(await page.locator("#sliceOwnerFilter").inputValue(), "");
   assert.equal(await page.locator("#sliceStatus").isVisible(), false);
+
+  const chooseProject = async value => {
+    await page.locator("#sliceProjectFilter-trigger").click();
+    await page.locator(`.custom-select__option[data-value="${value}"]`).click();
+  };
+  // Project metadata includes note-only projects, independent of loaded pages.
+  assert.equal(await page.locator('#sliceProjectFilter option[value="Notes"]').count(), 1);
+  await chooseProject("NRC");
+  await scrollToEnd();
+  await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length === 120);
+  assert.equal(await head(), "120 SLICES / 40 OPEN");
+  const projectPages = await page.evaluate(() => window.__fixtureRequests.filter(request => request.project === "NRC"));
+  assert.equal(projectPages.length, 2);
+  assert.equal(projectPages[1].cursor.sliceId, 1099n);
+  await chooseOwner("anke");
+  await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length === 0);
+  assert.equal(await status(), "NO SLICES MATCH THE FILTER");
+  await chooseProject("Notes");
+  await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length === 20);
+  assert.equal(await head(), "20 SLICES / 20 OPEN");
+  // Note mutations reconcile both remote broadcasts and local acknowledgements,
+  // including a note outside the currently loaded member snapshot.
+  await page.evaluate(() => window.__setNoteProject("NRC"));
+  await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length === 0);
+  assert.equal(await status(), "NO SLICES MATCH THE FILTER");
+  assert.equal(await page.locator("#sliceProjectFilter").inputValue(), "Notes");
+  await page.evaluate(() => window.__setNoteProject("Notes", 99));
+  await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length === 20);
+  await page.evaluate(() => window.__setNoteProject("Fresh note project", 100));
+  await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length === 0);
+  assert.equal(await page.locator('#sliceProjectFilter option[value="Fresh note project"]').count(), 1);
+  await chooseProject("Fresh note project");
+  await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length === 20);
+  await page.locator("#filterReset").click();
+  await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length >= 100);
+  assert.equal(await page.locator("#sliceProjectFilter").inputValue(), "");
+
+  // Reuse the production filter control in both themes and narrow compositions.
+  for (const theme of ["white", "matte-black"]) {
+    for (const width of [1600, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      if (width === 390) {
+        const expand = page.locator('[data-mobile-filters][aria-controls="taskFilters"]');
+        if (await expand.getAttribute("aria-expanded") !== "true") await expand.click();
+      }
+      await chooseProject("NRC");
+      assert.equal(await page.locator("#sliceProjectFilter-trigger").isVisible(), true);
+      assert.match(await page.locator("#sliceProjectFilter-trigger").textContent(), /NRC/);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      if (process.env.NRC_SLICE_SCREENSHOTS) await page.screenshot({ path: `${process.env.NRC_SLICE_SCREENSHOTS}/slice-project-${theme}-${width}.png` });
+      await chooseProject("Unused");
+      await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length === 0);
+      assert.equal(await status(), "NO SLICES MATCH THE FILTER");
+      if (process.env.NRC_SLICE_SCREENSHOTS) await page.screenshot({ path: `${process.env.NRC_SLICE_SCREENSHOTS}/slice-project-empty-${theme}-${width}.png` });
+      await page.locator("#filterReset").click();
+      await page.waitForFunction(() => document.querySelectorAll("#sliceRegisterList .slice-row").length >= 100);
+    }
+  }
+  await page.setViewportSize({ width: 1600, height: 1000 });
 
   // A single digit fits the narrow Done segment of a 5:3:2:1 distribution.
   // Longer counts need more room, but neither may widen the status share.

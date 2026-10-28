@@ -265,6 +265,7 @@ necessary service information, but hard-bounce/spam blocks always do.
 nrc task list
 nrc note list
 nrc slice list
+nrc slice list --project NRC
 nrc customer list
 nrc contact list
 nrc activity list
@@ -278,6 +279,11 @@ To assign task 356, run `nrc task update 356 --assignee alice`.
 Pass `--assignee ""` to clear the assignment. Omit the flag to keep the current
 assignment. Run `nrc task get 356` to check the assignee.
 A slice's owner does not automatically assign its member tasks.
+
+`slice list --project NRC` selects slices with at least one directly assigned task
+or note whose structured project is exactly `NRC`. A cross-project slice appears
+under each member project. Its counts and members still describe the whole slice;
+files do not supply a project through their category.
 
 ## Example: connect rollout work
 

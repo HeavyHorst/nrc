@@ -372,6 +372,10 @@ var sliceListCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		roomFlag, _ := cmd.Flags().GetString("room")
 		includeClosed, _ := cmd.Flags().GetBool("include-closed")
+		project, _ := cmd.Flags().GetString("project")
+		if len(project) > protocol.MaxProjectLength {
+			conn.FatalInvalid("Project exceeds %d bytes", protocol.MaxProjectLength)
+		}
 		jsonOutput := useJSONOutput(cmd)
 
 		s, err := conn.Dial(roomFlag)
@@ -380,7 +384,7 @@ var sliceListCmd = &cobra.Command{
 		}
 		defer s.Close()
 
-		listing, err := fetchTaskSlices(s, protocol.SliceQuery{IncludeClosed: includeClosed, Limit: protocol.MaxTaskSliceCount})
+		listing, err := fetchTaskSlices(s, protocol.SliceQuery{IncludeClosed: includeClosed, Project: project, Limit: protocol.MaxTaskSliceCount})
 		if err != nil {
 			conn.Fatal("Error: %v", err)
 		}
@@ -1166,6 +1170,7 @@ func init() {
 		}
 	}
 	sliceListCmd.Flags().Bool("include-closed", false, "Include closed slices")
+	sliceListCmd.Flags().String("project", "", "Slices with a direct task or note member in this project (exact match)")
 	sliceCreateCmd.Flags().String("owner", "", "Owner of the slice")
 	sliceCreateCmd.Flags().String("outcome", "", "What the slice ends in")
 	sliceUpdateCmd.Flags().String("name", "", "New name of the slice (memberships are preserved)")

@@ -69,7 +69,7 @@
     includeClosed: false,
     // The filters the register asks the server with. They survive no reload, like
     // the other registers' filters.
-    filters: { owner: null, query: "" },
+    filters: { owner: null, query: "", project: "" },
     selected: null,
     // The slice the detail on screen belongs to. A refresh of the same slice
     // keeps what is already shown instead of blanking it.
@@ -301,7 +301,7 @@
   }
 
   function filterActive() {
-    return state.filters.owner !== null || queryText() !== "";
+    return state.filters.owner !== null || queryText() !== "" || !!state.filters.project;
   }
 
   // The owner a filter names: MY SLICES is the reader's own name, UNASSIGNED is the
@@ -321,6 +321,25 @@
   let ownerGeneration = 0;
   let ownerError = "";
   let ownerOptions = null;
+
+  let noteProjects = [];
+  let projectOptions = null;
+  let projectError = "";
+
+  function syncProjectFilter() {
+    const select = document.getElementById("sliceProjectFilter");
+    if (!select) return;
+    const projects = new Set([...noteProjects, ...(window.NRCTaskQuery?.getProjects?.(0n) || [])]);
+    if (state.filters.project) projects.add(state.filters.project);
+    const listed = [...projects].filter(Boolean).sort();
+    const signature = JSON.stringify(listed);
+    if (signature !== projectOptions) {
+      projectOptions = signature;
+      select.innerHTML = '<option value="">ALL</option>' +
+        listed.map(project => `<option value="${escape(project)}">${escape(project)}</option>`).join("");
+    }
+    select.value = state.filters.project || "";
+  }
 
   function syncOwnerFilter() {
     const select = document.getElementById("sliceOwnerFilter");
@@ -350,6 +369,7 @@
   // space that was just typed.
   function syncFilterControls() {
     syncOwnerFilter();
+    syncProjectFilter();
     const query = document.getElementById("sliceQuery");
     if (query && query.value !== state.filters.query) query.value = state.filters.query;
   }
@@ -377,7 +397,16 @@
   function resetFilters() {
     if (!filterActive()) return Promise.resolve(false);
     explicitSelection = false;
-    state.filters = { owner: null, query: "" };
+    state.filters = { owner: null, query: "", project: "" };
+    syncFilterControls();
+    return requestList({ force: true });
+  }
+
+  function setProjectFilter(project) {
+    const next = String(project || "");
+    if (state.filters.project === next) return Promise.resolve(false);
+    explicitSelection = false;
+    state.filters.project = next;
     syncFilterControls();
     return requestList({ force: true });
   }
@@ -392,10 +421,11 @@
   function encodeListRequest(correlationId, cursor, filters, includeClosed) {
     const ownerBytes = encoder.encode(ownerName(filters.owner));
     const nameBytes = encoder.encode(String(filters.query ?? "").trim());
+    const projectBytes = encoder.encode(filters.project || "");
     const hasName = nameBytes.length > 0;
     // opcode, conv id, the two flags, the owner and its length, the name flag and
     // its length, the page bound, the cursor flag and the correlation id.
-    const buffer = new ArrayBuffer(24 + ownerBytes.length + nameBytes.length + (cursor ? 17 : 0));
+    const buffer = new ArrayBuffer(24 + ownerBytes.length + nameBytes.length + (cursor ? 17 : 0) + (projectBytes.length ? 2 + projectBytes.length : 0));
     const view = new DataView(buffer);
     view.setUint16(0, LIST_TASK_SLICES, false);
     view.setBigUint64(2, state.roomId, false);
@@ -424,6 +454,11 @@
       offset += 8;
     }
     view.setUint32(offset, correlationId, false);
+    offset += 4;
+    if (projectBytes.length) {
+      view.setUint16(offset, projectBytes.length, false);
+      new Uint8Array(buffer, offset + 2, projectBytes.length).set(projectBytes);
+    }
     return buffer;
   }
 
@@ -472,6 +507,17 @@
 
   function requestList({ force = false } = {}) {
     const scope = ++ownerGeneration;
+    window.NRCTaskQuery?.requestProjects?.({ force });
+    window.NRCAssets.sendListNoteProjects?.(0n, {
+      onSuccess: ({ projects }) => {
+        if (scope !== ownerGeneration) return;
+        noteProjects = projects; projectError = ""; syncProjectFilter(); render();
+      },
+      onError: ({ message }) => {
+        if (scope !== ownerGeneration) return;
+        projectError = `PROJECT LIST FAILED · ${message}`; render();
+      },
+    });
     window.NRCAssets.requestPersonList(65, { isCancelled: () => scope !== ownerGeneration }).then(values => {
       if (scope !== ownerGeneration) return;
       completeOwners = values; ownerError = ""; syncOwnerFilter(); render();
@@ -1125,7 +1171,7 @@
         state.createOpen = false;
         // A slice is created without an owner, so a filter that would hide it is
         // dropped: the register has to show the slice that was just made.
-        state.filters = { owner: null, query: "" };
+        state.filters = { owner: null, query: "", project: "" };
         invalidate({ debounce: false });
         select(detail.asset.assetId);
         render();
@@ -1318,9 +1364,9 @@
   // register's owner/closure fields and can also change the selected record's
   // outcome, so both surfaces have to follow it without waiting for a reload.
   // Cache fills are reads initiated by this module and must not invalidate the
-  // listing again, or loading a record would create a refresh loop. Likewise,
-  // nonzero correlation ids are acknowledgements of local writes whose callbacks
-  // already refresh the view; broadcasts from other clients carry zero.
+  // listing again, or loading a record would create a refresh loop. Slice record
+  // acknowledgements already refresh through their write callbacks; member note
+  // and ticket mutations also affect other slices and their project choices.
   function onAssetChanged(asset, reason, correlationId) {
     if (reason !== "mutation" || asset?.convId !== state.roomId) return;
     if (asset.assetType === TICKET_ASSET_TYPE) {
@@ -1332,8 +1378,11 @@
       }
       return;
     }
-    if (correlationId !== 0) return;
     if (asset.assetType === NOTE_ASSET_TYPE) {
+      // A note can move a slice into or out of the project filter, including a
+      // slice outside the loaded rows. Refresh the listing and project facets
+      // for local acknowledgements too; ordinary cache reads returned above.
+      invalidate();
       const index = state.notes.assets.findIndex(note => note.assetId === asset.assetId);
       if (index !== -1) {
         state.notes.assets[index] = asset;
@@ -1341,6 +1390,7 @@
       }
       return;
     }
+    if (correlationId !== 0) return;
     if (asset.assetType !== SLICE_ASSET_TYPE) return;
     const slice = state.slices.find((slice) => slice.sliceId === asset.assetId) ??
       (retainedSlice?.sliceId === asset.assetId ? retainedSlice : null);
@@ -1500,13 +1550,13 @@
     if (status) {
       const message = state.mode === "error" ? state.error :
         state.pageError ? state.pageError :
-        ownerError ? ownerError :
+        ownerError ? ownerError : projectError ? projectError :
         state.mode === "loading" && !loaded ? (showLoading ? "LOADING SLICES…" : "") :
         state.loadingMore ? (showLoading ? "LOADING MORE SLICES…" : "") :
         state.mode === "ready" && !loaded && filterActive() ? "NO SLICES MATCH THE FILTER" :
         state.mode === "ready" && !loaded ? "NO SLICES IN THIS WORKSPACE" : "";
       status.textContent = message;
-      status.dataset.state = state.mode === "error" || state.pageError || ownerError ? "error" : "info";
+      status.dataset.state = state.mode === "error" || state.pageError || ownerError || projectError ? "error" : "info";
       status.hidden = message === "";
     }
 
@@ -1998,6 +2048,10 @@
     ownerFilter?.addEventListener("change", () => {
       setOwnerFilter(ownerFilter.value);
     });
+    const projectFilter = document.getElementById("sliceProjectFilter");
+    projectFilter?.addEventListener("change", () => {
+      setProjectFilter(projectFilter.value);
+    });
     const queryFilter = document.getElementById("sliceQuery");
     queryFilter?.addEventListener("input", () => {
       setQuery(queryFilter.value);
@@ -2060,6 +2114,7 @@
     // The owners of the previous workspace's listing are not the owners of this
     // one's, so the filter's options start over with it.
     completeOwners = []; ownerError = "";
+    noteProjects = []; projectError = "";
     requestList({ force: true });
   }
 
@@ -2113,9 +2168,10 @@
     ensureLoaded,
     setIncludeClosed,
     getIncludeClosed: () => state.includeClosed,
-    // The register's filters: the owner, the name query and the reset that clears
-    // both are exposed so the shared RESET and the tests drive one write path.
+    // The shared RESET and the filter controls drive one write path.
     setOwnerFilter,
+    setProjectFilter,
+    syncProjectFilter,
     setQuery,
     resetFilters,
     getFilters: () => ({ ...state.filters }),

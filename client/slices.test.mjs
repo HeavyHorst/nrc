@@ -389,16 +389,54 @@ test("slice WorkOrder requests only one scoped page and loads subsequent pages o
   slices.disconnect();
 });
 
-test("a completed note mutation refreshes the member snapshot without reloading the slice register", () => {
+test("a completed note mutation refreshes the member snapshot and slice register, but cache reads do not", async () => {
   const slices = loadSlices();
   const old = { convId: 0n, assetId: 12n, assetType: 5, preview: '{"title":"Old"}' };
   slices.getState().notes = { mode: "ready", assets: [old] };
   const next = { ...old, preview: '{"title":"Renamed"}' };
   slices.onAssetChanged(next, "cache", 0);
   assert.equal(slices.getState().notes.assets[0], old, "ordinary reads cannot trigger mutation refreshes");
+  await new Promise(resolve => setTimeout(resolve, 140));
+  assert.equal(slices.__sent.length, 0, "a cache read does not reload the listing");
   slices.onAssetChanged(next, "mutation", 0);
   assert.equal(slices.getState().notes.assets[0].preview, '{"title":"Renamed"}');
-  assert.equal(slices.__sent.length, 0, "updating a member snapshot cannot loop through the slice listing");
+  await new Promise(resolve => setTimeout(resolve, 140));
+  assert.equal(slices.__sent.length, 1, "a note mutation can change project membership or movement");
+  slices.disconnect();
+});
+
+test("note project mutations refresh filtered slices and complete note-only choices even outside the loaded members", async () => {
+  let projects = ["NRC"];
+  const select = { innerHTML: "", value: "" };
+  const slices = loadSlices({
+    document: { getElementById: id => id === "sliceProjectFilter" ? select : null, addEventListener() {}, querySelectorAll: () => [] },
+    window: { NRCAssets: {
+      sendListNoteProjects: (room, options) => options.onSuccess({ projects }),
+    } },
+  });
+  slices.setProjectFilter("NRC");
+  slices.handleSliceList(encodeSliceList({ slices: [{ name: "Leaving NRC", sliceId: 5n, notes: 1 }] }));
+
+  projects = ["srv"];
+  slices.onAssetChanged({ convId: 0n, assetId: 12n, assetType: 5, preview: '{"project":"srv"}' }, "mutation", 0);
+  await new Promise(resolve => setTimeout(resolve, 140));
+  assert.equal(slices.__sent.length, 2, "remote note moving out asks for a new filtered listing");
+  assert.equal(sliceRequest(new DataView(slices.__sent[1])).project, "NRC");
+  assert.match(select.innerHTML, /value="srv"/, "new note-only projects become selectable");
+  assert.equal(select.value, "NRC", "the active project is retained even if its facet disappears");
+  slices.handleSliceList(encodeSliceList({ total: 0, slices: [] }));
+  assert.equal(slices.getState().slices.length, 0);
+
+  projects = ["NRC", "New note project"];
+  slices.onAssetChanged({ convId: 0n, assetId: 13n, assetType: 5, preview: '{"project":"NRC"}' }, "mutation", 99);
+  await new Promise(resolve => setTimeout(resolve, 140));
+  assert.equal(slices.__sent.length, 3, "a local acknowledgement outside loaded members can bring a slice into the filter");
+  assert.equal(sliceRequest(new DataView(slices.__sent[2])).project, "NRC");
+  assert.match(select.innerHTML, /value="New note project"/);
+  slices.handleSliceList(encodeSliceList({ slices: [{ name: "Entering NRC", sliceId: 6n, notes: 1 }] }));
+  assert.equal(slices.getState().slices[0].sliceId, 6n);
+  assert.equal(select.value, "NRC");
+  slices.disconnect();
 });
 
 test("a slice record changed elsewhere refreshes the register", async () => {
@@ -1527,6 +1565,7 @@ function sliceRequest(view) {
     hasCursor,
     cursor,
     correlationId: view.getUint32(offset, false),
+    project: view.byteLength > offset + 4 ? new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset + offset + 6, view.getUint16(offset + 4, false))) : "",
     length: view.byteLength,
   };
 }
@@ -1553,10 +1592,17 @@ test("a filter change asks the server with the filter in the request", async () 
   assert.equal(queried.name, "shard");
   assert.equal(queried.hasOwner, true, "the owner filter stays beside the query");
 
+  slices.setProjectFilter("NRC");
+  const project = sliceRequest(new DataView(slices.__sent[4]));
+  assert.equal(project.project, "NRC");
+  assert.equal(project.name, "shard");
+  assert.equal(project.hasOwner, true);
+
   slices.resetFilters();
-  const reset = sliceRequest(new DataView(slices.__sent[4]));
+  const reset = sliceRequest(new DataView(slices.__sent[5]));
   assert.equal(reset.hasOwner, false, "RESET asks for every owner again");
   assert.equal(reset.hasName, false);
+  assert.equal(reset.project, "");
   assert.equal(slices.filterActive(), false);
 });
 
@@ -1753,7 +1799,7 @@ test("a headless read walks every page without touching the register", async () 
   assert.deepEqual(Array.from(slices.getState().slices, (slice) => slice.name), ["Register row"],
     "the register's window is untouched");
   assert.equal(slices.getState().selected, 5n, "so is its selection");
-  assert.deepEqual({ ...slices.getFilters() }, { owner: null, query: "" }, "and its filter");
+  assert.deepEqual({ ...slices.getFilters() }, { owner: null, query: "", project: "" }, "and its filter");
 });
 
 test("a headless read ends when a page cannot advance the cursor", async () => {
@@ -1804,7 +1850,7 @@ test("creating a slice drops the filter that would hide it", async () => {
   slices.handleSliceList(encodeSliceList({ slices: [{ name: "Shard hardening", sliceId: 50n }] }));
   await settleMicrotasks();
   assert.equal(slices.filterActive(), false, "the filter goes so the new slice is visible");
-  assert.deepEqual({ ...slices.getFilters() }, { owner: null, query: "" });
+  assert.deepEqual({ ...slices.getFilters() }, { owner: null, query: "", project: "" });
   assert.equal(slices.getState().selected, 50n);
 });
 

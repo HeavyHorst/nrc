@@ -198,6 +198,7 @@ Slice_Query :: struct {
 	// once, because every record's name is lowered to compare.
 	has_name:           bool,
 	name:               string,
+	project:            string,
 	limit:              int,
 	has_cursor:         bool,
 	cursor_closed:      bool,
@@ -306,6 +307,7 @@ collect_task_slices :: proc(
 		if m.closed do entry.flags += pr.TaskSliceFlag_CLOSED
 
 		overflow := false
+		project_matches := query.project == ""
 		key := Edge_Entity_Key {
 			target_type = .Asset,
 			target_id   = u64(asset.asset_id),
@@ -319,19 +321,28 @@ collect_task_slices :: proc(
 				switch member_type {
 				case .Task:
 					task_id := pr.TaskID(member_id)
-					if fold_task_member(&entry, conv.tasks[task_id], &overflow) && assigned != nil {
-						assigned[task_id] = {}
+					task := conv.tasks[task_id]
+					if fold_task_member(&entry, task, &overflow) {
+						if string(task.project) == query.project do project_matches = true
+						if assigned != nil do assigned[task_id] = {}
 					}
 				case .Asset:
-					fold_asset_member(&entry, conv.assets[pr.AssetID(member_id)], &overflow)
-				}
-				if overflow {
-					clear(slices)
-					return Slice_Page{error = "Slice listing representation limit exceeded: member category exceeds 65535"}
+					member := conv.assets[pr.AssetID(member_id)]
+					fold_asset_member(&entry, member, &overflow)
+					if !project_matches && member != nil && member.asset_type == .Note {
+						tags := make([dynamic]string, 0, 4, allocator)
+						project_matches = json_note_metadata_fields(member.preview, &tags, allocator) == query.project
+						delete(tags)
+					}
 				}
 			}
 		}
 
+		if !project_matches do continue
+		if overflow {
+			clear(slices)
+			return Slice_Page{error = "Slice listing representation limit exceeded: member category exceeds 65535"}
+		}
 		if m.closed && !query.include_closed do continue
 
 		page.total_count += 1
@@ -393,12 +404,13 @@ process_list_task_slices :: proc(c: ^NRC_Connection, req: pr.ListTaskSlicesReque
 		owner              = string(req.owner),
 		has_name           = req.has_name,
 		name               = string(req.name),
+		project            = string(req.project),
 		limit              = int(req.limit),
 		has_cursor         = req.has_cursor,
 		cursor_closed      = req.cursor_closed,
 		cursor_sort_at     = req.cursor_sort_at,
 		cursor_slice_id    = req.cursor_slice_id,
-		with_work_counters = !req.has_cursor && !req.has_owner && !req.has_name,
+		with_work_counters = !req.has_cursor && !req.has_owner && !req.has_name && len(req.project) == 0,
 	}
 	page := collect_task_slices(conv, query, &slices, &assigned, allocator)
 	send_task_slice_list(c, req.conv_id, slices[:], page, page.error, req.correlation_id)

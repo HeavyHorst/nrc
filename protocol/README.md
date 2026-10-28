@@ -732,6 +732,8 @@ an additive protocol-v8 opcode; the Overview client requires a server supporting
 [ConversationID: 8 bytes] [IncludeClosed: 1 byte] [HasOwner: 1 byte] [OwnerLength: 2 bytes] [Owner: variable] [HasName: 1 byte] [NameLength: 2 bytes] [Name: variable] [Limit: 2 bytes] [HasCursor: 1 byte] [CursorClosed: 1 byte] [CursorSortAt: 8 bytes] [CursorSliceID: 8 bytes] [CorrelationID: 4 bytes]
 ```
 
+Requests may append `[ProjectLength: 2 bytes] [Project: variable]` after the correlation ID. The optional project is valid UTF-8, at most `MAX_PROJECT_LENGTH` bytes; absent or empty means no project filter. A nonempty project matches exactly, case-sensitively, when at least one direct `MemberOf` task or note member has that structured project. Retired tasks, files, tickets and indirect links do not supply projects. Cross-project slices match each member project. Filtering happens before pagination and total counts; counters, movement, ordering and member contents still describe the full slice. Project-filtered requests return zero workspace work counters. Older requests without the extension remain valid; project-filtered requests require an updated server.
+
 The register is paged. `Owner` is matched exactly and an empty owner with `HasOwner` is the slices nobody owns; `Name` is matched as a case-insensitive substring of the slice name. `Limit` is the page bound (`MAX_TASK_SLICE_COUNT` at most). The cursor is the last slice of the previous page, carried in the register's own order — closure, then movement, then ID — and is only sent when `HasCursor` is set. `MY SLICES` is resolved by the client into its own nickname, exactly as the task query resolves `MY TASKS` into the assignee.
 
 #### S_TaskSliceList (Server → Client)

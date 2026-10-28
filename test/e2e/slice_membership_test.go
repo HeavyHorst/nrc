@@ -145,7 +145,7 @@ func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 	moveQueryTask(t, conn, sliceRoomID, tasks[1], protocol.TaskStatusTodo)
 	moveQueryTask(t, conn, sliceRoomID, tasks[2], protocol.TaskStatusInProgress)
 	moveQueryTask(t, conn, sliceRoomID, tasks[3], protocol.TaskStatusDone)
-	note := createAssetAndRead(t, conn, sliceRoomID, protocol.AssetTypeNote, protocol.ParentTypeNone, 0, "slice-note")
+	note := createAssetAndRead(t, conn, sliceRoomID, protocol.AssetTypeNote, protocol.ParentTypeNone, 0, `{"title":"slice-note","project":"NRC"}`)
 	file := createAssetAndRead(t, conn, sliceRoomID, protocol.AssetTypeFile, protocol.ParentTypeNone, 0, "slice-file")
 	edges := []protocol.Edge{
 		createSliceMemberEdge(t, conn, protocol.TargetTypeTask, tasks[0].ID, alpha.AssetID),
@@ -184,6 +184,12 @@ func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 	b := sliceByID(t, all, beta.AssetID)
 	if b.Backlog != 1 || b.Todo != 0 || b.InProgress != 1 || b.Done != 0 || b.Blocked != 0 || b.Notes != 0 || b.Files != 0 || b.TaskCount() != 2 || b.MemberCount() != 2 {
 		t.Fatalf("Beta shared/reverse counters: %+v", b)
+	}
+	if got := listSlices(t, conn, protocol.SliceQuery{Project: "NRC", Limit: 1}, 111); got.TotalCount != 1 || got.HasMore || got.AssignedTasks != 0 || got.UnassignedTasks != 0 || len(got.Slices) != 1 || got.Slices[0] != a {
+		t.Fatalf("note project filter must preserve the full Alpha slice: %+v", got)
+	}
+	if got := listSlices(t, conn, protocol.SliceQuery{Project: "nrc", Limit: 1}, 112); got.TotalCount != 0 || len(got.Slices) != 0 {
+		t.Fatalf("project matching must be exact: %+v", got)
 	}
 	if got := listSlices(t, conn, protocol.SliceQuery{HasOwner: true, Owner: "alice", Limit: 10}, 102); got.TotalCount != 1 || got.Slices[0].SliceID != alpha.AssetID || got.AssignedTasks != 0 || got.UnassignedTasks != 0 {
 		t.Fatalf("owner filter: %+v", got)

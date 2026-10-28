@@ -1386,6 +1386,8 @@ ListTaskSlicesRequest :: struct {
 	cursor_sort_at:  i64,
 	cursor_slice_id: AssetID,
 	correlation_id:  u32,
+	// Optional trailing exact project filter; absent in older requests.
+	project:         []byte,
 }
 
 parseListTaskSlicesRequest :: proc(data: []byte) -> (result: ListTaskSlicesRequest, err: ProtocolParseError) {
@@ -1425,7 +1427,7 @@ parseListTaskSlicesRequest :: proc(data: []byte) -> (result: ListTaskSlicesReque
 	result.has_cursor = data[offset] == 1
 	offset += 1
 	expected := offset + (result.has_cursor ? 17 : 0) + 4
-	if len(data) != expected do return result, .ContentLengthMismatch
+	if len(data) < expected do return result, .ContentLengthMismatch
 	if result.has_cursor {
 		if data[offset] > 1 do return result, .InvalidValue
 		result.cursor_closed = data[offset] == 1
@@ -1442,6 +1444,16 @@ parseListTaskSlicesRequest :: proc(data: []byte) -> (result: ListTaskSlicesReque
 	correlation_id, correlation_ok := endian.get_u32(data[offset:], .Big)
 	if !correlation_ok do return result, .TooShort
 	result.correlation_id = correlation_id
+	offset += 4
+	if offset < len(data) {
+		project_len, project_ok := endian.get_u16(data[offset:], .Big)
+		if !project_ok do return result, .TooShort
+		offset += 2
+		if int(project_len) > MAX_PROJECT_LENGTH do return result, .InvalidValue
+		if offset + int(project_len) != len(data) do return result, .ContentLengthMismatch
+		result.project = data[offset:]
+		if !utf8.valid_string(string(result.project)) do return result, .InvalidValue
+	}
 	return result, nil
 }
 

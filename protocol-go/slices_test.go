@@ -65,6 +65,13 @@ func TestEncodeListTaskSlices(t *testing.T) {
 	if binary.BigEndian.Uint32(filtered[offset+18:]) != 9 {
 		t.Fatalf("correlation id not encoded: %x", filtered)
 	}
+	project := EncodeListTaskSlices(12, SliceQuery{
+		Project: "NRC", Limit: 50, Cursor: &SliceCursor{SliceID: 77},
+	}, 9)
+	if len(project) != 44 || binary.BigEndian.Uint32(project[35:]) != 9 ||
+		binary.BigEndian.Uint16(project[39:]) != 3 || string(project[41:]) != "NRC" {
+		t.Fatalf("project extension not encoded after cursor and correlation: %x", project)
+	}
 }
 
 func writeSlice(buf *bytes.Buffer, slice TaskSlice) {

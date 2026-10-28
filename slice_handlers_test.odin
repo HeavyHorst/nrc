@@ -210,6 +210,92 @@ slice_test_query :: proc(include_closed := false) -> Slice_Query {
 	return {include_closed = include_closed, limit = pr.MAX_TASK_SLICE_COUNT, with_work_counters = true}
 }
 
+@(test)
+test_slice_project_filter_preserves_whole_slices :: proc(t: ^testing.T) {
+	conv: Conversation_State
+	slice_test_state(&conv)
+	defer slice_test_destroy(&conv)
+	assets := [?]pr.Asset {
+		slice_test_slice_asset(71, `{"version":1,"name":"Mixed","owner":"anke"}`),
+		slice_test_slice_asset(72, `{"version":1,"name":"Notes","owner":"anke"}`),
+		slice_test_slice_asset(73, `{"version":1,"name":"Not members"}`, 99000),
+		slice_test_slice_asset(74, `{"version":1,"name":"Empty"}`, 98000),
+		slice_test_slice_asset(75, `{"version":1,"name":"Closed","closed":true}`),
+		{asset_id = 81, asset_type = .Note, preview = slice_test_bytes(`{"project":"NRC"}`), updated_at = 5000},
+		{asset_id = 82, asset_type = .File, preview = slice_test_bytes(`{"category":"NRC","project":"NRC"}`), updated_at = 9000},
+		{asset_id = 83, asset_type = .Ticket, preview = slice_test_bytes(`{"project":"NRC"}`)},
+	}
+	for &asset in assets do slice_test_add_asset(&conv, &asset)
+	tasks := [?]pr.Task {
+		{id = 1, status = .Todo, project = slice_test_bytes("NRC"), created_at = 100, updated_at = 3000},
+		{id = 2, status = .InProgress, project = slice_test_bytes("srv"), created_at = 50, updated_at = 8000, blocked_by = 1},
+		{id = 3, status = .Note, project = slice_test_bytes("NRC")},
+	}
+	for &task in tasks do slice_test_add_task(&conv, &task)
+	slice_test_member_of(&conv, .Task, 1, 71)
+	slice_test_member_of(&conv, .Task, 2, 71)
+	slice_test_member_of(&conv, .Asset, 82, 71)
+	slice_test_member_of(&conv, .Asset, 81, 72)
+	// Reverse membership direction is equally valid.
+	edge := conv.edges[pr.EdgeID(len(conv.edges))]
+	edge.source_type = .Asset; edge.source_id = 72
+	edge.target_type = .Asset; edge.target_id = 81
+	slice_test_member_of(&conv, .Task, 1, 73, .RelatedTo)
+	slice_test_member_of(&conv, .Task, 3, 73)
+	slice_test_member_of(&conv, .Asset, 82, 73)
+	slice_test_member_of(&conv, .Asset, 83, 73)
+	slice_test_member_of(&conv, .Asset, 72, 73) // No transitive project inference.
+	slice_test_member_of(&conv, .Task, 1, 75)
+	slices := make([dynamic]pr.TaskSlice)
+	defer delete(slices)
+	assigned := make(map[pr.TaskID]struct{})
+	defer delete(assigned)
+	query := Slice_Query {
+		project = "NRC",
+		limit   = 1,
+	}
+	page := collect_task_slices(&conv, query, &slices, &assigned, context.temp_allocator)
+	testing.expect_value(t, page.total_count, u32(2))
+	testing.expect(t, page.has_more)
+	testing.expect_value(t, len(slices), 1)
+	if len(slices) != 1 do return
+	testing.expect_value(t, slices[0].slice_id, pr.AssetID(71))
+	testing.expect_value(t, slices[0].todo, u16(1))
+	testing.expect_value(t, slices[0].in_progress, u16(1))
+	testing.expect_value(t, slices[0].blocked, u16(1))
+	testing.expect_value(t, slices[0].files, u16(1))
+	testing.expect_value(t, slices[0].oldest_active_at, i64(50))
+	testing.expect_value(t, slices[0].last_moved_at, i64(9000))
+	testing.expect_value(t, page.assigned_tasks, u32(0))
+	testing.expect_value(t, page.unassigned_tasks, u32(0))
+	query.has_cursor = true
+	query.cursor_sort_at = page.next_cursor.sort_at
+	query.cursor_slice_id = page.next_cursor.slice_id
+	clear(&slices)
+	page = collect_task_slices(&conv, query, &slices, &assigned, context.temp_allocator)
+	testing.expect_value(t, page.total_count, u32(2))
+	testing.expect(t, !page.has_more)
+	if testing.expect_value(t, len(slices), 1) do testing.expect_value(t, slices[0].slice_id, pr.AssetID(72))
+	expected_counts := [4]u32{1, 0, 0, 4}
+	for project, expected in ([?]string{"srv", "nrc", "NR", ""}) {
+		clear(&slices)
+		page = collect_task_slices(&conv, {project = project, limit = 100}, &slices, nil, context.temp_allocator)
+		testing.expect_value(t, page.total_count, expected_counts[expected])
+	}
+	clear(&slices)
+	page = collect_task_slices(
+		&conv,
+		{project = "NRC", include_closed = true, limit = 100, has_owner = true, owner = "anke", has_name = true, name = "NOTE"},
+		&slices,
+		nil,
+		context.temp_allocator,
+	)
+	testing.expect_value(t, page.total_count, u32(1))
+	clear(&slices)
+	page = collect_task_slices(&conv, {project = "NRC", include_closed = true, limit = 100}, &slices, nil, context.temp_allocator)
+	testing.expect_value(t, page.total_count, u32(3))
+}
+
 slice_test_slice_by_name :: proc(slices: []pr.TaskSlice, name: string) -> (pr.TaskSlice, bool) {
 	for entry in slices do if string(entry.name) == name do return entry, true
 	return {}, false
@@ -734,7 +820,35 @@ test_list_task_slices_request_parse :: proc(t: ^testing.T) {
 	long := [23]byte{}
 	copy(long[:], body[:])
 	_, long_err := pr.parseListTaskSlicesRequest(long[:])
-	testing.expect_value(t, long_err, pr.ProtocolParseError.ContentLengthMismatch)
+	testing.expect_value(t, long_err, pr.ProtocolParseError.TooShort)
+}
+
+@(test)
+test_list_task_slices_project_wire :: proc(t: ^testing.T) {
+	request := pr.ListTaskSlicesRequest {
+		limit           = 100,
+		project         = slice_test_bytes("NRC"),
+		correlation_id  = 7,
+		has_cursor      = true,
+		cursor_slice_id = 71,
+		cursor_sort_at  = 9000,
+	}
+	buf := make([]byte, pr.getSizeListTaskSlicesRequest(request))
+	defer delete(buf)
+	testing.expect_value(t, pr.serializeListTaskSlicesRequest(request, buf), len(buf))
+	parsed, err := pr.parseListTaskSlicesRequest(buf[2:])
+	testing.expect_value(t, err, pr.ProtocolParseError.None)
+	testing.expect_value(t, string(parsed.project), "NRC")
+	testing.expect_value(t, parsed.correlation_id, u32(7))
+	testing.expect_value(t, parsed.cursor_slice_id, pr.AssetID(71))
+	_, short_err := pr.parseListTaskSlicesRequest(buf[2:len(buf) - 1])
+	testing.expect_value(t, short_err, pr.ProtocolParseError.ContentLengthMismatch)
+	buf[len(buf) - 1] = 0xFF
+	_, utf8_err := pr.parseListTaskSlicesRequest(buf[2:])
+	testing.expect_value(t, utf8_err, pr.ProtocolParseError.InvalidValue)
+	endian.put_u16(buf[len(buf) - 5:], .Big, pr.MAX_PROJECT_LENGTH + 1)
+	_, length_err := pr.parseListTaskSlicesRequest(buf[2:])
+	testing.expect_value(t, length_err, pr.ProtocolParseError.InvalidValue)
 }
 
 @(test)

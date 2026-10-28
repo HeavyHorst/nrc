@@ -992,6 +992,7 @@ type SliceQuery struct {
 	Owner         string
 	HasName       bool
 	Name          string
+	Project       string // Exact structured project of at least one direct member.
 	Limit         uint16
 	Cursor        *SliceCursor
 }
@@ -1002,6 +1003,9 @@ func EncodeListTaskSlices(convID uint64, query SliceQuery, correlationID uint32)
 	owner := []byte(query.Owner)
 	name := []byte(query.Name)
 	size := 22 + len(owner) + len(name)
+	if query.Project != "" {
+		size += 2 + len(query.Project)
+	}
 	if query.Cursor != nil {
 		size += 17
 	}
@@ -1042,6 +1046,11 @@ func EncodeListTaskSlices(convID uint64, query SliceQuery, correlationID uint32)
 		offset++
 	}
 	binary.BigEndian.PutUint32(payload[offset:], correlationID)
+	offset += 4
+	if query.Project != "" {
+		binary.BigEndian.PutUint16(payload[offset:], uint16(len(query.Project)))
+		copy(payload[offset+2:], query.Project)
+	}
 	return payload
 }
 

@@ -203,6 +203,7 @@
       state = { mode: "idle", roomId: null, tasks: new Map(), hasMore: false, total: 0 };
     }
     return { update, loadMore, requestPage, afterMutation, handlePage, handleProjects, handleAssignees, disconnect,
+      requestProjects,
       requestMetadata: () => { requestProjects({ force: true }); requestAssignees({ force: true }); },
       getAssignees: () => assignees || [],
       getState: () => state, getProjects: (roomId) => projects.get(BigInt(roomId)) };
@@ -226,7 +227,7 @@
       if (scopedPage) taskListDirty = true;
       else invalidateTaskList(roomId);
     },
-    onProjects: () => populateProjectFilter(),
+    onProjects: () => { populateProjectFilter(); window.NRCSlices?.syncProjectFilter(); },
     onAssignees: () => populateAssigneeFilter(),
     onChange: () => {
       invalidateTaskList(0n);

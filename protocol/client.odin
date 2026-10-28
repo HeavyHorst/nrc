@@ -1833,13 +1833,14 @@ serializeListTaskProjectsRequest :: proc(conv_id: ConversationID, correlation_id
 getSizeListTaskSlicesRequest :: proc(req: ListTaskSlicesRequest) -> int {
 	size := 2 + 8 + 1 + 1 + 2 + len(req.owner) + 1 + 2 + len(req.name) + 2 + 1 + 4
 	if req.has_cursor do size += 17
+	if len(req.project) > 0 do size += 2 + len(req.project)
 	return size
 }
 
 serializeListTaskSlicesRequest :: proc(req: ListTaskSlicesRequest, buf: []byte) -> int {
 	total_size := getSizeListTaskSlicesRequest(req)
 	if len(buf) < total_size do return -1
-	if len(req.owner) > MAX_ASSIGNEE_LENGTH || len(req.name) > MAX_PROJECT_LENGTH do return -1
+	if len(req.owner) > MAX_ASSIGNEE_LENGTH || len(req.name) > MAX_PROJECT_LENGTH || len(req.project) > MAX_PROJECT_LENGTH do return -1
 
 	offset := 0
 	endian.put_u16(buf[offset:], .Big, u16(Opcode.C_ListTaskSlices)); offset += 2
@@ -1859,6 +1860,11 @@ serializeListTaskSlicesRequest :: proc(req: ListTaskSlicesRequest, buf: []byte) 
 		endian.put_u64(buf[offset:], .Big, u64(req.cursor_slice_id)); offset += 8
 	}
 	endian.put_u32(buf[offset:], .Big, req.correlation_id)
+	offset += 4
+	if len(req.project) > 0 {
+		endian.put_u16(buf[offset:], .Big, u16(len(req.project))); offset += 2
+		copy(buf[offset:], req.project)
+	}
 	return total_size
 }
 
