@@ -316,9 +316,10 @@ nothing, it retries from the root with checked prefix propagation. This targets
 deletion of existing keys; absent keys may pay for two descents. `get`, `set`,
 and lower-bound searches never use the optimistic path.
 
-NRC's title, project, and assignee task indexes always use the text cache.
-There is no uncached text-index configuration. Comparator fallback for unsupported
-text query forms and collisions remains necessary for correctness.
+NRC's title task indexes use the text cache. Project and assignee ordering use
+uncached nodes: paired benchmarks favored ordinary search for these orders,
+especially on smaller trees with few distinct names. Comparator fallback for
+unsupported text query forms and collisions remains necessary for cached indexes.
 
 ## Numeric Search
 

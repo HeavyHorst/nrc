@@ -672,7 +672,7 @@ test_task_query_order_filters_cursor_and_indexes :: proc(t: ^testing.T) {
 			for {
 				page := make([dynamic]pr.Task)
 				page_result := collect_task_query_page(&conv, reference_req, &page)
-				expected_cache := [8]btree.Cache_Mode{.Numeric, .Numeric, .Text, .None, .Numeric, .Text, .Numeric, .Text}
+				expected_cache := [8]btree.Cache_Mode{.Numeric, .Numeric, .None, .None, .Numeric, .Text, .Numeric, .None}
 				expected_projection := [8]Task_Numeric_Projection{.Enum_Value, .Enum_Value, .Time, .Time, .Time, .Time, .Enum_Value, .Time}
 				testing.expect_value(t, conv.task_query_indexes.trees[sort_kind][direction].cache, expected_cache[sort_kind])
 				testing.expect_value(t, conv.task_query_indexes.trees[sort_kind][direction].projection, expected_projection[sort_kind])

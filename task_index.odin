@@ -158,7 +158,7 @@ task_query_index_set_ensure_order :: proc(
 	if set.initialized[sort_index][direction] do return &set.trees[sort_index][direction]
 	cache: btree.Cache_Mode = .None
 	projection: Task_Numeric_Projection = .Time
-	if sort_kind == .Title || sort_kind == .Project || sort_kind == .Assignee do cache = .Text
+	if sort_kind == .Title do cache = .Text
 	if sort_kind == .CreatedAt do cache = .Numeric
 	if sort_kind == .Priority || sort_kind == .Status || sort_kind == .Color {
 		cache = .Numeric
