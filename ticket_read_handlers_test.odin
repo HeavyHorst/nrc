@@ -154,7 +154,9 @@ test_ticket_scratch_bookkeeping_allocation_failure :: proc(t: ^testing.T) {
 		out_band_size = 4096,
 	)
 	m: Ticket_Metadata
-	testing.expect(t, ticket_metadata_read(transmute([]byte)string(`{"kind":"public_reply"}`), &m, mem.dynamic_arena_allocator(&scratch)))
+	// Decode a field owned by Ticket_Metadata; unknown fields need no scratch.
+	testing.expect(t, ticket_metadata_read(transmute([]byte)string(`{"title":"Ticket"}`), &m, mem.dynamic_arena_allocator(&scratch)))
+	testing.expect_value(t, m.title, "Ticket")
 	// The block decode succeeded. The tracking-array allocation on destruction
 	// must fail-stop rather than silently lose the block pointer.
 	mem.dynamic_arena_destroy(&scratch)
