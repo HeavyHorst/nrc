@@ -1969,6 +1969,7 @@ body.sullivan-workbench #logOutput .ai-run-row .message-meta {
 .task-reference[data-reference-type="task"]::before { content: "☑"; }
 .task-reference[data-reference-type="note"]::before { content: "▤"; }
 .task-reference[data-reference-type="file"]::before { content: "▱"; }
+.task-reference[data-reference-presentation="citation"]::before { content: none; }
 .task-reference[data-nrc-reference]:focus-visible { outline: 2px solid var(--identity-reference); outline-offset: 2px; }
 
 .message-copy-actions { display: flex; align-items: center; flex-shrink: 0; gap: 2px; color: var(--text-dim); }
