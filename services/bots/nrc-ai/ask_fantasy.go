@@ -15,6 +15,7 @@ import (
 	"charm.land/fantasy/providers/openai"
 	"charm.land/fantasy/providers/openaicompat"
 	"charm.land/fantasy/providers/openrouter"
+	"github.com/charmbracelet/openai-go/option"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/session"
@@ -74,14 +75,19 @@ func newFantasyLanguageModel(ctx context.Context, cfg Config) (fantasy.LanguageM
 		return nil, fmt.Errorf("LLM_MODEL is required for ask engine")
 	}
 
-	provider, err := newFantasyProvider(providerName, cfg.LLMAPIKey, cfg.LLMBaseURL)
+	provider, err := newFantasyProvider(providerName, cfg.LLMAPIKey, cfg.LLMBaseURL, cfg.LLMServiceTier)
 	if err != nil {
 		return nil, err
 	}
 	return provider.LanguageModel(ctx, modelName)
 }
 
-func newFantasyProvider(providerName, apiKey, baseURL string) (fantasy.Provider, error) {
+func openAIUsesResponses(model string) bool {
+	return model == "gpt-5.6" || strings.HasPrefix(model, "gpt-5.6-") ||
+		model == "gpt-6" || strings.HasPrefix(model, "gpt-6-") || strings.HasPrefix(model, "gpt-6.")
+}
+
+func newFantasyProvider(providerName, apiKey, baseURL, serviceTier string) (fantasy.Provider, error) {
 	switch providerName {
 	case "openai", "":
 		if apiKey == "" {
@@ -90,10 +96,10 @@ func newFantasyProvider(providerName, apiKey, baseURL string) (fantasy.Provider,
 		opts := []openai.Option{
 			openai.WithAPIKey(apiKey),
 			openai.WithUseResponsesAPI(),
-			openai.WithResponsesAPIFunc(func(modelID string) bool {
-				return modelID == "gpt-5.6" || strings.HasPrefix(modelID, "gpt-5.6-") ||
-					modelID == "gpt-6" || strings.HasPrefix(modelID, "gpt-6-")
-			}),
+			openai.WithResponsesAPIFunc(openAIUsesResponses),
+		}
+		if serviceTier != "" {
+			opts = append(opts, openai.WithSDKOptions(option.WithJSONSet("service_tier", serviceTier)))
 		}
 		if baseURL != "" {
 			opts = append(opts, openai.WithBaseURL(baseURL))

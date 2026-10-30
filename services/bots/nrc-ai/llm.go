@@ -109,14 +109,16 @@ func NewLLM(provider, model, apiKey, baseURL string) (LLM, error) {
 // OpenAI
 
 type OpenAILLM struct {
-	client *http.Client
-	apiKey string
-	model  string
-	url    string
+	client      *http.Client
+	apiKey      string
+	model       string
+	url         string
+	serviceTier string
 }
 
 type openAIRequest struct {
 	Model          string         `json:"model"`
+	ServiceTier    string         `json:"service_tier,omitempty"`
 	Messages       []openAIMsg    `json:"messages"`
 	ResponseFormat *openAIRespFmt `json:"response_format,omitempty"`
 }
@@ -151,8 +153,9 @@ func (o *OpenAILLM) Complete(ctx context.Context, req CompletionRequest) (Comple
 	}
 
 	body := openAIRequest{
-		Model:    o.model,
-		Messages: msgs,
+		Model:       o.model,
+		ServiceTier: o.serviceTier,
+		Messages:    msgs,
 	}
 	if req.JSON {
 		body.ResponseFormat = &openAIRespFmt{Type: "json_object"}

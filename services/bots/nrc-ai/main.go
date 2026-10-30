@@ -25,6 +25,7 @@ type Config struct {
 	LLMModel           string
 	LLMAPIKey          string
 	LLMBaseURL         string
+	LLMServiceTier     string
 	SearchURL          string
 	FilesURL           string
 	SourcebotURL       string
@@ -45,6 +46,7 @@ func loadConfig() Config {
 		LLMModel:        envOrDefault("LLM_MODEL", "gpt-4o-mini"),
 		LLMAPIKey:       os.Getenv("LLM_API_KEY"),
 		LLMBaseURL:      os.Getenv("LLM_BASE_URL"),
+		LLMServiceTier:  os.Getenv("LLM_SERVICE_TIER"),
 		SearchURL:       envOrDefault("SEARCH_URL", "http://localhost:8090"),
 		FilesURL:        os.Getenv("FILES_URL"),
 		SourcebotURL:    os.Getenv("SOURCEBOT_URL"),
@@ -262,6 +264,9 @@ func main() {
 		slog.Error("failed to initialize LLM", "error", err)
 		os.Exit(1)
 	}
+	if openaiLLM, ok := llm.(*OpenAILLM); ok && cfg.LLMProvider == "openai" {
+		openaiLLM.serviceTier = cfg.LLMServiceTier
+	}
 	slog.Info("LLM initialized", "provider", cfg.LLMProvider, "model", cfg.LLMModel)
 
 	search := NewSearchClient(cfg.SearchURL)
@@ -318,6 +323,7 @@ func main() {
 		Status      string `json:"status"`
 		LLMProvider string `json:"llm_provider"`
 		LLMModel    string `json:"llm_model"`
+		ServiceTier string `json:"llm_service_tier,omitempty"`
 		Sourcebot   bool   `json:"sourcebot_enabled"`
 		Uptime      string `json:"uptime"`
 	}
@@ -328,6 +334,7 @@ func main() {
 			Status:      "ok",
 			LLMProvider: cfg.LLMProvider,
 			LLMModel:    cfg.LLMModel,
+			ServiceTier: cfg.LLMServiceTier,
 			Sourcebot:   sourcebot != nil,
 			Uptime:      time.Since(startTime).Round(time.Second).String(),
 		})

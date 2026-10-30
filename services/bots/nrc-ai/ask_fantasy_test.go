@@ -28,6 +28,53 @@ type timingTestModel struct {
 	err      error
 }
 
+func TestOpenAIServiceTierRequests(t *testing.T) {
+	for _, tier := range []string{"", "fast"} {
+		for _, modelName := range []string{"gpt-6.1-terra", "gpt-6-luna", "gpt-4o"} {
+			t.Run(modelName+"/"+tier, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					if body["model"] != modelName || (tier != "" && body["service_tier"] != tier) || (tier == "" && body["service_tier"] != nil) {
+						t.Errorf("unexpected model/tier: %v", body)
+					}
+					w.Header().Set("Content-Type", "application/json")
+					if modelName == "gpt-4o" {
+						if r.URL.Path != "/chat/completions" {
+							t.Errorf("wrong API: %s", r.URL.Path)
+						}
+						fmt.Fprint(w, `{"choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}`)
+					} else {
+						if r.URL.Path != "/responses" {
+							t.Errorf("wrong API: %s", r.URL.Path)
+						}
+						fmt.Fprint(w, `{"id":"fixture","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}]}`)
+					}
+				}))
+				defer server.Close()
+				t.Setenv("LLM_SERVICE_TIER", tier)
+				cfg := loadConfig()
+				cfg.LLMProvider, cfg.LLMModel, cfg.LLMAPIKey, cfg.LLMBaseURL = "openai", modelName, "test-only", server.URL
+				model, err := newFantasyLanguageModel(t.Context(), cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response, err := model.Generate(t.Context(), fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("Reply OK")}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response.Content.Text() != "OK" {
+					t.Errorf("unexpected response: %+v", response)
+				}
+			})
+		}
+	}
+}
+
 func (m timingTestModel) Generate(context.Context, fantasy.Call) (*fantasy.Response, error) {
 	time.Sleep(15 * time.Millisecond)
 	return m.response, m.err

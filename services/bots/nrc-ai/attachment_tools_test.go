@@ -137,6 +137,7 @@ func TestPrivateMediaDownloadAndCapabilities(t *testing.T) {
 		want                  bool
 	}{
 		{"openai", "gpt-6", "audio/wav", false}, {"openai", "gpt-4o", "audio/wav", true},
+		{"openai", "gpt-6.1-terra", "audio/wav", false}, {"openai", "gpt-6.1-terra", "image/png", true},
 		{"anthropic", "claude", "image/png", true}, {"anthropic", "claude", "audio/mpeg", false},
 		{"openrouter", "any", "image/png", false}, {"deepseek", "any", "image/png", false},
 		{"openai-compat", "any", "image/png", true}, {"openai", "gpt-4o", "application/pdf", false},

@@ -227,7 +227,7 @@ func toolMediaSupported(cfg Config, mime string) bool {
 	case "anthropic":
 		return image
 	case "openai", "":
-		responses := cfg.LLMModel == "gpt-5.6" || strings.HasPrefix(cfg.LLMModel, "gpt-5.6-") || cfg.LLMModel == "gpt-6" || strings.HasPrefix(cfg.LLMModel, "gpt-6-")
+		responses := openAIUsesResponses(cfg.LLMModel)
 		return image || (audio && !responses)
 	case "openai-compat", "openaicompat", "mistral", "ollama":
 		return image || audio
