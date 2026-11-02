@@ -1719,6 +1719,8 @@
           aiRunId,
           aiQuestion: question,
           aiAnswer: (data.answer || "").trim(),
+          aiKnowledgeGapSliceId: data.knowledge_gap_slice_id || null,
+          aiWorkspace: requestBody.workspace,
           aiMode: mode,
           aiRunStatus: "complete",
           suppressNotification: true,
@@ -2830,6 +2832,85 @@
     return result;
   }
 
+  async function openKnowledgeGapDraft(messageData, button) {
+    if (messageData.aiKnowledgeGapState || document.querySelector(".knowledge-gap-dialog")) return;
+    const workspace = messageData.aiWorkspace;
+    if (workspace !== currentWorkspaceId) return;
+    const view = window.NRCModal.create({ title: "WISSENSLÜCKE ERFASSEN", className: "new-task-dialog knowledge-gap-dialog" });
+    const fields = document.createElement("div");
+    fields.className = "detail-edit-grid";
+    fields.innerHTML = `
+      <p class="nrc-dialog-message" data-target></p>
+      <label class="detail-edit-field"><span class="detail-edit-label">Titel</span><input class="task-detail-input" name="title"></label>
+      <label class="detail-edit-field"><span class="detail-edit-label">Beschreibung</span><textarea class="task-detail-textarea" name="description" rows="7"></textarea></label>
+      <p class="nrc-dialog-message">Die Aufgabe ist im Workspace sichtbar. Bitte sensible Angaben vor dem Anlegen entfernen. Der Chat-Verlauf wird nicht übernommen.</p>
+      <p class="nrc-dialog-message" role="status">Ziel-Slice wird geprüft…</p>`;
+    view.panel.insertBefore(fields, view.actions);
+    const title = fields.querySelector("input");
+    const description = fields.querySelector("textarea");
+    const status = fields.querySelector("[role=status]");
+    title.value = truncateUtf8(messageData.aiQuestion, 256);
+    description.value = truncateUtf8(`Offene Frage:\n${messageData.aiQuestion}\n\nZiel: Antwort klären, als Wissensnotiz dokumentieren und diese mit der Aufgabe verknüpfen.\n\nZusätzlicher Kontext (optional):`, MAX_TASK_DESCRIPTION_LENGTH);
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn btn--ghost";
+    cancel.textContent = "Abbrechen";
+    cancel.onclick = () => view.cancel();
+    const submit = document.createElement("button");
+    submit.type = "button";
+    submit.className = "btn btn--primary";
+    submit.textContent = "Aufgabe anlegen";
+    submit.disabled = true;
+    view.actions.append(cancel, submit);
+    view.show();
+    let pending = false;
+    view.canClose = () => !pending;
+    try {
+      const [slice] = await window.NRCAssets.requestAssetsByIds(0n, [messageData.aiKnowledgeGapSliceId], { force: true });
+      if (!view.root.isConnected) return;
+      if (workspace !== currentWorkspaceId) throw new Error("Workspace gewechselt. Bitte den Entwurf schließen.");
+      if (!slice || slice.assetType !== window.NRCAssets.AssetType.Slice) throw new Error("Der konfigurierte Ziel-Slice ist nicht verfügbar. Bitte die Workspace-Konfiguration prüfen.");
+      const preview = JSON.parse(slice.preview);
+      if (preview.closed) throw new Error("Der konfigurierte Ziel-Slice ist geschlossen.");
+      fields.querySelector("[data-target]").textContent = `Workspace ${workspace} · Slice #${slice.assetId} · ${preview.name || "Knowledge Gaps"}`;
+      status.textContent = "Entwurf prüfen und bei Bedarf ergänzen.";
+      submit.disabled = false;
+    } catch (error) {
+      status.textContent = error.message;
+    }
+    submit.onclick = () => {
+      if (pending || messageData.aiKnowledgeGapState || workspace !== currentWorkspaceId) return;
+      pending = true;
+      messageData.aiKnowledgeGapState = "pending";
+      for (const control of [title, description, submit, cancel, button]) control.disabled = true;
+      status.textContent = "Aufgabe und Slice-Zuordnung werden gespeichert…";
+      let timer;
+      const finish = (text, state) => {
+        clearTimeout(timer);
+        pending = false;
+        messageData.aiKnowledgeGapState = state;
+        status.textContent = text;
+        cancel.disabled = false;
+        cancel.textContent = "Schließen";
+        if (!state) for (const control of [title, description, submit, button]) control.disabled = false;
+      };
+      try {
+        timer = setTimeout(() => finish("Bestätigung ausstehend. Vor einem erneuten Versuch die Aufgabenliste prüfen.", "unknown"), 30000);
+        const sent = window.NRCTransactions.sendCreateSliceTask(title.value.trim(), description.value, messageData.aiKnowledgeGapSliceId, {
+          onSuccess: ({ taskId }) => {
+            finish(`Aufgabe #${taskId} wurde im Ziel-Slice angelegt.`, "created");
+            button.textContent = `Wissenslücke erfasst · #${taskId}`;
+            window.NRCSlices?.invalidate?.();
+          },
+          onError: error => finish(error.message, error.uncertain ? "unknown" : null),
+        });
+        if (!sent) finish("Nicht verbunden. Es wurde keine Anfrage gesendet.", null);
+      } catch (error) {
+        finish(error.message, null);
+      }
+    };
+  }
+
   function renderResponseActions(root, messageData) {
     if (!messageData?.aiRunId || !messageData.aiAnswer || !messageData.aiQuestion ||
         messageData.aiContextRoomId == null || messageData.roomId == null || messageData.aiRunStatus !== "complete") return;
@@ -2871,6 +2952,18 @@
       button.addEventListener("click", () => { more.open = false; });
       target.appendChild(button);
     };
+    if (messageData.aiKnowledgeGapSliceId && messageData.aiWorkspace === currentWorkspaceId) {
+      const gap = document.createElement("button");
+      gap.type = "button";
+      gap.className = "btn";
+      gap.textContent = messageData.aiKnowledgeGapState ? "Wissenslücke bereits gesendet" : "Wissenslücke erfassen";
+      gap.disabled = !!messageData.aiKnowledgeGapState;
+      gap.onclick = () => openKnowledgeGapDraft(messageData, gap);
+      const gapActions = document.createElement("div");
+      gapActions.className = "ai-preview-actions";
+      gapActions.append(gap);
+      root.append(gapActions);
+    }
     const feedback = (text, error = false) => logWorkbenchMessage(
       error ? "Error" : "CommandResult",
       text,

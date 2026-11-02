@@ -948,6 +948,7 @@ func handleAskFantasy(wm *WorkspaceManager, search *SearchClient, sourcebot *Sou
 		recordToolTrace(ctx, "search_assets", started, workspace, convID, traceArgs, map[string]any{
 			"result_count": len(results),
 			"limit_used":   limit,
+			"stale":        out.Stale,
 		}, nil)
 
 		return out, nil
@@ -1157,6 +1158,7 @@ func handleAskFantasy(wm *WorkspaceManager, search *SearchClient, sourcebot *Sou
 		taskSourceCache.put(workspace, convID, titles)
 		recordToolTrace(ctx, "search_tasks", started, workspace, convID, traceArgs, map[string]any{
 			"result_count": len(out.Results), "limit_used": limit, "source": out.Source, "complete": out.Complete,
+			"stale": out.Warning != "",
 		}, nil)
 
 		return out, nil
@@ -2000,6 +2002,7 @@ When useful, structure your response with these sections in order:
 
 Do not hide uncertainty; name it explicitly in Gaps.
 If context is insufficient, say so clearly and ask for the minimum missing input.
+When successful research leaves a concrete factual question unanswered because knowledge is missing, call report_knowledge_gap to offer a user-reviewed task draft. Do not call it for technical failures, permission errors, ambiguous questions, partial searches or refusals. Never claim that a task was created by this tool.
 Do not prepend speaker labels or role prefixes to the answer body.`
 	if sourcebot != nil {
 		askSystemPrompt += `
@@ -2030,6 +2033,7 @@ Sourcebot code research:
 	fantasyTools = append(fantasyTools, newAttachmentTools(wm, search, cfg)...)
 	fantasyTools = append(fantasyTools, newTicketTools(wm, agentSessions)...)
 	fantasyTools = append(fantasyTools, newTicketGroupTools(wm, agentSessions)...)
+	fantasyTools = append(fantasyTools, newKnowledgeGapTool())
 
 	askAgent := fantasy.NewAgent(timedAskModel{fantasyModel},
 		fantasy.WithSystemPrompt(askSystemPrompt),
@@ -2199,14 +2203,15 @@ Sourcebot code research:
 		}
 		sources := sourcesFromAnswerRefs(answerText, sourceTasks, assetTitles)
 		result := askResponse{
-			Answer:             answerText,
-			Sources:            sources,
-			SessionID:          sessionSnapshot.ID,
-			AgentSessionID:     sessionSnapshot.ID,
-			Mode:               req.Mode,
-			ProposedActions:    proposedActions,
-			PendingActionCount: len(proposedActions),
-			HistoryTurns:       len(history),
+			Answer:              answerText,
+			Sources:             sources,
+			SessionID:           sessionSnapshot.ID,
+			AgentSessionID:      sessionSnapshot.ID,
+			Mode:                req.Mode,
+			ProposedActions:     proposedActions,
+			PendingActionCount:  len(proposedActions),
+			HistoryTurns:        len(history),
+			KnowledgeGapSliceID: knowledgeGapSlice(cfg.KnowledgeGapSlices, req.Workspace, toolTrace),
 		}
 		if activePlan.ID != "" && len(proposedActions) > 0 {
 			result.PlanID = activePlan.ID

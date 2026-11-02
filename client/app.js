@@ -4973,6 +4973,8 @@ function logMessage(type, message, roomId = null, metadata = {}) {
     aiRunId: metadata.aiRunId || null,
     aiQuestion: metadata.aiQuestion || null,
     aiAnswer: metadata.aiAnswer || null,
+    aiKnowledgeGapSliceId: metadata.aiKnowledgeGapSliceId || null,
+    aiWorkspace: metadata.aiWorkspace || null,
     aiMode: metadata.aiMode || null,
     aiRunStatus: metadata.aiRunStatus || null,
     systemLevel: metadata.systemLevel || metadata.level || null,

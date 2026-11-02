@@ -276,6 +276,7 @@ These are standalone defaults. Compose overrides service addresses and the nickn
 | `NRC_SERVER` | `ws://localhost:8080` | NRC WebSocket endpoint |
 | `NRC_BOT_SECRET` | None | Must match the server's bot secret |
 | `NRC_NICKNAME` | `Sullivan-{hostname}` | Bot nickname |
+| `NRC_KNOWLEDGE_GAP_SLICES` | Disabled | JSON object mapping exact workspace names to decimal slice ID strings, e.g. `{"team":"51","support":"82"}` |
 | `AI_PORT` | `8091` | Internal HTTP port |
 | `SEARCH_URL` | `http://localhost:8090` | Search endpoint |
 | `FILES_URL` | None | Private files endpoint for native attachment media reads |
@@ -289,6 +290,26 @@ These are standalone defaults. Compose overrides service addresses and the nickn
 | `SOURCEBOT_ALLOWED_REPOS` | None | Required with Sourcebot: exact repository names or explicit `*` |
 | `SOURCEBOT_API_KEY` | None | Optional `X-Sourcebot-Api-Key` credential |
 | `SOURCEBOT_BEARER_TOKEN` | None | Optional bearer credential |
+
+### Knowledge-gap tasks
+
+Create a slice in each workspace that needs this feature, then set
+`NRC_KNOWLEDGE_GAP_SLICES` on the AI service (Compose reads it from `.env`).
+Use stable IDs, not slice names. Unlisted workspaces have no gap-task button;
+invalid configuration stops startup. Restart the AI service after changing it.
+
+When Sullivan reports missing knowledge, the response can offer **Wissenslücke
+erfassen**. This is a model judgment, not proof that no answer exists. Tool errors
+suppress the offer; the model is also instructed not to classify incomplete
+searches, access failures or ambiguous questions as knowledge gaps.
+
+The button opens an editable title/description with the original question and a
+request to document the answer as a linked note. It does not copy the conversation
+or Sullivan's answer. The dialog warns that tasks are workspace-visible and checks
+that the configured slice still exists and is open. Confirmation creates the task
+and its `MemberOf` edge in one transaction through the user's connection. A failed
+membership write therefore cannot leave an orphan task. After an unknown outcome,
+check the task register before retrying; there is no automatic resubmission.
 
 ## Ask latency diagnostics
 

@@ -36,6 +36,7 @@ type Config struct {
 	NRCBotSecret       string
 	MaxContextTokens   int
 	LLMMaxOutputTokens int
+	KnowledgeGapSlices map[string]string
 }
 
 func loadConfig() Config {
@@ -84,6 +85,11 @@ func loadConfig() Config {
 	}
 	if cfg.LLMMaxOutputTokens == 0 {
 		cfg.LLMMaxOutputTokens = defaultMaxOutputTokens(cfg.LLMProvider, cfg.LLMModel)
+	}
+	cfg.KnowledgeGapSlices, err = parseKnowledgeGapSlices(os.Getenv("NRC_KNOWLEDGE_GAP_SLICES"))
+	if err != nil {
+		slog.Error("invalid knowledge-gap configuration", "error", err)
+		os.Exit(1)
 	}
 
 	return cfg

@@ -778,6 +778,68 @@ try {
   });
   assert.deepEqual(openedEntries, [{ type: "asset", assetType: 14, id: "700" }]);
   console.log("PASS: Sullivan typed task/slice/contact references, delayed title reads, uint64 IDs, unavailable fallback and stable citation numbers");
+  // Exercise the real ask response -> editable draft -> atomic wire request path.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.route("**/ask", route => route.fulfill({ json: {
+    answer: "Die Wiederherstellung ist nicht dokumentiert. PRIVATE ANSWER DETAIL",
+    sources: [], knowledge_gap_slice_id: "9007199254740993",
+  } }));
+  await page.evaluate(async () => {
+    window.gapPackets = [];
+    window.gapAssetsOriginal = NRCAssets.requestAssetsByIds;
+    window.gapSendOriginal = sendPacket;
+    NRCAssets.requestAssetsByIds = async () => [{ assetId: 9007199254740993n, assetType: AssetType.Slice, preview: JSON.stringify({ version: 1, name: "Knowledge Gaps" }) }];
+    sendPacket = packet => {
+      if (new DataView(packet).getUint16(0) === 27) window.gapPackets.push([...new Uint8Array(packet)]);
+      else window.gapSendOriginal(packet);
+    };
+    await NRCAI.openSullivanWithContext(0n, { focused: true });
+    await NRCAI.handleAsk("Wie stellen wir das Archiv wieder her?");
+  });
+  const gapButton = page.getByRole("button", { name: "Wissenslücke erfassen", exact: true });
+  await gapButton.click();
+  const gapDialog = page.locator("dialog:has(.knowledge-gap-dialog)");
+  assert.equal(await gapDialog.getByLabel("Titel", { exact: true }).inputValue(), "Wie stellen wir das Archiv wieder her?");
+  assert.ok(!(await gapDialog.getByLabel("Beschreibung").inputValue()).includes("PRIVATE ANSWER DETAIL"));
+  assert.match(await gapDialog.innerText(), /9007199254740993.*Knowledge Gaps/);
+  assert.equal(await page.evaluate(() => gapPackets.length), 0, "opening a draft never writes");
+  await gapDialog.getByRole("button", { name: "Abbrechen" }).click();
+  assert.equal(await page.evaluate(() => gapPackets.length), 0, "cancellation never writes");
+  await gapButton.click();
+  await gapDialog.getByLabel("Titel", { exact: true }).fill("Archiv: Wiederherstellung klären");
+  await gapDialog.getByLabel("Beschreibung").fill("Antwort mit Betrieb klären und als Notiz dokumentieren.");
+  await gapDialog.getByRole("button", { name: "Aufgabe anlegen" }).click();
+  assert.ok(await gapDialog.getByRole("button", { name: "Aufgabe anlegen" }).isDisabled());
+  assert.equal(await page.evaluate(() => gapPackets.length), 1);
+  const created = await page.evaluate(() => {
+    const view = new DataView(Uint8Array.from(gapPackets[0]).buffer);
+    const titleLen = view.getUint16(48);
+    const descriptionOffset = 50 + titleLen;
+    const title = new TextDecoder().decode(new Uint8Array(view.buffer, 50, titleLen));
+    const description = new TextDecoder().decode(new Uint8Array(view.buffer, descriptionOffset + 2, view.getUint16(descriptionOffset)));
+    const reply = new DataView(new ArrayBuffer(32));
+    reply.setUint16(0, 137); reply.setUint8(2, 1); reply.setUint32(4, view.getUint32(6));
+    reply.setUint16(8, 65535); reply.setUint16(10, 2);
+    reply.setUint8(12, 1); reply.setBigUint64(14, 812n);
+    reply.setUint8(22, 5); reply.setBigUint64(24, 913n);
+    NRCTransactions.handleTransactionApplied(reply);
+    return { title, description };
+  });
+  assert.deepEqual(created, { title: "Archiv: Wiederherstellung klären", description: "Antwort mit Betrieb klären und als Notiz dokumentieren." });
+  assert.match(await gapDialog.innerText(), /Aufgabe #812 wurde im Ziel-Slice angelegt/);
+  await gapDialog.getByRole("button", { name: "Schließen" }).click();
+  assert.ok(await page.getByRole("button", { name: "Wissenslücke erfasst · #812" }).isDisabled());
+  await page.evaluate(async () => {
+    NRCAssets.requestAssetsByIds = async () => [];
+    await NRCAI.handleAsk("Wer kennt die fehlenden Archiv-Schritte?");
+  });
+  await gapButton.click();
+  assert.match(await gapDialog.innerText(), /Ziel-Slice ist nicht verfügbar/);
+  assert.ok(await gapDialog.getByRole("button", { name: "Aufgabe anlegen" }).isDisabled());
+  assert.equal(await page.evaluate(() => gapPackets.length), 1, "missing destination cannot create an orphan");
+  await gapDialog.getByRole("button", { name: "Abbrechen" }).click();
+  await page.evaluate(() => { NRCAssets.requestAssetsByIds = gapAssetsOriginal; sendPacket = gapSendOriginal; });
+  console.log("PASS: knowledge gap draft, privacy, cancellation, edited atomic task/membership, ACK, duplicate prevention and missing slice");
   assert.deepEqual(errors, []);
   console.log("PASS: chat quotes/send, mouse/keyboard mentions, scroll/unread, local search, notification isolation, desktop/mobile light/dark");
 } finally {

@@ -12,12 +12,14 @@ const TransactionOpcode = {
 };
 
 const TransactionOperation = {
+  TaskCreate: 1,
   AssetCreate: 3,
   AssetPatch: 4,
   EdgeCreate: 5,
 };
 
 const TransactionEntity = {
+  Task: 1,
   Asset: 2,
 };
 
@@ -49,9 +51,9 @@ function transactionUint16(value, name) {
   return value;
 }
 
-function writeTransactionReference(view, offset, kind, value) {
+function writeTransactionReference(view, offset, kind, value, entity = TransactionEntity.Asset) {
   view.setUint8(offset, kind);
-  view.setUint8(offset + 1, TransactionEntity.Asset);
+  view.setUint8(offset + 1, entity);
   view.setUint16(offset + 2, 0, false);
   view.setBigUint64(offset + 4, value, false);
   return offset + 12;
@@ -148,6 +150,44 @@ function sendCreateLinkedAsset(convId, assetType, preview, payload, companyId, o
   return correlationId;
 }
 
+// Task and slice membership commit together; a missing target leaves no orphan task.
+function sendCreateSliceTask(title, description, sliceId, options = {}) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const slice = transactionUint64(sliceId, "sliceId");
+  if (!slice) throw new RangeError("sliceId must be nonzero");
+  const titleBytes = transactionTextEncoder.encode(title);
+  const descriptionBytes = transactionTextEncoder.encode(description);
+  if (!title.trim() || titleBytes.length > 256 || descriptionBytes.length > 4096) {
+    throw new RangeError("Title is required (max 256 bytes); description max 4096 bytes");
+  }
+  const correlationId = window.NRCAssets.generateCorrelationId();
+  const taskLength = 40 + titleBytes.length + descriptionBytes.length;
+  const buffer = new ArrayBuffer(10 + 6 + taskLength + 6 + 34);
+  const view = new DataView(buffer);
+  view.setUint16(0, TransactionOpcode.Apply);
+  view.setUint8(2, TRANSACTION_WIRE_VERSION);
+  view.setUint16(4, 2);
+  view.setUint32(6, correlationId);
+  view.setUint8(10, TransactionOperation.TaskCreate);
+  view.setUint32(12, taskLength);
+  view.setUint8(25, 128); // Backlog, normal priority, no due date or blocker.
+  writeTransactionReference(view, 36, TransactionReference.Existing, 0n, TransactionEntity.Task);
+  let offset = 48;
+  for (const bytes of [titleBytes, descriptionBytes, new Uint8Array(), new Uint8Array()]) {
+    view.setUint16(offset, bytes.length); offset += 2;
+    new Uint8Array(buffer, offset, bytes.length).set(bytes); offset += bytes.length;
+  }
+  view.setUint8(offset, TransactionOperation.EdgeCreate);
+  view.setUint32(offset + 2, 34);
+  offset += 14; // operation header and workspace scope
+  offset = writeTransactionReference(view, offset, TransactionReference.CreatedBy, 0n, TransactionEntity.Task);
+  offset = writeTransactionReference(view, offset, TransactionReference.Existing, slice);
+  view.setUint16(offset, 7); // MemberOf
+  pendingTransactionRpc.set(correlationId, { kind: "slice_task", ...options });
+  sendPacket(buffer);
+  return correlationId;
+}
+
 function sendAssetMetadataPatch(asset, preview, payload, options = {}) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   if (preview === null && payload === null) {
@@ -223,6 +263,12 @@ function handleTransactionApplied(dataView) {
   }
   if (count !== 2) return false;
 
+  if (pendingTransactionRpc.get(correlationId)?.kind === "slice_task") {
+    if (operations[0].type !== TransactionOperation.TaskCreate ||
+        operations[1].type !== TransactionOperation.EdgeCreate) return false;
+    settleTransaction(correlationId, true, { correlationId, taskId: operations[0].entityId, edgeId: operations[1].entityId });
+    return true;
+  }
   if (operations[0].type !== TransactionOperation.AssetCreate ||
       operations[1].type !== TransactionOperation.EdgeCreate) return false;
   settleTransaction(correlationId, true, {
@@ -255,6 +301,7 @@ function clearPendingTransactionRpc() {
 
 window.NRCTransactions = {
   sendCreateLinkedAsset,
+  sendCreateSliceTask,
   sendAssetMetadataPatch,
   handleTransactionApplied,
   handleTransactionErrorResponse,

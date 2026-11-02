@@ -121,17 +121,18 @@ func parseConvIDRaw(raw json.RawMessage) (uint64, error) {
 }
 
 type askResponse struct {
-	Answer             string           `json:"answer"`
-	Sources            []askSource      `json:"sources"`
-	SessionID          string           `json:"session_id,omitempty"`
-	AgentSessionID     string           `json:"agent_session_id,omitempty"`
-	Mode               string           `json:"mode,omitempty"`
-	PlanID             string           `json:"plan_id,omitempty"`
-	ToolTrace          []ToolTraceEntry `json:"tool_trace,omitempty"`
-	ProposedActions    []ProposedAction `json:"proposed_actions,omitempty"`
-	PendingActionCount int              `json:"pending_action_count"`
-	HistoryTurns       int              `json:"history_turns"`
-	SessionTurns       int              `json:"session_turns"`
+	Answer              string           `json:"answer"`
+	Sources             []askSource      `json:"sources"`
+	SessionID           string           `json:"session_id,omitempty"`
+	AgentSessionID      string           `json:"agent_session_id,omitempty"`
+	Mode                string           `json:"mode,omitempty"`
+	PlanID              string           `json:"plan_id,omitempty"`
+	ToolTrace           []ToolTraceEntry `json:"tool_trace,omitempty"`
+	ProposedActions     []ProposedAction `json:"proposed_actions,omitempty"`
+	PendingActionCount  int              `json:"pending_action_count"`
+	HistoryTurns        int              `json:"history_turns"`
+	SessionTurns        int              `json:"session_turns"`
+	KnowledgeGapSliceID string           `json:"knowledge_gap_slice_id,omitempty"`
 }
 
 type askSource struct {
@@ -294,6 +295,7 @@ func buildContext(ctx context.Context, client *NRCClient, search *SearchClient, 
 	if req.ConvID != protocol.WorkspaceDataConvID {
 		return errWorkspaceDataScope.Error(), nil, nil
 	}
+	started := time.Now()
 	response, err := retrieveRoom(ctx, client, search, protocol.RetrieveRequest{
 		Workspace: req.Workspace, ConvID: protocol.WorkspaceDataConvID, Query: req.Question,
 		TopN: retrieveDefaultTopN, Depth: 1, Direction: "both", PayloadMode: protocol.RetrievePayloadTop, PayloadTop: retrieveDefaultPayloadTop,
@@ -301,7 +303,11 @@ func buildContext(ctx context.Context, client *NRCClient, search *SearchClient, 
 	})
 	if err != nil {
 		slog.Warn("ask retrieval unavailable", "error", err)
+		recordToolTrace(ctx, "initial_retrieval", started, req.Workspace, req.ConvID, nil, nil, err)
 		return "Workspace retrieval unavailable. This is not evidence that no matching records exist. Use targeted read/search tools as needed and disclose missing evidence.", nil, nil
+	}
+	if response.Stale || len(response.Warnings) > 0 {
+		recordToolTrace(ctx, "initial_retrieval", started, req.Workspace, req.ConvID, nil, map[string]any{"stale": true}, nil)
 	}
 	taskTitles := make(map[uint64]string)
 	for _, result := range response.Results {

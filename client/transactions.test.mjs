@@ -28,6 +28,37 @@ function fixture() {
   return { api: window.NRCTransactions, packets };
 }
 
+test("slice tasks encode atomic task membership and settle only a matching commit", () => {
+  const { api, packets } = fixture();
+  let saved;
+  const id = api.sendCreateSliceTask("Why?", "Ä?", 9007199254740993n, { onSuccess: value => { saved = value; } });
+  const bytes = new Uint8Array(packets[0]);
+  const view = new DataView(packets[0]);
+  assert.equal(view.getUint16(0), 27);
+  assert.equal(view.getUint16(4), 2);
+  assert.equal(bytes[10], 1);
+  assert.equal(view.getUint32(12), 47);
+  assert.equal(view.getBigUint64(16), 0n);
+  assert.deepEqual([...bytes.slice(24, 28)], [0, 128, 0, 0]);
+  assert.deepEqual([...bytes.slice(36, 48)], [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual([...bytes.slice(48, 63)], [0, 4, 87, 104, 121, 63, 0, 3, 195, 132, 63, 0, 0, 0, 0]);
+  assert.equal(bytes[63], 5);
+  assert.equal(view.getUint32(65), 34);
+  assert.deepEqual([...bytes.slice(77, 89)], [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual([...bytes.slice(89, 93)], [0, 2, 0, 0]);
+  assert.equal(view.getBigUint64(93), 9007199254740993n);
+  assert.equal(view.getUint16(101), 7);
+  assert.equal(saved, undefined);
+  assert.equal(api.handleTransactionApplied(transactionResult(id, 0, 0xffff, [[3, 8n], [5, 9n]])), false);
+  assert.equal(saved, undefined);
+  assert.equal(api.handleTransactionApplied(transactionResult(id, 0, 0xffff, [[1, 8n], [5, 9n]])), true);
+  assert.equal(saved.taskId, 8n);
+  assert.equal(saved.edgeId, 9n);
+  assert.throws(() => api.sendCreateSliceTask("ä".repeat(129), "", 7n), /256/);
+  assert.throws(() => api.sendCreateSliceTask("x", "ä".repeat(2049), 7n), /4096/);
+  assert.equal(packets.length, 1);
+});
+
 test("sendCreateLinkedAsset writes the exact two-operation transaction wire format", () => {
   const { api, packets } = fixture();
   const correlationId = api.sendCreateLinkedAsset(0x0102030405060708n, 8, "P£", "{}", 0x1112131415161718n);
