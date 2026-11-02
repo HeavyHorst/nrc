@@ -79,6 +79,54 @@ test_shard_storage_probe_uses_cache_and_rejects_stale_or_failed_samples :: proc(
 	testing.expect(t, !refresh_shard_writer_storage_space(writer), "old samples must not admit writes")
 }
 
+@(test)
+test_worker_maintenance_refreshes_idle_shard_space :: proc(t: ^testing.T) {
+	worker_state_init_core(nil, 0, 16)
+	defer worker_state_destroy_core_for_test()
+	old_registry := td.shard_writers
+	defer td.shard_writers = old_registry
+	server: NRC_Server
+	server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 3, context.allocator)
+	defer chan.destroy(server.storage_control_jobs)
+	td.server = &server
+	defer td.server = nil
+	td.shard_writers = {
+		mode = .Active,
+	}
+	defer delete(td.shard_writers.writers)
+	for &index in td.shard_writers.writer_index do index = -1
+	sample := time.time_add(clock.now(), -1500 * time.Millisecond)
+	for shard in 0 ..< 3 {
+		append(
+			&td.shard_writers.writers,
+			Shard_Transaction_Writer {
+				batch_writes = true,
+				managed = true,
+				shard = shard,
+				shard_dir = ".",
+				storage = storage_io.host_context(),
+				space_known = true,
+				space_checked_at = sample,
+				lifecycle_in_flight = shard == 1,
+			},
+		)
+		td.shard_writers.writer_index[shard] = i16(shard)
+	}
+	// No requests or compaction turns: the maintenance tick must keep every
+	// shard fresh, including a shard waiting for a lifecycle operation.
+	run_worker_maintenance()
+	for {
+		job, received := chan.try_recv(server.storage_control_jobs)
+		if !received do break
+		testing.expect(t, process_shard_compaction_result(run_shard_compaction_job(job)))
+	}
+	for &writer in td.shard_writers.writers {
+		testing.expect(t, writer.space_known && writer.space_checked_at != sample)
+		testing.expect(t, !shard_writer_backpressured(&writer))
+	}
+	defer discard_queued_shard_compaction_jobs(&server)
+}
+
 Shard_Writer_Test_Data :: struct {
 	tx:        Shard_Transaction,
 	mutations: [3]Shard_Mutation,

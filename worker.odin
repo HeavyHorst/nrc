@@ -496,6 +496,14 @@ run_worker_maintenance :: proc() {
 	if td.next_send_watchdog_at != {} && time.diff(td.next_send_watchdog_at, now) >= 0 {
 		check_stalled_sends(now)
 	}
+	// Refresh all owned shards independently of request traffic and the
+	// one-shard-per-turn compaction cursor. The helper only queues due probes;
+	// stale or failed samples still fail closed on the write path.
+	if td.server != nil && td.shard_writers.mode == .Active {
+		for &writer in td.shard_writers.writers {
+			if writer.managed && writer.batch_writes do _ = refresh_shard_writer_storage_space(&writer)
+		}
+	}
 }
 
 // Run bounded idle maintenance every 100ms and scan the indexed stalled sends
