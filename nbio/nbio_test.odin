@@ -1476,6 +1476,88 @@ test_tick_callback_limit_preserves_pending_callbacks :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_tick_callback_limit_recycles_receives_without_starving_other_io :: proc(t: ^testing.T) {
+	io: IO
+	if !expect(t, init(&io) == .NONE) do return
+	defer destroy(&io)
+	if !expect(t, pbuf_ring_init(&io, 2) == .NONE) do return
+
+	// Real stream sockets, with one independent receive per provided buffer.
+	pairs := [2][2]linux.Fd{{-1, -1}, {-1, -1}}
+	defer {
+		for pair in pairs {
+			for fd in pair {
+				if fd >= 0 do linux.close(fd)
+			}
+		}
+	}
+	for &pair in pairs {
+		if !expect(t, linux.socketpair(.UNIX, .STREAM, linux.Protocol(0), &pair) == .NONE) do return
+	}
+	seen: [7]int
+	for &count in seen {
+		timeout(&io, time.Millisecond, &count, proc(raw: rawptr) {
+			(^int)(raw)^ += 1
+		})
+	}
+	expect(t, submit_all_pending(&io) == .NONE)
+	// Stage the older backlog without dispatching callbacks. Timing does not
+	// determine the ordering under test: all CQEs are harvested before tick.
+	started := time.now()
+	for io.ios_in_kernel > 0 && time.since(started) < time.Second {
+		expect(t, flush_completions(&io, 0) == .NONE)
+	}
+	expect(t, io.ios_in_kernel == 0)
+	Result :: struct {
+		calls:  int,
+		value:  byte,
+		failed: bool,
+	}
+	results: [2]Result
+	for round in 0 ..< 2 {
+		for pair, i in pairs {
+			recv_provided(&io, net.TCP_Socket(pair[0]), &results[i], proc(raw: rawptr, received: int, buf: []byte, _: Maybe(net.Endpoint), err: net.Network_Error) {
+				result := (^Result)(raw)
+				result.calls += 1
+				result.failed = err != nil || received != 1 || len(buf) != 1
+				if !result.failed do result.value = buf[0]
+			})
+			payload := [1]byte{byte(31 + 11 * i + 7 * round)}
+			n, err := linux.write(pair[1], payload[:])
+			expect(t, err == .NONE && n == 1)
+		}
+		expect(t, submit_all_pending(&io) == .NONE)
+		started = time.now()
+		for io.ios_in_kernel > 0 && time.since(started) < time.Second {
+			expect(t, flush_completions(&io, 0) == .NONE)
+		}
+		expect(t, io.ios_in_kernel == 0)
+		for step in 0 ..< 4 {
+			before := results[0].calls + results[1].calls
+			for count in seen do before += count
+			expect(t, tick(&io, 0, yield_after_callbacks = true, callback_limit = 1) == .NONE)
+			after := results[0].calls + results[1].calls
+			for count in seen do after += count
+			expect(t, after - before == 1, "receive priority must not bypass the callback budget")
+			expect(t, results[0].calls + results[1].calls == 2 * round + (step + 2) / 2, "buffered receives and other callbacks must alternate across ticks")
+		}
+		for result, i in results {
+			expect(
+				t,
+				result.calls == round + 1 && !result.failed && result.value == byte(31 + 11 * i + 7 * round),
+				"buffer-holding receives must progress despite older callbacks",
+			)
+		}
+		timers := 0
+		for count in seen do timers += count
+		expect(t, timers == 2 * (round + 1), "other I/O must progress even with one callback per tick")
+	}
+	drain_and_expect_empty(t, &io)
+	for count in seen do expect(t, count == 1)
+	for result in results do expect(t, result.calls == 2 && !result.failed)
+}
+
+@(test)
 test_accept_recv_provided_send_all_echo :: proc(t: ^testing.T) {
 	io: IO
 	ierr := init(&io)

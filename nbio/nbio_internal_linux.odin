@@ -18,26 +18,30 @@ import io_uring "_io_uring"
 NANOSECONDS_PER_SECOND :: 1e+9
 
 _IO :: struct {
-	ring:                 io_uring.IO_Uring,
-	completion_pool:      Pool(Completion),
-	cqe_scratch:          [4096]io_uring.io_uring_cqe,
+	ring:                            io_uring.IO_Uring,
+	completion_pool:                 Pool(Completion),
+	cqe_scratch:                     [4096]io_uring.io_uring_cqe,
 	// Deferred after SQ saturation. FIFO ordering is preserved among entries in
 	// this queue; it is not a global ordering barrier for newly scheduled I/O.
-	unqueued:             queue.Queue(^Completion),
+	unqueued:                        queue.Queue(^Completion),
 	// Ready to run callbacks.
-	completed:            queue.Queue(^Completion),
-	ios_queued:           u64,
-	ios_in_kernel:        u64,
-	allocator:            mem.Allocator,
+	completed:                       queue.Queue(^Completion),
+	// Receives holding scarce kernel buffers alternate with ordinary callbacks.
+	// Remember the turn across ticks so even callback_limit=1 is fair.
+	buffered_recvs:                  queue.Queue(^Completion),
+	last_callback_was_buffered_recv: bool,
+	ios_queued:                      u64,
+	ios_in_kernel:                   u64,
+	allocator:                       mem.Allocator,
 
 	// Statistics
-	total_completions:    u64,
-	total_latency_ns:     u64,
-	latency_sample_count: u64,
-	send_sample_seq:      u64,
+	total_completions:               u64,
+	total_latency_ns:                u64,
+	latency_sample_count:            u64,
+	send_sample_seq:                 u64,
 
 	// Provided buffer ring management
-	pbuf_ring:            Provided_Buffer_Ring,
+	pbuf_ring:                       Provided_Buffer_Ring,
 }
 
 // Buffer pool configuration
@@ -350,11 +354,14 @@ cancel_unqueued_recv_provided :: proc(io: ^IO, target: ^Completion) -> bool {
 }
 
 run_completed_callbacks :: proc(io: ^IO, callback_limit := max(int)) {
-	n := min(queue.len(io.completed), callback_limit)
+	n := min(queue.len(io.completed) + queue.len(io.buffered_recvs), callback_limit)
 	
 	// odinfmt: disable
 	for _ in 0 ..< n {
-		completed := queue.pop_front(&io.completed)
+		buffered_recv := queue.len(io.buffered_recvs) > 0 &&
+		                 (!io.last_callback_was_buffered_recv || queue.len(io.completed) == 0)
+		completed := buffered_recv ? queue.pop_front(&io.buffered_recvs) : queue.pop_front(&io.completed)
+		io.last_callback_was_buffered_recv = buffered_recv
 		context = completed.ctx
 
 		#partial switch &op in completed.operation {
@@ -459,7 +466,7 @@ flush :: proc(io: ^IO, wait_nr: u32, callback_limit := max(int)) -> (linux.Errno
 	err = flush_completions(io, 0)
 	if err != .NONE do return err, false
 
-	had_callbacks := queue.len(io.completed) > 0
+	had_callbacks := queue.len(io.completed) > 0 || queue.len(io.buffered_recvs) > 0
 	run_completed_callbacks(io, callback_limit)
 	return .NONE, had_callbacks
 }
@@ -527,6 +534,13 @@ dispatch_cqe :: proc(io: ^IO, cqe: io_uring.io_uring_cqe) {
 		}
 	}
 
+	#partial switch _ in completion.operation {
+	case Op_Recv_Provided:
+		if completion.flags & io_uring.IORING_CQE_F_BUFFER != 0 {
+			queue.push_back(&io.buffered_recvs, completion)
+			return
+		}
+	}
 	queue.push_back(&io.completed, completion)
 }
 

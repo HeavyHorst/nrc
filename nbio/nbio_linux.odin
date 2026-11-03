@@ -138,6 +138,14 @@ init :: proc(io: ^IO, alloc := context.allocator, ring_entries: u32 = 0) -> (err
 		return .ENOMEM
 	}
 
+	if qerr := queue.init(&io.buffered_recvs, allocator = alloc); qerr != nil {
+		queue.destroy(&io.completed)
+		queue.destroy(&io.unqueued)
+		io_uring.io_uring_destroy(&io.ring)
+		pool_destroy(&io.completion_pool)
+		return .ENOMEM
+	}
+
 	return
 }
 
@@ -166,6 +174,7 @@ destroy :: proc(io: ^IO) {
 
 	queue.destroy(&io.unqueued)
 	queue.destroy(&io.completed)
+	queue.destroy(&io.buffered_recvs)
 	pool_destroy(&io.completion_pool)
 	io_uring.io_uring_destroy(&io.ring)
 }
@@ -181,7 +190,13 @@ Returns:
 - err: An error code when something went when retrieving events, 0 otherwise
 */
 has_userspace_work :: #force_inline proc(io: ^IO) -> bool {
-	return queue.len(io.unqueued) > 0 || queue.len(io.completed) > 0 || io.ios_queued > 0 || io_uring.cq_ready(&io.ring) > 0
+	return(
+		queue.len(io.unqueued) > 0 ||
+		queue.len(io.completed) > 0 ||
+		queue.len(io.buffered_recvs) > 0 ||
+		io.ios_queued > 0 ||
+		io_uring.cq_ready(&io.ring) > 0 \
+	)
 }
 
 wait_for_ring_events :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd, timed_out, externally_woken: ^bool) -> linux.Errno {
@@ -237,8 +252,9 @@ wait_for_ring_events :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linu
 // callback work is available. This lets event-loop callers publish work staged
 // outside nbio before the original idle wait budget expires.
 // callback_limit bounds each callback wave, not CQE retirement. Remaining
-// callbacks stay FIFO-queued; combine with yield_after_callbacks for one wave
-// per tick. The default preserves unbounded waves for other callers.
+// buffer-holding receives and ordinary callbacks alternate, FIFO within each
+// class, so buffers recycle without starving other I/O. Combine with
+// yield_after_callbacks for one wave per tick. The default is unbounded waves.
 tick :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd = -1, yield_after_callbacks := false, callback_limit := max(int)) -> linux.Errno {
 	assert(callback_limit > 0)
 	if ferr, had_callbacks := flush(io, 0, callback_limit); ferr != .NONE {
