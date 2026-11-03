@@ -71,7 +71,7 @@ when !NRC_SIMULATION {
 		}
 		_, ok := worker_finish_callback_wave()
 		testing.expect(t, ok)
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		events := presence_test_events(t, &ctx.sim, c.sock)
 		if !testing.expect_value(t, len(events), 1000) do return
 		for event, i in events {
@@ -108,7 +108,7 @@ when !NRC_SIMULATION {
 		broadcast_presence_update_by_id("presence-order", 19, .UserLeft, "after-unsubscribe")
 		_, ok := worker_finish_callback_wave()
 		testing.expect(t, ok)
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		a_events := presence_test_events(t, &ctx.sim, a.sock)
 		b_events := presence_test_events(t, &ctx.sim, b.sock)
 		if !testing.expect_value(t, len(a_events), 7) || !testing.expect_value(t, len(b_events), 4) do return
@@ -149,7 +149,7 @@ when !NRC_SIMULATION {
 		broadcast_presence_update_by_id("presence-other", 1, .UserJoined, "separate")
 		_, ok := worker_finish_callback_wave()
 		testing.expect(t, ok)
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		a_events := presence_test_events(t, &ctx.sim, a.sock)
 		b_events := presence_test_events(t, &ctx.sim, b.sock)
 		if !testing.expect_value(t, len(a_events), PRESENCE_BATCH_ROOMS + 1) || !testing.expect_value(t, len(b_events), 1) do return
@@ -177,7 +177,7 @@ when !NRC_SIMULATION {
 			ids[i] = ctx.sim.world.next_event_id
 		}
 		testing.expect(t, sim_world_dispatch_callback_wave(&ctx.sim.world, ids[:]))
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		nrc_sim_run_all_close_completions(&ctx.sim)
 		ctx.conns[1], ctx.conns[2] = nil, nil
 		connection_test_live_count -= 2
@@ -319,7 +319,7 @@ when !NRC_SIMULATION {
 		testing.expect(t, ok)
 		testing.expect(t, bytes.equal(held, expected), "in-flight bytes must not be mutated or recycled")
 		testing.expect(t, td.spool.allocation_count > allocations_before)
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		testing.expect_value(t, td.spool.used, u64(0))
 		testing.expect_value(t, td.spool.invalid_release_count, u64(0))
 	}
@@ -348,7 +348,7 @@ when !NRC_SIMULATION {
 		testing.expect(t, slow.state >= .Will_Close, "capacity flush must reject the full recipient")
 		_, ok := worker_finish_callback_wave()
 		testing.expect(t, ok)
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		for i in 2 ..< 4 {
 			events := presence_test_events(t, &ctx.sim, ctx.conns[i].sock)
 			if !testing.expect_value(t, len(events), generated + 1) do return

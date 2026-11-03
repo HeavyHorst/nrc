@@ -209,6 +209,8 @@ when NRC_SIMULATION {
 			"incomplete transaction must remain inert",
 		)
 		testing.expect(t, nrc_sim_run_next_receive(&ctx.sim), "run complete atomic transaction")
+		_, publication_ok := worker_finish_callback_wave()
+		testing.expect(t, publication_ok, "attempt transaction publication before durability")
 
 		writer := &td.shard_writers.writers[0]
 		conv = get_conversation(get_workspace(workspace), pr.WORKSPACE_DATA_ID)
@@ -242,7 +244,7 @@ when NRC_SIMULATION {
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, requester.sock), 0)
 		testing.expect(t, nrc_sim_run_next_fsync_completion(&ctx.sim), "complete simulated transaction fsync")
 		testing.expect_value(t, writer.wal.durable_record_count, u64(1))
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim), "publish committed transaction output")
 		expected_results := [3]pr.TransactionOperationResult {
 			{op_type = .TaskCreate, entity_id = 1},
 			{op_type = .AssetCreate, entity_id = 1},
@@ -257,13 +259,13 @@ when NRC_SIMULATION {
 		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, peer.sock, .S_AssetCreated), 1)
 		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, peer.sock, .S_EdgeCreated), 1)
 
-		nrc_sim_clear_inboxes(&ctx.sim)
+		nrc_sim_clear_captured_frames(&ctx.sim)
 		stale_delete := transaction_test_delete_body(pr.WORKSPACE_DATA_ID, .Task, 1, task.updated_at - 1)
 		rejected_task := transaction_test_task_create_body(pr.WORKSPACE_DATA_ID, .Existing, 0, 'x')
 		rejected := [2]pr.TransactionOperation{{op_type = .TaskCreate, body = rejected_task[:]}, {op_type = .TaskDelete, body = stale_delete[:]}}
 		testing.expect(t, transaction_simulation_enqueue_request(&ctx, requester, 0xA702, rejected[:]), "enqueue stale atomic transaction")
 		nrc_sim_run_all_receives(&ctx.sim)
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim), "publish rejected transaction output")
 		testing.expect(t, transaction_simulation_result_matches(&ctx.sim, requester, .Rejected, 0xA702, 1, nil), "stale transaction should report rejection")
 		testing.expect(
 			t,
@@ -466,6 +468,8 @@ when NRC_SIMULATION {
 		}
 		writer := semantic_transport_persistence_writer(&campaign)
 		if writer == nil || writer.wal.record_count != 1 do return "ordinary mutation did not append"
+		_, publication_ok := worker_finish_callback_wave()
+		if !publication_ok do return "attempt ordinary pre-durability publication"
 		if nrc_sim_client_frame_count(&campaign.ctx.sim, campaign.requester.sock) != 0 ||
 		   nrc_sim_client_frame_count(&campaign.ctx.sim, campaign.peer.sock) != 0 {
 			return "ordinary mutation emitted output before durability"
@@ -496,13 +500,13 @@ when NRC_SIMULATION {
 		baseline_durable := writer.wal.durable_record_count
 		if !transaction_simulation_enqueue_request(&campaign.ctx, campaign.requester, 0xB001, rejected[:]) do return "enqueue rejected mixed transaction"
 		nrc_sim_run_all_receives(&campaign.ctx.sim)
-		nrc_sim_run_all_send_completions(&campaign.ctx.sim)
+		if !simulation_test_publish_output(&campaign.ctx.sim) do return "publish rejected mixed transaction"
 		if !transaction_simulation_result_matches(&campaign.ctx.sim, campaign.requester, .Rejected, 0xB001, 1, nil) ||
 		   td.task_seq != 1 ||
 		   writer.wal.record_count != baseline_records {
 			return "rejected mixed transaction changed durable history"
 		}
-		nrc_sim_clear_inboxes(&campaign.ctx.sim)
+		nrc_sim_clear_captured_frames(&campaign.ctx.sim)
 
 		task_body := transaction_test_task_create_body(pr.WORKSPACE_DATA_ID, .Existing, 0, 'a')
 		asset_body := transaction_simulation_asset_create_body(pr.WORKSPACE_DATA_ID)
@@ -527,6 +531,8 @@ when NRC_SIMULATION {
 				return "transaction receive schedule stalled"
 			}
 		}
+		_, publication_ok = worker_finish_callback_wave()
+		if !publication_ok do return "attempt accepted transaction pre-durability publication"
 		if writer.wal.record_count != baseline_records + 1 ||
 		   writer.wal.durable_record_count != baseline_durable ||
 		   nrc_sim_client_frame_count(&campaign.ctx.sim, campaign.requester.sock) != 0 ||
@@ -568,7 +574,7 @@ when NRC_SIMULATION {
 			completed := nrc_sim_run_next_fsync_completion(&campaign.ctx.sim, fsync_errno)
 			if !completed do return "transaction fsync completion missing"
 		}
-		nrc_sim_run_all_send_completions(&campaign.ctx.sim)
+		if !simulation_test_publish_output(&campaign.ctx.sim) do return "publish transaction durability ledger"
 		if outcome != .Success || disconnect {
 			if nrc_sim_client_frame_count(&campaign.ctx.sim, campaign.requester.sock) != 0 do return "undurable or stale transaction response escaped"
 		} else {

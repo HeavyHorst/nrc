@@ -355,6 +355,7 @@ when NRC_SIMULATION {
 			process_create_task(ctx.conns[0], pr.CreateTaskRequest{conv_id = 77, title = transmute([]byte)string("batched"), correlation_id = u32(i + 1)})
 		}
 		process_get_task(ctx.conns[1], pr.GetTaskRequest{conv_id = 77, task_id = 2, correlation_id = 3})
+		for drain_deferred_outbox_pumps() {}
 		for c in ctx.conns[:2] do testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, c.sock), 0)
 		testing.expect_value(t, nrc_sim_send_completion_count(&ctx.sim), 0)
 		testing.expect_value(t, writer.wal.write_count, u64(0))
@@ -370,6 +371,7 @@ when NRC_SIMULATION {
 		// A later mutation is not covered by the first completion, even if the
 		// device happens to persist more than the submitted snapshot.
 		process_create_task(ctx.conns[0], pr.CreateTaskRequest{conv_id = 77, title = transmute([]byte)string("next batch"), correlation_id = 4})
+		for drain_deferred_outbox_pumps() {}
 		testing.expect(t, nrc_sim_run_next_fsync_completion(&ctx.sim))
 		nrc_sim_run_all_send_completions(&ctx.sim)
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, ctx.conns[0].sock), 2)

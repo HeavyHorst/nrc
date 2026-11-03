@@ -514,6 +514,7 @@ when NRC_SIMULATION {
 		subscribe_to_conversation(campaign.requester, 77)
 		subscribe_to_conversation(campaign.peer, pr.WORKSPACE_DATA_ID)
 		subscribe_to_conversation(campaign.peer, 77)
+		if !simulation_test_publish_output(&campaign.ctx.sim) do return "publish setup presence"
 		nrc_sim_clear_inboxes(&campaign.ctx.sim)
 		campaign.pool_live_before = connection_lifetime_pool_live_alloc_count(td.spool)
 		campaign.invalid_releases_before = td.spool.invalid_release_count
@@ -679,6 +680,8 @@ when NRC_SIMULATION {
 			nrc_sim_run_all_close_completions(&campaign.ctx.sim)
 			nrc_sim_run_all_send_completions(&campaign.ctx.sim)
 			for nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) {}
+			// Teardown owns all remaining output, unlike the selective schedules.
+			_ = simulation_test_publish_output(&campaign.ctx.sim)
 			if campaign.reused_old_counted {
 				old := connection_get_by_handle(campaign.reused_old_handle)
 				if old == nil {
@@ -967,6 +970,9 @@ when NRC_SIMULATION {
 			if !completed do return "selected fsync completion was not runnable"
 			campaign.fsync_completed = true
 		}
+		// Publish this callback wave, but leave both send completions selectable.
+		_, publication_ok := worker_finish_callback_wave()
+		if !publication_ok do return "publish semantic callback wave"
 		return semantic_transport_persistence_check(campaign)
 	}
 
@@ -2098,8 +2104,10 @@ when NRC_SIMULATION {
 			ordinal := int(send_choices[3] / 2) % nrc_sim_send_completion_count(&campaign.ctx.sim)
 			if !nrc_sim_run_send_completion_at(&campaign.ctx.sim, ordinal) do return "dependent delete/recreate final send was not runnable"
 		}
-		if !nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) ||
-		   writer.wal.durable_record_count != 4 ||
+		if !nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) do return "dependent delete/recreate fsync was not runnable"
+		_, publication_ok := worker_finish_callback_wave()
+		if !publication_ok do return "publish dependent delete/recreate prefix"
+		if writer.wal.durable_record_count != 4 ||
 		   writer.wal.record_count != 5 ||
 		   writer.wal.pending_bytes == 0 ||
 		   nrc_sim_send_completion_count(&campaign.ctx.sim) == 0 {
@@ -2288,8 +2296,10 @@ when NRC_SIMULATION {
 		if diagnostic = semantic_dependent_cascade_optional_send(&campaign, send_choices[4], "recreation"); diagnostic != "" do return diagnostic
 
 		expected_records := durable_cascade ? u64(5) : u64(3)
-		if !nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) ||
-		   writer.wal.durable_record_count != expected_records ||
+		if !nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) do return "dependent cascade fsync was not runnable"
+		_, publication_ok := worker_finish_callback_wave()
+		if !publication_ok do return "publish dependent cascade prefix"
+		if writer.wal.durable_record_count != expected_records ||
 		   writer.wal.record_count != 6 ||
 		   writer.wal.pending_bytes == 0 ||
 		   nrc_sim_send_completion_count(&campaign.ctx.sim) == 0 {
@@ -2432,6 +2442,8 @@ when NRC_SIMULATION {
 			return "dependent history continuation fsync failed"
 		}
 
+		_, publication_ok := worker_finish_callback_wave()
+		if !publication_ok do return "publish dependent history continuation"
 		completion_count := nrc_sim_send_completion_count(&campaign.ctx.sim)
 		if completion_count == 0 do return "dependent history continuation produced no pending sends"
 		if send_choice & 1 != 0 {
@@ -2526,6 +2538,8 @@ when NRC_SIMULATION {
 				if !nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) {
 					return fmt.tprintf("dependent history operation %d fsync completion was not runnable", index)
 				}
+				_, publication_ok := worker_finish_callback_wave()
+				if !publication_ok do return "publish dependent history fsync wave"
 				durable_records = inflight_snapshot_records
 				fsync_completions += 1
 				if writer.wal.durable_record_count != durable_records {
@@ -2614,6 +2628,9 @@ when NRC_SIMULATION {
 			if !sync_ok || !did_work do return "submit second dependent fsync"
 			campaign.second_fsync_submitted = true
 		}
+		// Keep the explicit requester/peer completion order under test.
+		_, publication_ok := worker_finish_callback_wave()
+		if !publication_ok do return "publish dependent update callback wave"
 		return semantic_update_campaign_check(campaign)
 	}
 
@@ -2751,7 +2768,7 @@ when NRC_SIMULATION {
 			return "transfer sealed semantic task to compaction job"
 		}
 
-		nrc_sim_clear_inboxes(&campaign.ctx.sim)
+		nrc_sim_clear_captured_frames(&campaign.ctx.sim)
 		second := pr.CreateTaskRequest {
 			conv_id        = pr.WORKSPACE_DATA_ID,
 			title          = transmute([]byte)string("active during compaction"),
@@ -2810,6 +2827,8 @@ when NRC_SIMULATION {
 		if !nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) || writer.fsync_in_flight || writer.wal.durable_record_count != 1 {
 			return "complete active-WAL semantic fsync"
 		}
+		_, publication_ok := worker_finish_callback_wave()
+		if !publication_ok do return "publish active-WAL semantic responses"
 		response_connections := [?]^NRC_Connection{campaign.requester, campaign.peer}
 		for conn in response_connections {
 			index := semantic_transport_persistence_send_completion_index(&campaign, conn)
@@ -3597,6 +3616,8 @@ when NRC_SIMULATION {
 			if !sim_world_dispatch_event(&campaign.ctx.sim.world, index) {
 				return "global dependent compaction selected event dispatch failed"
 			}
+			_, publication_ok := worker_finish_callback_wave()
+			if !publication_ok do return "publish global dependent callback wave"
 			if event.id == enqueue_action_event_id {
 				if enqueue_action.diagnostic != "" do return enqueue_action.diagnostic
 				if !enqueue_action.enqueued || enqueue_action.index != enqueued_count {
@@ -3777,6 +3798,8 @@ when NRC_SIMULATION {
 			if !sim_world_dispatch_event(&campaign.ctx.sim.world, allowed_indices[selected]) {
 				return "global compaction selected event dispatch failed"
 			}
+			_, publication_ok := worker_finish_callback_wave()
+			if !publication_ok do return "publish global compaction callback wave"
 			if selected_event.id == active_fsync_action_event_id {
 				if active_fsync_action.diagnostic != "" do return active_fsync_action.diagnostic
 				if !active_fsync_action.submitted || active_fsync_submitted || writer.wal.durable_record_count != 0 {
@@ -3902,6 +3925,8 @@ when NRC_SIMULATION {
 			return "peer task response completion was not runnable after requester reuse"
 		}
 		campaign.peer_send_completed = true
+		_, publication_ok := worker_finish_callback_wave()
+		if !publication_ok do return "publish close-induced peer presence"
 		peer_send_index = semantic_transport_persistence_send_completion_index(&campaign, campaign.peer)
 		if nrc_sim_send_completion_count(&campaign.ctx.sim) != 1 ||
 		   peer_send_index < 0 ||
@@ -3953,6 +3978,8 @@ when NRC_SIMULATION {
 		if !sync_ok || !did_work || !nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) || writer.wal.durable_record_count != 1 {
 			return "stale generation storage durable foundation missing"
 		}
+		_, publication_ok := worker_finish_callback_wave()
+		if !publication_ok do return "publish stale generation foundation"
 
 		old_requester := campaign.requester
 		old_handle := old_requester.handle
@@ -4039,6 +4066,8 @@ when NRC_SIMULATION {
 			if index < 0 || !sim_world_dispatch_event(&campaign.ctx.sim.world, index) {
 				return "stale generation selected event failed to dispatch"
 			}
+			_, publication_ok := worker_finish_callback_wave()
+			if !publication_ok do return "publish stale generation callback wave"
 		}
 		if len(campaign.ctx.sim.world.events) != 0 || deferred_outbox_pump_count() != 0 {
 			return "stale generation schedule did not drain"
@@ -4983,6 +5012,12 @@ when NRC_SIMULATION {
 				dispatched_count += 1
 				break
 			}
+			// Keep the staged retained append under its explicit flush driver.
+			// Publication submits sends; their completions still compete by rank.
+			if td.message_stores.pending_write_count == 0 {
+				_, publication_ok := worker_finish_callback_wave()
+				if !publication_ok do return "publish segmented deferred callback wave"
+			}
 			if event.id == edge_final_receive_id {
 				edge_request_completed = true
 				semantic_global_segmented_retry_retained(&campaign)
@@ -5298,7 +5333,7 @@ when NRC_SIMULATION {
 			return "global segmented deferred retained continuation lookup did not schedule"
 		}
 		for nrc_sim_run_next_file_read(&campaign.ctx.sim) {}
-		nrc_sim_run_all_send_completions(&campaign.ctx.sim)
+		if !simulation_test_publish_output(&campaign.ctx.sim) do return "publish retained continuation dedup output"
 		retained_ack_payload, retained_ack_ok := nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&campaign.ctx.sim, campaign.requester.sock, 0))
 		if retained_store.async_readers != 0 ||
 		   retained_store.high_water != expected_retained_high_water ||
@@ -5318,7 +5353,7 @@ when NRC_SIMULATION {
 				semantic_global_segmented_retained_ack_exact(retained_ack_payload),
 			)
 		}
-		nrc_sim_clear_inboxes(&campaign.ctx.sim)
+		nrc_sim_clear_captured_frames(&campaign.ctx.sim)
 		second_was_durable := expected_retained_high_water == 2
 		semantic_global_segmented_append_retained(&campaign)
 		if len(retained_store.pending_appends) != 1 || td.message_stores.pending_write_count != 1 || campaign.requester.retained_io != 1 {
@@ -5338,7 +5373,7 @@ when NRC_SIMULATION {
 		} else if !retained_store.fsync_in_flight || !nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) {
 			return "global segmented deferred missing retained retry did not become durable"
 		}
-		nrc_sim_run_all_send_completions(&campaign.ctx.sim)
+		if !simulation_test_publish_output(&campaign.ctx.sim) do return "publish retained recovery retry output"
 		retained_retry_ack, retained_retry_ack_ok := nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&campaign.ctx.sim, campaign.requester.sock, 0))
 		retained_retry_peer_frames := nrc_sim_client_frame_count(&campaign.ctx.sim, campaign.peer.sock)
 		if retained_store.wal.record_count != 1 ||
@@ -5356,7 +5391,7 @@ when NRC_SIMULATION {
 			}
 		}
 
-		nrc_sim_clear_inboxes(&campaign.ctx.sim)
+		nrc_sim_clear_captured_frames(&campaign.ctx.sim)
 		semantic_global_segmented_continue_retained(&campaign)
 		if len(retained_store.pending_appends) != 1 || td.message_stores.pending_write_count != 1 {
 			return "global segmented deferred retained continuation did not stage"
@@ -5371,7 +5406,7 @@ when NRC_SIMULATION {
 		   !nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) {
 			return "global segmented deferred retained continuation did not become durable"
 		}
-		nrc_sim_run_all_send_completions(&campaign.ctx.sim)
+		if !simulation_test_publish_output(&campaign.ctx.sim) do return "publish retained continuation output"
 		retained_continuation_ack, retained_continuation_ack_ok := nrc_sim_frame_protocol_payload(
 			nrc_sim_client_frame(&campaign.ctx.sim, campaign.requester.sock, 0),
 		)
@@ -5548,15 +5583,16 @@ when NRC_SIMULATION {
 			   !semantic_deferred_rotation_asset_exact(conv.assets[1], "updated") {
 				return "successful deferred rotation did not publish and apply exact FIFO state"
 			}
-			nrc_sim_run_all_send_completions(&campaign.ctx.sim)
+			// Publish the sealed prefix while the active WAL is still undurable.
+			if !simulation_test_publish_output(&campaign.ctx.sim) do return "publish sealed-prefix output"
 			if diagnostic = semantic_transport_persistence_check_frames(&campaign); diagnostic != "" do return diagnostic
-			nrc_sim_clear_inboxes(&campaign.ctx.sim)
+			nrc_sim_clear_captured_frames(&campaign.ctx.sim)
 			writer.commit_started = {}
 			did_work, sync_ok = schedule_shard_writer_fsyncs_if_due(&td.shard_writers)
 			if !sync_ok || !did_work || !nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) || writer.wal.durable_record_count != 2 {
 				return "successful deferred rotation active WAL did not become durable"
 			}
-			nrc_sim_run_all_send_completions(&campaign.ctx.sim)
+			if !simulation_test_publish_output(&campaign.ctx.sim) do return "publish active-WAL deferred responses"
 			if diagnostic = semantic_deferred_rotation_check_responses(&campaign); diagnostic != "" do return diagnostic
 			if campaign.requester.pending_io != 0 ||
 			   campaign.peer.pending_io != 0 ||
@@ -5738,7 +5774,7 @@ when NRC_SIMULATION {
 		if !before_ok || !retained_history_page_matches_model(before, 42, sequences[:], all_live[:], 0, 20, !descending) {
 			return "retained lifecycle history before expiry differs from model"
 		}
-		nrc_sim_clear_inboxes(&ctx.sim)
+		nrc_sim_clear_captured_frames(&ctx.sim)
 		store.rotation_pending = true
 		if !retained_message_flush_store(store) ||
 		   !simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll) ||
@@ -5829,13 +5865,13 @@ when NRC_SIMULATION {
 			content        = transmute([]byte)string("hello retained world"),
 		}
 		message_put_u64(retry.client_message_id[:], markers[retry_index])
-		nrc_sim_clear_inboxes(&ctx.sim)
+		nrc_sim_clear_captured_frames(&ctx.sim)
 		process_send_message_v2(conn, retry)
 		_, retry_ok := flush_pending_retained_message_writes(&td.message_stores)
 		if !simulation_test_flush_message_writes(&ctx.sim) do return "retained lifecycle recovered retry write failed"
 		if !retry_ok || nrc_sim_file_read_count(&ctx.sim) == 0 do return "retained lifecycle recovered retry did not enter sealed lookup"
 		for nrc_sim_run_next_file_read(&ctx.sim) {}
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		if !simulation_test_publish_output(&ctx.sim) do return "publish retained lifecycle retry output"
 		if store.high_water != 8 || store.wal.record_count != 0 || nrc_sim_client_frame_count(&ctx.sim, conn.sock) != 1 {
 			return "retained lifecycle recovered retry duplicated a live message"
 		}

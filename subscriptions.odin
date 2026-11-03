@@ -116,6 +116,10 @@ send_shared_to_subscriber_entries :: proc(
 	excluded_handle: Connection_Handle = {},
 	personal_owner: string = "",
 ) -> int {
+	// Publish normal fanout at the worker's bounded wave boundary so large
+	// subscriber sets do not monopolize send submission ahead of input and ACKs.
+	defer_normal_outbox_pumps_begin()
+	defer defer_normal_outbox_pumps_end()
 	shared_fanout_begin()
 	defer shared_fanout_end()
 	sort_subscribers_by_handle_index_if_dirty(conv)

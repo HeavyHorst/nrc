@@ -384,14 +384,22 @@ when NRC_SIMULATION {
 
 	// Handler equivalence tests explicitly cross the durability boundary before
 	// comparing replies. Interleaving tests schedule individual completions instead.
+	simulation_test_publish_output :: proc(sim: ^Sim_Runtime) -> bool {
+		for {
+			_, ok := worker_finish_callback_wave()
+			if !ok do return false
+			nrc_sim_run_all_send_completions(sim)
+			if deferred_outbox_pump_count() == 0 do return true
+		}
+	}
+
 	simulation_test_commit_shards :: proc(sim: ^Sim_Runtime) -> bool {
 		for &writer in td.shard_writers.writers do writer.commit_started = {}
 		_, ok := schedule_shard_writer_fsyncs_if_due(&td.shard_writers)
 		if !ok do return false
 		for nrc_sim_run_next_file_write(sim) {}
 		for nrc_sim_run_next_fsync_completion(sim) {}
-		nrc_sim_run_all_send_completions(sim)
-		return true
+		return simulation_test_publish_output(sim)
 	}
 
 	// Model the production post-tick boundary, including input pressure and
@@ -453,14 +461,16 @@ when NRC_SIMULATION {
 			_ = schedule_retained_message_fsync(&store)
 		}
 		for nrc_sim_run_next_fsync_completion(sim) {}
-		nrc_sim_run_all_send_completions(sim)
-		return true
+		return simulation_test_publish_output(sim)
 	}
 
 	simulation_test_end :: proc(ctx: ^Sim_Test_Context) {
 		for conn in ctx.conns {
 			simulation_test_uninstall_client(conn)
 		}
+		// Disposing clients releases queued leases; discard their stale handles,
+		// without pretending teardown delivered output that the test did not run.
+		discard_deferred_outbox_pumps()
 		nrc_sim_runtime_destroy(&ctx.sim)
 		connection_test_storage_destroy()
 		worker_state_destroy_core_for_test()

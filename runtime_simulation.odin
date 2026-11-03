@@ -1280,6 +1280,12 @@ when NRC_SIMULATION {
 	}
 
 	nrc_sim_clear_inboxes :: proc(sim: ^Sim_Runtime) {
+		// Drain currently publishable output before clearing captures, without
+		// advancing storage/receive events or flushing staged presence batches.
+		// Tests preserving pending output use nrc_sim_clear_captured_frames.
+		for drain_deferred_outbox_pumps() {
+			nrc_sim_run_all_send_completions(sim)
+		}
 		nrc_sim_run_all_send_completions(sim)
 		nrc_sim_clear_captured_frames(sim)
 	}

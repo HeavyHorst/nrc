@@ -472,6 +472,8 @@ when NRC_SIMULATION {
 			ok := simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok)
 			testing.expect_value(t, store.wal.record_count, u64(1))
+			// Publish the write callback's fanout before testing its fsync gate.
+			testing.expect(t, simulation_test_publish_output(&ctx.sim))
 			testing.expect(t, conn.outbox_waiting_durability && peer.outbox_waiting_durability)
 			store.commit_started = {}
 			testing.expect(t, schedule_retained_message_fsync(store))
@@ -491,6 +493,7 @@ when NRC_SIMULATION {
 			process_send_message_v2(conn, req)
 			ok = simulation_test_flush_message_writes(&ctx.sim)
 			testing.expect(t, ok)
+			testing.expect(t, simulation_test_publish_output(&ctx.sim))
 			if fail_sync {
 				previous_logger := context.logger
 				context.logger = log.nil_logger()
@@ -520,6 +523,7 @@ when NRC_SIMULATION {
 				process_send_message_v2(conn, req)
 				ok = simulation_test_flush_message_writes(&ctx.sim)
 				testing.expect(t, ok && !store.fsync_in_flight)
+				testing.expect(t, simulation_test_publish_output(&ctx.sim))
 				testing.expect_value(t, peer.pending_io, u32(0))
 				peer.state = .Will_Close
 				generation := store.active_generation

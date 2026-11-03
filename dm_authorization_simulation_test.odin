@@ -371,7 +371,7 @@ when NRC_SIMULATION {
 
 	dm_generated_apply :: proc(ctx: ^Sim_Test_Context, model: ^DM_Generated_Model, op: DM_Generated_Op, op_index: int) -> (string, bool) {
 		if op.client_id < 0 || op.client_id >= DM_GENERATED_CLIENTS do return "generated DM client out of range", false
-		nrc_sim_clear_inboxes(&ctx.sim)
+		nrc_sim_clear_captured_frames(&ctx.sim)
 		conn := dm_generated_connection(ctx, op.client_id)
 		workspace_index := dm_generated_workspace_index(op.client_id)
 		user_index := dm_generated_user_index(op.client_id)
@@ -439,7 +439,7 @@ when NRC_SIMULATION {
 		case .Disconnect:
 			if conn == nil do break
 			connection_run_logical_cleanup(conn, false)
-			nrc_sim_run_all_send_completions(&ctx.sim)
+			if !simulation_test_publish_output(&ctx.sim) do return "publish DM departure", false
 			simulation_test_uninstall_client(conn)
 			ctx.conns[op.client_id + 1] = nil
 			model.connected[op.client_id] = false
@@ -452,6 +452,7 @@ when NRC_SIMULATION {
 
 		// All generated operations are workspace-local. Presence and protocol fanout
 		// may vary by operation, but no frame may cross the workspace boundary.
+		if !simulation_test_publish_output(&ctx.sim) do return "publish generated DM output", false
 		for candidate in 0 ..< DM_GENERATED_CLIENTS {
 			if dm_generated_workspace_index(candidate) == workspace_index do continue
 			if nrc_sim_client_frame_count(&ctx.sim, connection_test_fake_socket(candidate + 1)) != 0 {
@@ -585,7 +586,7 @@ when NRC_SIMULATION {
 		for nrc_sim_receive_event_count(sim) > 0 {
 			if !nrc_sim_run_next_receive(sim) do return false
 		}
-		return true
+		return simulation_test_publish_output(sim)
 	}
 
 	dm_kernel_pending_semantics_validate_frames :: proc(ctx: ^Sim_Test_Context, with_reuse: bool = false) -> string {
@@ -1768,7 +1769,9 @@ when NRC_SIMULATION {
 			}
 		}
 
-		for len(ctx.sim.world.events) > 0 {
+		for len(ctx.sim.world.events) > 0 || deferred_outbox_pump_count() > 0 {
+			for drain_deferred_outbox_pumps() {}
+			if len(ctx.sim.world.events) == 0 do break
 			choice := choice_index < len(choices) ? choices[choice_index] : 0
 			choice_index += 1
 			if reason := dm_pending_lifecycle_dispatch(&ctx, &model, pending, old_connections[:], &output_group, choice); reason != "" do return reason
@@ -2426,7 +2429,7 @@ test_simulation_dm_disconnect_cleans_subscriber_not_persistent_membership :: pro
 
 		nrc_sim_clear_inboxes(&ctx.sim)
 		connection_run_logical_cleanup(alice, false)
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		testing.expect(t, alice.logical_cleanup_done, "disconnect should run logical cleanup")
 		testing.expect(t, alice.rooms == nil, "disconnect should release socket membership map")
 		testing.expect(t, !conversation_has_subscriber(conv, alice.sock), "disconnect should remove alice subscriber")

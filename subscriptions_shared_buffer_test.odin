@@ -475,6 +475,9 @@ test_send_shared_presence_to_subscribers_excludes_closing_and_nil :: proc(t: ^te
 
 @(test)
 test_send_shared_presence_to_subscribers_partial_success :: proc(t: ^testing.T) {
+	worker_state_init_core(nil, 94)
+	defer worker_state_destroy_core_for_test()
+	defer discard_deferred_outbox_pumps()
 	conv := subscriber_test_make_conversation()
 	defer subscriber_test_destroy_conversation(&conv)
 
@@ -534,6 +537,9 @@ test_on_single_presence_sent_handles_nil_connection_on_error :: proc(t: ^testing
 
 @(test)
 test_presence_and_subscriber_send_paths_match_eligibility_matrix :: proc(t: ^testing.T) {
+	worker_state_init_core(nil, 94)
+	defer worker_state_destroy_core_for_test()
+	defer discard_deferred_outbox_pumps()
 	conv := subscriber_test_make_conversation()
 	defer subscriber_test_destroy_conversation(&conv)
 
@@ -587,6 +593,9 @@ test_user_list_collection_skips_closing_subscriber :: proc(t: ^testing.T) {
 
 @(test)
 test_subscriber_send_paths_ignore_reused_socket_with_stale_handle :: proc(t: ^testing.T) {
+	worker_state_init_core(nil, 94)
+	defer worker_state_destroy_core_for_test()
+	defer discard_deferred_outbox_pumps()
 	conv := subscriber_test_make_conversation()
 	defer subscriber_test_destroy_conversation(&conv)
 
@@ -639,6 +648,9 @@ test_subscriber_send_paths_ignore_reused_socket_with_stale_handle :: proc(t: ^te
 
 @(test)
 test_send_shared_presence_to_subscribers_large_room_not_truncated :: proc(t: ^testing.T) {
+	worker_state_init_core(nil, 94)
+	defer worker_state_destroy_core_for_test()
+	defer discard_deferred_outbox_pumps()
 	conv := subscriber_test_make_conversation()
 	defer subscriber_test_destroy_conversation(&conv)
 
@@ -712,6 +724,70 @@ test_shared_frame_release_releases_each_owned_reference :: proc(t: ^testing.T) {
 	shared_frame_release(shared)
 
 	testing.expect(t, true, "release helper should free buffer without crashing")
+}
+
+@(test)
+test_simulation_subscriber_fanout_yields_to_priority_and_preserves_order :: proc(t: ^testing.T) {
+	when !NRC_SIMULATION {
+		return
+	} else {
+		ctx: Sim_Test_Context
+		simulation_test_begin(&ctx)
+		defer simulation_test_end(&ctx)
+		sender := simulation_test_install_client(&ctx.sim, 1, "subscriber-wave", "sender", init_send_queue = true)
+		receiver := simulation_test_install_client(&ctx.sim, 2, "subscriber-wave", "receiver", init_send_queue = true)
+		closing := simulation_test_install_client(&ctx.sim, 3, "subscriber-wave", "closing", init_send_queue = true)
+		ctx.conns[1] = sender
+		ctx.conns[2] = receiver
+		ctx.conns[3] = closing
+		if !testing.expect(t, sender != nil && receiver != nil && closing != nil) do return
+		for client in ctx.conns[1:4] do subscribe_to_conversation(client, 42)
+		_, setup_ok := worker_finish_callback_wave()
+		testing.expect(t, setup_ok)
+		nrc_sim_run_all_send_completions(&ctx.sim)
+		nrc_sim_clear_inboxes(&ctx.sim)
+		pool_used := td.spool.used
+		conv := get_conversation(get_connection_workspace(sender), 42)
+		for seq in u64(1) ..= 2 {
+			msg := pr.NewMessageEvent {
+				conv_id         = 42,
+				seq             = seq,
+				timestamp       = 1,
+				content_type    = .PlainText,
+				author_username = transmute([]byte)string("sender"),
+				content         = transmute([]byte)string("queued snapshot"),
+			}
+			shared := create_shared_broadcast_buffer(msg)
+			if !testing.expect(t, shared != nil) do return
+			testing.expect_value(t, send_shared_to_subscribers_except(conv, sender.sock, shared), 2)
+		}
+		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, receiver.sock), 0)
+		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, closing.sock), 0)
+		// An ACK must escape the normal publication queue, without publishing it.
+		send_ack_message_direct(receiver, pr.AckSendMessage{client_req_id = 91})
+		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, receiver.sock, .S_AckSendMessage), 1)
+		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, receiver.sock, .S_NewMessage), 0)
+		simulation_test_uninstall_client(closing)
+		ctx.conns[3] = nil
+		_, ok := worker_finish_callback_wave()
+		testing.expect(t, ok)
+		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, sender.sock, .S_NewMessage), 0)
+		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, receiver.sock, .S_NewMessage), 2)
+		expected_seq := u64(1)
+		for index in 0 ..< nrc_sim_client_frame_count(&ctx.sim, receiver.sock) {
+			payload, decoded := nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&ctx.sim, receiver.sock, index))
+			if !testing.expect(t, decoded) do return
+			if pr.get_opcode(payload) != .S_NewMessage do continue
+			msg, err := pr.parseNewMessageEventMessage(payload)
+			if !testing.expect(t, err == nil) do return
+			testing.expect_value(t, msg.seq, expected_seq)
+			testing.expect_value(t, string(msg.content), "queued snapshot")
+			expected_seq += 1
+		}
+		testing.expect_value(t, td.spool.used, pool_used)
+	}
 }
 
 @(test)
@@ -881,7 +957,7 @@ test_simulation_worker_adopts_reused_fd_before_old_close_callback :: proc(t: ^te
 		if !testing.expect(t, old != nil) do return
 		sock, old_handle := old.sock, old.handle
 		subscribe_to_conversation(old, 17)
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		buf, err := byte_pool.alloc(td.spool, 8)
 		if !testing.expect(t, err == .None) do return
 		record := Sim_Delayed_Send_Test_Record {
@@ -1451,6 +1527,7 @@ test_simulation_dm_presence_multi_connection_status_edges :: proc(t: ^testing.T)
 
 		nrc_sim_clear_inboxes(&ctx.sim)
 		connection_close(alice_desktop, false)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		testing.expect(
 			t,
 			!nrc_sim_client_has_opcode(&ctx.sim, bob.sock, .S_DMPartnerStatus),
@@ -1467,7 +1544,7 @@ test_simulation_dm_presence_multi_connection_status_edges :: proc(t: ^testing.T)
 
 		nrc_sim_clear_inboxes(&ctx.sim)
 		connection_close(alice_mobile, false)
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		testing.expect(t, !is_user_online(ws_state, "alice"), "alice should be offline after last connection disconnects")
 		testing.expect(t, !is_user_authenticated(ws_state, "alice"), "alice should be unauthenticated after last authenticated disconnect")
 		alice_sockets = get_user_sockets(ws_state, "alice")
@@ -1570,7 +1647,7 @@ test_simulation_shared_fanout_drains_rejection_cleanup_iteratively :: proc(t: ^t
 		if shared == nil do return
 
 		sent := send_shared_to_subscribers_except(conv_a, net.TCP_Socket(0), shared)
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 
 		testing.expect_value(t, sent, 3)
 		testing.expect(t, !conversation_has_subscriber(conv_a, slow_a.sock), "first rejected subscriber should leave room A")
@@ -1680,7 +1757,7 @@ test_simulation_dm_presence_graceful_close_cleans_up_immediately :: proc(t: ^tes
 
 		nrc_sim_clear_inboxes(&ctx.sim)
 		send_websocket_close_frame_and_close(alice, 1000, "Idle timeout")
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		nrc_sim_run_all_shutdown_sends(&ctx.sim)
 
 		testing.expect_value(t, alice.state, Connection_State.Will_Close)
@@ -1771,7 +1848,7 @@ test_simulation_idle_timeout_graceful_close_cleans_up_dm_presence :: proc(t: ^te
 		bob.last_activity = nrc_time_now_monotonic()
 		td.idle_scan_cursor = int(alice.sock)
 		check_idle_connections(nrc_time_now_monotonic())
-		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 		nrc_sim_run_all_shutdown_sends(&ctx.sim)
 
 		testing.expect_value(t, alice.state, Connection_State.Will_Close)
@@ -1984,6 +2061,7 @@ test_simulation_room_subscription_cleanup_is_idempotent :: proc(t: ^testing.T) {
 
 		nrc_sim_clear_inboxes(&ctx.sim)
 		connection_run_logical_cleanup(alice, false)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 
 		testing.expect(t, alice.logical_cleanup_done, "first logical cleanup should mark connection cleaned")
 		testing.expect(t, alice.rooms == nil, "first logical cleanup should free room membership map")
@@ -1999,6 +2077,7 @@ test_simulation_room_subscription_cleanup_is_idempotent :: proc(t: ^testing.T) {
 		bob_presence_after_first := nrc_sim_client_frame_count(&ctx.sim, bob.sock)
 		testing.expect(t, bob_presence_after_first > 0, "bob should receive at least one presence update for alice leaving shared rooms")
 		connection_run_logical_cleanup(alice, false)
+		testing.expect(t, simulation_test_publish_output(&ctx.sim))
 
 		testing.expect_value(t, subscriber_count(conv_a), 1)
 		testing.expect_value(t, subscriber_count(conv_b), 1)

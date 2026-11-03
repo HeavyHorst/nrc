@@ -2621,7 +2621,7 @@ when NRC_SIMULATION {
 		if durable_after > 0 && (!nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) || writer.wal.durable_record_count != u64(5 + durable_after)) {
 			return "handler swarm selected-prefix fsync completion failed"
 		}
-		nrc_sim_run_all_send_completions(&campaign.ctx.sim)
+		if !simulation_test_publish_output(&campaign.ctx.sim) do return "publish handler swarm selected-prefix output"
 		if diagnostic = semantic_handler_swarm_output_check(&campaign, &ledger); diagnostic != "" do return diagnostic
 		semantic_handler_swarm_output_ledger_destroy(&ledger)
 		semantic_handler_swarm_output_ledger_init(&ledger)
@@ -2646,9 +2646,9 @@ when NRC_SIMULATION {
 		if diagnostic = semantic_handler_swarm_observe_task_page(&campaign, &expected, recovered_query.query_selector, 0xBFFE, semantic_multihop_split(recovered_query.split_b, false), semantic_multihop_split(recovered_query.split_a, true)); diagnostic != "" do return diagnostic
 		if diagnostic = semantic_handler_swarm_observe_note_page(&campaign, &expected, recovered_query.query_selector, 0xAFFE, semantic_multihop_split(recovered_query.split_a, false), semantic_multihop_split(recovered_query.split_b, true)); diagnostic != "" do return diagnostic
 		if diagnostic = semantic_handler_swarm_observe_rejected_mutation(&campaign, &expected, &ledger, recovered_query.query_selector, 0xA0FE, 0, semantic_multihop_split(recovered_query.split_b, false), semantic_multihop_split(recovered_query.split_a, true)); diagnostic != "" do return diagnostic
-		nrc_sim_run_all_send_completions(&campaign.ctx.sim)
+		if !simulation_test_publish_output(&campaign.ctx.sim) do return "publish handler swarm recovered output"
 		if diagnostic = semantic_handler_swarm_output_check(&campaign, &ledger); diagnostic != "" do return diagnostic
-		nrc_sim_clear_inboxes(&campaign.ctx.sim)
+		nrc_sim_clear_captured_frames(&campaign.ctx.sim)
 		semantic_handler_swarm_output_ledger_destroy(&ledger)
 		semantic_handler_swarm_output_ledger_init(&ledger)
 		continuation := Semantic_Handler_Swarm_Op {
@@ -2663,7 +2663,7 @@ when NRC_SIMULATION {
 		if !sync_ok || !did_work || !nrc_sim_run_next_fsync_completion(&campaign.ctx.sim) || writer.wal.durable_record_count != expected_records + 1 {
 			return "handler swarm continuation fsync failed"
 		}
-		nrc_sim_run_all_send_completions(&campaign.ctx.sim)
+		if !simulation_test_publish_output(&campaign.ctx.sim) do return "publish handler swarm continuation output"
 		if diagnostic = semantic_handler_swarm_output_check(&campaign, &ledger); diagnostic != "" do return diagnostic
 		floors, replay_ok, crash_diagnostic = semantic_transport_persistence_virtual_crash_reopen(&campaign)
 		if crash_diagnostic != "" do return crash_diagnostic
