@@ -236,8 +236,12 @@ wait_for_ring_events :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linu
 // When yield_after_callbacks is set, wait up to timeout_nsec only while no
 // callback work is available. This lets event-loop callers publish work staged
 // outside nbio before the original idle wait budget expires.
-tick :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd = -1, yield_after_callbacks := false) -> linux.Errno {
-	if ferr, had_callbacks := flush(io, 0); ferr != .NONE {
+// callback_limit bounds each callback wave, not CQE retirement. Remaining
+// callbacks stay FIFO-queued; combine with yield_after_callbacks for one wave
+// per tick. The default preserves unbounded waves for other callers.
+tick :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd = -1, yield_after_callbacks := false, callback_limit := max(int)) -> linux.Errno {
+	assert(callback_limit > 0)
+	if ferr, had_callbacks := flush(io, 0, callback_limit); ferr != .NONE {
 		return ferr
 	} else if yield_after_callbacks && had_callbacks {
 		return .NONE
@@ -250,7 +254,7 @@ tick :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd = -1, yield
 	started_at := clock.now_monotonic()
 	for {
 		if has_userspace_work(io) {
-			if ferr, had_callbacks := flush(io, 0); ferr != .NONE {
+			if ferr, had_callbacks := flush(io, 0, callback_limit); ferr != .NONE {
 				return ferr
 			} else if yield_after_callbacks && had_callbacks {
 				return .NONE
@@ -278,7 +282,7 @@ tick :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd = -1, yield
 
 		// Wakeups must drain immediately; deferring to the deadline adds ~1ms
 		// of latency per protocol step in the worker loop.
-		if ferr, had_callbacks := flush(io, 0); ferr != .NONE {
+		if ferr, had_callbacks := flush(io, 0, callback_limit); ferr != .NONE {
 			return ferr
 		} else if yield_after_callbacks && had_callbacks {
 			return .NONE
@@ -286,7 +290,7 @@ tick :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd = -1, yield
 	}
 
 	// Final non-blocking pass to pick up CQEs that raced with timeout expiry.
-	ferr, _ := flush(io, 0)
+	ferr, _ := flush(io, 0, callback_limit)
 	return ferr
 }
 

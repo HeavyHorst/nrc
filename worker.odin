@@ -30,6 +30,8 @@ import pr "protocol"
 WORKER_TICK_ACTIVE_TIMEOUT :: 250 * time.Microsecond
 WORKER_TICK_IDLE_TIMEOUT :: 10 * time.Millisecond
 WORKER_TICK_ACTIVITY_BURST_LOOPS :: 8
+// Large fanout completion waves must yield back to input and maintenance.
+WORKER_CALLBACK_BUDGET :: 1024
 
 // Thread-local message sequence counter
 @(thread_local)
@@ -357,9 +359,9 @@ worker_state_start_real_timers :: proc() {
 	start_worker_maintenance_timer()
 }
 
-// Publish work produced by one completed I/O callback wave. io_uring runs every
-// completion already collected by a tick before the worker reaches this boundary;
-// retained writes and normal fanout therefore become visible only after that wave.
+// Publish work produced by one bounded I/O callback wave. Ready callbacks beyond
+// the worker budget remain queued for later turns; writes and normal fanout
+// produced by this wave become visible here, without waiting for that backlog.
 worker_finish_callback_wave :: proc() -> (did_work, ok: bool) {
 	ok = true
 	if !td.collect_presence_updates do begin_presence_batch_wave()
@@ -467,7 +469,7 @@ worker_thread :: proc(worker_data: Worker_Thread_Data) {
 		did_work := worker_run_pre_tick()
 
 		tick_stats_before := nbio.get_stats(&td.io)
-		errno2 := nbio.tick(&td.io, worker_tick_timeout(), td.my_pending_queue.wake_fd, yield_after_callbacks = true)
+		errno2 := nbio.tick(&td.io, worker_tick_timeout(), td.my_pending_queue.wake_fd, yield_after_callbacks = true, callback_limit = WORKER_CALLBACK_BUDGET)
 		if errno2 != linux.Errno.NONE {
 			log.errorf("[T%d] nbio tick error: %v", td.thread_index, errno2)
 			time.sleep(100 * time.Millisecond)

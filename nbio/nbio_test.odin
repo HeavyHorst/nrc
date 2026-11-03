@@ -1448,6 +1448,34 @@ test_tick_returns_after_callback_wave_before_wait_budget :: proc(t: ^testing.T) 
 }
 
 @(test)
+test_tick_callback_limit_preserves_pending_callbacks :: proc(t: ^testing.T) {
+	io: IO
+	if !expect(t, init(&io) == .NONE) do return
+	defer destroy(&io)
+	seen: [7]int
+	for &count in seen {
+		timeout(&io, time.Millisecond, &count, proc(raw: rawptr) {
+			count := (^int)(raw)
+			count^ += 1
+		})
+	}
+	expect(t, submit_all_pending(&io) == .NONE)
+	// Make the whole batch eligible before asking for bounded callback waves.
+	time.sleep(10 * time.Millisecond)
+	total := 0
+	for _ in 0 ..< 20 {
+		expect(t, tick(&io, 10 * time.Millisecond, yield_after_callbacks = true, callback_limit = 2) == .NONE)
+		after := 0
+		for count in seen do after += count
+		expect(t, after - total <= 2, "a callback wave must yield at its limit")
+		total = after
+		if total == len(seen) do break
+	}
+	for count in seen do expect(t, count == 1, "pending callbacks must complete exactly once on later ticks")
+	drain_and_expect_empty(t, &io)
+}
+
+@(test)
 test_accept_recv_provided_send_all_echo :: proc(t: ^testing.T) {
 	io: IO
 	ierr := init(&io)

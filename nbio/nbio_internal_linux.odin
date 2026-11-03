@@ -349,8 +349,8 @@ cancel_unqueued_recv_provided :: proc(io: ^IO, target: ^Completion) -> bool {
 	return true
 }
 
-run_completed_callbacks :: proc(io: ^IO) {
-	n := queue.len(io.completed)
+run_completed_callbacks :: proc(io: ^IO, callback_limit := max(int)) {
+	n := min(queue.len(io.completed), callback_limit)
 	
 	// odinfmt: disable
 	for _ in 0 ..< n {
@@ -446,7 +446,7 @@ file_sync_callback :: proc(io: ^IO, completion: ^Completion, op: ^Op_File_Sync) 
 	pool_put(&io.completion_pool, completion)
 }
 
-flush :: proc(io: ^IO, wait_nr: u32) -> (linux.Errno, bool) {
+flush :: proc(io: ^IO, wait_nr: u32, callback_limit := max(int)) -> (linux.Errno, bool) {
 	// Publish SQEs that were prepared in the previous callback wave.
 	err := flush_submissions(io, 0)
 	if err != .NONE do return err, false
@@ -460,7 +460,7 @@ flush :: proc(io: ^IO, wait_nr: u32) -> (linux.Errno, bool) {
 	if err != .NONE do return err, false
 
 	had_callbacks := queue.len(io.completed) > 0
-	run_completed_callbacks(io)
+	run_completed_callbacks(io, callback_limit)
 	return .NONE, had_callbacks
 }
 
