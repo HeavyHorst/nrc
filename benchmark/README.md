@@ -2,6 +2,10 @@
 
 A load testing tool for the NRC WebSocket server. Simulates concurrent users performing realistic chat operations.
 
+For persistent sessions with retained chat, workspace-data subscriptions, task/note edits,
+slice memberships and correctness checks, see [the active-user simulator](ACTIVE_USERS.md).
+Its default workload starts at 20,000 users with topology-aware server/generator placement.
+
 ## Building
 
 ```bash
