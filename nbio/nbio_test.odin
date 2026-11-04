@@ -87,10 +87,24 @@ test_async_read_only_file_open_and_close :: proc(t: ^testing.T) {
 	expect(t, string(buffer[:]) == "mmet")
 	_, write_err := linux.write(results[0].fd, buffer[:])
 	expect(t, write_err == .EBADF, "async open must be read-only")
-	close(&io, results[0].fd)
+	Close_Result :: struct {
+		calls: int,
+		ok:    bool,
+	}
+	closed: [2]Close_Result
+	on_close := proc(user: rawptr, ok: bool) {
+		result := (^Close_Result)(user)
+		result.calls += 1
+		result.ok = ok
+	}
+	// Observe the close completion, not the fd number: another test may reuse
+	// that process-wide number before drain returns.
+	close(&io, results[0].fd, &closed[0], on_close)
+	close(&io, linux.Fd(-1), &closed[1], on_close)
+	expect(t, closed[0].calls == 0 && closed[1].calls == 0, "close completed synchronously")
 	drain_and_expect_empty(t, &io)
-	_, read_err := linux.pread(results[0].fd, buffer[:], 0)
-	expect(t, read_err == .EBADF, "descriptor was not closed")
+	expect(t, closed[0].calls == 1 && closed[0].ok, "file close did not complete successfully")
+	expect(t, closed[1].calls == 1 && !closed[1].ok, "invalid descriptor close must fail")
 }
 
 @(test)
