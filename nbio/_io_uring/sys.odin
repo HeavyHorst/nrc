@@ -191,6 +191,8 @@ IORING_SETUP_SINGLE_ISSUER: u32 : (1 << 12)
 // Rather than running bits of task work whenever the task transitions
 // try to do it just before it is needed.
 IORING_SETUP_DEFER_TASKRUN: u32 : (1 << 13)
+// Direct SQE indexing, without a submission index array (Linux 6.6+).
+IORING_SETUP_NO_SQARRAY: u32 : (1 << 16)
 
 /*
  * sqe.uring_cmd_flags

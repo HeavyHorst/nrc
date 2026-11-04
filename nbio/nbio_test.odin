@@ -3920,3 +3920,48 @@ test_tick_external_wake_interrupts_idle_wait :: proc(t: ^testing.T) {
 	_, read_err := linux.read(wake_fd, ([^]byte)(&value)[:size_of(value)])
 	expect(t, read_err == .EAGAIN, "tick should drain the external eventfd before returning")
 }
+
+@(test)
+test_submission_ring_wrap_and_full :: proc(t: ^testing.T) {
+	io: IO
+	init_err := init(&io, ring_entries = 8)
+	expect(t, init_err == .NONE)
+	if init_err != .NONE do return
+	defer destroy(&io)
+	ring := &io.ring
+	expect(t, ring.flags & io_uring.IORING_SETUP_NO_SQARRAY != 0)
+
+	// Unequal batches cross the physical ring boundary, including full rings.
+	// Unique IDs catch stale SQEs, duplicates and incorrect direct indexing.
+	for round in 0 ..< 513 {
+		count := 1 + (round * 5) % 8
+		for i in 0 ..< count {
+			_, err := io_uring.nop(ring, u64(1000 + round * 8 + i))
+			expect(t, err == .None)
+		}
+		if count == 8 {
+			_, err := io_uring.nop(ring, 999999)
+			expect(t, err == .Submission_Queue_Full)
+		}
+		n, err := io_uring.submit(ring, u32(count))
+		expect(t, err == .None && n == u32(count))
+		if err != .None do return
+		cqes: [8]io_uring.io_uring_cqe
+		got, cq_err := io_uring.copy_cqes(ring, cqes[:], 0)
+		expect(t, cq_err == .None && got == u32(count))
+		seen: [8]bool
+		for cqe in cqes[:got] {
+			expect(t, cqe.res == 0)
+			index := int(cqe.user_data) - (1000 + round * 8)
+			expect(t, index >= 0 && index < count)
+			if index >= 0 && index < count {
+				expect(t, !seen[index])
+				seen[index] = true
+			}
+		}
+		expect(t, io_uring.sq_ready(ring) == 0)
+		// An empty publication must not resubmit the preceding batch.
+		empty_count, empty_err := io_uring.submit(ring)
+		expect(t, empty_err == .None && empty_count == 0)
+	}
+}

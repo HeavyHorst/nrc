@@ -13,7 +13,7 @@ belongs to the workspace, not to individual chat rooms.
 The supplied deployment uses Docker Compose and Tailscale authentication.
 Before you start, check these requirements:
 
-- An x86-64 Linux host with kernel 5.19 or newer. Docker must permit io_uring.
+- An x86-64 Linux host with kernel 6.6 or newer. Docker must permit io_uring.
   Containers use the host kernel. The server container runs privileged.
 - Docker Engine with Compose v2 or newer.
 - A Tailscale account. Enable MagicDNS and HTTPS certificates in your tailnet.

@@ -8,7 +8,7 @@ import "core:time"
 import "../clock"
 import io_uring "_io_uring"
 
-REQUIRED_RING_FLAGS :: io_uring.IORING_SETUP_COOP_TASKRUN | io_uring.IORING_SETUP_SINGLE_ISSUER
+REQUIRED_RING_FLAGS :: io_uring.IORING_SETUP_COOP_TASKRUN | io_uring.IORING_SETUP_SINGLE_ISSUER | io_uring.IORING_SETUP_NO_SQARRAY
 
 set_start_time_disabled :: #force_inline proc(completion: ^Completion) {
 	completion.start_time = 0

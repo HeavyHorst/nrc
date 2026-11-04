@@ -43,7 +43,14 @@ IO_Uring :: struct {
 }
 
 // Set up an IO_Uring with default parameters, `entries` must be a power of 2 between 1 and 4096.
-io_uring_make :: proc(params: ^io_uring_params, entries: u32 = DEFAULT_ENTRIES, flags: u32 = 0) -> (ring: IO_Uring, err: IO_Uring_Error) {
+io_uring_make :: proc(
+	params: ^io_uring_params,
+	entries: u32 = DEFAULT_ENTRIES,
+	flags: u32 = IORING_SETUP_NO_SQARRAY,
+) -> (
+	ring: IO_Uring,
+	err: IO_Uring_Error,
+) {
 	params.flags = flags
 	params.sq_thread_idle = DEFAULT_THREAD_IDLE_MS
 	err = io_uring_init(&ring, entries, params)
@@ -53,6 +60,7 @@ io_uring_make :: proc(params: ^io_uring_params, entries: u32 = DEFAULT_ENTRIES, 
 // Initialize and setup a io_uring with more control than io_uring_make.
 io_uring_init :: proc(ring: ^IO_Uring, entries: u32, params: ^io_uring_params) -> (err: IO_Uring_Error) {
 	check_entries(entries) or_return
+	assert(params.flags & IORING_SETUP_NO_SQARRAY != 0, "direct SQE indexing requires NO_SQARRAY")
 
 	res := sys_io_uring_setup(entries, params)
 	if res < 0 {
@@ -207,14 +215,10 @@ flush_sq :: proc(ring: ^IO_Uring) -> (n_pending: u32) {
 	sq := &ring.sq
 	to_submit := sq.sqe_tail - sq.sqe_head
 	if to_submit != 0 {
-		tail := sq.tail^
-		i: u32 = 0
-		for ; i < to_submit; i += 1 {
-			sq.array[tail & sq.mask] = sq.sqe_head & sq.mask
-			tail += 1
-			sq.sqe_head += 1
-		}
-		sync.atomic_store_explicit(sq.tail, tail, .Release)
+		// NO_SQARRAY lets the kernel index SQEs directly. Publish only after
+		// every SQE in this batch has been initialized.
+		sq.sqe_head = sq.sqe_tail
+		sync.atomic_store_explicit(sq.tail, sq.sqe_tail, .Release)
 	}
 	n_pending = sq_ready(ring)
 	return
@@ -563,7 +567,6 @@ Submission_Queue :: struct {
 	mask:      u32,
 	flags:     ^u32,
 	dropped:   ^u32,
-	array:     []u32,
 	sqes:      []io_uring_sqe,
 	mmap:      []u8,
 	mmap_sqes: []u8,
@@ -581,9 +584,9 @@ submission_queue_make :: proc(fd: linux.Fd, params: ^io_uring_params) -> (sq: Su
 	// Unsupported feature.
 	assert((params.features & IORING_FEAT_SINGLE_MMAP) != 0, "kernel does not support IORING_FEAT_SINGLE_MMAP")
 
-	sq_size := params.sq_off.array + params.sq_entries * size_of(u32)
 	cq_size := params.cq_off.cqes + params.cq_entries * size_of(io_uring_cqe)
-	size := max(sq_size, cq_size)
+	// SINGLE_MMAP includes the SQ metadata; NO_SQARRAY removes its index array.
+	size := cq_size
 
 	mmap_result := unix.sys_mmap(
 		nil,
@@ -611,7 +614,6 @@ submission_queue_make :: proc(fd: linux.Fd, params: ^io_uring_params) -> (sq: Su
 	)
 	if mmap_sqes_result < 0 do return
 
-	array := cast([^]u32)&mmap[params.sq_off.array]
 	sqes := cast([^]io_uring_sqe)uintptr(mmap_sqes_result)
 	mmap_sqes := cast([^]u8)uintptr(mmap_sqes_result)
 
@@ -621,7 +623,6 @@ submission_queue_make :: proc(fd: linux.Fd, params: ^io_uring_params) -> (sq: Su
 	sq.mask = (cast(^u32)&mmap[params.sq_off.ring_mask])^
 	sq.flags = cast(^u32)&mmap[params.sq_off.flags]
 	sq.dropped = cast(^u32)&mmap[params.sq_off.dropped]
-	sq.array = array[:params.sq_entries]
 	sq.sqes = sqes[:params.sq_entries]
 	sq.mmap = mmap[:size]
 	sq.mmap_sqes = mmap_sqes[:size_sqes]
