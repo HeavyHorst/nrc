@@ -8,6 +8,7 @@ package nbio
 import "core:bytes"
 import "core:container/queue"
 import "core:fmt"
+import "core:log"
 import "core:net"
 import "core:os"
 import "core:strings"
@@ -1766,6 +1767,10 @@ test_timed_send_defers_when_only_primary_sqe_fits :: proc(t: ^testing.T) {
 
 	expect(t, submit_all_pending(&io) == .NONE, "timed send should publish after two SQEs become available")
 	expect(t, queue.len(io.unqueued) == 0, "timed send should leave the deferred queue after linked publication")
+	if io.ring.flags & io_uring.IORING_SETUP_SQ_REWIND != 0 {
+		sqe_index = 0
+		sqe = &io.ring.sq.sqes[sqe_index]
+	}
 	expect(t, sqe.flags & u8(io_uring.IOSQE_IO_LINK) != 0, "retried send must retain its linked timeout")
 	timeout_sqe := &io.ring.sq.sqes[(sqe_index + 1) & io.ring.sq.mask]
 	expect(t, timeout_sqe.opcode == io_uring.IORING_OP.LINK_TIMEOUT, "retried send should be followed by a linked-timeout SQE")
@@ -1809,6 +1814,10 @@ test_timed_writev_defers_when_only_primary_sqe_fits :: proc(t: ^testing.T) {
 
 	expect(t, submit_all_pending(&io) == .NONE, "timed writev should publish after two SQEs become available")
 	expect(t, queue.len(io.unqueued) == 0, "timed writev should leave the deferred queue after linked publication")
+	if io.ring.flags & io_uring.IORING_SETUP_SQ_REWIND != 0 {
+		sqe_index = 0
+		sqe = &io.ring.sq.sqes[sqe_index]
+	}
 	expect(t, sqe.flags & u8(io_uring.IOSQE_IO_LINK) != 0, "retried writev must retain its linked timeout")
 	timeout_sqe := &io.ring.sq.sqes[(sqe_index + 1) & io.ring.sq.mask]
 	expect(t, timeout_sqe.opcode == io_uring.IORING_OP.LINK_TIMEOUT, "retried writev should be followed by a linked-timeout SQE")
@@ -3964,4 +3973,99 @@ test_submission_ring_wrap_and_full :: proc(t: ^testing.T) {
 		empty_count, empty_err := io_uring.submit(ring)
 		expect(t, empty_err == .None && empty_count == 0)
 	}
+}
+
+@(test)
+test_submission_prefix_retry_and_append :: proc(t: ^testing.T) {
+	// Exercise both the Linux 6.6 path and optional rewind on this kernel.
+	for optional in ([2]u32{0, io_uring.IORING_SETUP_SQ_REWIND}) {
+		params: io_uring.io_uring_params
+		ring, err := io_uring.io_uring_make(&params, 8, REQUIRED_RING_FLAGS | optional)
+		expect(t, err == .None)
+		if err != .None do return
+		defer io_uring.io_uring_destroy(&ring)
+		log.infof("SQ_REWIND requested=%v active=%v", optional != 0, ring.flags & io_uring.IORING_SETUP_SQ_REWIND != 0)
+		for round in 0 ..< 257 {
+			base := u64(10000 + round * 19)
+			short_return := round % 2 == 1
+			for i in 0 ..< 7 {
+				sqe, e := io_uring.nop(&ring, base + u64(i))
+				expect(t, e == .None)
+				if short_return && i == 1 do sqe.opcode = io_uring.IORING_OP(255)
+			}
+			io_uring.flush_sq(&ring)
+			// Rejected syscall must leave the entire batch retryable.
+			n, e := io_uring.enter(&ring, 7, 0, 1 << 31)
+			expect(t, e == .Submission_Queue_Entry_Invalid && n == 0)
+			expect(t, io_uring.sq_ready(&ring) == 7)
+			// Alternate a chosen prefix with a real short return: without
+			// SUBMIT_ALL, invalid opcode preparation stops after the second SQE.
+			requested: u32 = short_return ? 7 : 3
+			consumed: u32 = short_return ? 2 : 3
+			n, e = io_uring.enter(&ring, requested, 0, 0)
+			expect(t, e == .None && n == consumed)
+			if e != .None || n != consumed do return
+			expect(t, io_uring.sq_ready(&ring) == 7 - consumed)
+			for i in 7 ..< 9 {
+				_, ne := io_uring.nop(&ring, base + u64(i))
+				expect(t, ne == .None)
+			}
+			n, e = io_uring.submit(&ring, 9)
+			expect(t, e == .None && n == 9 - consumed)
+			if e != .None do return
+			cqes: [16]io_uring.io_uring_cqe
+			got, ce := io_uring.copy_cqes(&ring, cqes[:], 0)
+			expect(t, ce == .None && got == 9)
+			seen: [9]bool
+			for cqe in cqes[:got] {
+				index := int(cqe.user_data - base)
+				expected_result: i32 = short_return && index == 1 ? -i32(linux.Errno.EINVAL) : 0
+				expect(t, cqe.res == expected_result)
+				expect(t, index >= 0 && index < 9)
+				if index >= 0 && index < 9 {
+					expect(t, !seen[index])
+					seen[index] = true
+				}
+			}
+			expect(t, io_uring.sq_ready(&ring) == 0)
+		}
+	}
+}
+
+@(test)
+test_rewind_setup_fallback :: proc(t: ^testing.T) {
+	flags := REQUIRED_RING_FLAGS | io_uring.IORING_SETUP_SQ_REWIND
+	params := io_uring.io_uring_params {
+		flags      = flags,
+		cq_entries = 16,
+	}
+	// Emulate an older kernel, including mutation of the failed in/out params.
+	result := io_uring.setup_with_rewind_fallback(8, &params, proc "contextless" (entries: u32, p: ^io_uring.io_uring_params) -> int {
+		if p.flags & io_uring.IORING_SETUP_SQ_REWIND != 0 {
+			p.cq_entries = 999
+			return -int(linux.Errno.EINVAL)
+		}
+		if p.flags != REQUIRED_RING_FLAGS || p.cq_entries != 16 || entries != 8 do return -999
+		return 123
+	})
+	expect(t, result == 123 && params.flags == REQUIRED_RING_FLAGS && params.cq_entries == 16)
+	// Permission/resource failures must not be disguised as unsupported flags.
+	for errno in ([2]linux.Errno{.EPERM, .ENOMEM}) {
+		params = io_uring.io_uring_params {
+			flags      = flags,
+			cq_entries = u32(errno),
+		}
+		result = io_uring.setup_with_rewind_fallback(8, &params, proc "contextless" (_: u32, p: ^io_uring.io_uring_params) -> int {
+			if p.flags & io_uring.IORING_SETUP_SQ_REWIND == 0 do return -999
+			return -int(p.cq_entries)
+		})
+		expect(t, result == -int(errno) && params.flags == flags)
+	}
+	params = io_uring.io_uring_params {
+		flags = flags,
+	}
+	result = io_uring.setup_with_rewind_fallback(8, &params, proc "contextless" (_: u32, _: ^io_uring.io_uring_params) -> int {
+		return -int(linux.Errno.EINVAL)
+	})
+	expect(t, result == -int(linux.Errno.EINVAL), "failed fallback must propagate, without further retries")
 }

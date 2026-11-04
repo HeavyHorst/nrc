@@ -62,7 +62,7 @@ io_uring_init :: proc(ring: ^IO_Uring, entries: u32, params: ^io_uring_params) -
 	check_entries(entries) or_return
 	assert(params.flags & IORING_SETUP_NO_SQARRAY != 0, "direct SQE indexing requires NO_SQARRAY")
 
-	res := sys_io_uring_setup(entries, params)
+	res := setup_with_rewind_fallback(entries, params)
 	if res < 0 {
 		#partial switch linux.Errno(-res) {
 		case .EFAULT:
@@ -205,6 +205,17 @@ enter :: proc(ring: ^IO_Uring, n_to_submit: u32, min_complete: u32, flags: u32) 
 	}
 
 	n_submitted = u32(ns)
+	if ring.flags & IORING_SETUP_SQ_REWIND != 0 && n_submitted != 0 {
+		// Preserve an unconsumed suffix, including after a short submission.
+		// Failed enter calls above leave every pending SQE intact for retry.
+		sq := &ring.sq
+		assert(n_submitted <= n_to_submit && n_submitted <= sq.sqe_tail)
+		remaining := sq.sqe_tail - n_submitted
+		if remaining != 0 {
+			copy(sq.sqes[:remaining], sq.sqes[n_submitted:sq.sqe_tail])
+		}
+		sq.sqe_tail = remaining
+	}
 	return
 }
 
@@ -213,6 +224,10 @@ enter :: proc(ring: ^IO_Uring, n_to_submit: u32, min_complete: u32, flags: u32) 
 // Rationale is to determine that an enter call is needed.
 flush_sq :: proc(ring: ^IO_Uring) -> (n_pending: u32) {
 	sq := &ring.sq
+	if ring.flags & IORING_SETUP_SQ_REWIND != 0 {
+		// The kernel consumes from SQE zero, without shared head/tail updates.
+		return sq.sqe_tail
+	}
 	to_submit := sq.sqe_tail - sq.sqe_head
 	if to_submit != 0 {
 		// NO_SQARRAY lets the kernel index SQEs directly. Publish only after

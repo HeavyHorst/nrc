@@ -3,7 +3,11 @@
 ## Toolchains and build
 
 The core requires Linux 6.6+ with usable io_uring and `IORING_SETUP_NO_SQARRAY`.
-There is no fallback for older kernels. Tested locally with Odin
+There is no fallback below Linux 6.6. NRC also requests `IORING_SETUP_SQ_REWIND`
+(Linux 7.0+); if setup returns `EINVAL`, it retries once without that optional
+flag, preserving the required flags. Other setup errors retain their existing
+handling. The successful ring's flags select the submission path.
+Tested locally with Odin
 `dev-2026-09-nightly:a2fb372`, Go `1.26.8` and Node `24.21.0`.
 Go module requirements are in each `go.mod`; the proxy requires at least Go 1.26.6.
 Docker builds supply their own toolchains and build Odin from upstream HEAD.

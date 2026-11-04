@@ -2,6 +2,7 @@
 package io_uring
 
 import "base:intrinsics"
+import "core:sys/linux"
 
 //odinfmt:disable
 SYS_io_uring_setup:    uintptr : 425
@@ -193,6 +194,8 @@ IORING_SETUP_SINGLE_ISSUER: u32 : (1 << 12)
 IORING_SETUP_DEFER_TASKRUN: u32 : (1 << 13)
 // Direct SQE indexing, without a submission index array (Linux 6.6+).
 IORING_SETUP_NO_SQARRAY: u32 : (1 << 16)
+// Linear submission batches starting at SQE zero (Linux 7.0+).
+IORING_SETUP_SQ_REWIND: u32 : (1 << 20)
 
 /*
  * sqe.uring_cmd_flags
@@ -490,6 +493,19 @@ IORING_OFF_MMAP_MASK: u64 : 0xf8000000
 
 sys_io_uring_setup :: proc "contextless" (entries: u32, params: ^io_uring_params) -> int {
 	return int(intrinsics.syscall(SYS_io_uring_setup, uintptr(entries), uintptr(params)))
+}
+
+// Only SQ_REWIND is optional. Preserve all required flags and restore input
+// parameters before retrying: setup may have modified its in/out structure.
+setup_with_rewind_fallback :: proc(entries: u32, params: ^io_uring_params, setup: type_of(sys_io_uring_setup) = sys_io_uring_setup) -> int {
+	requested := params^
+	result := setup(entries, params)
+	if result == -int(linux.Errno.EINVAL) && requested.flags & IORING_SETUP_SQ_REWIND != 0 {
+		params^ = requested
+		params.flags &~= IORING_SETUP_SQ_REWIND
+		return setup(entries, params)
+	}
+	return result
 }
 
 sys_io_uring_enter :: proc "contextless" (fd: u32, to_submit: u32, min_complete: u32, flags: u32, sig: ^sigset_t) -> int {

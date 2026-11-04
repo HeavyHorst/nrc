@@ -101,7 +101,7 @@ init :: proc(io: ^IO, alloc := context.allocator, ring_entries: u32 = 0) -> (err
 			params: io_uring.io_uring_params
 			params.cq_entries = entries * 2
 
-			ring, rerr = io_uring.io_uring_make(&params, entries, REQUIRED_RING_FLAGS | io_uring.IORING_SETUP_CQSIZE)
+			ring, rerr = io_uring.io_uring_make(&params, entries, REQUIRED_RING_FLAGS | io_uring.IORING_SETUP_CQSIZE | io_uring.IORING_SETUP_SQ_REWIND)
 			if rerr == .None {
 				ring_ready = true
 				break outer
