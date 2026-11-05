@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261105voice9";
+const CACHE_NAME = "nrc-terminal-20261105voice12";
 
 const APP_SHELL = [
   "./",
@@ -19,7 +19,7 @@ const APP_SHELL = [
   "./css/mobile-tasks.css?v=20261019registers1",
   "./css/mobile.css?v=20261102gap1",
   "./css/custom-select.css?v=20261019compact1",
-  "./css/voice.css?v=20261104voice8",
+  "./css/voice.css?v=20261105voice12",
   "./dialog.js?v=20261021taskslice1",
   "./portal.js?v=20261021modal1",
   "./custom-picker.js?v=20260927appointment2",
@@ -32,7 +32,7 @@ const APP_SHELL = [
   "./edges.js?v=20261023protocol2",
   "./files.js?v=20261022cancel1",
   "./links-ui.js?v=20261018ticketregister1",
-  "./inspector.js?v=20261104voice8",
+  "./inspector.js?v=20261105voice12",
   "./view-manager.js?v=20261017history5",
   "./list-navigation.js?v=20260805b",
   "./virtual-list.js?v=20260908a",
@@ -59,7 +59,7 @@ const APP_SHELL = [
   "./notes.js?v=20261027columns2",
   "./task-references.js?v=20260914workspace1",
   "./ai.js?v=20261102gap1",
-  "./voice.js?v=20261105voice9",
+  "./voice.js?v=20261105voice12",
   "./retained-messages.js?v=20261023protocol2",
   "./chat.js?v=20261020composer1",
   "./app.js?v=20261102gap1",

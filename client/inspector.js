@@ -730,6 +730,11 @@
         leaveEdit.click();
         return;
       }
+      const temporaryClose = current()?.type === "temporary" && document.querySelector('#inspectorHeader [data-inspector-command="escape"]');
+      if (temporaryClose) {
+        temporaryClose.click();
+        return;
+      }
       if (current()) close();
       else setDrawer(false);
     });

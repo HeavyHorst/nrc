@@ -5,14 +5,14 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { chromium } from "playwright";
 
-const html = `<!doctype html><html lang="de" data-theme="lupine"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/css/main.css"><link rel="stylesheet" href="/css/voice.css"></head><body>
+const html = `<!doctype html><html lang="de" data-theme="dark"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/css/main.css"><link rel="stylesheet" href="/css/voice.css"></head><body>
 <div class="retro-container"><div class="app-shell">
 <aside class="app-sidebar"><nav aria-label="Workspace views">Navigation</nav></aside>
 <main class="content-shell"><button id="sullivanVoice" class="btn">VOICE</button><label>Notiz <textarea id="workspaceNote" class="task-detail-textarea">Rollout-Notizen</textarea></label></main>
 <footer class="status-footer"><span>VERBUNDEN</span></footer>
 </div></div>
 <aside id="inspector" class="inspector ledger-context agenda-panel" style="position:fixed;right:0;top:0;width:min(450px,100vw);height:85vh;display:flex;flex-direction:column;background:var(--surface-panel)">
-<header id="inspectorHeader" class="panel-header"></header><div id="inspectorEntityHost" style="flex:1;min-height:0" hidden></div><div id="inspectorChatContextHost"></div><div id="inspectorViewContextHost"></div><div id="inspectorActions"><button id="inspectorBack">BACK</button></div>
+<header id="inspectorHeader" class="panel-header inspector-matrix-header"></header><div id="inspectorEntityHost" style="flex:1;min-height:0" hidden></div><div id="inspectorChatContextHost"></div><div id="inspectorViewContextHost"></div><div id="inspectorActions"><button id="inspectorBack" class="btn header-operation inspector-back inspector-matrix-control"><small>NAV ←</small><span>BACK</span></button></div>
 </aside>
 <script>
 let currentWorkspaceId = 'voice-test';
@@ -21,6 +21,7 @@ window.NRCAI = { navigateToSource() { fixture.navigations++; } };
 window.fixture = { applies: [], creates: 0, closes: 0, navigations: 0, tracks: [], deny: false, failCreate: false, unknownApply: false, holdApply: false,
   state: { revision: 1, result: null, transcript: 'Nutzer: Erstelle eine Aufgabe und eine Notiz für den Rollout.' } };
 window.NRCLinksUI = {loadLinks: async()=>{}};
+window.NRCAssets = {MAX_PAYLOAD_LENGTH: 1048576};
 window.NRCTasks = {
  roomTasks:new Map([[0n,new Map([[10n,{id:10n}],[20n,{id:20n}]])]]),
  confirmDiscardTaskEdits:()=>{fixture.discards=(fixture.discards||0)+1;return !fixture.editing;},
@@ -72,7 +73,7 @@ window.fetch = async (url, options) => {
       if (fixture.holdResponse) await new Promise(resolve => { fixture.releaseResponse = resolve; });
       throw new TypeError('response lost');
     }
-    const data = {ok:true,applied:req.action_ids.map(action_id => ({action_id,created_entity:{type:'note',id:81}})),failed:[]};
+    const data = fixture.applyResult || {ok:true,applied:req.action_ids.map(action_id => ({action_id,created_entity:{type:'note',id:81}})),failed:[]};
     fixture.state.apply_result = data;
     if (fixture.holdResponse) await new Promise(resolve => { fixture.releaseResponse = resolve; });
     if (fixture.unknownApply) throw new TypeError('response lost');
@@ -80,12 +81,12 @@ window.fetch = async (url, options) => {
   }
   throw new Error('unexpected voice operation');
 };
-</script><script src="/dialog.js"></script><script src="/inspector.js"></script><script src="/voice.js"></script></body></html>`;
+</script><script src="/dialog.js"></script><script src="/detail-ui.js"></script><script src="/inspector.js"></script><script src="/voice.js"></script></body></html>`;
 
 const server = createServer(async (req, res) => {
   if (req.url === "/") { res.setHeader("Content-Type", "text/html"); res.end(html); return; }
   const pathname = new URL(req.url, "http://fixture").pathname;
-  if (!/^\/(css\/[a-z-]+\.css|dialog\.js|inspector\.js|voice\.js)$/.test(pathname)) { res.writeHead(404).end(); return; }
+  if (!/^\/(css\/[a-z-]+\.css|dialog\.js|detail-ui\.js|inspector\.js|voice\.js)$/.test(pathname)) { res.writeHead(404).end(); return; }
   try {
     res.setHeader("Content-Type", pathname.endsWith(".css") ? "text/css" : "text/javascript");
     res.end(await readFile(new URL(`.${pathname}`, import.meta.url)));
@@ -101,6 +102,51 @@ if (process.argv.includes("--serve")) {
     const page = await browser.newPage({viewport:{width:1280,height:900},deviceScaleFactor:2});
     const errors = []; page.on("pageerror", e => errors.push(e.message));
     const open = async () => { await page.goto(url); };
+    await open();
+    await page.evaluate(() => {
+      fixture.state.result.proposed_actions = [
+        {id:'edit',type:'update_note',title:'Entscheidung',asset_id:81,content:'Vollständiger Inhalt\n'.repeat(30)+'ENDE <script>unsafe</script>',tags:[],project:'',extra:{enabled:false,count:0}},
+        {id:'delete',type:'delete_note',title:'Alte Notiz',asset_id:82,expected_updated_at:'1793881234567890123'},
+        {id:'edge',type:'create_edge',source_type:'note',source_action_id:'other',target_type:'note',target_action_id:'edit',relation:'related-to'},
+        {id:'task',type:'update_task',title:'Rollout',task_id:9,task_status:'InProgress',priority:0,blocked_by:7},
+        {id:'other',type:'update_note',title:'Entscheidung',asset_id:83,content:'Andere Notiz'},
+      ];
+      fixture.applyResult = {ok:false,applied:[
+        {action_id:'edit',entity:{type:'note',id:81,title:'Entscheidung'},already_applied:true},
+        {action_id:'delete',deleted_entity:{type:'note',id:82,title:'Alte Notiz'}},
+        {action_id:'edge',created_edge:{edge_id:23,source_type:'note',source_id:81,target_type:'task',target_id:9,relation:'related-to'}},
+      ],failed:[{action_id:'task',error:'outcome_unknown: <script>unsafe</script>'}]};
+    });
+    await page.click('#sullivanVoice');
+    await page.waitForSelector('[data-voice-plan] input');
+    assert.equal(await page.locator('[data-voice-plan]').innerText().then(text => text.includes('ENDE <script>unsafe</script>')), false);
+    const disclosure = page.locator('[data-voice-plan] summary');
+    assert.equal(await disclosure.innerText(), 'Vollständigen Inhalt anzeigen');
+    await disclosure.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('[data-voice-plan] summary').textContent === 'Inhalt einklappen');
+    assert.equal(await page.locator('[data-voice-plan] details > div').textContent(), await page.evaluate(() => fixture.state.result.proposed_actions[0].content));
+    assert.equal(await page.locator('[data-voice-plan] input:checked').count(), 0, 'expanding content never approves an action');
+    const planText = (await page.locator('[data-voice-plan]').innerText()).replace(/\s+/g, ' ');
+    for (const text of ['1. Notiz ändern', '5. Notiz ändern', 'ENDE <script>unsafe</script>', 'Projekt: Leer', 'Schlagwörter: Keine Einträge', 'enabled: Nein', 'count: 0', 'Erwartete Datensatzversion: 1793881234567890123', 'Quellaktion: Vorschlag 5 · Notiz ändern', 'Zielaktion: Vorschlag 1 · Notiz ändern', 'Aufgabenstatus: In Arbeit', 'Priorität: 0']) assert.ok(planText.includes(text), text);
+    assert.equal(await page.locator('[data-voice-plan] details').count(), 1, 'only the long content has a disclosure');
+    assert.ok(!planText.includes('Technische Details'));
+    await disclosure.click();
+    await page.waitForFunction(() => document.querySelector('[data-voice-plan] summary').textContent === 'Vollständigen Inhalt anzeigen');
+    assert.equal(await page.locator('[data-voice-plan]').innerText().then(text => text.includes('ENDE <script>unsafe</script>')), false);
+    assert.equal(await page.locator('[data-voice-plan] pre, [data-voice-plan] script').count(), 0);
+    for (const check of await page.locator('[data-voice-plan] input').all()) await check.check();
+    await page.getByRole('button', {name:'AUSWAHL BESTÄTIGEN'}).click();
+    await page.waitForSelector('[data-voice-result] .ai-action-plan');
+    const resultText = (await page.locator('[data-voice-result]').innerText()).replace(/\s+/g, ' ');
+    for (const text of ['Bereits ausgeführt; nicht erneut angewendet.', 'Gelöscht: Notiz #82', 'Verknüpfungs-ID: 23', 'Datensatz prüfen, nicht erneut ausführen.']) assert.ok(resultText.includes(text), text);
+    assert.equal(await page.locator('[data-voice-result] button').count(), 1, 'deleted records and edges do not get dead links');
+    await page.locator('[data-voice-result] details').last().locator('summary').click();
+    assert.match(await page.locator('[data-voice-result]').innerText(), /Fehlerdetail:\s+outcome_unknown: <script>unsafe<\/script>/);
+    assert.equal(await page.locator('[data-voice-result] pre, [data-voice-result] script').count(), 0);
+    await page.getByRole('button', {name:'Notiz #81 · Entscheidung ↗'}).click();
+    assert.equal(await page.evaluate(() => fixture.navigations), 1);
+    assert.equal(await page.evaluate(() => fixture.applies.length), 1);
     await open();
     assert.equal(await page.evaluate(() => fixture.creates), 0, "opening does not create a billed session");
     await page.evaluate(() => { fixture.state.result = {answer:'Eine normale Antwort.',proposed_actions:[]}; });
@@ -157,7 +203,30 @@ if (process.argv.includes("--serve")) {
     assert.equal(await page.evaluate(() => fixture.closes), 0, "mute does not close billing");
     await page.getByRole("button", {name:"BEENDEN",exact:true}).click();
     await page.waitForFunction(() => fixture.tracks[0].stopped);
-    assert.equal(await page.locator("[data-voice-usage]").innerText(), "voice-test · 0.7 Minuten");
+    assert.equal(await page.locator('.voice-panel, .voice-dock, .voice-review').count(), 0);
+    assert.equal(await page.evaluate(() => fixture.closes), 1);
+
+    // Ending removes both compact controls and an open review, without taking
+    // over another record. Final usage must not resurrect the dismissed UI.
+    for (const width of [1280, 390]) for (const theme of ['white', 'dark']) for (const expanded of [false, true]) {
+      await open();
+      await page.setViewportSize({width, height:900});
+      await page.evaluate(async theme => {
+        document.documentElement.dataset.theme = theme;
+        fixture.state.result = null;
+      }, theme);
+      await page.click('#sullivanVoice');
+      await page.waitForFunction(() => !document.querySelector('.voice-actions button').disabled);
+      await page.evaluate(() => NRCInspector.openEntity({type:'task',id:10}));
+      await page.waitForFunction(() => !NRCInspector.isLoading());
+      if (expanded) await page.getByRole('button', {name:'ÖFFNEN',exact:true}).click();
+      await page.getByRole('button', {name:'BEENDEN',exact:true}).click();
+      await page.waitForFunction(() => fixture.tracks[0].stopped && !NRCInspector.isLoading());
+      assert.equal(await page.locator('.voice-panel, .voice-dock, .voice-review').count(), 0);
+      assert.equal(await page.evaluate(() => String(NRCInspector.current().id)), '10');
+      assert.equal(await page.evaluate(() => fixture.closes), 1);
+    }
+    await page.setViewportSize({width:1280,height:900});
 
     await open();
     await page.click('#sullivanVoice');
@@ -195,9 +264,11 @@ if (process.argv.includes("--serve")) {
     assert.equal(await page.evaluate(() => fixture.navigations), 0);
     assert.equal(await page.locator('#inspectorEntityHost .voice-review').isVisible(), true);
     await page.waitForFunction(() => fixture.releaseApply);
-    await page.getByRole('button', {name:'MINIMIEREN',exact:true}).click();
+    await page.getByRole('button', {name:'Close',exact:true}).focus();
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.voice-content').isVisible(), false, 'Close leaves pending approval running in the dock');
+    assert.equal(await page.evaluate(() => fixture.closes), 0, 'Inspector Close does not end audio');
     await page.locator('#workspaceNote').fill('Weiterarbeiten trotz laufender Bestätigung');
-    assert.equal(await page.getByRole('button', {name:'SCHLIESSEN',exact:true,includeHidden:true}).isDisabled(), true);
     await page.getByRole("button", {name:"BEENDEN",exact:true}).click();
     await page.waitForFunction(() => fixture.tracks[0].stopped);
     await page.evaluate(() => fixture.releaseApply());
@@ -206,7 +277,9 @@ if (process.argv.includes("--serve")) {
     await page.waitForSelector('#inspectorEntityHost .voice-review');
     assert.equal(await page.locator('[data-voice-result]').isVisible(), true);
     assert.equal(await page.evaluate(() => fixture.applies.length), 1, "closed audio does not cause a write replay");
-    assert.equal(await page.getByRole("button", {name:"SCHLIESSEN",exact:true}).isEnabled(), true);
+    await page.getByRole('button', {name:'Close',exact:true}).focus();
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.voice-panel, .voice-dock, .voice-review').count(), 0, 'Close dismisses a settled result after audio ends');
 
     // Source navigation must leave both audio and the result panel alive.
     await open();
@@ -261,7 +334,7 @@ if (process.argv.includes("--serve")) {
     assert.equal(await page.locator('.voice-content').isVisible(), false, 'acknowledged error does not repeatedly open');
     await page.evaluate(() => { fixture.state.error = 'Neue Fehlermeldung'; });
     await page.waitForSelector('#inspectorEntityHost .voice-review');
-    await page.getByRole('button', {name:'SCHLIESSEN',exact:true}).click();
+    await page.getByRole('button', {name:'BEENDEN',exact:true}).click();
     await page.waitForFunction(() => fixture.tracks[0].stopped);
     assert.equal(await page.locator('.voice-panel, .voice-dock').count(), 0, 'late close event does not resurrect dismissed controls');
 

@@ -7,7 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
     <link rel="stylesheet" href="../css/main.css?v=20261102gap1">
     <link rel="stylesheet" href="../css/custom-select.css?v=20261019compact1">
-    <link rel="stylesheet" href="../css/voice.css?v=20261104voice8">
+    <link rel="stylesheet" href="../css/voice.css?v=20261105voice12">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
 </head>
 <body>
@@ -673,22 +673,23 @@ Ziel: Antwort klären, als Wissensnotiz dokumentieren und diese mit der Aufgabe 
                             <div class="nrc-dialog-actions"><button class="btn btn--ghost" type="button">Abbrechen</button><button class="btn btn--primary" type="button">Aufgabe anlegen</button></div>
                         </div>
                         <p class="catalog-usage">Knowledge gaps reuse the task dialog fields with a fixed, workspace-configured slice. Validate the target before enabling submission. Create the task and membership atomically; keep the draft open on rejection. Disable resubmission after success or an unknown outcome.</p>
-                        <header class="panel-header"><div class="inspector-identity-row"><span class="header-text">SULLIVAN · SPRACHE</span><button class="btn btn--danger task-detail-close" type="button" aria-label="Zurück zum vorherigen Inhalt">×</button></div><div class="inspector-mode-row"><button class="btn btn--ghost" type="button">BACK</button></div></header>
+                        <div class="catalog-inspector-stage inspector">
+                        <header class="panel-header inspector-matrix-header"><div class="inspector-identity-row"><span class="header-text">SULLIVAN · SPRACHE</span></div><div class="inspector-mode-row"><button class="btn header-operation inspector-back inspector-matrix-control" type="button"><small>NAV ←</small><span>BACK</span></button><button class="btn header-operation task-detail-close inspector-matrix-control" data-inspector-command="escape" type="button" title="Close (Esc)" aria-label="Close"><span>CLOSE</span><b aria-hidden="true">×</b></button></div></header>
                         <section class="voice-review" aria-label="Sullivan-Freigabe">
-                            <p class="nrc-dialog-message" role="status">VERBUNDEN · Änderungen nur per Klick bestätigen.</p>
-                            <p class="nrc-dialog-message">Workspace support · 2:14 / 10:00</p>
+                            <div class="voice-summary"><p class="nrc-dialog-message" role="status">VERBUNDEN</p><p class="nrc-dialog-message">support · 2:14 / 10:00</p></div>
                             <div class="voice-content">
-                                <div class="ai-action-plan"><div class="ai-action-plan-header">VORSCHLAG · 1 AKTION · REV 4</div><label class="ai-action-row"><input type="checkbox" aria-label="Aufgabe auswählen"><div class="ai-action-body"><div class="ai-action-title">create_task · Rollout prüfen</div><pre class="ai-action-desc">{ "title": "Rollout prüfen", "description": "Freigabe kontrollieren" }</pre></div></label><button class="btn btn--primary" disabled>AUSWAHL BESTÄTIGEN</button></div>
+                                <div data-voice-plan><div class="ai-action-plan"><div class="ai-action-plan-header">VORSCHLAG · 1 AKTION · REV 4</div><label class="ai-action-row"><input type="checkbox" aria-label="Aufgabe anlegen: Rollout prüfen"><div class="ai-action-body"><div class="ai-action-title">1. Aufgabe anlegen</div><div><div class="ai-action-desc voice-field"><strong>Titel: </strong><div>Rollout prüfen</div></div><div class="ai-action-desc voice-field voice-field--text"><strong>Beschreibung: </strong><div>Freigabe kontrollieren</div></div></div></div></label><p class="nrc-dialog-message voice-approval-hint">Alle Felder prüfen und Aktionen auswählen. Neue Sprache macht diesen Vorschlag ungültig. Gesprochenes Ja führt nichts aus.</p><button class="btn btn--primary" disabled>AUSWAHL BESTÄTIGEN</button></div></div>
                             </div>
-                            <div class="voice-actions"><button class="btn btn--ghost" type="button">SCHLIESSEN</button></div>
                         </section>
+                        </div>
                         <div class="voice-dock" style="width: 10.75rem;">
                         <section class="voice-panel voice-panel--collapsed" aria-label="Sullivan-Sprachgespräch minimiert">
                             <header class="panel-header"><div><button class="btn btn--ghost" type="button" aria-expanded="false" aria-label="VORSCHLÄGE PRÜFEN"><strong>SULLIVAN</strong><span class="voice-compact-time">02:14</span><span class="voice-compact-notice">1 FREIGABE</span><span class="voice-compact-arrow" aria-hidden="true"></span></button></div></header>
                             <div class="voice-actions"><button class="btn" type="button" aria-label="MIKROFON STUMM" aria-pressed="false">MIC AN</button><button class="btn btn--danger" type="button" aria-label="BEENDEN">ENDE</button></div>
                         </section>
                         </div>
-                        <p class="catalog-usage">VOICE starts capture in the sidebar controls, or in the footer on narrow screens and focused share views. Proposals and new errors open a temporary Inspector entry; an active editor defers automatic opening. Back and successful execution restore the previous record without taking over later navigation. The Sullivan button opens details. 1 FREIGABE marks a pending plan, PRÜFT an unresolved approval and FEHLER an error. Mobile controls retain 44px targets. Navigation keeps audio active. Selection starts empty; only a click confirms the exact revision. New speech invalidates the proposal. Unknown outcomes cannot be retried. Closing ends audio and is blocked while confirming; minimizing remains available.</p>
+                        <p class="catalog-usage">Long proposal content and descriptions start with a preview of at most 320 characters and four source lines. “Vollständigen Inhalt anzeigen” expands the full, unchanged text in the Inspector's existing scroll area; “Inhalt einklappen” restores the preview. Expanding never selects or confirms an action. Short text stays fully visible.</p>
+                        <p class="catalog-usage">VOICE starts capture in the sidebar controls, or in the footer on narrow screens and focused share views. Proposals and new errors open a temporary Inspector entry; an active editor defers automatic opening. Back and successful execution restore the previous record without taking over later navigation. The Sullivan button opens details. 1 FREIGABE marks a pending plan, PRÜFT an unresolved approval and FEHLER an error. Mobile controls retain 44px targets. Selection starts empty; only a click confirms the exact revision. New speech invalidates the proposal. Unknown outcomes cannot be retried. The shared Inspector CLOSE × control hides the review while audio or an approval is active; it dismisses a settled result after audio ends. ENDE stops audio and removes the voice UI unless an approval is still pending. Final usage arrives in the background without opening an end screen.</p>
                         <div class="nrc-dialog-backdrop catalog-dialog-stage">
                             <div class="nrc-dialog" role="dialog" aria-labelledby="catalogDialogTitle">
                                 <div class="nrc-dialog-title" id="catalogDialogTitle">CONFIRM ACTION</div>

@@ -2,6 +2,68 @@
 // submits selected IDs. No model/data-channel event can call Apply.
 (() => {
   let active = null;
+  const actionNames = {
+    create_task: "Aufgabe anlegen", update_task: "Aufgabe ändern",
+    create_note: "Notiz anlegen", update_note: "Notiz ändern", delete_note: "Notiz löschen",
+    create_edge: "Verknüpfung anlegen", delete_edge: "Verknüpfung löschen",
+  };
+  const fieldNames = {
+    id: "Aktions-ID", type: "Typ", status: "Status", title: "Titel",
+    description: "Beschreibung", content: "Inhalt", format: "Format",
+    project: "Projekt", tags: "Schlagwörter", priority: "Priorität",
+    task_id: "Aufgaben-ID", task_status: "Aufgabenstatus", blocked_by: "Blockiert durch Aufgabe",
+    asset_id: "Datensatz-ID", edge_id: "Verknüpfungs-ID",
+    source_type: "Quelltyp", source_id: "Quell-ID", source_action_id: "Quellaktion",
+    target_type: "Zieltyp", target_id: "Ziel-ID", target_action_id: "Zielaktion", relation: "Beziehung",
+    expected_updated_at: "Erwartete Datensatzversion", applied_at: "Ausgeführt am", error: "Fehlerdetail",
+    created_task_id: "Angelegte Aufgaben-ID", created_asset_id: "Angelegte Datensatz-ID",
+    created_edge_id: "Angelegte Verknüpfungs-ID", ticket: "Ticket", ticket_result_id: "Ticket-Ergebnis-ID",
+  };
+  const valueNames = {
+    task: "Aufgabe", note: "Notiz", asset: "Datensatz", markdown: "Markdown", html: "HTML",
+    pending: "Ausstehend", applied: "Ausgeführt", failed: "Fehlgeschlagen",
+    todo: "Offen", in_progress: "In Arbeit", done: "Erledigt", blocked: "Blockiert",
+    Backlog: "Backlog", Todo: "Offen", InProgress: "In Arbeit", Done: "Erledigt", Note: "Notiz",
+    "related-to": "Gehört zusammen", "depends-on": "Abhängig von", "member-of": "Mitglied von",
+    references: "Verweist auf", blocks: "Blockiert", "derived-from": "Abgeleitet von", supersedes: "Ersetzt",
+  };
+  function actionName(action) {
+    return actionNames[action.type] || action.type || "Aktion";
+  }
+  function renderFields(values, collapseLongText = false, proposals = []) {
+    const fields = document.createElement("div");
+    for (const [key, value] of Object.entries(values)) {
+      const row = document.createElement("div"); row.className = "ai-action-desc";
+      row.classList.add("voice-field");
+      row.classList.toggle("voice-field--text", ["content", "description"].includes(key));
+      const label = document.createElement("strong"); label.textContent = `${fieldNames[key] || key}: `;
+      const fieldValue = document.createElement("div");
+      row.append(label, fieldValue);
+      if (collapseLongText && ["content", "description"].includes(key) && typeof value === "string" && (value.length > 320 || value.split("\n").length > 4)) {
+        const preview = document.createElement("span");
+        preview.textContent = value.split("\n").slice(0, 4).join("\n").slice(0, 320) + " …";
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = "Vollständigen Inhalt anzeigen";
+        const full = document.createElement("div"); full.textContent = value;
+        details.append(summary, full);
+        details.addEventListener("toggle", () => {
+          preview.hidden = details.open;
+          summary.textContent = details.open ? "Inhalt einklappen" : "Vollständigen Inhalt anzeigen";
+        });
+        fieldValue.append(preview, details);
+      } else if (value !== null && typeof value === "object") {
+        if (Array.isArray(value) && !value.length) fieldValue.append("Keine Einträge");
+        else fieldValue.append(renderFields(Array.isArray(value) ? Object.fromEntries(value.map((item, i) => [i + 1, item])) : value, collapseLongText, proposals));
+      } else {
+        const referenced = ["source_action_id", "target_action_id"].includes(key) ? proposals.findIndex(action => action.id === value) : -1;
+        const translated = ["type", "status", "task_status", "source_type", "target_type", "relation", "format"].includes(key);
+        fieldValue.append(referenced >= 0 ? `Vorschlag ${referenced + 1} · ${actionName(proposals[referenced])}` : value === null ? "Nicht gesetzt" : value === "" ? "Leer" : typeof value === "boolean" ? value ? "Ja" : "Nein" : translated ? valueNames[value] || String(value) : String(value));
+      }
+      fields.append(row);
+    }
+    return fields;
+  }
   const button = (text, action, variant = "") => {
     const el = document.createElement("button");
     el.type = "button";
@@ -70,6 +132,7 @@
     let started = 0, ended = false, ready = false, applying = false, closeOnly = false;
     let reconciling = false, reconcileDeadline = 0, approvalRevision = -1, completedApprovalRevision = -1;
     let revision = -1, planKey = "", lastApply = "", localSpeech = false;
+    let approvedActions = [];
     let collapsed = false, hasProposal = false, dismissed = false;
     let elapsed = "00:00";
     let displayedError = "";
@@ -82,10 +145,13 @@
     });
     mute.setAttribute("aria-pressed", "false");
     mute.disabled = true;
-    const stop = button("BEENDEN", () => end(), "btn--danger");
+    const stop = button("BEENDEN", () => {
+      if (applying || reconciling) end();
+      else dismissPanel();
+    }, "btn--danger");
     stop.setAttribute("aria-label", "BEENDEN");
     stop.title = "Gespräch beenden";
-    const dismiss = button("SCHLIESSEN", () => {
+    function dismissPanel() {
       if (applying || reconciling) return;
       dismissed = true;
       window.NRCInspector.removeTemporary("sullivan-voice");
@@ -94,16 +160,15 @@
       layoutObserver.disconnect();
       if (active?.end === end) active = null;
       document.getElementById("sullivanVoice")?.focus();
-    }, "btn--ghost");
+    }
     stop.disabled = true;
     actions.append(mute, stop);
     const review = document.createElement("section");
     review.className = "voice-review";
     review.setAttribute("aria-label", "Sullivan-Freigabe");
-    const reviewActions = document.createElement("div");
-    reviewActions.className = "voice-actions";
-    reviewActions.append(dismiss);
-    review.append(status, usage, body, reviewActions);
+    const summary = document.createElement("div"); summary.className = "voice-summary";
+    summary.append(status, usage);
+    review.append(summary, body);
     let openRequest = 0;
     active = { end, expand: () => setCollapsed(false, false) };
     setCollapsed(true);
@@ -133,10 +198,13 @@
           identity.className = "inspector-identity-row";
           const heading = document.createElement("span");
           heading.className = "header-text"; heading.textContent = "SULLIVAN · SPRACHE";
-          const close = button("×", () => setCollapsed(true), "btn--danger task-detail-close");
-          close.setAttribute("aria-label", "Zurück zum vorherigen Inhalt");
-          identity.append(heading, close);
+          identity.append(heading);
           const mode = document.createElement("div"); mode.className = "inspector-mode-row";
+          mode.innerHTML = window.NRCDetailUI.renderCloseControl("voiceReviewClose");
+          mode.querySelector("button").onclick = () => {
+            if (ended && !applying && !reconciling) dismissPanel();
+            else setCollapsed(true);
+          };
           inspectorHeader.replaceChildren(identity, mode);
           updatePanel();
         },
@@ -247,7 +315,7 @@
               return;
             }
             mute.disabled = false;
-            status.textContent = "VERBUNDEN · Mikrofon an · Änderungen nur per Klick bestätigen.";
+            status.textContent = "VERBUNDEN";
           }
           if (event.type === "session.input_transcript.delta") {
             localSpeech = true; disablePlan();
@@ -308,17 +376,46 @@
       lastApply = JSON.stringify(data);
       hasProposal = false;
       disablePlan();
-      dismiss.disabled = applying;
       const root = body.querySelector("[data-voice-result]");
       root.replaceChildren();
       const summary = document.createElement("p");
       summary.className = "nrc-dialog-message";
       summary.textContent = `${data.applied?.length || 0} Aktionen erfolgreich · ${data.failed?.length || 0} mit Fehler oder unbestätigtem Ausgang. Übrige Aktionen wurden nicht automatisch ausgeführt.`;
       if (data.ok === false || data.failed?.length) summary.textContent += " Datensätze prüfen: Eine Aktion könnte trotz Fehler gespeichert sein. Nicht erneut anwenden.";
-      const details = document.createElement("details");
-      const title = document.createElement("summary"); title.textContent = "Ausführungsergebnis / Datensatz-IDs";
-      const pre = document.createElement("pre"); pre.className = "ai-action-desc"; pre.textContent = JSON.stringify(data, null, 2);
-      details.append(title, pre); root.append(summary, details);
+      root.append(summary);
+      for (const [entries, failed] of [[data.applied || [], false], [data.failed || [], true]]) {
+        for (const entry of entries) {
+          const action = approvedActions.find(action => action.id === entry.action_id) || entry;
+          const card = document.createElement("section"); card.className = "ai-action-plan";
+          const title = document.createElement("div"); title.className = "ai-action-plan-header";
+          title.textContent = `${actionName(action)}${action.title ? ` · ${action.title}` : ""}`;
+          const outcome = document.createElement("p"); outcome.className = "nrc-dialog-message";
+          outcome.textContent = failed ? "Fehler oder Ausgang unbestätigt. Datensatz prüfen, nicht erneut ausführen."
+            : entry.already_applied ? "Bereits ausgeführt; nicht erneut angewendet." : "Erfolgreich ausgeführt.";
+          const content = document.createElement("div"); content.className = "ai-action-plan-status";
+          content.append(outcome); card.append(title, content);
+          const entity = entry.deleted_entity || entry.entity || entry.created_entity;
+          if (entity) {
+            const label = `${valueNames[entity.type] || entity.type} #${entity.id}${entity.title ? ` · ${entity.title}` : ""}`;
+            if (entry.deleted_entity) {
+              const deleted = document.createElement("p"); deleted.className = "ai-action-desc";
+              deleted.textContent = `Gelöscht: ${label}`; content.append(deleted);
+            } else {
+              content.append(button(`${label} ↗`, () => {
+                if (applying || reconciling) return;
+                setCollapsed(true);
+                NRCAI.navigateToSource(entity, 0n);
+              }, "btn--ghost"));
+            }
+          }
+          const edge = entry.deleted_edge || entry.created_edge;
+          if (edge) content.append(renderFields(edge));
+          const details = document.createElement("details");
+          const label = document.createElement("summary"); label.textContent = "Technische Details";
+          details.append(label, renderFields({ id: entry.action_id, ...(entry.error ? { error: entry.error } : {}) }));
+          content.append(details); root.append(card);
+        }
+      }
       if (data.ok === true && !data.failed?.length) setCollapsed(true);
       else { displayedError = "Ausführung prüfen"; setCollapsed(false); }
       updatePanel();
@@ -341,7 +438,6 @@
           setCollapsed(false);
           updatePanel();
         }
-        dismiss.disabled = applying || reconciling;
         if (data.closed) end(data.error || "Gespräch beendet. Ergebnis der Bestätigung siehe unten.");
         if (ended) {
           if (!reconciling) { cleanup(); return; }
@@ -351,7 +447,7 @@
             status.textContent = data.error;
             if (data.error !== displayedError) setCollapsed(false);
           }
-          else status.textContent = data.applying ? "BESTÄTIGTE AKTIONEN WERDEN AUSGEFÜHRT …" : data.busy ? "SULLIVAN RECHERCHIERT …" : "VERBUNDEN · Änderungen nur per Klick bestätigen.";
+          else status.textContent = data.applying ? "BESTÄTIGTE AKTIONEN WERDEN AUSGEFÜHRT …" : data.busy ? "SULLIVAN RECHERCHIERT …" : "VERBUNDEN";
           displayedError = data.error || "";
           const key = `${data.revision}:${data.result?.plan_id || ""}:${!!data.result}:${data.busy}:${data.applying}`;
           if (key !== planKey) {
@@ -365,7 +461,7 @@
         if (!reconciling) return;
       }
       if (reconciling && Date.now() >= reconcileDeadline) {
-        reconciling = false; dismiss.disabled = applying;
+        reconciling = false;
         hasProposal = false;
         displayedError = "Ausgang unbestätigt";
         body.querySelector("[data-voice-result]").textContent = "Ausgang weiterhin unbestätigt. Datensätze prüfen; Bestätigung nicht wiederholen.";
@@ -398,34 +494,36 @@
       heading.textContent = `VORSCHLAG · ${result.proposed_actions.length} AKTIONEN · REV ${data.revision}`;
       card.append(heading);
       const checks = [];
-      for (const action of result.proposed_actions) {
+      for (const [index, action] of result.proposed_actions.entries()) {
         const row = document.createElement("label"); row.className = "ai-action-row";
         const check = document.createElement("input"); check.type = "checkbox"; check.value = action.id;
-        check.setAttribute("aria-label", `${action.type}: ${action.title || action.id}`);
+        check.setAttribute("aria-label", `${actionName(action)}: ${action.title || action.id}`);
         // Deliberately unchecked: selection must be explicit, including deletes.
         checks.push(check);
         const content = document.createElement("div"); content.className = "ai-action-body";
         const title = document.createElement("div"); title.className = "ai-action-title";
-        title.textContent = `${action.type} · ${action.title || action.id}`;
-        const fields = document.createElement("pre"); fields.className = "ai-action-desc";
-        fields.textContent = JSON.stringify(action, null, 2); // show every approved field, never clip content
-        content.append(title, fields); row.append(check, content); card.append(row);
+        title.textContent = `${index + 1}. ${actionName(action)}`;
+        // Keep all approved values, including empty, zero and unknown fields.
+        const { type, id, ...values } = action;
+        content.append(title, renderFields(values, true, result.proposed_actions));
+        row.append(check, content); card.append(row);
       }
-      const hint = document.createElement("p"); hint.className = "nrc-dialog-message";
+      const hint = document.createElement("p"); hint.className = "nrc-dialog-message voice-approval-hint";
       hint.textContent = "Alle Felder prüfen und Aktionen auswählen. Neue Sprache macht diesen Vorschlag ungültig. Gesprochenes Ja führt nichts aus.";
       const confirm = button("AUSWAHL BESTÄTIGEN", async () => {
         const ids = checks.filter(el => el.checked && !el.disabled).map(el => el.value);
         if (!ids.length || applying || reconciling || ended || localSpeech) return;
         applying = true; reconciling = true; reconcileDeadline = Date.now() + 60000;
+        approvedActions = result.proposed_actions.filter(action => ids.includes(action.id));
         lastApply = "";
         body.querySelector("[data-voice-result]").replaceChildren();
         approvalRevision = data.revision;
-        disablePlan(); dismiss.disabled = true;
+        disablePlan();
         body.querySelectorAll("[data-voice-answer] button").forEach(el => { el.disabled = true; });
         status.textContent = "BESTÄTIGUNG WIRD AUSGEFÜHRT …";
         try { showResult(await request("apply", { revision: data.revision, plan_id: result.plan_id, action_ids: ids }), data.revision); }
         catch (error) { if (reconciling) status.textContent = `Nicht erneut bestätigen. Status prüfen: ${error.message}`; }
-        finally { applying = false; planKey = ""; dismiss.disabled = reconciling; updatePanel(); }
+        finally { applying = false; planKey = ""; updatePanel(); }
       }, "btn--primary");
       confirm.disabled = true;
       checks.forEach(check => check.onchange = () => { confirm.disabled = !checks.some(el => el.checked) || localSpeech || applying || reconciling || ended; });
