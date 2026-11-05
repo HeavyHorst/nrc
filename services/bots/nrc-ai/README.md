@@ -32,6 +32,85 @@ Missing required provider credentials prevent startup. If the paste LLM initiali
 but the Ask engine fails, paste remains available and Ask returns HTTP 503.
 Health alone does not prove that your provider can complete requests.
 
+## Voice prototype
+
+Set `NRC_VOICE_OPENAI_API_KEY` on the AI service to enable GPT-Live. The OpenAI
+project must have access to `gpt-live-1`; the ordinary Sullivan backend still uses
+`LLM_PROVIDER` and `LLM_MODEL`. Empty means disabled. Use the authenticated HTTPS
+client through the Tailscale proxy, open Sullivan, then **VOICE** to start the
+microphone and session.
+
+`NRC_VOICE_OPENAI_VOICE_ID` optionally selects a saved custom voice. Unset or empty
+omits the audio voice override and leaves the provider default. To opt into this
+installation's saved voice, set
+`NRC_VOICE_OPENAI_VOICE_ID=voice_6aec886c508081918e0df89198e00d76` on the AI service;
+the OpenAI project must have access to that voice.
+
+The browser sends audio directly to OpenAI over WebRTC. The AI service creates
+the session and attaches a server-side WebSocket for client delegation. The
+private service must not be exposed directly: it trusts the proxy's stripped and
+replaced `X-Tailscale-User` header. All `/ai/voice/{create,status,apply,close}`
+requests are POST JSON with `workspace`; session operations also require `id`.
+Sessions belong to one authenticated user and workspace. The API key never goes
+to the browser.
+
+Voice proposals use a separate Ask plan store, inaccessible through `/ask/apply`.
+The client displays all action fields and starts with an empty selection. Only
+the confirmation button submits `plan_id`, `revision`, and nonempty `action_ids`.
+New speech invalidates the proposal on the server. Each approval is consumed
+before execution; repeated clicks do not retry it. The remaining unselected
+actions require a new proposal. Read the per-action results: Apply is not atomic.
+Any per-action failure, including an HTTP-200 response with an unknown write
+outcome, stops further voice planning and closes audio. Inspect records before
+continuing; a failed acknowledgment does not prove the write failed. After a lost
+HTTP reply, the client polls for the matching approval result for up to a minute,
+even after audio ends. A service restart or page reload loses this recovery state;
+inspect NRC records before asking for the same write again.
+
+Each delegation uses a fresh plan with the accumulated transcript and the exact
+previous answer/proposal (up to 64,000 bytes), so references such as "the second
+one" retain their meaning without changing a reviewed plan. Only one backend
+request runs at a time. Corrections invalidate its result. A delayed fragment
+whose `start_ms` precedes or equals the retained delegation's `offset_ms` reruns
+that task, even after publication. Later speech or missing timestamps requires
+a new delegation before a replacement answer is published.
+This can delay a correction until the old lookup finishes. Interrupted playback
+does not cancel an already confirmed write. Clicking VOICE starts the microphone
+and opens compact controls at the bottom of the sidebar, or in the footer on
+narrow screens and focused share views. Ordinary answers keep this view; proposals
+and new errors open a temporary Inspector entry. Automatic opening defers while
+an Inspector editor is visible; a deliberate click uses the normal discard guard.
+Back and successful execution restore the preceding record. If the user has
+already navigated elsewhere, completion removes only the stale history entry.
+Minimizing never confirms actions.
+Sources open the existing inspector without ending audio. The row shows Sullivan,
+duration, microphone state and end; click Sullivan to restore details. Narrow
+screens retain 44px controls. Changing workspace ends the conversation. Closing the panel
+ends audio and is blocked while an approval outcome is unresolved; minimizing
+remains available.
+
+Sessions stop after ten minutes, 64 delegations, or 24,000 transcript bytes. The
+server closes abandoned sessions after 20 seconds without client polling. Muting
+does not end billing. The UI shows elapsed time and final provider duration when
+available, without a price estimate. An interrupted close can leave final usage
+unconfirmed. Neither audio
+nor transcripts are written to NRC records or added to server logs by the voice
+bridge; provider processing and existing Ask/tool logging policies still apply.
+
+Local checks without a provider key:
+
+```sh
+go -C services/bots/nrc-ai test -race -run TestVoice ./...
+node client/voice.e2e.mjs
+```
+
+The Go test uses an HTTP/WebSocket provider fixture. The browser test uses the
+production panel with simulated media and API responses; `--serve` runs that
+fixture for visual review. These tests do not establish real audio quality,
+provider access, latency, or successful end-to-end NRC mutations. Before enabling
+for users, test German speech, delayed transcript/delegation delivery, interruptions,
+network loss and actual confirmed writes against a disposable NRC workspace.
+
 ## Use
 
 Before its first model call, Sullivan retrieves bounded workspace evidence using

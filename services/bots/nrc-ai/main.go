@@ -325,6 +325,18 @@ func main() {
 		mux.HandleFunc("POST /ask", askHandler)
 	}
 
+	// Separate stores prevent the public text Apply endpoint from executing a
+	// voice proposal without its owner/revision checks. Disabled without a key.
+	voiceStore := newAgentSessionStore(15*time.Minute, 20)
+	var voiceAsk http.HandlerFunc
+	if os.Getenv("NRC_VOICE_OPENAI_API_KEY") != "" {
+		voiceAsk, err = handleAskFantasy(wm, search, sourcebot, cfg, cfg.MaxContextTokens, voiceStore)
+		if err != nil {
+			slog.Error("voice ask engine unavailable", "error", err)
+		}
+	}
+	newVoiceService(os.Getenv("NRC_VOICE_OPENAI_API_KEY"), os.Getenv("NRC_VOICE_OPENAI_VOICE_ID"), voiceAsk, handleAskApply(wm, voiceStore)).register(mux)
+
 	type healthResponse struct {
 		Status      string `json:"status"`
 		LLMProvider string `json:"llm_provider"`
