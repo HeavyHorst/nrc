@@ -24,6 +24,7 @@
 
   function normalize(ref) {
     if (!ref || ref.id == null) return null;
+    if (ref.type === "temporary") return { ...ref, roomId: 0n, id: String(ref.id) };
     return { ...ref, roomId: 0n, id: BigInt(ref.id), type: String(ref.type).toLowerCase() };
   }
 
@@ -42,7 +43,8 @@
   function setDrawer(open, trigger = null) {
     const inspector = shell();
     if (!inspector) return;
-    const overlay = matchMedia("(max-width: 1199px)").matches;
+    const overlay = matchMedia("(max-width: 1199px)").matches ||
+      current()?.type === "temporary" && ["noteShare", "sullivanShare"].includes(state.activeView);
     if (open && overlay) {
       if (!document.body.classList.contains("inspector-open")) {
         state.returnFocus = trigger || document.activeElement;
@@ -54,7 +56,7 @@
         if (state.stack.length > 1) document.getElementById("inspectorBack")?.focus();
         else inspector.focus();
       });
-    } else if (!open) {
+    } else {
       inspector.removeAttribute("role");
       inspector.removeAttribute("aria-modal");
       inspector.removeAttribute("tabindex");
@@ -227,8 +229,11 @@
     const token = ++state.sequence;
     const stillCurrent = () => token === state.sequence && key(current()) === key(ref);
     setDetailLoading(false);
+    shell()?.classList.toggle("inspector-temporary", ref.type === "temporary");
     showEntityHost();
-    if (["company", "activity"].includes(ref.type) || ref.type === "contact" && !ref.id) {
+    if (ref.type === "temporary") {
+      ref.render(entityHost(), document.getElementById("inspectorHeader"));
+    } else if (["company", "activity"].includes(ref.type) || ref.type === "contact" && !ref.id) {
       window.NRCCustomers?.showInspector(ref);
     } else if (["note", "task", "contact"].includes(ref.type)) {
       loadLinkedEntity(ref, stillCurrent, restoreScroll);
@@ -264,20 +269,27 @@
   }
 
   async function openEntity(input, options = {}) {
+    // Background interventions must not interrupt an editor or raise a discard
+    // prompt. A deliberate click still uses each record's normal discard guard.
+    if (options.automatic && current()?.type !== "temporary" && (
+      detailLoading || shell()?.classList.contains("inspector-unavailable") ||
+      Array.from(shell()?.querySelectorAll('input:not([readonly]):not([disabled]), textarea:not([readonly]):not([disabled]), select:not([disabled]), [contenteditable="true"]') || [])
+        .some(el => el.getClientRects().length > 0)
+    )) return false;
     const intent = ++state.intentVersion;
     const ref = normalize({ ...input, ...options });
     if (!ref) return false;
     const existing = current();
     if (existing && key(existing) === key(ref)) {
       if (!(await canDispose(existing))) return false;
-      if (!isIntentCurrent(intent)) return false;
+      if (!isIntentCurrent(intent) || options.isCancelled?.()) return false;
       Object.assign(existing, ref);
       renderEntity(existing);
       setDrawer(true);
       return true;
     }
     if (!(await canDispose(existing))) return false;
-    if (!isIntentCurrent(intent)) return false;
+    if (!isIntentCurrent(intent) || options.isCancelled?.()) return false;
     const replaceCurrent = Boolean(existing && options.replaceCurrent);
     rememberDocumentScroll(existing);
     if (!replaceCurrent || existing.type !== ref.type) {
@@ -286,6 +298,7 @@
     if (replaceCurrent) {
       state.stack[state.stack.length - 1] = ref;
     } else {
+      if (ref.type === "temporary") state.stack = state.stack.filter(item => key(item) !== key(ref));
       state.stack.push(ref);
     }
     renderEntity(ref);
@@ -320,6 +333,7 @@
   }
 
   function clearModuleSelection(ref, preserveDetail = false) {
+    if (ref?.type === "temporary") ref.onLeave?.();
     if (ref?.type === "note") window.NRCNotes?.clearNoteSelection?.({ fromInspector: true, preserveDetail });
     if (ref?.type === "task") window.NRCTasks?.clearTaskSelection?.({ fromInspector: true, preserveDetail });
     if (ref?.type === "reminder") window.NRCTasks?.clearReminderSelection?.({ fromInspector: true });
@@ -337,7 +351,7 @@
     clearModuleSelection(ref, state.stack.length > 1);
     state.stack.pop();
     const previous = current();
-    if (previous) renderEntity(previous, { restoreScroll: true });
+    if (previous) { renderEntity(previous, { restoreScroll: true }); setDrawer(true); }
     else {
       showContext();
       setDrawer(false);
@@ -346,6 +360,7 @@
   }
 
   async function close() {
+    if (current()?.type === "temporary") return back();
     const intent = ++state.intentVersion;
     const ref = current();
     if (ref && !(await canDispose(ref))) return false;
@@ -355,6 +370,21 @@
     showContext();
     setDrawer(false);
     return true;
+  }
+
+  function removeTemporary(id) {
+    const ref = state.stack.find(item => item.type === "temporary" && item.id === String(id));
+    if (!ref) return;
+    const wasCurrent = current() === ref;
+    state.stack = state.stack.filter(item => item !== ref);
+    if (wasCurrent) {
+      // A pending user navigation owns its intent even when this entry expires.
+      state.sequence++;
+      ref.onLeave?.();
+      if (current()) { renderEntity(current(), { restoreScroll: true }); setDrawer(true); }
+      else { showContext(); setDrawer(false); }
+    }
+    updateActions();
   }
 
   function entityDeleted(input) {
@@ -459,6 +489,7 @@
 
   function showContext() {
     if (current()) return;
+    shell()?.classList.remove("inspector-temporary");
     const view = state.activeView;
     if (view === "newsletter" || view === "history") {
       shell()?.classList.add("inspector-overview-hidden", "inspector-unavailable");
@@ -573,7 +604,7 @@
   }
 
   function updateActions() {
-    const hasHistory = state.stack.length > 1;
+    const hasHistory = state.stack.length > 1 || current()?.type === "temporary";
     const actions = document.getElementById("inspectorActions");
     const modeRow = document.querySelector("#inspectorHeader > .inspector-mode-row");
     backControl ||= document.getElementById("inspectorBack");
@@ -628,7 +659,8 @@
     shell()?.classList.toggle("inspector-overview-hidden", view === "overview" || view === "newsletter" || view === "history");
     const focused = view === "noteShare" || view === "sullivanShare" || view === "overview" || view === "newsletter" || view === "history";
     shell()?.classList.toggle("inspector-unavailable", focused);
-    if (focused) setDrawer(false);
+    if (current()?.type === "temporary") setDrawer(true);
+    else if (focused) setDrawer(false);
     else if (!current()) showContext();
   }
 
@@ -702,6 +734,7 @@
       else setDrawer(false);
     });
     matchMedia("(max-width: 1199px)").addEventListener("change", (event) => {
+      if (current()?.type === "temporary") { setDrawer(true); return; }
       if (!event.matches) {
         shell()?.removeAttribute("role");
         shell()?.removeAttribute("aria-modal");
@@ -714,7 +747,7 @@
   });
 
   window.NRCInspector = {
-    openEntity, prefetchNote, back, close, entityDeleted, showContext, refreshContext: showContext,
+    openEntity, prefetchNote, back, close, entityDeleted, showContext, refreshContext: showContext, removeTemporary,
     showSystemLogEntry: renderSystemLogEntry,
     setActiveView, current, hasEntity: () => !!current(), consumeRoomChange,
     requestRoomChange, consumeWorkspaceChange, requestWorkspaceChange,

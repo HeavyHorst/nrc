@@ -140,7 +140,7 @@ function makeTestNode() {
 test("Notes context renders aligned scope bands and an explicit empty selection", () => {
   const header = makeTestNode();
   const inspector = makeTestNode();
-  inspector.classList = { toggle() {} };
+  inspector.classList = { toggle() {}, remove() {} };
   const chatHost = makeTestNode();
   const viewHost = makeTestNode();
   const entityHost = makeTestNode();
@@ -796,4 +796,16 @@ test("newsletter exposes the inspector only for an explicitly opened record and 
   assert.equal(classes.has("inspector-entity-only"), true);
   await f.inspector.close();
   assert.equal(classes.has("inspector-overview-hidden"), true);
+});
+
+test("expiring a temporary entry preserves a navigation already awaiting disposal", async () => {
+  const { inspector } = loadInspector();
+  await inspector.openEntity({ type: "task", id: 10n });
+  await inspector.openEntity({ type: "temporary", id: "voice", render() {} });
+  const navigation = inspector.openEntity({ type: "task", id: 20n });
+  inspector.removeTemporary("voice");
+  assert.equal(await navigation, true);
+  assert.equal(inspector.current().id, 20n);
+  await inspector.back();
+  assert.equal(inspector.current().id, 10n);
 });
