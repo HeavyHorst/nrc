@@ -79,6 +79,14 @@ GPL-2.0-or-later. Retain the installed package copyright notices and satisfy
 applicable corresponding-source requirements when redistributing that image.
 These programs do not by themselves relicense NRC's Go source.
 
+## Android voice
+
+The Android app uses `io.github.webrtc-sdk:android:144.7559.14`, a native WebRTC
+build. Its upstream WebRTC and third-party notices are bundled in the APK at
+`assets/licenses/WEBRTC.md`, copied from the SDK's `v144.7559.14` tag (commit
+`905355c191c1a1678dd99f11aff2d4fde6b486fa`). Keep that notice file with redistributed
+APKs. The notices describe the upstream bundle, not NRC's own code.
+
 ## Container images
 
 Base images and operating-system packages have their own licenses. In particular,

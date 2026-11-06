@@ -27,6 +27,7 @@ kotlin {
         jvmMain.dependencies { implementation("io.ktor:ktor-client-cio:3.0.3") }
         jvmTest.dependencies {
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+            implementation("io.ktor:ktor-client-mock:3.0.3")
             implementation("app.cash.sqldelight:sqlite-driver:2.0.2")
             implementation("com.squareup.okhttp3:mockwebserver:4.12.0")
             implementation("com.squareup.okhttp3:okhttp-tls:4.12.0")

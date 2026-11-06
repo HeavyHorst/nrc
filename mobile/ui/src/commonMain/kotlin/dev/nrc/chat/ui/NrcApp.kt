@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material3.*
@@ -110,12 +111,20 @@ fun NrcApp(
     onTailnetSignIn: (() -> Unit)? = null,
     onSwitchTailnet: (() -> Unit)? = null,
     switchingTailnet: Boolean = false,
+    voice: VoiceState = VoiceState(),
+    onVoiceStart: (() -> Unit)? = null,
+    onVoiceMute: () -> Unit = {},
+    onVoiceEnd: () -> Unit = {},
+    onVoiceDismiss: () -> Unit = {},
+    onVoiceSelect: (String, Boolean) -> Unit = { _, _ -> },
+    onVoiceApprove: () -> Unit = {},
 ) {
     var settings by rememberSaveable { mutableStateOf(state.profile.server.isBlank()) }
     var diagnostics by rememberSaveable { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     var newDM by remember { mutableStateOf(false) }
     var confirmTailnetSwitch by rememberSaveable { mutableStateOf(false) }
+    var confirmVoice by remember { mutableStateOf(false) }
     val selected = state.conversations.firstOrNull { it.id == state.selected }
     platformBackHandler(diagnostics || (settings && state.profile.server.isNotBlank()) || selected != null) {
         when {
@@ -148,6 +157,8 @@ fun NrcApp(
                         TextButton(onClick = onTailnetSignIn) { Text("Continue Tailscale sign-in") }
                     }
                 }
+                if ((diagnostics || settings) && voice.visible) VoicePanel(voice, onVoiceMute, onVoiceEnd,
+                    onVoiceDismiss, onVoiceSelect, onVoiceApprove, platformBackHandler)
                 if (diagnostics) {
                     SystemLog(state, onClose = { diagnostics = false }, onClear = onClearDiagnostics)
                 } else if (settings) {
@@ -183,6 +194,10 @@ fun NrcApp(
                         Box {
                             IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Connection settings and actions") }
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                if (onVoiceStart != null) DropdownMenuItem(text = { Text("Sullivan Sprache") },
+                                    enabled = state.connection == Connection.Connected && !state.storageBlocked &&
+                                        !switchingTailnet && !voice.active && !voice.starting && !voice.resolving,
+                                    onClick = { menu = false; confirmVoice = true })
                                 DropdownMenuItem(text = { Text("Connection settings") }, enabled = !switchingTailnet, onClick = { menu = false; settings = true })
                                 DropdownMenuItem(text = { Text("Reconnect") }, enabled = !switchingTailnet, onClick = { menu = false; onReconnect() })
                                 if (onSwitchTailnet != null) DropdownMenuItem(text = { Text("Switch Tailscale account") },
@@ -192,6 +207,17 @@ fun NrcApp(
                         }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    if (onVoiceStart != null && !voice.visible) TextButton(
+                        onClick = { confirmVoice = true },
+                        enabled = state.connection == Connection.Connected && !state.storageBlocked &&
+                            !switchingTailnet && !voice.active && !voice.starting && !voice.resolving,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                        Icon(Icons.Outlined.Mic, null, Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Mit Sullivan sprechen")
+                    }
+                    if (voice.visible) VoicePanel(voice, onVoiceMute, onVoiceEnd, onVoiceDismiss,
+                        onVoiceSelect, onVoiceApprove, platformBackHandler)
                     state.notice?.let { Notice(it, onDismissNotice) }
                     if (preparingAttachment && state.fileTransfer == null) {
                         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
@@ -219,6 +245,17 @@ fun NrcApp(
         }
         if (newDM) NewDM(state.connection == Connection.Connected, { newDM = false }) {
             onStartDM(it); newDM = false
+        }
+        if (confirmVoice && onVoiceStart != null) {
+            AlertDialog(onDismissRequest = { confirmVoice = false }, shape = square,
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                title = { Text("Sullivan Sprache") },
+                text = { Text("Audio wird bei OpenAI verarbeitet. NRC-Fragen beziehen sich auf „${state.profile.workspace}“. Änderungen erfordern Auswahl und Bestätigung. Im Hintergrund endet das Gespräch.",
+                    modifier = Modifier.verticalScroll(rememberScrollState())) },
+                confirmButton = { TextButton(enabled = state.connection == Connection.Connected && !state.storageBlocked &&
+                    !switchingTailnet && !voice.active && !voice.starting && !voice.resolving,
+                    onClick = { confirmVoice = false; onVoiceStart() }) { Text("Gespräch starten") } },
+                dismissButton = { TextButton(onClick = { confirmVoice = false }) { Text("Abbrechen") } })
         }
         if (confirmTailnetSwitch && onSwitchTailnet != null) {
             AlertDialog(onDismissRequest = { confirmTailnetSwitch = false }, shape = square,
@@ -300,7 +337,12 @@ private fun ColumnScope.SystemLog(state: ChatState, onClose: () -> Unit, onClear
 private fun ConnectionLabel(connection: Connection) {
     val colour = if (connection == Connection.Connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
     Text("● ", color = colour, fontSize = 10.sp)
-    Text(connection.name.uppercase(), color = colour, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
+    Text(when (connection) {
+        Connection.Connected -> "VERBUNDEN"
+        Connection.Connecting -> "VERBINDET"
+        Connection.Reconnecting -> "VERBINDET ERNEUT"
+        Connection.Disconnected -> "GETRENNT"
+    }, color = colour, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
         maxLines = 1, letterSpacing = 0.4.sp)
 }
 
@@ -324,14 +366,14 @@ private fun Notice(text: String, onDismiss: (() -> Unit)? = null) {
 private fun ColumnScope.Conversations(state: ChatState, onSelect: (Long) -> Unit, onNewDM: () -> Unit) {
     var search by rememberSaveable { mutableStateOf("") }
     OutlinedTextField(search, { search = it }, Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 20.dp),
-        placeholder = { Text("Search conversations", fontSize = 15.sp) }, singleLine = true, shape = square,
+        placeholder = { Text("Gespräche suchen", fontSize = 15.sp) }, singleLine = true, shape = square,
         leadingIcon = { Icon(Icons.Outlined.Search, "Search", Modifier.size(20.dp)) })
     val filtered = state.conversations.filter { search.isBlank() || it.name.contains(search, ignoreCase = true) }
     LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
         for (direct in listOf(false, true)) {
             item {
                 Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp).height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (direct) "DIRECT" else "ROOMS", Modifier.weight(1f), fontFamily = FontFamily.Monospace,
+                    Text(if (direct) "DIREKT" else "RÄUME", Modifier.weight(1f), fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp, letterSpacing = 2.sp)
                     if (direct) IconButton(onClick = onNewDM, enabled = state.connection == Connection.Connected) {
                         Icon(Icons.Outlined.Add, "Start direct message", Modifier.size(22.dp))
@@ -348,14 +390,14 @@ private fun ColumnScope.Conversations(state: ChatState, onSelect: (Long) -> Unit
                     Column(Modifier.weight(1f)) {
                         Text(conversation.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(last?.let { "${if (it.author == state.username) "You" else it.author}: ${it.text}" }
-                            ?: if (direct) "Live conversation" else "Open conversation",
+                        Text(last?.let { "${if (it.author == state.username) "Du" else it.author}: ${it.text}" }
+                            ?: if (direct) "Direktnachricht" else "Gespräch öffnen",
                             Modifier.padding(top = 5.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Column(Modifier.padding(start = 10.dp), horizontalAlignment = Alignment.End) {
                         if (last != null) Meta(clockTime(last.timestampNanos))
-                        if (unread > 0) Text("$unread new", Modifier.padding(top = 5.dp), fontFamily = FontFamily.Monospace,
+                        if (unread > 0) Text("$unread neu", Modifier.padding(top = 5.dp), fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
@@ -561,7 +603,7 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
             if (it.text != draft) onDraft(id, it.text)
         }, Modifier.weight(1f).heightIn(min = 56.dp, max = 160.dp).focusRequester(composerFocus),
             enabled = !state.storageBlocked,
-            placeholder = { Text("Message ${if (conversation.direct) "@" else "#"}${conversation.name}", fontSize = 15.sp) },
+            placeholder = { Text("Nachricht an ${if (conversation.direct) "@" else "#"}${conversation.name}", fontSize = 15.sp) },
             shape = square, maxLines = 5, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
         Spacer(Modifier.width(10.dp))
         val canSend = !state.storageBlocked && state.connection == Connection.Connected && draft.isNotBlank() &&
@@ -570,7 +612,7 @@ private fun ColumnScope.Transcript(state: ChatState, conversation: Conversation,
         Button(onClick = onSend, enabled = canSend, modifier = Modifier.size(56.dp), shape = square,
             contentPadding = PaddingValues(0.dp)) { Icon(Icons.AutoMirrored.Outlined.Send, "Send message", Modifier.size(22.dp)) }
     }
-    Meta(if (draft.isNotBlank()) "Draft saved locally" else if (state.username.isNotBlank()) "SIGNED IN · ${state.username}" else "",
+    Meta(if (draft.isNotBlank()) "Entwurf lokal gespeichert" else if (state.username.isNotBlank()) "ANGEMELDET · ${state.username}" else "",
         Modifier.padding(start = 18.dp, end = 16.dp, top = 2.dp, bottom = 6.dp))
 }
 

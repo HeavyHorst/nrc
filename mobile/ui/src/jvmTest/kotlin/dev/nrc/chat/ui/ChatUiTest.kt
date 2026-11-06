@@ -231,18 +231,18 @@ class ChatUiTest {
                 { sends++ }, {}, {}, {}, {}, {})
         }
         compose.onNode(hasSetTextAction()).assertDoesNotExist()
-        compose.onNodeWithText("Message #engineering").assertIsNotEnabled()
+        compose.onNodeWithText("Nachricht an #engineering").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Send message").assertIsNotEnabled()
         compose.runOnIdle { state = state.copy(storageBlocked = false) }
-        compose.onNodeWithText("Message #engineering").performTextInput("Draft survives reconnect")
-        compose.onNodeWithText("Draft saved locally").assertExists()
+        compose.onNodeWithText("Nachricht an #engineering").performTextInput("Draft survives reconnect")
+        compose.onNodeWithText("Entwurf lokal gespeichert").assertExists()
         compose.onNodeWithContentDescription("Send message").assertIsNotEnabled()
         compose.runOnIdle { state = state.copy(connection = Connection.Connected) }
         compose.onNodeWithContentDescription("Send message").assertIsEnabled().performClick()
         assertEquals(1, sends)
         assertEquals("Draft survives reconnect", state.drafts[2])
         compose.onNodeWithContentDescription("Back to conversations").performClick()
-        compose.onNodeWithText("ROOMS").assertExists()
+        compose.onNodeWithText("RÄUME").assertExists()
         compose.onNodeWithText("engineering").performClick()
         compose.onNodeWithText("Draft survives reconnect").assertExists()
     }
@@ -268,8 +268,8 @@ class ChatUiTest {
     @Test fun searchFiltersRoomsAndDirectMessages() {
         val state = ChatState(profile = Profile("https://nrc.example", "studio"), conversations = defaultRooms + Conversation(Long.MIN_VALUE + 1, "lena", true))
         compose.setContent { NrcApp(state, {}, { _, _ -> }, {}, {}, {}, {}, {}, {}, darkTheme = true) }
-        compose.onNodeWithText("Search conversations").performTextInput("lena")
-        compose.onNode(hasText("lena") and hasText("Live conversation")).assertExists()
+        compose.onNodeWithText("Gespräche suchen").performTextInput("lena")
+        compose.onNode(hasText("lena") and hasText("Direktnachricht")).assertExists()
         compose.onNodeWithText("engineering").assertDoesNotExist()
     }
 
@@ -334,7 +334,7 @@ class ChatUiTest {
         compose.onNodeWithText("Draft before opening system log").assertExists()
         assertEquals(2L, state.selected)
         compose.runOnIdle { hostBack() }
-        compose.onNodeWithText("ROOMS").assertExists()
+        compose.onNodeWithText("RÄUME").assertExists()
         compose.runOnIdle { assertFalse(backEnabled) }
         assertEquals("Draft before opening system log", state.drafts[2])
     }

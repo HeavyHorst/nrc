@@ -17,6 +17,7 @@ kotlin {
             implementation(compose.materialIconsExtended)
             implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
             implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.32.0")
             implementation("com.mikepenz:multiplatform-markdown-renderer-code:0.32.0")
             implementation("io.coil-kt.coil3:coil-compose:3.1.0")

@@ -36,7 +36,9 @@ white on a dark padded tile for Android adaptive/themed launcher icons.
   Cancel reply removes the unchanged quote
   prefix, preserving draft edits; attachment replies quote the filename, not JSON.
   If the quote itself is edited, it becomes ordinary draft text. Formatted HTML
-  clipboard and Sullivan/record panels remain web-only.
+  clipboard and general record panels remain web-only.
+- **Sullivan Sprache** in the three-dot menu: native WebRTC audio, microphone
+  permission, mute/end controls, answers and explicit selection of proposed writes.
 
 **This is not yet a production mobile messenger.** There is no durable outbox,
 FCM integration, notification permission flow, reactions, or read
@@ -52,6 +54,41 @@ The UI does not claim that `sent` means the recipient read or received a message
 Unacknowledged sends become `delivery unknown`; they are never automatically
 resent, because ephemeral sends cannot safely deduplicate and retained deduplication
 has a bounded retry window.
+
+## Sullivan voice
+
+Connect to NRC, choose **Sullivan Sprache** in the three-dot menu, confirm
+**Gespräch starten**, and grant microphone access. The configured AI service must
+have GPT-Live enabled; see [the voice backend](../services/bots/nrc-ai/README.md#voice-prototype).
+Session creation, status, approval and close use `/ai/voice/*` through NRC's embedded
+Tailscale transport. Audio uses native WebRTC directly to OpenAI, outside Tailscale.
+No provider key belongs in the APK.
+
+Tap **Details** for the full answer, source titles/IDs and proposals. Every action's
+complete payload is available under **Technische Daten anzeigen**, including empty and unknown fields. Actions
+start unchecked; **Bestätigen** submits only the selected IDs and exact
+plan revision. Spoken agreement cannot execute writes. New speech disables the
+old proposal. Source records still need the web client for inspection/editing.
+
+Mute stops microphone recording but does not end the billed session. **Ende**,
+backgrounding, audio-focus loss or a disconnected NRC connection ends audio without
+automatic restart. The same applies to changing workspace, server or Tailscale
+account. A pending create response is closed even if it arrives after End; a
+provider-only session keeps a muted control connection briefly to send its close.
+Sessions have the backend's ten-minute limit. Final provider usage may remain
+unconfirmed after closing.
+
+Creation and approval are never automatically retried. If an approval reply is
+lost, status polling checks that revision for up to a minute, even after audio
+ends or an activity is recreated on rotation. Partial failures and unknown outcomes are shown rather than reported as
+success. Check records before repeating a write. Process death loses this
+in-memory recovery state; there is no background service or persisted transcript.
+
+`VoiceClientTest` checks the HTTP contract with a simulated audio peer;
+`VoiceUiTest` exercises the actual Compose controls. The desktop preview's sample
+mode has a **Sample voice proposal** button after starting voice. It produces no
+audio, requests or writes. Native microphone permissions, audio routing, WebRTC
+connectivity and real GPT-Live speech still require a physical Android device.
 
 ## Markdown in chat
 

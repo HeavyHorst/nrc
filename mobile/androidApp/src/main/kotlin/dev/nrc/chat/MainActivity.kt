@@ -6,6 +6,9 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -14,6 +17,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import app.cash.sqldelight.driver.android.AndroidSqliteDriver
 import dev.nrc.chat.db.ChatDatabase
 import dev.nrc.chat.ui.NrcApp
@@ -29,14 +34,29 @@ import kotlinx.serialization.json.Json
 class MainActivity : ComponentActivity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var http: HttpClient
+    private lateinit var voiceSession: AndroidVoiceSession
     private lateinit var transport: NrcTransport
     private lateinit var chat: ChatClient
     private lateinit var attachments: AndroidAttachments
+    private lateinit var voice: VoiceClient
+    private var voicePermissionTarget: Pair<Profile, String>? = null
+    private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val target = voicePermissionTarget
+        voicePermissionTarget = null
+        if (target != null && target == (chat.state.value.profile to chat.state.value.username) &&
+            lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && chat.state.value.connection == Connection.Connected) {
+            if (granted) voiceSession.start(target.first, target.second) else voice.denied()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        transport = NrcTransport(applicationContext)
+        val app = applicationContext
+        transport = ViewModelProvider(this, object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = AndroidTransportSession(app) as T
+        })[AndroidTransportSession::class.java].transport
         http = HttpClient(OkHttp) {
             engine { config { transport.configure(this) } }
             // OkHttp rejects custom maxFrameSize settings after a successful upgrade.
@@ -45,6 +65,25 @@ class MainActivity : ComponentActivity() {
             expectSuccess = true
         }
         chat = ChatClient(http, AndroidStore(this), scope, AndroidMessageStore.get(this))
+        val sharedTransport = transport
+        voiceSession = ViewModelProvider(this, object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val voiceHttp = HttpClient(OkHttp) {
+                    engine { config {
+                        sharedTransport.configure(this)
+                        retryOnConnectionFailure(false)
+                        readTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
+                    } }
+                    followRedirects = false
+                    expectSuccess = true
+                }
+                @Suppress("UNCHECKED_CAST")
+                return AndroidVoiceSession(voiceHttp, { AndroidVoiceAudio(app) },
+                    sharedTransport::configureServer) as T
+            }
+        })[AndroidVoiceSession::class.java]
+        voice = voiceSession.client
+        voiceSession.identityChanged(chat.state.value.profile, chat.state.value.username)
         transport.configureServer(chat.state.value.profile)
         attachments = AndroidAttachments(this, chat, scope)
         scope.launch {
@@ -55,6 +94,13 @@ class MainActivity : ComponentActivity() {
         scope.launch {
             var previous = chat.state.value
             chat.state.collect { current ->
+                if (previous.profile != current.profile || previous.username != current.username ||
+                    (previous.connection == Connection.Connected && current.connection != Connection.Connected)) {
+                    voicePermissionTarget = null
+                    if (voice.state.value.active) voice.end("Verbindung oder Konto gewechselt. Gespräch beendet.")
+                    if (previous.profile != current.profile || previous.username != current.username)
+                        voiceSession.identityChanged(current.profile, current.username)
+                }
                 if (previous.profile != current.profile || previous.username != current.username || previous.selected != current.selected)
                     attachments.contextChanged()
                 else if (previous.connection == Connection.Connected && current.connection != Connection.Connected)
@@ -64,6 +110,7 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             val state by chat.state.collectAsState()
+            val voiceState by voice.state.collectAsState()
             val signInUrl by transport.signInUrl.collectAsState()
             val switchingTailnet by transport.switching.collectAsState()
             val pending = attachments.pending?.takeIf { it.target.profile == state.profile &&
@@ -72,6 +119,7 @@ class MainActivity : ComponentActivity() {
                 if (id != chat.state.value.selected) attachments.contextChanged()
                 chat.select(id)
             }, chat::draft, chat::sendSelected, { profile ->
+                if (profile != chat.state.value.profile) voice.end("Workspace gewechselt. Gespräch beendet.")
                 if (profile != chat.state.value.profile) attachments.contextChanged()
                 transport.configureServer(profile)
                 try { chat.configure(profile) }
@@ -93,7 +141,10 @@ class MainActivity : ComponentActivity() {
                 fileActionError = attachments.error, onDismissFileError = { attachments.error = null },
                 attachmentHttp = http,
                 onTailnetSignIn = signInUrl?.let { url -> { openTailnetSignIn(url) } },
-                onSwitchTailnet = ::switchTailnet, switchingTailnet = switchingTailnet)
+                onSwitchTailnet = ::switchTailnet, switchingTailnet = switchingTailnet,
+                voice = voiceState, onVoiceStart = ::startVoice, onVoiceMute = voice::mute,
+                onVoiceEnd = { voice.end() }, onVoiceDismiss = voice::dismiss,
+                onVoiceSelect = voice::select, onVoiceApprove = voice::approve)
         }
     }
     override fun onStart() {
@@ -103,15 +154,31 @@ class MainActivity : ComponentActivity() {
         if (!transport.switching.value) chat.connect()
     }
     override fun onStop() {
+        voicePermissionTarget = null
+        voiceSession.backgrounded()
         attachments.backgrounded()
         chat.disconnect()
         scope.launch(start = CoroutineStart.UNDISPATCHED) { chat.flushCache() }
         super.onStop()
     }
-    override fun onDestroy() { attachments.close(); scope.cancel(); http.close(); transport.close(); super.onDestroy() }
+    override fun onDestroy() { attachments.close(); scope.cancel(); http.close(); super.onDestroy() }
+
+    private fun startVoice() {
+        val state = chat.state.value
+        if (state.connection != Connection.Connected || state.storageBlocked || transport.switching.value ||
+            voice.state.value.active || voice.state.value.starting || voice.state.value.resolving) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) voiceSession.start(state.profile, state.username)
+        else {
+            voicePermissionTarget = state.profile to state.username
+            microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
     private fun switchTailnet() {
         if (transport.switching.value) return
+        voicePermissionTarget = null
+        voice.end("Tailscale-Konto wird gewechselt. Gespräch beendet.")
+        voice.hide()
         attachments.contextChanged()
         chat.disconnect()
         val changed = transport.switchAccount()

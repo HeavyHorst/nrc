@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -30,6 +32,7 @@ fun main() = application {
         var sample by remember { mutableStateOf(true) }
         var dark by remember { mutableStateOf(false) }
         var fixture by remember { mutableStateOf(sampleState()) }
+        var voice by remember { mutableStateOf(VoiceState()) }
         val scope = rememberCoroutineScope()
         val http = remember { HttpClient(CIO) { install(WebSockets); followRedirects = false; expectSuccess = true } }
         val driver = remember {
@@ -59,7 +62,21 @@ fun main() = application {
                         Text(if (sample) "Connect live" else "Sample")
                     }
                 }
+                if (sample && voice.active) TextButton(onClick = {
+                    voice = voice.copy(answer = "Ich schlage eine Aufgabe zur Prüfung des Rollouts vor.",
+                        canApprove = true, selected = emptySet(), actions = listOf(VoiceAction("sample-task", "Rollout prüfen",
+                            """{
+  "type": "create_task",
+  "title": "Rollout prüfen",
+  "description": "Sprachmodus auf dem Android-Gerät testen.",
+  "priority": 0,
+  "project": "NRC"
+}""")))
+                }) { Text("Sample voice proposal") }
             }
+            val density = LocalDensity.current
+            val fontScale = System.getenv("NRC_PREVIEW_FONT_SCALE")?.toFloatOrNull() ?: density.fontScale
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
             Box(Modifier.weight(1f)) {
                 if (!sample) NrcApp(live, client::select, client::draft, client::sendSelected, client::configure,
                     client::startDM, client::loadOlder, { client.disconnect(); client.connect() }, client::dismissNotice, dark,
@@ -79,7 +96,17 @@ fun main() = application {
                         fixture = fixture.copy(conversations = (fixture.conversations + conversation).distinctBy { it.id }, selected = conversation.id,
                             liveDMs = fixture.liveDMs + conversation.id, retention = fixture.retention + (conversation.id to Retention.Enabled))
                     }, {}, { fixture = fixture.copy(connection = Connection.Connected) }, { fixture = fixture.copy(notice = null) }, dark,
-                    onClearDiagnostics = { fixture = fixture.copy(diagnostics = emptyList()) })
+                    onClearDiagnostics = { fixture = fixture.copy(diagnostics = emptyList()) },
+                    voice = voice,
+                    onVoiceStart = { voice = VoiceState(visible = true, active = true, ready = true,
+                        workspace = "studio", seconds = 74, status = "Verbunden · Beispieldaten, kein Audio") },
+                    onVoiceMute = { voice = voice.copy(muted = !voice.muted) },
+                    onVoiceEnd = { voice = voice.copy(active = false, ready = false, canApprove = false, status = "Gespräch beendet · Beispieldaten") },
+                    onVoiceDismiss = { voice = VoiceState() },
+                    onVoiceSelect = { id, selected -> voice = voice.copy(selected = if (selected) voice.selected + id else voice.selected - id) },
+                    onVoiceApprove = { voice = voice.copy(actions = emptyList(), selected = emptySet(), canApprove = false,
+                        outcome = "Beispielbestätigung. Es wurden keine Daten gespeichert.") })
+            }
             }
         }
     }
