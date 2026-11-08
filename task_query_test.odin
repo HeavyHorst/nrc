@@ -129,7 +129,7 @@ task_numeric_model_check :: proc(
 				i -= 1
 				has = has ? btree.iter_prev(&it) : btree.iter_last(&it)
 			}
-			for j in 0 ..< page_size {
+			for _ in 0 ..< page_size {
 				if has != (i >= 0 && i < len(model)) do return "page presence"
 				if !has do break
 				if !task_numeric_model_equal(btree.item(&it), model[i]) do return "page value"
@@ -220,7 +220,7 @@ prop_task_query_numeric_model :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.Body
 		key := pool[choice]
 		failure := task_numeric_model_check(trees[:], model[:], key, descending, int(burst))
 		if failure != "" do return hgl.interesting(failure)
-		for step in 0 ..< int(burst) {
+		for _ in 0 ..< int(burst) {
 			index, e3 := hgl.draw_i64(tc, 0, 95)
 			op, e4 := hgl.draw_i64(tc, 0, 3)
 			if e3 == .Stop_Test || e4 == .Stop_Test do return hgl.abort()

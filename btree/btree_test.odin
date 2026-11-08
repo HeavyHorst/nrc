@@ -1964,7 +1964,7 @@ text_test_check :: proc(tr: ^BTreeG(Text_Test_Item, $Order), model: []Text_Test_
 				index += 1
 				ok = iter_next(&it)
 			}
-			for offset in 0 ..< 1 + i % 7 {
+			for _ in 0 ..< 1 + i % 7 {
 				if ok != (index >= 0 && index < len(want)) do return "text page length mismatch"
 				if !ok do break
 				if item(&it) != want[index] do return "text page item mismatch"
