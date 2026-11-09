@@ -15,6 +15,59 @@ import (
 	"github.com/heavyhorst/nrc/protocol-go"
 )
 
+func TestCancelledWriteWaitingForWriterIsNotDispatched(t *testing.T) {
+	c, requests := connectedListingTestClient(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	c.writeMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			c.writeMu.Unlock()
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.CreateTask(ctx, 0, "must not exist", "", 1)
+		done <- err
+	}()
+	deadline := time.After(time.Second)
+	for {
+		c.pendingTaskCreatesMu.Lock()
+		waiting := len(c.pendingTaskCreates) > 0
+		c.pendingTaskCreatesMu.Unlock()
+		if waiting {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("write did not start")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	cancel()
+	c.writeMu.Unlock()
+	locked = false
+	select {
+	case err := <-done:
+		var unknown *ticketOutcomeUnknown
+		if !errors.Is(err, context.Canceled) || errors.As(err, &unknown) {
+			t.Fatalf("undispatched write: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("write did not stop")
+	}
+	c.sendPing()
+	select {
+	case msg := <-requests:
+		if msg.Opcode != protocol.C_Ping {
+			t.Fatal("cancelled mutation reached server", msg.Opcode)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing barrier")
+	}
+}
+
 func taskPagePayload(correlationID uint32, success bool) []byte {
 	var b bytes.Buffer
 	_ = binary.Write(&b, binary.BigEndian, uint64(0))

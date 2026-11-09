@@ -22,7 +22,7 @@ import (
 type ticketOutcomeUnknown struct{ cause error }
 
 func (e *ticketOutcomeUnknown) Error() string {
-	return "outcome_unknown: ticket write may have committed; do not replay: " + e.cause.Error()
+	return "outcome_unknown: write may have committed; do not replay: " + e.cause.Error()
 }
 func (e *ticketOutcomeUnknown) Unwrap() error { return e.cause }
 
