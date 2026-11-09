@@ -40,6 +40,36 @@ class MainActivity : ComponentActivity() {
     private lateinit var attachments: AndroidAttachments
     private lateinit var voice: VoiceClient
     private var voicePermissionTarget: Pair<Profile, String>? = null
+    private var exportValid: (() -> Boolean)? = null
+    private val memorySaver = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val valid = exportValid
+        exportValid = null
+        if (uri != null && valid?.invoke() == true) scope.launch {
+            try {
+                require(uri.scheme == "content")
+                val data = voice.memory.state.value.export.encodeToByteArray()
+                withContext(Dispatchers.IO) {
+                    ensureActive()
+                    check(valid())
+                    contentResolver.openOutputStream(uri, "wt").use { output ->
+                        checkNotNull(output)
+                        for (offset in data.indices step 32768) {
+                            ensureActive()
+                            check(valid())
+                            output.write(data, offset, minOf(32768, data.size - offset))
+                        }
+                    }
+                }
+                Toast.makeText(this@MainActivity, "Export gespeichert.", Toast.LENGTH_SHORT).show()
+            } catch (cancelled: CancellationException) {
+                attachments.error = "Speichern abgebrochen. Eine unvollständige Datei kann am gewählten Ort verbleiben."
+                throw cancelled
+            }
+            catch (_: Exception) {
+                attachments.error = "Export konnte nicht gespeichert werden. Eine unvollständige Datei kann am gewählten Ort verbleiben."
+            } finally { voice.memory.clearExport() }
+        } else if (::voice.isInitialized) voice.memory.clearExport()
+    }
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val target = voicePermissionTarget
         voicePermissionTarget = null
@@ -98,8 +128,10 @@ class MainActivity : ComponentActivity() {
                     (previous.connection == Connection.Connected && current.connection != Connection.Connected)) {
                     voicePermissionTarget = null
                     if (voice.state.value.active) voice.end("Verbindung oder Konto gewechselt. Gespräch beendet.")
-                    if (previous.profile != current.profile || previous.username != current.username)
+                    if (previous.profile != current.profile || previous.username != current.username) {
+                        exportValid = null
                         voiceSession.identityChanged(current.profile, current.username)
+                    }
                 }
                 if (previous.profile != current.profile || previous.username != current.username || previous.selected != current.selected)
                     attachments.contextChanged()
@@ -111,6 +143,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state by chat.state.collectAsState()
             val voiceState by voice.state.collectAsState()
+            val memoryState by voice.memory.state.collectAsState()
             val signInUrl by transport.signInUrl.collectAsState()
             val switchingTailnet by transport.switching.collectAsState()
             val pending = attachments.pending?.takeIf { it.target.profile == state.profile &&
@@ -144,7 +177,25 @@ class MainActivity : ComponentActivity() {
                 onSwitchTailnet = ::switchTailnet, switchingTailnet = switchingTailnet,
                 voice = voiceState, onVoiceStart = ::startVoice, onVoiceMute = voice::mute,
                 onVoiceEnd = { voice.end() }, onVoiceDismiss = voice::dismiss,
-                onVoiceSelect = voice::select, onVoiceApprove = voice::approve)
+                onVoiceSelect = voice::select, onVoiceApprove = voice::approve,
+                memory = memoryState, onTemporaryVoice = voice.memory::temporary,
+                onMemoryAction = { operation ->
+                    val current = chat.state.value
+                    if (current.connection == Connection.Connected && !current.storageBlocked && !transport.switching.value)
+                        voiceSession.memoryAction(current.profile, current.username, operation) { _, valid ->
+                            val target = current.profile to current.username
+                            if (!isDestroyed && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && valid() &&
+                                target == (chat.state.value.profile to chat.state.value.username)) {
+                                exportValid = { valid() && target == (chat.state.value.profile to chat.state.value.username) && !transport.switching.value }
+                                try { memorySaver.launch("nrc-personal-memory.json") }
+                                catch (_: Exception) {
+                                    exportValid = null
+                                    voice.memory.clearExport()
+                                    attachments.error = "Kein Speicherort verfügbar."
+                                }
+                            } else voice.memory.clearExport()
+                        }
+                })
         }
     }
     override fun onStart() {
@@ -161,7 +212,11 @@ class MainActivity : ComponentActivity() {
         scope.launch(start = CoroutineStart.UNDISPATCHED) { chat.flushCache() }
         super.onStop()
     }
-    override fun onDestroy() { attachments.close(); scope.cancel(); http.close(); super.onDestroy() }
+    override fun onDestroy() {
+        exportValid = null
+        voice.memory.clearExport()
+        attachments.close(); scope.cancel(); http.close(); super.onDestroy()
+    }
 
     private fun startVoice() {
         val state = chat.state.value
@@ -177,6 +232,7 @@ class MainActivity : ComponentActivity() {
     private fun switchTailnet() {
         if (transport.switching.value) return
         voicePermissionTarget = null
+        exportValid = null
         voice.end("Tailscale-Konto wird gewechselt. Gespräch beendet.")
         voice.hide()
         attachments.contextChanged()

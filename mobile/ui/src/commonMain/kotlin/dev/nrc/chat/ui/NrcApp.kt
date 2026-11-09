@@ -118,6 +118,9 @@ fun NrcApp(
     onVoiceDismiss: () -> Unit = {},
     onVoiceSelect: (String, Boolean) -> Unit = { _, _ -> },
     onVoiceApprove: () -> Unit = {},
+    memory: MemoryState = MemoryState(),
+    onMemoryAction: (String) -> Unit = {},
+    onTemporaryVoice: (Boolean) -> Unit = {},
 ) {
     var settings by rememberSaveable { mutableStateOf(state.profile.server.isBlank()) }
     var diagnostics by rememberSaveable { mutableStateOf(false) }
@@ -125,6 +128,7 @@ fun NrcApp(
     var newDM by remember { mutableStateOf(false) }
     var confirmTailnetSwitch by rememberSaveable { mutableStateOf(false) }
     var confirmVoice by remember { mutableStateOf(false) }
+    LaunchedEffect(state.profile, state.username) { confirmVoice = false }
     val selected = state.conversations.firstOrNull { it.id == state.selected }
     platformBackHandler(diagnostics || (settings && state.profile.server.isNotBlank()) || selected != null) {
         when {
@@ -162,7 +166,11 @@ fun NrcApp(
                 if (diagnostics) {
                     SystemLog(state, onClose = { diagnostics = false }, onClear = onClearDiagnostics)
                 } else if (settings) {
-                    Setup(state.profile, onClose = { settings = false }, canClose = state.profile.server.isNotBlank()) {
+                    LaunchedEffect(state.profile, state.username) {
+                        if (state.connection == Connection.Connected) onMemoryAction("inspect")
+                    }
+                    Setup(state.profile, onClose = { settings = false }, canClose = state.profile.server.isNotBlank(),
+                        memory = memory, onMemoryAction = onMemoryAction, memoryOwner = state.username) {
                         onConfigure(it); settings = false
                     }
                 } else {
@@ -198,6 +206,10 @@ fun NrcApp(
                                     enabled = state.connection == Connection.Connected && !state.storageBlocked &&
                                         !switchingTailnet && !voice.active && !voice.starting && !voice.resolving,
                                     onClick = { menu = false; confirmVoice = true })
+                                if (onVoiceStart != null) DropdownMenuItem(
+                                    text = { Text(if (memory.temporary) "Temporär sprechen ✓" else "Temporär sprechen") },
+                                    enabled = !memory.busy && !voice.active && !voice.starting && !voice.resolving,
+                                    onClick = { onTemporaryVoice(!memory.temporary); menu = false })
                                 DropdownMenuItem(text = { Text("Connection settings") }, enabled = !switchingTailnet, onClick = { menu = false; settings = true })
                                 DropdownMenuItem(text = { Text("Reconnect") }, enabled = !switchingTailnet, onClick = { menu = false; onReconnect() })
                                 if (onSwitchTailnet != null) DropdownMenuItem(text = { Text("Switch Tailscale account") },
@@ -214,7 +226,7 @@ fun NrcApp(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                         Icon(Icons.Outlined.Mic, null, Modifier.size(20.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Mit Sullivan sprechen")
+                        Text(if (memory.temporary) "Temporär mit Sullivan sprechen" else "Mit Sullivan sprechen")
                     }
                     if (voice.visible) VoicePanel(voice, onVoiceMute, onVoiceEnd, onVoiceDismiss,
                         onVoiceSelect, onVoiceApprove, platformBackHandler)
@@ -250,10 +262,12 @@ fun NrcApp(
             AlertDialog(onDismissRequest = { confirmVoice = false }, shape = square,
                 containerColor = MaterialTheme.colorScheme.surfaceVariant,
                 title = { Text("Sullivan Sprache") },
-                text = { Text("Audio wird bei OpenAI verarbeitet. NRC-Fragen beziehen sich auf „${state.profile.workspace}“. Änderungen erfordern Auswahl und Bestätigung. Im Hintergrund endet das Gespräch.",
-                    modifier = Modifier.verticalScroll(rememberScrollState())) },
+                text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text("Audio wird bei OpenAI verarbeitet. NRC-Fragen beziehen sich auf „${state.profile.workspace}“. Änderungen erfordern Auswahl und Bestätigung. Im Hintergrund endet das Gespräch.")
+                    if (memory.temporary) Text("Temporär: Dieses Gespräch liest und speichert keinen persönlichen Verlauf.")
+                } },
                 confirmButton = { TextButton(enabled = state.connection == Connection.Connected && !state.storageBlocked &&
-                    !switchingTailnet && !voice.active && !voice.starting && !voice.resolving,
+                    !switchingTailnet && !voice.active && !voice.starting && !voice.resolving && !memory.busy,
                     onClick = { confirmVoice = false; onVoiceStart() }) { Text("Gespräch starten") } },
                 dismissButton = { TextButton(onClick = { confirmVoice = false }) { Text("Abbrechen") } })
         }
@@ -646,7 +660,8 @@ private fun ChatAttachmentView(attachment: ChatAttachment, state: ChatState, ima
 }
 
 @Composable
-private fun Setup(profile: Profile, onClose: () -> Unit, canClose: Boolean, onSave: (Profile) -> Unit) {
+private fun Setup(profile: Profile, onClose: () -> Unit, canClose: Boolean,
+                  memory: MemoryState, onMemoryAction: (String) -> Unit, memoryOwner: String, onSave: (Profile) -> Unit) {
     var server by rememberSaveable(profile) { mutableStateOf(profile.server) }
     var workspace by rememberSaveable(profile) { mutableStateOf(profile.workspace) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -676,6 +691,10 @@ private fun Setup(profile: Profile, onClose: () -> Unit, canClose: Boolean, onSa
                 Text("Connect", fontFamily = FontFamily.Monospace)
             }
             HorizontalDivider(Modifier.padding(vertical = 28.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            if (canClose) key(profile, memoryOwner) {
+                MemoryControls(memory, onMemoryAction)
+                HorizontalDivider(Modifier.padding(vertical = 28.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            }
             Text("Chat history is saved on this device. Background push is not configured. Recovering missed room messages and DMs requires server retention.",
                 fontSize = 13.sp, lineHeight = 21.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

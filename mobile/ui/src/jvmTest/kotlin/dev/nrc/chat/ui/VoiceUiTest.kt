@@ -16,6 +16,45 @@ import kotlin.test.assertEquals
 class VoiceUiTest {
     @get:Rule val compose = createComposeRule()
 
+    @Test fun privacyControlsDoNotPromptForConsentAndDeletionNeedsConfirmation() {
+        var memory by mutableStateOf(MemoryState(policy = MemoryPolicy(0, true)))
+        val operations = mutableListOf<String>()
+        compose.setContent {
+            Box(Modifier.width(360.dp).height(800.dp)) {
+                NrcApp(ChatState(profile = Profile("https://nrc.example", "studio"), connection = Connection.Connected),
+                    {}, { _, _ -> }, {}, {}, {}, {}, {}, {}, onVoiceStart = {}, memory = memory,
+                    onTemporaryVoice = { memory = memory.copy(temporary = it) },
+                    onMemoryAction = { operations += it })
+            }
+        }
+        compose.onNodeWithText("Mit Sullivan sprechen").performClick()
+        compose.onNodeWithText("Gespräch starten").assertIsEnabled()
+        assertEquals(emptyList(), operations)
+        compose.onNodeWithText("Persönliches Gedächtnis").assertDoesNotExist()
+        compose.onNodeWithText("Abbrechen").performClick()
+        compose.onNodeWithContentDescription("Connection settings and actions").performClick()
+        compose.onNodeWithText("Temporär sprechen").performClick()
+        assertEquals(true, memory.temporary)
+        compose.onNodeWithText("Temporär mit Sullivan sprechen").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Connection settings and actions").performClick()
+        compose.onNodeWithText("Connection settings").performClick()
+        compose.runOnIdle { assertEquals(listOf("inspect"), operations) }
+        compose.onNodeWithText("Erneut versuchen").assertDoesNotExist()
+        compose.onNodeWithText("Gedächtnis deaktivieren").performScrollTo().performClick()
+        assertEquals("disable", operations.last())
+        compose.onNodeWithText("Export speichern …").performScrollTo().performClick()
+        assertEquals("export", operations.last())
+        compose.onNodeWithText("Alles vergessen …").performScrollTo().performClick()
+        assertEquals("export", operations.last())
+        compose.onNodeWithText("Endgültig vergessen").performClick()
+        assertEquals("forget_all", operations.last())
+        compose.runOnIdle { memory = memory.copy(busy = true) }
+        compose.onNodeWithText("Export speichern …").assertIsNotEnabled()
+        compose.runOnIdle { memory = MemoryState() }
+        compose.onNodeWithText("Erneut versuchen").performScrollTo().performClick()
+        assertEquals("inspect", operations.last())
+    }
+
     @Test fun startNeedsConsentAndProposalNeedsSelectionWhileMuteAndEndRemainAvailable() {
         var state by mutableStateOf(ChatState(profile = Profile("https://nrc.example", "studio"),
             connection = Connection.Connected))

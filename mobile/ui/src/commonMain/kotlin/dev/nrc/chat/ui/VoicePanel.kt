@@ -55,6 +55,9 @@ internal fun VoicePanel(state: VoiceState, mute: () -> Unit, end: () -> Unit, di
             TextButton(onClick = { details = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Details") }
         }
         Text(state.status, style = MaterialTheme.typography.bodySmall)
+        if (state.privacy.isNotEmpty()) Text(state.privacy, style = MaterialTheme.typography.bodySmall)
+        if (state.contextDelivery.isNotEmpty()) Text(state.contextDelivery + " Keine Aussage über Sprache oder Wiedergabe.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (state.resolving) Text("Bestätigung wird geprüft. Nicht erneut ausführen.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
         else if (state.actions.isNotEmpty()) TextButton(onClick = { details = true },

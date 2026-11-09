@@ -33,6 +33,7 @@ fun main() = application {
         var dark by remember { mutableStateOf(false) }
         var fixture by remember { mutableStateOf(sampleState()) }
         var voice by remember { mutableStateOf(VoiceState()) }
+        var memory by remember { mutableStateOf(MemoryState(policy = MemoryPolicy(0, true))) }
         val scope = rememberCoroutineScope()
         val http = remember { HttpClient(CIO) { install(WebSockets); followRedirects = false; expectSuccess = true } }
         val driver = remember {
@@ -98,8 +99,19 @@ fun main() = application {
                     }, {}, { fixture = fixture.copy(connection = Connection.Connected) }, { fixture = fixture.copy(notice = null) }, dark,
                     onClearDiagnostics = { fixture = fixture.copy(diagnostics = emptyList()) },
                     voice = voice,
+                    memory = memory,
+                    onTemporaryVoice = { memory = memory.copy(temporary = it) },
+                    onMemoryAction = { operation ->
+                        memory = when (operation) {
+                            "enable", "disable" -> memory.copy(policy = MemoryPolicy(0, operation == "enable"))
+                            "export" -> memory.copy(export = "[{\"sequence\":0,\"sample\":true}]", message = "Beispieldaten · keine Serveranfrage")
+                            "forget_all" -> memory.copy(export = "", message = "Beispiel gelöscht · keine Serveranfrage")
+                            else -> memory.copy(message = "Beispieldaten · keine Serveranfrage")
+                        }
+                    },
                     onVoiceStart = { voice = VoiceState(visible = true, active = true, ready = true,
-                        workspace = "studio", seconds = 74, status = "Verbunden · Beispieldaten, kein Audio") },
+                        workspace = "studio", seconds = 74, status = "Verbunden · Beispieldaten, kein Audio",
+                        privacy = if (memory.temporary || memory.policy?.enabled == false) "Temporär · ohne persönliches Gedächtnis" else "Persönlich · Gedächtnis aktiviert") },
                     onVoiceMute = { voice = voice.copy(muted = !voice.muted) },
                     onVoiceEnd = { voice = voice.copy(active = false, ready = false, canApprove = false, status = "Gespräch beendet · Beispieldaten") },
                     onVoiceDismiss = { voice = VoiceState() },

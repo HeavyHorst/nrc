@@ -15,8 +15,25 @@ internal class AndroidVoiceSession(
     val client = VoiceClient(http, scope, audioFactory)
     private var owner: Pair<Profile, String>? = null
 
+    fun memoryAction(profile: Profile, username: String, operation: String,
+                     exportReady: (String, () -> Boolean) -> Unit = { _, _ -> }) {
+        if (operation != "forget_all" &&
+            (client.state.value.active || client.state.value.starting || client.state.value.resolving)) return
+        identityChanged(profile, username)
+        configure(profile)
+        owner = profile to username
+        when (operation) {
+            "inspect" -> client.memory.refresh(profile)
+            "enable" -> client.memory.configure(profile, true)
+            "disable" -> client.memory.configure(profile, false)
+            "export" -> client.memory.export(profile, exportReady)
+            "forget_all" -> client.memory.forgetAll(profile)
+        }
+    }
+
     fun start(profile: Profile, username: String) {
         if (client.state.value.active || client.state.value.starting || client.state.value.resolving) return
+        identityChanged(profile, username)
         configure(profile)
         owner = profile to username
         client.start(profile)

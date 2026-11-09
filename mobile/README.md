@@ -64,6 +64,26 @@ Session creation, status, approval and close use `/ai/voice/*` through NRC's emb
 Tailscale transport. Audio uses native WebRTC directly to OpenAI, outside Tailscale.
 No provider key belongs in the APK.
 
+Personal voice checks the saved memory policy before opening the microphone.
+Enabled accounts (including new accounts by default) request `private` execution
+with `require_memory: true`; disabled accounts use `temporary`. An unavailable or
+invalid policy stops startup rather than silently changing modes. There is no
+memory-consent prompt. The existing start dialog still explains audio processing.
+
+Open **Privatsphäre & Gedächtnis** in that dialog to choose temporary voice,
+enable or disable memory, inspect/export JSON pages (100 entries per page), or
+confirm **Alles vergessen**. Export pages can be selected or explicitly copied;
+the app does not save them to disk. Disabling does not delete existing memories.
+Forget-all applies only to the current account and workspace, not shared records
+or exported copies. Failed control requests are not retried; reload status before
+deciding what to do next. Controls are unavailable during voice or pending approval
+recovery. Account/workspace changes clear the native memory-control state.
+
+Provider-context delivery warnings describe pending, rejected or unconfirmed
+context only, never speech or playback. They do not resend context or change write
+approval. Native Sullivan text chat is not implemented; ordinary room/DM chat is
+unchanged.
+
 Tap **Details** for the full answer, source titles/IDs and proposals. Every action's
 complete payload is available under **Technische Daten anzeigen**, including empty and unknown fields. Actions
 start unchecked; **Bestätigen** submits only the selected IDs and exact
