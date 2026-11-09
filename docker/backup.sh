@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 exec 9>/run/lock/nrc-backup.lock
 flock -n 9 || {
@@ -15,6 +16,7 @@ PARTIAL="$BACKUP_ROOT/$TS.partial"
 FINAL="$BACKUP_ROOT/$TS"
 
 mkdir -p "$BACKUP_ROOT" "$PARTIAL"
+chmod 700 "$BACKUP_ROOT" "$PARTIAL"
 cd "$COMPOSE_DIR"
 
 COMPOSE_ARGS=(--env-file .env -f "$COMPOSE_FILE")
@@ -77,8 +79,12 @@ for volume in "${VOLUMES[@]}"; do
   docker run --rm \
     -v "$volume:/volume:ro" \
     -v "$PARTIAL:/backup" \
-    alpine sh -c "cd /volume && tar -czf /backup/${volume}.tar.gz ."
+    alpine sh -c "umask 077; cd /volume && tar -czf /backup/${volume}.tar.gz ."
 done
+
+# Volume archives include SQLite DB, WAL and SHM together while all writers are
+# stopped. Never restore personal memory by copying only an old DB into service:
+# reconcile current deletion/approval guards with personal_memory/storage_ops.py.
 
 cd "$PARTIAL"
 sha256sum ./*.tar.gz > SHA256SUMS

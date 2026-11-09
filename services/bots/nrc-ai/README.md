@@ -7,7 +7,9 @@ follow graph links and propose task, note and edge changes for approval.
 ## Start
 
 First set up the [core deployment](../../../README.md#quickstart).
-Use the same `NRC_BOT_SECRET` for the server and AI. In `.env`, set:
+Use the same `NRC_BOT_SECRET` for the server and AI. AI also requires the proxy's
+`NRC_JWT_SECRET` (at least 32 bytes). If overriding `NRC_JWT_ISSUER`, use the same
+value on both services; the default is `nrc-tailscale-proxy`. In `.env`, set:
 
 - `LLM_PROVIDER`: the provider to use; the default is `openai`.
 - `LLM_MODEL`: a model supported by that provider; the default is `gpt-4o-mini`.
@@ -48,8 +50,9 @@ the OpenAI project must have access to that voice.
 
 The browser sends audio directly to OpenAI over WebRTC. The AI service creates
 the session and attaches a server-side WebSocket for client delegation. The
-private service must not be exposed directly: it trusts the proxy's stripped and
-replaced `X-Tailscale-User` header. All `/ai/voice/{create,status,apply,close}`
+private service must not be exposed directly. Chat and voice verify the proxy's
+signed `X-NRC-AI-Auth` assertion, scoped to a human user and workspace; raw
+`X-Tailscale-User` headers are not credentials. All `/ai/voice/{create,status,apply,close}`
 requests are POST JSON with `workspace`; session operations also require `id`.
 Sessions belong to one authenticated user and workspace. The API key never goes
 to the browser.
@@ -113,7 +116,20 @@ network loss and actual confirmed writes against a disposable NRC workspace.
 
 ## Use
 
-Before its first model call, Sullivan retrieves bounded workspace evidence using
+Ask defaults to `execution_policy: "temporary"`. This suppresses server room
+progress and automatic searches using the question or prior conversation. GPT
+Live delegates with the same policy and explicitly sets `store: false` on the
+provider session. The model can still request workspace evidence through focused
+tools. Lookup queries are limited to one line and 160 bytes; this limits transcript
+forwarding but is not a semantic guarantee that every query is non-sensitive.
+
+`execution_policy: "private"` uses personal memory when configured and enabled.
+`require_memory:true` rejects requests without that access; it never silently
+falls back to temporary mode. Changing policy requires a new session. Temporary
+mode does not read or write personal memory. Shared changes require explicit approval;
+"remember this" is not an instruction to publish a note.
+
+With explicit `execution_policy: "workspace"`, Sullivan retrieves bounded workspace evidence using
 the same retrieval core as `nrc retrieve`: ten ranked results, graph depth one,
 payloads for the top three results, and at most 30,000 payload bytes (less when
 the configured context budget is smaller). Existing sessions include a bounded
@@ -226,10 +242,110 @@ See the [CLI guide](../../../cli/README.md#search-and-retrieval).
 
 ## Limits and access
 
-All durable context is workspace-wide. Selecting a room or DM changes where
-progress is displayed, not which tasks, notes or files AI can read.
+All live durable context is workspace-wide. In workspace execution, selecting a
+room or DM changes where progress is displayed, not which records AI can read.
+Private/temporary execution never broadcasts progress to that room or DM.
 Sessions and pending plans exist in memory and expire; a restart removes them.
 Keep durable decisions in notes and work in tasks, not only in an AI session.
+
+Ask and voice sessions belong to the verified Tailscale user ID within the
+workspace, not to a login name or device. Tagged machines cannot use these
+endpoints. Reading, resuming, resetting or applying another user's session
+returns 404, as does an expired session. Start a new chat after expiry.
+Voice status requests renew its short-lived authorization; background work is
+bounded by the assertion expiry. Revocation is not instantaneous: a previously
+issued assertion remains valid for up to five minutes, and the voice watchdog
+checks expiry once per second. The existing no-poll timeout is 20 seconds.
+
+Personal durable memory is disabled unless `NRC_PERSONAL_MEMORY_PATH` is configured.
+For Compose, use `/data/personal/memory.db`; the named volume is owned by the
+non-root service user. The directory must be 0700 and the database 0600. Invalid
+permissions or an already-owned store fail startup. Enabling the store makes the
+memory controls available. First inspection initializes enabled retention without
+a consent dialog. Existing enablement or disablement survives restart; a saved
+disablement is never overwritten by the default.
+
+Ask and GPT Live share the SQLite tree: startup history, tree expansion,
+original reads and chat/voice capture use an owner/workspace capability selected
+by verified human identity. Request/model identity fields cannot select it.
+Temporary sessions cannot use it. Retained Ask requires a stable `run_id`; retries
+return saved evidence without another model invocation. GPT Live backend runs use
+the voice session ID and revision. On restart, unfinished captures become
+incomplete rather than restarting generation or billed audio.
+
+Retained Ask and Live's delegated reasoning use a persisted, revision-bound tree
+partition as primary history, replacing the rolling session window. Ready nodes
+append until the byte budget requires batch merging. Recent/pending evidence stays
+in a separate bounded suffix; exact originals remain accessible through tools.
+The history budget comes from the complete model call, including normalized tool
+schemas and output reserve. Full history blocks have stable message boundaries;
+OpenAI Responses gets an explicit cache breakpoint on the last complete block.
+This improves prefix reuse opportunities, not guaranteed cache hits or recall.
+Live's small startup preview does not resize the persisted partition.
+
+Memory-enabled Apply durably consumes approval before dispatch. Receipts retain
+minimal result IDs/status; ambiguous writes remain `outcome_unknown` and cannot
+replay. `POST /ask/run/status` and `POST /ask/receipt/status` recover records without
+restoring executable plans. Both require current identity and memory access.
+
+The gated `POST /ask/memory` API supports inspect, paginated export, policy changes,
+single-segment forgetting and forgetting all history. Changes require explicit
+confirmation and a current epoch or segment revision. Forgetting and policy
+changes cancel that user's active Ask/Live work in the workspace and invalidate
+old plans and late writes. Already-dispatched mutation receipts may still finish.
+Retention is keep-until-deleted with persisted enable/disable controls and no
+total byte or segment quota. Disabling does not delete existing history.
+There is no timed expiry. Per-original validation still caps a segment at 64 KiB.
+The web settings dialog provides retention switching, export and confirmed deletion.
+Personal history is the web default, without a consent prompt. A saved opt-out
+starts temporary conversations after reload. `require_memory:true` refuses
+to run without memory access instead of silently losing history. The web client
+polls owner/workspace revisions every five seconds for changed history and receipts;
+an epoch change removes local transcripts and cancels old conversations. Native
+voice has the same saved-policy default and explicit privacy controls.
+GPT Live context appends expose pending, acknowledged, rejected or unconfirmed
+delivery; acknowledgment confirms timeline delivery, not speech playback.
+
+Every Fantasy call checks the complete input, tool schemas and tool results using
+a conservative serialized-byte bound with output reserve. Oversized calls return
+HTTP 413 without retrying or truncating evidence. This bound intentionally rejects
+some requests a provider tokenizer could fit.
+
+Memory maintenance checkpoints each minute, reports disk pressure and considers
+daily compaction. Consumed approvals and run identities remain permanently
+non-replayable. See [storage operations](personal_memory/STORAGE_OPERATIONS.md)
+for consistent backups and deletion-aware restore. Safe restore requires the latest
+authoritative safety source; old backups alone cannot recover forgotten content
+and consumed approvals safely. Production activation still needs volume checks,
+encrypted backup policy and alert routing; see the
+[memory design](../../../docs/SULLIVAN_MEMORY_DESIGN.md).
+
+The store starts one background tree worker. It discovers persisted pending nodes
+after restart and builds in up to eight enabled owner/workspace scopes concurrently,
+with one job per scope and a 45-second job deadline. Free slots refill independently;
+idle sweeps and failed scopes back off one second.
+Eligible parents precede newer leaf backlogs. Root references remain navigable
+even without summaries, and forget-all marks empty trees ready without model calls.
+Adjacent voice deltas share bounded segments while each event commits separately.
+Active captures and disabled scopes are skipped. Forgetting cancels an in-flight
+call and rejects late output.
+`NRC_MEMORY_SUMMARY_MODEL` selects a model on the existing LLM provider; unset uses
+`gpt-6.1-sol` for OpenAI and `LLM_MODEL` for other providers. The foreground model
+is unchanged. Summaries share `LLM_MAX_OUTPUT_TOKENS` with chat, including reasoning;
+there is no summary-specific token budget. The shared OpenAI default is 8192.
+The separate stored-summary limit remains 512 UTF-8 bytes.
+Only normally completed model output is accepted; truncated, filtered or unknown
+finishes cannot become ready summaries.
+
+Each node revision has three durable build attempts, reserved before generation.
+Restarts and queue rebuilds do not replenish them. Each build allows five generations
+per fragment (initial plus four length corrections), with at most 16 attempts shared across
+all fragments and recompression. Provider-error retries belong to the worker;
+the agent does not add another retry loop. Exhausted nodes stay pending, without
+further automatic calls until their source revision changes. Their originals remain
+readable, and unrelated eligible nodes continue. An empty work queue therefore does
+not imply a fully summarized tree. Background summarization can incur charges while
+users are offline. No provider credentials or deployment settings change automatically.
 
 Keep the HTTP API on the private Docker network. Public calls must pass through
 the Tailscale proxy's identity, origin and workspace checks. The bot connection
@@ -245,7 +361,8 @@ unavailable, the task-search tool can fall back to loaded records and reports
 The paths below are public paths through the Tailscale site. The internal AI
 service uses the same paths without `/ai`, for example `/ask` and `/retrieve`.
 Use `conv_id: 0`, or `context_conv_id: 0` for Ask. Nonzero durable scopes are rejected.
-Ask's optional `display_conv_id` selects a chat progress destination, not a data filter.
+Ask's optional `display_conv_id` selects a progress destination only in workspace
+execution; private/temporary execution ignores it. It never filters data access.
 
 | Method and public path | Purpose |
 | --- | --- |
@@ -255,7 +372,7 @@ Ask's optional `display_conv_id` selects a chat progress destination, not a data
 | `POST /ai/ask/ready` | Check workspace readiness for Ask |
 | `POST /ai/ask` | Answer or stage a plan |
 | `POST /ai/ask/apply` | Execute selected actions from a pending plan |
-| `GET /ai/ask/session/{id}` | Read session state and pending plans |
+| `GET /ai/ask/session/{id}?workspace={workspace}` | Read owned session state and pending plans |
 | `POST /ai/ask/session/reset` | Clear a session |
 | `GET /ai/health` | Report process status and provider settings; blocked with HTTP 403 when workspace restrictions are configured |
 
@@ -394,7 +511,10 @@ check the task register before retrying; there is no automatic resubmission.
 
 Ask emits INFO timing logs correlated by `request_id` (also returned in the
 `X-NRC-Request-ID` response header), provider and model. New timing records do not
-include prompts, answers or tool arguments.
+include prompts, answers or tool arguments. The process log sink allowlists
+metadata, drops unreviewed fields, and records error types instead of error text
+because upstream errors can echo private input. This also applies to background
+I/O logging. Detailed tool traces remain in owner-scoped ephemeral sessions.
 
 - `ask request timing`: total handler time and success/error status, including early failures.
 - `ask phase timing`: `prepare` (connection/session setup), `retrieve` (initial evidence), `agent`

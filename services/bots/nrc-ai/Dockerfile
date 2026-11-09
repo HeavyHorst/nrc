@@ -20,7 +20,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --system --no-create-home nrcai
+RUN useradd --system --no-create-home nrcai \
+    && install -d -m 0700 -o nrcai -g nrcai /data/personal
 
 COPY --from=builder /app/nrc-ai /app/nrc-ai
 
