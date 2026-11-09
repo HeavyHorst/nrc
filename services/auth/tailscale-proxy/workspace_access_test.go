@@ -34,7 +34,7 @@ func workspaceTestPolicy(t *testing.T) workspacePolicy {
 }
 
 func workspaceTestIdentity(identity string) fakeWhoIsClient {
-	response := &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: identity}}
+	response := &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{ID: 17, LoginName: identity}}
 	if strings.HasPrefix(identity, "tag:") {
 		response.Node.Tags = []string{identity}
 	}
@@ -76,6 +76,9 @@ func TestWorkspacePolicyOptIn(t *testing.T) {
 }
 
 func TestWorkspaceBrowserOriginsThroughReverseProxy(t *testing.T) {
+	old := jwtSecret
+	jwtSecret = []byte("fixture-ai-signing-secret-not-production")
+	t.Cleanup(func() { jwtSecret = old })
 	var forwarded atomic.Int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		forwarded.Add(1)
