@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261105voice12";
+const CACHE_NAME = "nrc-terminal-20261108memory9";
 
 const APP_SHELL = [
   "./",
@@ -11,10 +11,10 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261102gap1",
+  "./css/main.css?v=20261108memory9",
   "./css/foundation.css?v=20261020fill2",
   "./css/workspace.css?v=20261023attachment1",
-  "./css/entities.css?v=20261023attachment1",
+  "./css/entities.css?v=20261108memory9",
   "./css/ledger.css?v=20261030citation1",
   "./css/mobile-tasks.css?v=20261019registers1",
   "./css/mobile.css?v=20261102gap1",
@@ -58,11 +58,12 @@ const APP_SHELL = [
   "./note-html.js?v=20261007fragments1",
   "./notes.js?v=20261027columns2",
   "./task-references.js?v=20260914workspace1",
-  "./ai.js?v=20261102gap1",
-  "./voice.js?v=20261105voice12",
+  "./personal-memory.js?v=20261108memory9",
+  "./ai.js?v=20261108memory9",
+  "./voice.js?v=20261108memory8",
   "./retained-messages.js?v=20261023protocol2",
   "./chat.js?v=20261020composer1",
-  "./app.js?v=20261102gap1",
+  "./app.js?v=20261108memory9",
   "./calls.js?v=20261022cancel1",
   "./newsletter.js?v=20261022cancel1",
   "./customers.js?v=20261022cancel1",

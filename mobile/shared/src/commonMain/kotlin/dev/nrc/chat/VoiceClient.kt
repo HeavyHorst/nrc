@@ -38,11 +38,14 @@ data class VoiceState(
     val resolving: Boolean = false,
     val submitted: Boolean = false,
     val outcome: String = "",
+    val privacy: String = "",
+    val contextDelivery: String = "",
 )
 
 /** Main-thread confined. Never retries creation or writes, including after a lost HTTP reply. */
 class VoiceClient(private val http: HttpClient, private val scope: CoroutineScope,
     private val audioFactory: () -> VoiceAudio) {
+    val memory = PersonalMemory(http, scope) { invalidateMemory() }
     private val mutable = MutableStateFlow(VoiceState())
     val state = mutable.asStateFlow()
     private var audio: VoiceAudio? = null
@@ -57,6 +60,7 @@ class VoiceClient(private val http: HttpClient, private val scope: CoroutineScop
     private var consumedRevision: String? = null
     private var deadline = 0L
     private var generation = 0
+    private var memoryInvalidated = false
     private var poll: Job? = null
     private var clock: Job? = null
     private val pretty = Json { prettyPrint = true }
@@ -64,21 +68,36 @@ class VoiceClient(private val http: HttpClient, private val scope: CoroutineScop
     private fun update(change: (VoiceState) -> VoiceState) { mutable.value = change(mutable.value) }
 
     fun start(target: Profile) {
-        if (state.value.active || state.value.starting || state.value.resolving) return
+        if (state.value.active || state.value.starting || state.value.resolving || memory.state.value.busy) return
+        val temporary = memory.state.value.temporary
         ChatClient.connectionUrl(target) // Same HTTPS-origin validation as chat.
         poll?.cancel(); clock?.cancel()
         val run = ++generation
+        memoryInvalidated = false
         profile = target; id = ""; revision = ""; plan = ""
         speech = false; speechRevision = ""; approvalRevision = null; consumedRevision = null
         mutable.value = VoiceState(visible = true, workspace = target.workspace, active = true,
             starting = true, status = "Mikrofon wird verbunden …")
         scope.launch {
             try {
-                if (!state.value.active) return@launch
+                if (run != generation || !state.value.active) return@launch
+                update { it.copy(status = "Gedächtnis-Einstellung wird geprüft …") }
+                val remember = !temporary && memory.inspect(target).enabled
+                if (run != generation || !state.value.active) return@launch
+                update { it.copy(privacy = if (remember) "Persönlich · Gedächtnis aktiviert" else "Temporär · ohne persönliches Gedächtnis") }
                 val media = audioFactory().also { audio = it }
                 val sdp = media.offer { raw -> scope.launch { if (run == generation) event(raw) } }
-                if (!state.value.active) return@launch
-                val created = request("create", buildJsonObject { put("sdp", sdp) })
+                if (run != generation || !state.value.active) return@launch
+                val created = request("create", buildJsonObject {
+                    put("sdp", sdp)
+                    put("execution_policy", if (remember) "private" else "temporary")
+                    put("require_memory", remember)
+                }, target = target)
+                if (run != generation) {
+                    requestClose(target, created.text("id"))
+                    media.close()
+                    return@launch
+                }
                 id = created.text("id")
                 require(id.isNotEmpty())
                 if (!state.value.active) {
@@ -91,13 +110,14 @@ class VoiceClient(private val http: HttpClient, private val scope: CoroutineScop
                     // Establish the revision before remote audio can produce transcript events.
                     // Research completion need not advance the first utterance's revision again.
                     val initial = request("status")
-                    if (!state.value.active) return@launch
+                    if (run != generation || !state.value.active) return@launch
+                    if (initial.flag("memory_invalidated")) { memory.reset(); invalidateMemory(); return@launch }
                     check(!initial.flag("closed") && initial.text("error").isEmpty())
                     revision = initial.text("revision")
                     require(revision.toULongOrNull() != null)
                 }
                 media.answer(created.text("sdp"))
-                if (!state.value.active) return@launch
+                if (run != generation || !state.value.active) return@launch
                 if (created.flag("close_only")) { end("Serververbindung fehlgeschlagen. Gespräch beendet."); return@launch }
                 update { it.copy(starting = false, status = if (it.ready) "Verbunden" else "Warte auf Sullivan …") }
                 val started = now()
@@ -110,13 +130,15 @@ class VoiceClient(private val http: HttpClient, private val scope: CoroutineScop
                             end("Zeitlimit erreicht. Kein automatischer Neustart.")
                     }
                 }
-                poll = scope.launch { pollStatus() }
-            } catch (_: TimeoutCancellationException) { end("Zeitlimit beim Sprachstart. Kein automatischer Neustart.") }
-            catch (cancel: CancellationException) { end(); throw cancel }
-            catch (_: Exception) { end("Sprachverbindung fehlgeschlagen. Mikrofon, Netzwerk und Voice-Konfiguration prüfen.") }
+                poll = scope.launch { pollStatus(run) }
+            } catch (_: TimeoutCancellationException) { if (run == generation) end("Zeitlimit beim Sprachstart. Kein automatischer Neustart.") }
+            catch (cancel: CancellationException) { if (run == generation) end(); throw cancel }
+            catch (_: Exception) { if (run == generation) end("Sprachverbindung oder Gedächtnis nicht verfügbar. Kein automatischer Wechsel zu temporär. Einstellung und Netzwerk prüfen.") }
             finally {
-                if (!state.value.active) { audio?.close(); audio = null }
-                update { it.copy(starting = false) }
+                if (run == generation) {
+                    if (!state.value.active) { audio?.close(); audio = null }
+                    update { it.copy(starting = false) }
+                }
             }
         }
     }
@@ -124,7 +146,29 @@ class VoiceClient(private val http: HttpClient, private val scope: CoroutineScop
     fun denied() { mutable.value = VoiceState(visible = true, status = "Mikrofon nicht freigegeben. Erneut über Sullivan Sprache starten.") }
     fun dismiss() { if (!state.value.active && !state.value.starting && !state.value.resolving) update { it.copy(visible = false) } }
     /** Old-account results may still settle, but must not appear in a new account. */
-    fun hide() { end(); update { it.copy(visible = false) } }
+    fun hide() {
+        end(); generation++; poll?.cancel(); clock?.cancel()
+        audio?.close(); audio = null
+        memory.reset(); mutable.value = VoiceState()
+    }
+
+    /** Forget evidence, not the fact that an already submitted write may still settle. */
+    private fun invalidateMemory() {
+        if (memoryInvalidated) return
+        end()
+        memoryInvalidated = true
+        val run = ++generation
+        poll?.cancel(); clock?.cancel()
+        audio?.close(); audio = null
+        plan = ""; revision = ""; speechRevision = ""; speech = false
+        val previous = state.value
+        mutable.value = VoiceState(visible = previous.visible, workspace = previous.workspace,
+            resolving = previous.resolving, submitted = previous.submitted,
+            status = "Persönlicher Gesprächskontext gelöscht. Gespräch beendet.",
+            outcome = if (previous.resolving || previous.submitted)
+                "Bestätigungsausgang prüfen; nicht erneut ausführen." else "")
+        if (previous.resolving) poll = scope.launch { pollStatus(run) }
+    }
     fun mute() {
         if (!state.value.active || !state.value.ready) return
         val muted = !state.value.muted
@@ -140,7 +184,23 @@ class VoiceClient(private val http: HttpClient, private val scope: CoroutineScop
         update { it.copy(active = false, ready = false, canApprove = false, selected = emptySet(), status = message) }
         val target = profile
         val session = id
-        if (session.isNotEmpty()) scope.launch { requestClose(target, session) }
+        val run = generation
+        if (session.isNotEmpty()) scope.launch {
+            requestClose(target, session)
+            // Audio closure can precede the HTTP invalidation signal while the regular
+            // poll is sleeping. Always make one bounded terminal read, even without an
+            // approval to reconcile. Never infer deletion from ordinary closure/errors.
+            if (run != generation || memoryInvalidated) return@launch
+            try {
+                val data = request("status", target = target, session = session)
+                if (run == generation && data.flag("memory_invalidated")) {
+                    memory.reset()
+                    invalidateMemory()
+                }
+            } catch (_: TimeoutCancellationException) { /* No automatic retry. */ }
+            catch (cancel: CancellationException) { throw cancel }
+            catch (_: Exception) { /* Unconfirmed terminal status is not deletion. */ }
+        }
     }
     private suspend fun requestClose(target: Profile = profile, session: String = id) {
         try { request("close", target = target, session = session) }
@@ -176,6 +236,9 @@ class VoiceClient(private val http: HttpClient, private val scope: CoroutineScop
         if (!current.active || !current.canApprove || current.resolving || current.selected.isEmpty()) return
         val approvedPlan = plan
         val approvedRevision = revision
+        val target = profile
+        val session = id
+        val selected = current.selected
         val run = generation
         approvalRevision = revision; consumedRevision = revision; deadline = now() + 60_000
         update { it.copy(resolving = true, submitted = true, canApprove = false, selected = emptySet(), outcome = "Bestätigung wird geprüft. Nicht erneut ausführen.") }
@@ -184,8 +247,8 @@ class VoiceClient(private val http: HttpClient, private val scope: CoroutineScop
                 val result = request("apply", buildJsonObject {
                     put("plan_id", approvedPlan)
                     put("revision", JsonPrimitive(approvedRevision.toULong()))
-                    put("action_ids", JsonArray(current.selected.map(::JsonPrimitive)))
-                })
+                    put("action_ids", JsonArray(selected.map(::JsonPrimitive)))
+                }, target = target, session = session)
                 if (run == generation) receipt(result, approvedRevision)
             } catch (_: TimeoutCancellationException) { /* Reconcile through status. */ }
             catch (cancel: CancellationException) { throw cancel }
@@ -198,15 +261,31 @@ class VoiceClient(private val http: HttpClient, private val scope: CoroutineScop
         val failed = !result.flag("ok") || result.array("failed").isNotEmpty()
         update { it.copy(resolving = false, actions = emptyList(), canApprove = false,
             outcome = (if (failed) "Ausgang unbestätigt oder fehlgeschlagen. Datensätze prüfen; nicht erneut ausführen.\n"
-                else "${result.array("applied").size} Aktionen erfolgreich.\n") + pretty.encodeToString(JsonObject.serializer(), result)) }
+                else "${result.array("applied").size} Aktionen erfolgreich.\n") +
+                (if (memoryInvalidated) "" else pretty.encodeToString(JsonObject.serializer(), result))) }
         if (failed) end("Ausführung prüfen. Gespräch beendet.")
     }
 
-    private suspend fun pollStatus() {
-        while (state.value.active || state.value.resolving) {
+    private suspend fun pollStatus(run: Int) {
+        while (run == generation && (state.value.active || state.value.resolving)) {
             try {
                 val beforeRequest = speechEvents
                 val data = request("status")
+                if (run != generation) return
+                if (data.flag("memory_invalidated") && !memoryInvalidated) {
+                    memory.reset()
+                    invalidateMemory()
+                    return
+                }
+                val delivery = (data["context_delivery"] as? JsonObject)?.values.orEmpty()
+                    .mapNotNull { (it as? JsonObject)?.text("state") }
+                update { it.copy(contextDelivery = when {
+                    memoryInvalidated -> ""
+                    "rejected" in delivery -> "Provider-Kontext abgelehnt. Keine automatische Wiederholung."
+                    "unconfirmed" in delivery -> "Provider-Kontext unbestätigt. Keine automatische Wiederholung."
+                    "pending" in delivery -> "Provider-Kontext: Zustellung ausstehend."
+                    else -> ""
+                }) }
                 (data["apply_result"] as? JsonObject)?.let { receipt(it, data.text("apply_revision")) }
                 if (state.value.resolving && !data.flag("applying") && data.text("error").isNotEmpty() &&
                     data.text("apply_revision") == approvalRevision) {
@@ -246,12 +325,13 @@ class VoiceClient(private val http: HttpClient, private val scope: CoroutineScop
                             !it.ready -> "Warte auf Sullivan …"
                             else -> "Verbunden" }) }
                 }
-                if (!state.value.active && data.flag("final_usage")) update {
+                if (!memoryInvalidated && !state.value.active && data.flag("final_usage")) update {
                     it.copy(status = "Gespräch beendet · ${data.text("seconds")} Sekunden Provider-Nutzung")
                 }
-            } catch (_: TimeoutCancellationException) { if (state.value.active) end("Status-Zeitlimit. Gespräch beendet.") }
+            } catch (_: TimeoutCancellationException) { if (run == generation && state.value.active) end("Status-Zeitlimit. Gespräch beendet.") }
             catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { if (state.value.active) end("Status nicht erreichbar. Gespräch beendet.") }
+            catch (_: Exception) { if (run == generation && state.value.active) end("Status nicht erreichbar. Gespräch beendet.") }
+            if (run != generation) return
             if (state.value.resolving && now() >= deadline) {
                 update { it.copy(resolving = false, outcome = "Ausgang weiterhin unbestätigt. Datensätze prüfen; Bestätigung nicht wiederholen.") }
                 end()

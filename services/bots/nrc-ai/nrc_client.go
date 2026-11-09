@@ -344,6 +344,13 @@ func (c *NRCClient) pingLoop(ctx context.Context) {
 }
 
 func (c *NRCClient) sendProtocolMessage(opcode uint16, payload []byte, ticketWrite ...bool) error {
+	return c.sendProtocolMessageContext(context.Background(), opcode, payload, ticketWrite...)
+}
+
+func (c *NRCClient) sendProtocolMessageContext(ctx context.Context, opcode uint16, payload []byte, ticketWrite ...bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !c.connected.Load() {
 		return errNotConnected
 	}
@@ -362,8 +369,13 @@ func (c *NRCClient) sendProtocolMessage(opcode uint16, payload []byte, ticketWri
 	}
 
 	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	// Cancellation while waiting for either connection or writer ownership must
+	// stop dispatch. Once WriteMessage starts, failure has an uncertain outcome.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	err = conn.WriteMessage(websocket.BinaryMessage, buf)
-	c.writeMu.Unlock()
 	if err != nil {
 		if len(ticketWrite) > 0 && ticketWrite[0] {
 			return ticketWriteError(err)
@@ -1013,7 +1025,7 @@ func (c *NRCClient) GetEdges(ctx context.Context, convID uint64) ([]protocol.Edg
 	defer removePendingEdge(c, convID, ch)
 
 	if needsSend {
-		if err := c.sendListAllEdges(convID); err != nil {
+		if err := c.sendListAllEdges(ctx, convID); err != nil {
 			return nil, err
 		}
 	}
@@ -1116,7 +1128,7 @@ func (c *NRCClient) CreateTask(ctx context.Context, convID uint64, title, descri
 	defer removePendingTaskCreate(c, correlationID, ch)
 
 	payload := protocol.EncodeTaskCreateWithCorrelation(protocol.WorkspaceDataConvID, title, description, int32(priority), correlationID)
-	if err := c.sendProtocolMessage(protocol.C_CreateTask, payload); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, protocol.C_CreateTask, payload, true); err != nil {
 		return nil, err
 	}
 
@@ -1127,9 +1139,9 @@ func (c *NRCClient) CreateTask(ctx context.Context, convID uint64, title, descri
 		}
 		return result.Task, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, ticketWriteError(ctx.Err())
 	case <-time.After(15 * time.Second):
-		return nil, fmt.Errorf("timeout waiting for task create response for conv_id %d", convID)
+		return nil, ticketWriteError(fmt.Errorf("timeout waiting for task create response for conv_id %d", convID))
 	}
 }
 
@@ -1182,7 +1194,7 @@ func (c *NRCClient) UpdateTask(ctx context.Context, convID uint64, current proto
 		nil, // Preserve the current server-side attachment list.
 		correlationID,
 	)
-	if err := c.sendProtocolMessage(protocol.C_UpdateTask, payload); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, protocol.C_UpdateTask, payload, true); err != nil {
 		return nil, err
 	}
 
@@ -1193,9 +1205,9 @@ func (c *NRCClient) UpdateTask(ctx context.Context, convID uint64, current proto
 		}
 		return result.Task, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, ticketWriteError(ctx.Err())
 	case <-time.After(15 * time.Second):
-		return nil, fmt.Errorf("timeout waiting for task update response for conv_id %d task_id %d", convID, current.ID)
+		return nil, ticketWriteError(fmt.Errorf("timeout waiting for task update response for conv_id %d task_id %d", convID, current.ID))
 	}
 }
 
@@ -1222,7 +1234,7 @@ func (c *NRCClient) CreateEdge(ctx context.Context, convID uint64, sourceType ui
 	defer removePendingEdgeCreate(c, correlationID, ch)
 
 	payload := protocol.EncodeCreateEdgeWithCorrelation(protocol.WorkspaceDataConvID, sourceType, sourceID, targetType, targetID, relation, correlationID)
-	if err := c.sendProtocolMessage(protocol.C_CreateEdge, payload); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, protocol.C_CreateEdge, payload, true); err != nil {
 		return nil, err
 	}
 
@@ -1233,9 +1245,9 @@ func (c *NRCClient) CreateEdge(ctx context.Context, convID uint64, sourceType ui
 		}
 		return result.Edge, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, ticketWriteError(ctx.Err())
 	case <-time.After(15 * time.Second):
-		return nil, fmt.Errorf("timeout waiting for edge create response for conv_id %d", convID)
+		return nil, ticketWriteError(fmt.Errorf("timeout waiting for edge create response for conv_id %d", convID))
 	}
 }
 
@@ -1265,7 +1277,7 @@ func (c *NRCClient) DeleteEdge(ctx context.Context, convID uint64, edgeID uint64
 	defer removePendingEdgeDelete(c, correlationID, ch)
 
 	payload := protocol.EncodeDeleteEdgeWithCorrelation(protocol.WorkspaceDataConvID, edgeID, correlationID)
-	if err := c.sendProtocolMessage(protocol.C_DeleteEdge, payload); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, protocol.C_DeleteEdge, payload, true); err != nil {
 		return err
 	}
 
@@ -1276,9 +1288,9 @@ func (c *NRCClient) DeleteEdge(ctx context.Context, convID uint64, edgeID uint64
 		}
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return ticketWriteError(ctx.Err())
 	case <-time.After(15 * time.Second):
-		return fmt.Errorf("timeout waiting for edge delete response for conv_id %d edge_id %d", convID, edgeID)
+		return ticketWriteError(fmt.Errorf("timeout waiting for edge delete response for conv_id %d edge_id %d", convID, edgeID))
 	}
 }
 
@@ -1324,7 +1336,7 @@ func (c *NRCClient) createAssetAttachments(ctx context.Context, convID uint64, a
 		}
 		return err
 	}
-	if err := c.sendProtocolMessage(protocol.C_CreateAsset, payloadBytes, assetType == 13 || assetType == 14); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, protocol.C_CreateAsset, payloadBytes, true); err != nil {
 		return nil, err
 	}
 
@@ -1335,9 +1347,9 @@ func (c *NRCClient) createAssetAttachments(ctx context.Context, convID uint64, a
 		}
 		return result.Asset, nil
 	case <-ctx.Done():
-		return nil, writeErr(ctx.Err())
+		return nil, ticketWriteError(ctx.Err())
 	case <-time.After(15 * time.Second):
-		return nil, writeErr(fmt.Errorf("timeout waiting for asset create response for conv_id %d", convID))
+		return nil, ticketWriteError(fmt.Errorf("timeout waiting for asset create response for conv_id %d", convID))
 	}
 }
 
@@ -1364,7 +1376,7 @@ func (c *NRCClient) UpdateAsset(ctx context.Context, convID uint64, assetID uint
 	defer removePendingAssetWrite(c, correlationID, ch)
 
 	payloadBytes := protocol.EncodeUpdateAssetWithCorrelation(protocol.WorkspaceDataConvID, assetID, preview, payload, correlationID)
-	if err := c.sendProtocolMessage(protocol.C_UpdateAsset, payloadBytes); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, protocol.C_UpdateAsset, payloadBytes, true); err != nil {
 		return nil, err
 	}
 
@@ -1375,9 +1387,9 @@ func (c *NRCClient) UpdateAsset(ctx context.Context, convID uint64, assetID uint
 		}
 		return result.Asset, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, ticketWriteError(ctx.Err())
 	case <-time.After(15 * time.Second):
-		return nil, fmt.Errorf("timeout waiting for asset update response for conv_id %d asset_id %d", convID, assetID)
+		return nil, ticketWriteError(fmt.Errorf("timeout waiting for asset update response for conv_id %d asset_id %d", convID, assetID))
 	}
 }
 
@@ -1407,7 +1419,7 @@ func (c *NRCClient) DeleteAsset(ctx context.Context, convID uint64, assetID uint
 	defer removePendingAssetDelete(c, correlationID, ch)
 
 	payloadBytes := protocol.EncodeDeleteAssetWithCorrelation(protocol.WorkspaceDataConvID, assetID, correlationID)
-	if err := c.sendProtocolMessage(protocol.C_DeleteAsset, payloadBytes); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, protocol.C_DeleteAsset, payloadBytes, true); err != nil {
 		return err
 	}
 
@@ -1418,9 +1430,9 @@ func (c *NRCClient) DeleteAsset(ctx context.Context, convID uint64, assetID uint
 		}
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return ticketWriteError(ctx.Err())
 	case <-time.After(15 * time.Second):
-		return fmt.Errorf("timeout waiting for asset delete response for conv_id %d asset_id %d", convID, assetID)
+		return ticketWriteError(fmt.Errorf("timeout waiting for asset delete response for conv_id %d asset_id %d", convID, assetID))
 	}
 }
 
@@ -1446,7 +1458,7 @@ func (c *NRCClient) ListTasksPage(ctx context.Context, convID uint64, statusMask
 	c.pendingTaskPages[correlationID] = append(c.pendingTaskPages[correlationID], ch)
 	c.pendingTaskPagesMu.Unlock()
 	defer removePendingTaskPage(c, correlationID, ch)
-	if err := c.sendProtocolMessage(protocol.C_ListTasksPaged, payload); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, protocol.C_ListTasksPaged, payload); err != nil {
 		return nil, err
 	}
 	select {
@@ -1522,7 +1534,7 @@ func (c *NRCClient) ListAssetsPage(ctx context.Context, convID uint64, assetType
 		payload = protocol.EncodeListAssetsPagedByTagWithCorrelation(protocol.WorkspaceDataConvID, assetType, includePayload, limit, cursor != nil, updatedAt, assetID, tag, correlationID)
 	}
 
-	if err := c.sendProtocolMessage(opcode, payload); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, opcode, payload); err != nil {
 		return nil, err
 	}
 
@@ -1561,7 +1573,7 @@ func (c *NRCClient) ListNoteProjects(ctx context.Context, convID uint64) ([]stri
 	defer removePendingNoteProjects(c, correlationID, ch)
 
 	payload := protocol.EncodeListNoteProjectsWithCorrelation(protocol.WorkspaceDataConvID, correlationID)
-	if err := c.sendProtocolMessage(protocol.C_ListNoteProjects, payload); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, protocol.C_ListNoteProjects, payload); err != nil {
 		return nil, err
 	}
 
@@ -1600,7 +1612,7 @@ func (c *NRCClient) ListNoteTags(ctx context.Context, convID uint64) ([]string, 
 	defer removePendingNoteTags(c, correlationID, ch)
 
 	payload := protocol.EncodeListNoteTagsWithCorrelation(protocol.WorkspaceDataConvID, correlationID)
-	if err := c.sendProtocolMessage(protocol.C_ListNoteTags, payload); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, protocol.C_ListNoteTags, payload); err != nil {
 		return nil, err
 	}
 
@@ -1685,7 +1697,7 @@ func (c *NRCClient) GetGraphNeighborhood(ctx context.Context, convID uint64, sta
 
 	defer removePendingGraphQuery(c, correlationID, ch)
 
-	if err := c.sendGraphQuery(convID, startType, startID, maxDepth, relationMask, direction, flags, correlationID); err != nil {
+	if err := c.sendGraphQuery(ctx, convID, startType, startID, maxDepth, relationMask, direction, flags, correlationID); err != nil {
 		return graphQueryResult{}, err
 	}
 
@@ -1720,7 +1732,7 @@ func (c *NRCClient) GetGraphRank(ctx context.Context, convID uint64, anchors, ca
 	c.pendingGraphRanks[correlationID] = append(c.pendingGraphRanks[correlationID], ch)
 	c.pendingGraphRanksMu.Unlock()
 	defer removePendingGraphRank(c, correlationID, ch)
-	if err := c.sendProtocolMessage(protocol.C_GraphRank, payload); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, protocol.C_GraphRank, payload); err != nil {
 		return protocol.GraphRankResult{}, err
 	}
 	select {
@@ -1750,7 +1762,7 @@ func (c *NRCClient) GetAsset(ctx context.Context, convID, assetID uint64) (proto
 	defer removePendingAsset(c, key, ch)
 
 	if needsSend {
-		if err := c.sendGetAsset(convID, assetID); err != nil {
+		if err := c.sendGetAsset(ctx, convID, assetID); err != nil {
 			return protocol.Asset{}, err
 		}
 	}
@@ -2014,12 +2026,12 @@ func (c *NRCClient) sendGetTasks(convID uint64) error {
 	return nil
 }
 
-func (c *NRCClient) sendListAllEdges(convID uint64) error {
+func (c *NRCClient) sendListAllEdges(ctx context.Context, convID uint64) error {
 	if convID != protocol.WorkspaceDataConvID {
 		return errWorkspaceDataScope
 	}
 	payload := protocol.EncodeListAllEdges(protocol.WorkspaceDataConvID)
-	err := c.sendProtocolMessage(protocol.C_ListAllEdges, payload)
+	err := c.sendProtocolMessageContext(ctx, protocol.C_ListAllEdges, payload)
 	if err != nil {
 		slog.Error("failed to send list all edges", "error", err)
 		return err
@@ -2027,12 +2039,12 @@ func (c *NRCClient) sendListAllEdges(convID uint64) error {
 	return nil
 }
 
-func (c *NRCClient) sendGraphQuery(convID uint64, startType uint16, startID uint64, maxDepth uint8, relationMask uint16, direction uint8, flags uint8, correlationID uint32) error {
+func (c *NRCClient) sendGraphQuery(ctx context.Context, convID uint64, startType uint16, startID uint64, maxDepth uint8, relationMask uint16, direction uint8, flags uint8, correlationID uint32) error {
 	if convID != protocol.WorkspaceDataConvID {
 		return errWorkspaceDataScope
 	}
 	payload := protocol.EncodeGraphQueryWithCorrelation(protocol.WorkspaceDataConvID, startType, startID, maxDepth, relationMask, direction, flags, correlationID)
-	err := c.sendProtocolMessage(protocol.C_GraphQuery, payload)
+	err := c.sendProtocolMessageContext(ctx, protocol.C_GraphQuery, payload)
 	if err != nil {
 		slog.Error("failed to send graph query", "error", err)
 		return err
@@ -2040,12 +2052,12 @@ func (c *NRCClient) sendGraphQuery(convID uint64, startType uint16, startID uint
 	return nil
 }
 
-func (c *NRCClient) sendGetAsset(convID, assetID uint64) error {
+func (c *NRCClient) sendGetAsset(ctx context.Context, convID, assetID uint64) error {
 	if convID != protocol.WorkspaceDataConvID {
 		return errWorkspaceDataScope
 	}
 	payload := protocol.EncodeGetAsset(protocol.WorkspaceDataConvID, assetID)
-	err := c.sendProtocolMessage(protocol.C_GetAsset, payload)
+	err := c.sendProtocolMessageContext(ctx, protocol.C_GetAsset, payload)
 	if err != nil {
 		slog.Error("failed to send get asset", "conv_id", convID, "asset_id", assetID, "error", err)
 		return err

@@ -15,7 +15,7 @@ func TestReadTicketsServerDuePreservesCursor(t *testing.T) {
 	c.subscribedRooms[0] = true
 	c.taskSnapshots[0] = true
 	store := newAgentSessionStore(time.Hour, 5)
-	s, _ := store.getOrCreate("ws", 0, 0, "", agentModePlan)
+	s, _ := store.getOrCreate(testAIOwner, "ws", 0, 0, "", agentModePlan)
 	p, _ := store.startPlan(s.ID)
 	ctx := ticketTestContext(t, s, p)
 	tools := newTicketTools(&WorkspaceManager{ctx: ctx, clients: map[string]*NRCClient{"ws": c}}, store)

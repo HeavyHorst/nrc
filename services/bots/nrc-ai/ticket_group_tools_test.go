@@ -80,7 +80,7 @@ func TestTicketGroupProposalRejectsConflictingCompanyChanges(t *testing.T) {
 	c, requests := connectedListingTestClient(t)
 	c.subscribedRooms[0], c.taskSnapshots[0] = true, true
 	store := newAgentSessionStore(time.Hour, 5)
-	s, _ := store.getOrCreate("ws", 0, 0, "", agentModePlan)
+	s, _ := store.getOrCreate(testAIOwner, "ws", 0, 0, "", agentModePlan)
 	plan, _ := store.startPlan(s.ID)
 	ctx := ticketTestContext(t, s, plan)
 	tools := newTicketGroupTools(&WorkspaceManager{ctx: ctx, clients: map[string]*NRCClient{"ws": c}}, store)
@@ -140,7 +140,7 @@ func TestTicketGroupProposalAndApply(t *testing.T) {
 			c.subscribedRooms[0] = true
 			c.taskSnapshots[0] = true
 			store := newAgentSessionStore(time.Hour, 5)
-			s, _ := store.getOrCreate("ws", 0, 0, "", agentModePlan)
+			s, _ := store.getOrCreate(testAIOwner, "ws", 0, 0, "", agentModePlan)
 			p, _ := store.startPlan(s.ID)
 			ctx := ticketTestContext(t, s, p)
 			tools := newTicketGroupTools(&WorkspaceManager{ctx: ctx, clients: map[string]*NRCClient{"ws": c}}, store)

@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	memory "nrc-ai/personal_memory"
 )
 
 var errClientReadyTimeout = errors.New("timeout waiting for NRC client ready")
@@ -23,6 +25,7 @@ type Config struct {
 	AIPort             string
 	LLMProvider        string
 	LLMModel           string
+	MemorySummaryModel string
 	LLMAPIKey          string
 	LLMBaseURL         string
 	LLMServiceTier     string
@@ -86,6 +89,11 @@ func loadConfig() Config {
 	if cfg.LLMMaxOutputTokens == 0 {
 		cfg.LLMMaxOutputTokens = defaultMaxOutputTokens(cfg.LLMProvider, cfg.LLMModel)
 	}
+	cfg.MemorySummaryModel = cfg.LLMModel
+	if strings.EqualFold(strings.TrimSpace(cfg.LLMProvider), "openai") {
+		cfg.MemorySummaryModel = "gpt-6.1-sol"
+	}
+	cfg.MemorySummaryModel = envOrDefault("NRC_MEMORY_SUMMARY_MODEL", cfg.MemorySummaryModel)
 	cfg.KnowledgeGapSlices, err = parseKnowledgeGapSlices(os.Getenv("NRC_KNOWLEDGE_GAP_SLICES"))
 	if err != nil {
 		slog.Error("invalid knowledge-gap configuration", "error", err)
@@ -251,8 +259,18 @@ func waitForClientReady(ctx context.Context, client *NRCClient, timeout time.Dur
 }
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: metadataLogAttr})))
 	cfg := loadConfig()
 	startTime := time.Now()
+	issuer := os.Getenv("NRC_JWT_ISSUER")
+	if issuer == "" {
+		issuer = "nrc-tailscale-proxy"
+	}
+	authenticate, err := newAIAuthentication(os.Getenv("NRC_JWT_SECRET"), issuer)
+	if err != nil {
+		slog.Error("failed to initialize AI authentication", "error", err)
+		os.Exit(1)
+	}
 
 	slog.Info("starting nrc-ai",
 		"server", cfg.NRCServer,
@@ -290,6 +308,35 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var memoryStore *memory.Store
+	if path := strings.TrimSpace(os.Getenv("NRC_PERSONAL_MEMORY_PATH")); path != "" {
+		summaryCfg := cfg
+		summaryCfg.LLMModel = cfg.MemorySummaryModel
+		model, err := newFantasyLanguageModel(ctx, summaryCfg)
+		if err != nil {
+			slog.Error("failed to initialize personal memory summarizer")
+			os.Exit(1)
+		}
+		memoryStore, err = memory.Open(path)
+		if err != nil {
+			slog.Error("failed to open private personal memory store", "error", err)
+			os.Exit(1)
+		}
+		workerDone := make(chan struct{})
+		go func() {
+			defer close(workerDone)
+			bounded := timedAskModel{LanguageModel: model, maxContextTokens: int64(cfg.MaxContextTokens), maxOutputTokens: int64(cfg.LLMMaxOutputTokens)}
+			memoryStore.RunSummaries(ctx, "sullivan-tree-v3", personalMemorySummarizer(bounded, int64(cfg.LLMMaxOutputTokens)))
+		}()
+		maintenanceDone := make(chan struct{})
+		go func() {
+			defer close(maintenanceDone)
+			memoryStore.RunMaintenance(ctx)
+		}()
+		defer func() { cancel(); <-workerDone; <-maintenanceDone; memoryStore.Close() }()
+		slog.Info("personal memory controls enabled; saved retention policy applies")
+	}
+
 	wm := NewWorkspaceManager(ctx, cfg)
 	agentSessions := newAgentSessionStore(30*time.Minute, 20)
 
@@ -299,6 +346,9 @@ func main() {
 	mux.HandleFunc("POST /paste-to-note", handlePasteToNote(llm, search))
 	mux.HandleFunc("POST /retrieve", handleRetrieve(wm, search))
 	mux.HandleFunc("POST /ask/apply", handleAskApply(wm, agentSessions))
+	mux.HandleFunc("POST /ask/run/status", handlePersonalRecovery(false))
+	mux.HandleFunc("POST /ask/receipt/status", handlePersonalRecovery(true))
+	mux.HandleFunc("POST /ask/memory", handlePersonalRetention)
 	mux.HandleFunc("POST /ask/session/reset", handleAskSessionReset(agentSessions))
 	mux.HandleFunc("GET /ask/session/{id}", handleAskSessionGet(agentSessions))
 	askHandler, err := handleAskFantasy(wm, search, sourcebot, cfg, cfg.MaxContextTokens, agentSessions)
@@ -335,7 +385,8 @@ func main() {
 			slog.Error("voice ask engine unavailable", "error", err)
 		}
 	}
-	newVoiceService(os.Getenv("NRC_VOICE_OPENAI_API_KEY"), os.Getenv("NRC_VOICE_OPENAI_VOICE_ID"), voiceAsk, handleAskApply(wm, voiceStore)).register(mux)
+	voice := newVoiceService(os.Getenv("NRC_VOICE_OPENAI_API_KEY"), os.Getenv("NRC_VOICE_OPENAI_VOICE_ID"), voiceAsk, handleAskApply(wm, voiceStore))
+	voice.register(mux)
 
 	type healthResponse struct {
 		Status      string `json:"status"`
@@ -360,23 +411,25 @@ func main() {
 
 	server := &http.Server{
 		Addr:    ":" + cfg.AIPort,
-		Handler: mux,
+		Handler: authenticate(personalMemoryMiddleware(memoryStore, mux)),
 	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	shutdownDone := make(chan error, 1)
 	go func() {
 		sig := <-sigCh
 		slog.Info("received signal, shutting down", "signal", sig)
-		cancel()
 
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// Leave NRC connections and SQLite alive for already-approved writes
+		// (40 seconds plus receipt persistence) and final Live capture sealing.
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 55*time.Second)
 		defer shutdownCancel()
-
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			slog.Error("HTTP server shutdown error", "error", err)
-		}
+		voiceDone := make(chan error, 1)
+		go func() { voiceDone <- voice.shutdown(shutdownCtx) }()
+		httpErr := server.Shutdown(shutdownCtx)
+		shutdownDone <- errors.Join(httpErr, <-voiceDone)
 	}()
 
 	slog.Info(fmt.Sprintf("HTTP server listening on :%s", cfg.AIPort))
@@ -384,6 +437,13 @@ func main() {
 		slog.Error("HTTP server error", "error", err)
 		os.Exit(1)
 	}
+	if err := <-shutdownDone; err != nil {
+		// Do not close shared storage under live consumers or claim a clean drain.
+		// Crash recovery will conservatively reconcile any unfinished work.
+		slog.Error("shutdown incomplete; pending outcomes require recovery", "error", err)
+		os.Exit(1)
+	}
+	cancel()
 
 	slog.Info("nrc-ai stopped")
 }

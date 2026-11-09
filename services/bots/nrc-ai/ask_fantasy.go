@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -27,6 +30,7 @@ import (
 const fantasyAskAppName = "nrc-ai-ask"
 
 type askTimingLoggerKey struct{}
+type summaryModelKey struct{}
 
 func askTimingLogger(ctx context.Context) *slog.Logger {
 	if logger, ok := ctx.Value(askTimingLoggerKey{}).(*slog.Logger); ok {
@@ -39,9 +43,79 @@ func askTimingLogger(ctx context.Context) *slog.Logger {
 // Embedding preserves the model's streaming and metadata interfaces.
 type timedAskModel struct {
 	fantasy.LanguageModel
+	maxContextTokens int64
+	maxOutputTokens  int64
+}
+
+// This is a local admission error, not a retryable provider/transport error.
+// Keep it payload-free: callers may return it to clients or log it.
+var errAskInputBudget = errors.New("model input exceeds the conservative context budget; narrow the request or start a new session")
+
+// askCallInputBound is a conservative byte-based estimate, NOT exact token
+// accounting. Fantasy v0.45.2 supplies the complete step Prompt (including
+// system messages and previous tool results) and prepared tool schemas here.
+// Providers normalize these differently, so count the JSON bytes at one budget
+// unit per byte, plus framing headroom per message, part and tool. JSON escaping
+// deliberately overcounts text. Never use a characters/4 estimate for admission.
+// Provider-added hidden prompts and model-specific tokenization remain unknown.
+func askCallInputBound(call fantasy.Call) (int64, error) {
+	framing := int64(1024) + 128*int64(len(call.Tools))
+	for _, message := range call.Prompt {
+		framing += 128 + 128*int64(len(message.Content))
+		for _, part := range message.Content {
+			switch part.(type) {
+			case fantasy.TextPart, *fantasy.TextPart, fantasy.ReasoningPart, *fantasy.ReasoningPart, fantasy.ToolCallPart, *fantasy.ToolCallPart:
+			case fantasy.ToolResultPart, *fantasy.ToolResultPart:
+				result, _ := fantasy.AsMessagePart[fantasy.ToolResultPart](part)
+				switch output := result.Output.(type) {
+				case fantasy.ToolResultOutputContentText, *fantasy.ToolResultOutputContentText:
+				case fantasy.ToolResultOutputContentError, *fantasy.ToolResultOutputContentError:
+					// error's JSON encoding is usually {}, whereas providers send Error().
+					e, _ := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](output)
+					if e.Error != nil {
+						encoded, _ := json.Marshal(e.Error.Error())
+						framing += int64(len(encoded))
+					}
+				default:
+					// Media token costs cannot be bounded by a URL or byte length.
+					return 0, errAskInputBudget
+				}
+			default:
+				return 0, errAskInputBudget
+			}
+		}
+	}
+	encoded, err := json.Marshal(call)
+	if err != nil {
+		// Marshal errors can contain tool data; do not wrap them.
+		return 0, errAskInputBudget
+	}
+	return int64(len(encoded)) + framing, nil
+}
+
+func (m timedAskModel) checkInputBudget(call fantasy.Call) error {
+	reserve := m.maxOutputTokens
+	if call.MaxOutputTokens != nil && *call.MaxOutputTokens > reserve {
+		reserve = *call.MaxOutputTokens
+	}
+	if m.maxContextTokens <= 0 || reserve <= 0 || reserve >= m.maxContextTokens {
+		return errAskInputBudget
+	}
+	bound, err := askCallInputBound(call)
+	if err != nil || bound > m.maxContextTokens-reserve {
+		return errAskInputBudget
+	}
+	return nil
 }
 
 func (m timedAskModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	ctx, call, err := m.withPersonalContext(ctx, call)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.checkInputBudget(call); err != nil {
+		return nil, err
+	}
 	started := time.Now()
 	response, err := m.LanguageModel.Generate(ctx, call)
 	attrs := []any{"duration_ms", time.Since(started).Milliseconds(), "status", "ok"}
@@ -51,10 +125,25 @@ func (m timedAskModel) Generate(ctx context.Context, call fantasy.Call) (*fantas
 	if response != nil {
 		attrs = append(attrs, "input_tokens", response.Usage.InputTokens,
 			"output_tokens", response.Usage.OutputTokens, "reasoning_tokens", response.Usage.ReasoningTokens,
-			"cache_read_tokens", response.Usage.CacheReadTokens, "finish_reason", response.FinishReason)
+			"cache_read_tokens", response.Usage.CacheReadTokens, "cache_creation_tokens", response.Usage.CacheCreationTokens, "finish_reason", response.FinishReason)
 	}
-	askTimingLogger(ctx).Info("ask model timing", attrs...)
+	event := "ask model timing"
+	if summary, _ := ctx.Value(summaryModelKey{}).(bool); summary {
+		event = "memory summary model timing"
+	}
+	askTimingLogger(ctx).Info(event, attrs...)
 	return response, err
+}
+
+func (m timedAskModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+	ctx, call, err := m.withPersonalContext(ctx, call)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.checkInputBudget(call); err != nil {
+		return nil, err
+	}
+	return m.LanguageModel.Stream(ctx, call)
 }
 
 type adkRunnableTool interface {
@@ -87,6 +176,66 @@ func openAIUsesResponses(model string) bool {
 		model == "gpt-6" || strings.HasPrefix(model, "gpt-6-") || strings.HasPrefix(model, "gpt-6.")
 }
 
+type askCacheBoundaryKey struct{}
+
+// Fantasy's pinned Responses adapter does not expose prompt_cache_breakpoint.
+// Add only this transport field, preserving raw JSON for tools and other inputs.
+// Implicit caching remains enabled for tool loops; no retention policy changes.
+func openAIAskCacheBoundary(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	index, marked := req.Context().Value(askCacheBoundaryKey{}).(int)
+	if !marked || !strings.HasSuffix(req.URL.Path, "/responses") {
+		return next(req)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	_ = req.Body.Close()
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	var model string
+	_ = json.Unmarshal(payload["model"], &model)
+	var prefix []json.RawMessage
+	if openAIUsesResponses(model) {
+		var input []json.RawMessage
+		if err := json.Unmarshal(payload["input"], &input); err != nil {
+			return nil, err
+		}
+		if index < 0 || index >= len(input) {
+			return nil, errors.New("missing Ask cache boundary")
+		}
+		var message map[string]json.RawMessage
+		if err := json.Unmarshal(input[index], &message); err != nil {
+			return nil, err
+		}
+		var parts []map[string]json.RawMessage
+		if err := json.Unmarshal(message["content"], &parts); err != nil {
+			return nil, err
+		}
+		if len(parts) != 1 || string(parts[0]["type"]) != `"input_text"` || string(message["role"]) != `"user"` {
+			return nil, errors.New("invalid Ask cache boundary")
+		}
+		parts[0]["prompt_cache_breakpoint"] = json.RawMessage(`{"mode":"explicit"}`)
+		message["content"], _ = json.Marshal(parts)
+		input[index], _ = json.Marshal(message)
+		prefix = input[:index+1]
+		payload["input"], _ = json.Marshal(input)
+		body, err = json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+	}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+	if prefix != nil {
+		return coordinatedCacheRequest(req, next, payload, prefix)
+	}
+	return next(req)
+}
+
 func newFantasyProvider(providerName, apiKey, baseURL, serviceTier string) (fantasy.Provider, error) {
 	switch providerName {
 	case "openai", "":
@@ -97,6 +246,7 @@ func newFantasyProvider(providerName, apiKey, baseURL, serviceTier string) (fant
 			openai.WithAPIKey(apiKey),
 			openai.WithUseResponsesAPI(),
 			openai.WithResponsesAPIFunc(openAIUsesResponses),
+			openai.WithSDKOptions(option.WithMiddleware(openAIAskCacheBoundary)),
 		}
 		if serviceTier != "" {
 			opts = append(opts, openai.WithSDKOptions(option.WithJSONSet("service_tier", serviceTier)))

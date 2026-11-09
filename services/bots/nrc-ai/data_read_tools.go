@@ -150,7 +150,7 @@ func (c *NRCClient) correlatedDataRead(ctx context.Context, convID uint64, opcod
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := c.sendProtocolMessage(opcode, payload, ticketWrite...); err != nil {
+	if err := c.sendProtocolMessageContext(ctx, opcode, payload, ticketWrite...); err != nil {
 		return nil, err
 	}
 	timer := time.NewTimer(15 * time.Second)

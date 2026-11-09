@@ -96,7 +96,7 @@ func TestTicketTypesAndPrivacy(t *testing.T) {
 
 func TestTicketAndLinkedTaskProposalDependencies(t *testing.T) {
 	store := newAgentSessionStore(time.Hour, 5)
-	s, _ := store.getOrCreate("ws", 0, 0, "", agentModePlan)
+	s, _ := store.getOrCreate(testAIOwner, "ws", 0, 0, "", agentModePlan)
 	p, _ := store.startPlan(s.ID)
 	ticket, err := store.addTicketAction(s.ID, p.ID, ticketAction{Operation: "create", Metadata: map[string]string{"title": "Ticket"}})
 	if err != nil {
@@ -123,7 +123,7 @@ func TestTicketSliceProposalAndApprovedApply(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			c, requests := connectedListingTestClient(t)
 			store := newAgentSessionStore(time.Hour, 5)
-			s, _ := store.getOrCreate("ws", 0, 0, "", agentModePlan)
+			s, _ := store.getOrCreate(testAIOwner, "ws", 0, 0, "", agentModePlan)
 			p, _ := store.startPlan(s.ID)
 			var sourceAction string
 			sourceID := uint64(41)
@@ -205,7 +205,7 @@ func TestTicketProposalAndApprovedApply(t *testing.T) {
 			c.subscribedRooms[0] = true
 			c.taskSnapshots[0] = true
 			store := newAgentSessionStore(time.Hour, 5)
-			session, _ := store.getOrCreate("ws", 0, 0, "", agentModePlan)
+			session, _ := store.getOrCreate(testAIOwner, "ws", 0, 0, "", agentModePlan)
 			plan, _ := store.startPlan(session.ID)
 			ctx := ticketTestContext(t, session, plan)
 			tools := newTicketTools(&WorkspaceManager{ctx: ctx, clients: map[string]*NRCClient{"ws": c}}, store)
@@ -355,7 +355,7 @@ func TestPublicTicketProposalDisclosesValidatedAttachments(t *testing.T) {
 	c.subscribedRooms[0] = true
 	c.taskSnapshots[0] = true
 	store := newAgentSessionStore(time.Hour, 5)
-	s, _ := store.getOrCreate("ws", 0, 0, "", agentModePlan)
+	s, _ := store.getOrCreate(testAIOwner, "ws", 0, 0, "", agentModePlan)
 	p, _ := store.startPlan(s.ID)
 	ctx := ticketTestContext(t, s, p)
 	tools := newTicketTools(&WorkspaceManager{ctx: ctx, clients: map[string]*NRCClient{"ws": c}}, store)
@@ -429,7 +429,7 @@ func TestTicketConversationReadsFullRecordsAndAttachments(t *testing.T) {
 	c.subscribedRooms[0] = true
 	c.taskSnapshots[0] = true
 	store := newAgentSessionStore(time.Hour, 5)
-	s, _ := store.getOrCreate("ws", 0, 0, "", agentModePlan)
+	s, _ := store.getOrCreate(testAIOwner, "ws", 0, 0, "", agentModePlan)
 	p, _ := store.startPlan(s.ID)
 	ctx := ticketTestContext(t, s, p)
 	tools := newTicketTools(&WorkspaceManager{ctx: ctx, clients: map[string]*NRCClient{"ws": c}}, store)
@@ -487,7 +487,7 @@ func TestTicketCommittedWithoutACKBlocksReplay(t *testing.T) {
 			t.Run(operation+map[bool]string{false: "/lost_ack", true: "/rejected"}[reject], func(t *testing.T) {
 				c, requests := connectedListingTestClient(t)
 				store := newAgentSessionStore(time.Hour, 5)
-				s, _ := store.getOrCreate("ws", 0, 0, "", agentModePlan)
+				s, _ := store.getOrCreate(testAIOwner, "ws", 0, 0, "", agentModePlan)
 				p, _ := store.startPlan(s.ID)
 				a := ticketAction{Operation: operation, Metadata: map[string]string{"title": "test"}}
 				if operation != "create" {
@@ -649,7 +649,7 @@ func TestTicketRealWorkerCreateAndSuppressedACK(t *testing.T) {
 			}()
 			t.Cleanup(func() { c.conn.Close(); <-readerDone })
 			store := newAgentSessionStore(time.Hour, 5)
-			s, _ := store.getOrCreate(c.workspace, 0, 0, "", agentModePlan)
+			s, _ := store.getOrCreate(testAIOwner, c.workspace, 0, 0, "", agentModePlan)
 			p, _ := store.startPlan(s.ID)
 			if _, err := store.addTicketAction(s.ID, p.ID, ticketAction{Operation: "create", Metadata: map[string]string{"title": "AI real worker", "requester": "ada@example.test"}, Content: "original body", GeneratedFiles: []ticketGeneratedFile{{Filename: "worker.txt", Content: "generated evidence"}}}); err != nil {
 				t.Fatal(err)
@@ -748,7 +748,7 @@ func TestGeneratedTicketFileUploadsOnlyOnApprovedApply(t *testing.T) {
 	c.subscribedRooms[0] = true
 	c.taskSnapshots[0] = true
 	store := newAgentSessionStore(time.Hour, 5)
-	s, _ := store.getOrCreate("ws", 0, 0, "", agentModePlan)
+	s, _ := store.getOrCreate(testAIOwner, "ws", 0, 0, "", agentModePlan)
 	p, _ := store.startPlan(s.ID)
 	ctx := ticketTestContext(t, s, p)
 	tools := newTicketTools(&WorkspaceManager{ctx: ctx, clients: map[string]*NRCClient{"ws": c}}, store)

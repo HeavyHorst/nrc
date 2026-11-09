@@ -38,17 +38,21 @@ const (
 )
 
 type AgentSession struct {
-	ID            string       `json:"id"`
-	Workspace     string       `json:"workspace"`
-	ContextConvID uint64       `json:"context_conv_id"`
-	DisplayConvID uint64       `json:"display_conv_id"`
-	Mode          string       `json:"mode"`
-	Summary       string       `json:"summary,omitempty"`
-	Turns         []AgentTurn  `json:"turns,omitempty"`
-	PendingPlans  []ActionPlan `json:"pending_plans,omitempty"`
-	CreatedAt     time.Time    `json:"created_at"`
-	UpdatedAt     time.Time    `json:"updated_at"`
-	ExpiresAt     time.Time    `json:"expires_at"`
+	ID              string       `json:"id"`
+	Owner           string       `json:"-"`
+	ExecutionPolicy string       `json:"execution_policy"`
+	PersonalMemory  bool         `json:"personal_memory"`
+	MemoryEpoch     int64        `json:"-"`
+	Workspace       string       `json:"workspace"`
+	ContextConvID   uint64       `json:"context_conv_id"`
+	DisplayConvID   uint64       `json:"display_conv_id"`
+	Mode            string       `json:"mode"`
+	Summary         string       `json:"summary,omitempty"`
+	Turns           []AgentTurn  `json:"turns,omitempty"`
+	PendingPlans    []ActionPlan `json:"pending_plans,omitempty"`
+	CreatedAt       time.Time    `json:"created_at"`
+	UpdatedAt       time.Time    `json:"updated_at"`
+	ExpiresAt       time.Time    `json:"expires_at"`
 }
 
 type AgentTurn struct {
@@ -71,16 +75,17 @@ type ToolTraceEntry struct {
 }
 
 type ActionPlan struct {
-	ID             string           `json:"id"`
-	AgentSessionID string           `json:"agent_session_id"`
-	Workspace      string           `json:"workspace"`
-	ContextConvID  uint64           `json:"context_conv_id"`
-	DisplayConvID  uint64           `json:"display_conv_id"`
-	Status         string           `json:"status"`
-	Actions        []ProposedAction `json:"actions"`
-	CreatedAt      time.Time        `json:"created_at"`
-	UpdatedAt      time.Time        `json:"updated_at"`
-	ExpiresAt      time.Time        `json:"expires_at"`
+	ID                  string           `json:"id"`
+	UserInputGeneration int64            `json:"-"`
+	AgentSessionID      string           `json:"agent_session_id"`
+	Workspace           string           `json:"workspace"`
+	ContextConvID       uint64           `json:"context_conv_id"`
+	DisplayConvID       uint64           `json:"display_conv_id"`
+	Status              string           `json:"status"`
+	Actions             []ProposedAction `json:"actions"`
+	CreatedAt           time.Time        `json:"created_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
+	ExpiresAt           time.Time        `json:"expires_at"`
 }
 
 type ProposedAction struct {
@@ -166,7 +171,7 @@ func newActionPlanID() string {
 	return "plan_" + newAskSessionID()
 }
 
-func (s *AgentSessionStore) getOrCreate(workspace string, contextConvID, displayConvID uint64, requestedSessionID, mode string) (AgentSession, bool) {
+func (s *AgentSessionStore) getOrCreate(owner, workspace string, contextConvID, displayConvID uint64, requestedSessionID, mode string) (AgentSession, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -176,7 +181,7 @@ func (s *AgentSessionStore) getOrCreate(workspace string, contextConvID, display
 	mode = normalizeAgentMode(mode)
 	requestedSessionID = strings.TrimSpace(requestedSessionID)
 	if requestedSessionID != "" {
-		if session, ok := s.sessions[requestedSessionID]; ok && session.Workspace == workspace && session.ContextConvID == contextConvID {
+		if session, ok := s.sessions[requestedSessionID]; ok && session.Owner == owner && session.Workspace == workspace && session.ContextConvID == contextConvID {
 			session.DisplayConvID = displayConvID
 			session.Mode = mode
 			session.UpdatedAt = now
@@ -186,27 +191,47 @@ func (s *AgentSessionStore) getOrCreate(workspace string, contextConvID, display
 	}
 
 	session := &AgentSession{
-		ID:            newAgentSessionID(),
-		Workspace:     workspace,
-		ContextConvID: contextConvID,
-		DisplayConvID: displayConvID,
-		Mode:          mode,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		ExpiresAt:     now.Add(s.ttl),
+		ID:              newAgentSessionID(),
+		Owner:           owner,
+		ExecutionPolicy: "temporary",
+		Workspace:       workspace,
+		ContextConvID:   contextConvID,
+		DisplayConvID:   displayConvID,
+		Mode:            mode,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		ExpiresAt:       now.Add(s.ttl),
 	}
 	s.sessions[session.ID] = session
 	return cloneAgentSession(session), true
 }
 
-func (s *AgentSessionStore) get(sessionID string) (AgentSession, bool) {
+// Called only for a newly allocated, not-yet-published session.
+func (s *AgentSessionStore) setExecutionPolicy(sessionID, policy string, personal ...bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if session := s.sessions[sessionID]; session != nil {
+		session.ExecutionPolicy = policy
+		session.PersonalMemory = len(personal) > 0 && personal[0]
+	}
+}
+
+func (s *AgentSessionStore) setMemoryEpoch(sessionID string, epoch int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if session := s.sessions[sessionID]; session != nil {
+		session.MemoryEpoch = epoch
+	}
+}
+
+func (s *AgentSessionStore) get(owner, workspace, sessionID string) (AgentSession, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now()
 	s.pruneExpiredLocked(now)
 	session, ok := s.sessions[strings.TrimSpace(sessionID)]
-	if !ok {
+	if !ok || session.Owner != owner || session.Workspace != workspace {
 		return AgentSession{}, false
 	}
 	session.UpdatedAt = now
@@ -245,7 +270,10 @@ func (s *AgentSessionStore) appendTurn(sessionID string, turn AgentTurn) int {
 	turn.ToolTrace = cloneToolTrace(turn.ToolTrace)
 	session.Turns = append(session.Turns, turn)
 	if s.maxTurns > 0 && len(session.Turns) > s.maxTurns {
-		start := len(session.Turns) - s.maxTurns
+		// Make room for a block of future turns. Sliding by one on every append
+		// invalidates the entire model-history prefix on every subsequent call.
+		// Durable personal originals are separate and are never pruned here.
+		start := len(session.Turns) - max(1, s.maxTurns/2)
 		session.Turns = append([]AgentTurn(nil), session.Turns[start:]...)
 	}
 	session.UpdatedAt = now
@@ -253,7 +281,7 @@ func (s *AgentSessionStore) appendTurn(sessionID string, turn AgentTurn) int {
 	return len(session.Turns)
 }
 
-func (s *AgentSessionStore) startPlan(sessionID string) (ActionPlan, bool) {
+func (s *AgentSessionStore) startPlan(sessionID string, inputGeneration ...int64) (ActionPlan, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -275,6 +303,9 @@ func (s *AgentSessionStore) startPlan(sessionID string) (ActionPlan, bool) {
 		CreatedAt:      now,
 		UpdatedAt:      now,
 		ExpiresAt:      now.Add(s.ttl),
+	}
+	if len(inputGeneration) != 0 {
+		plan.UserInputGeneration = inputGeneration[0]
 	}
 	session.PendingPlans = append(session.PendingPlans, plan)
 	session.UpdatedAt = now
@@ -914,7 +945,7 @@ func (s *AgentSessionStore) completeAction(sessionID, planID, actionID string, a
 		if applyErr != nil {
 			action.Status = actionStatusFailed
 			var unknown *ticketOutcomeUnknown
-			if action.Ticket != nil && errors.As(applyErr, &unknown) {
+			if errors.As(applyErr, &unknown) {
 				action.Status = "outcome_unknown"
 			}
 			action.Error = applyErr.Error()

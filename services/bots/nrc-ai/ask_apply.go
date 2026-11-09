@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/heavyhorst/nrc/protocol-go"
+	memory "nrc-ai/personal_memory"
 )
 
 var actionAssetRefPattern = regexp.MustCompile(`(?i)\[\s*(?:asset|comment|document|file|agenda|note|reminder)\s*:\s*(\d+)\s*\]`)
@@ -50,9 +51,11 @@ type applyActionResult struct {
 }
 
 type applyActionFailure struct {
-	ActionID string `json:"action_id"`
-	Type     string `json:"type"`
-	Error    string `json:"error"`
+	ActionID string            `json:"action_id"`
+	Type     string            `json:"type"`
+	Error    string            `json:"error"`
+	Outcome  string            `json:"outcome,omitempty"`
+	Edge     *applyCreatedEdge `json:"edge,omitempty"`
 }
 
 type applyCreatedEntity struct {
@@ -131,17 +134,40 @@ func handleAskApply(wm *WorkspaceManager, store *AgentSessionStore) http.Handler
 			return
 		}
 
-		sessionSnapshot, ok := store.get(req.AgentSessionID)
+		identity, authorized := requireAIIdentity(w, r, req.Workspace)
+		if !authorized {
+			return
+		}
+		sessionSnapshot, ok := store.get(identity.owner(), req.Workspace, req.AgentSessionID)
 		if !ok {
 			http.Error(w, `{"error":"agent session expired or not found"}`, http.StatusNotFound)
 			return
 		}
-		if sessionSnapshot.Workspace != req.Workspace {
-			http.Error(w, `{"error":"agent session workspace mismatch"}`, http.StatusBadRequest)
-			return
-		}
 
 		planID := req.PlanID
+		var personal *personalMemoryAccess
+		if sessionSnapshot.PersonalMemory {
+			var err error
+			personal, err = personalMemoryFor(r.Context(), identity, sessionSnapshot.ExecutionPolicy)
+			if err != nil || personal == nil {
+				http.Error(w, "personal memory access denied", http.StatusForbidden)
+				return
+			}
+			var executionCtx context.Context
+			var release func()
+			personal, executionCtx, release, err = personal.execution(r.Context())
+			if err != nil {
+				http.Error(w, "personal retention unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			defer release()
+			if sessionSnapshot.MemoryEpoch != personal.scope.Epoch() {
+				store.reset(req.AgentSessionID)
+				http.Error(w, "memory changed; review a new plan", 409)
+				return
+			}
+			r = r.WithContext(executionCtx)
+		}
 		if planID == "" {
 			latest, ok := store.latestPendingPlan(req.AgentSessionID)
 			if !ok {
@@ -149,6 +175,15 @@ func handleAskApply(wm *WorkspaceManager, store *AgentSessionStore) http.Handler
 				return
 			}
 			planID = latest.ID
+		}
+
+		if personal != nil {
+			plan, found := store.getPlan(req.AgentSessionID, planID)
+			generation, err := personal.scope.UserInputGeneration(r.Context())
+			if err != nil || !found || plan.UserInputGeneration != generation {
+				http.Error(w, "new personal input; review a new plan", http.StatusConflict)
+				return
+			}
 		}
 
 		if sessionSnapshot.ContextConvID != protocol.WorkspaceDataConvID {
@@ -177,42 +212,111 @@ func handleAskApply(wm *WorkspaceManager, store *AgentSessionStore) http.Handler
 			return
 		}
 
-		_, _, toApply, alreadyApplied, earlyFailures, err := store.prepareApply(req.AgentSessionID, planID, req.ActionIDs)
+		preparedSession, preparedPlan, toApply, alreadyApplied, earlyFailures, err := store.prepareApply(req.AgentSessionID, planID, req.ActionIDs)
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
 			return
 		}
 
+		// Retained dispatch owns this snapshot through receipt completion. Resetting
+		// the public session cannot discard acknowledgments or dependency results.
+		executionStore := store
+		if personal != nil {
+			executionStore = newAgentSessionStore(time.Hour, store.maxTurns)
+			executionStore.sessions[preparedSession.ID] = &preparedSession
+		}
 		result := askApplyResponse{
 			Applied: append([]applyActionResult(nil), alreadyApplied...),
 			Failed:  append([]applyActionFailure(nil), earlyFailures...),
 		}
 
+		channel := "chat"
+		if voice, _ := ctx.Value(voiceMemoryKey{}).(bool); voice {
+			channel = "voice"
+		}
+		var receiptFailure bool
 		for _, pending := range toApply {
+			if err := ctx.Err(); err != nil || receiptFailure {
+				if err == nil {
+					err = fmt.Errorf("approval receipt persistence failed")
+				}
+				completed, _ := store.completeFailedAction(pending.SessionID, pending.PlanID, pending.Action.ID, fmt.Errorf("not dispatched: %w", err))
+				result.Failed = append(result.Failed, applyActionFailure{ActionID: pending.Action.ID, Type: pending.Action.Type, Error: completed.Error})
+				continue
+			}
+			var receipt memory.Receipt
+			if personal != nil {
+				proposal := pending.Action
+				proposal.Status, proposal.Error = "", ""
+				body, _ := json.Marshal(proposal)
+				var consumed bool
+				receipt, consumed, err = personal.scope.ConsumeApproval(ctx, channel, pending.SessionID, pending.PlanID, pending.Action.ID, body, preparedPlan.UserInputGeneration)
+				if err != nil || !consumed {
+					// A failed commit may be ambiguous; never dispatch on this path.
+					completed, _ := store.completeFailedAction(pending.SessionID, pending.PlanID, pending.Action.ID, &ticketOutcomeUnknown{fmt.Errorf("approval unavailable or already consumed; inspect durable receipt")})
+					result.Failed = append(result.Failed, applyActionFailure{ActionID: pending.Action.ID, Type: pending.Action.Type, Error: completed.Error})
+					receiptFailure = true
+					continue
+				}
+			}
+			appliedStart, failedStart, edgesStart := len(result.Applied), len(result.Failed), len(result.CreatedEdges)
 			switch pending.Action.Type {
 			case "ticket_create", "ticket_update_metadata", "ticket_entry", "ticket_delete", "ticket_group":
-				applyTicketAction(ctx, client, store, pending, &result)
+				applyTicketAction(ctx, client, executionStore, pending, &result)
 			case actionTypeCreateTask:
-				applyCreateTaskAction(ctx, client, store, sessionSnapshot.ContextConvID, pending, &result)
+				applyCreateTaskAction(ctx, client, executionStore, sessionSnapshot.ContextConvID, pending, &result)
 			case actionTypeUpdateTask:
-				applyUpdateTaskAction(ctx, client, store, sessionSnapshot.ContextConvID, pending, &result)
+				applyUpdateTaskAction(ctx, client, executionStore, sessionSnapshot.ContextConvID, pending, &result)
 			case actionTypeCreateNote:
-				applyCreateNoteAction(ctx, client, store, sessionSnapshot.ContextConvID, pending, &result)
+				applyCreateNoteAction(ctx, client, executionStore, sessionSnapshot.ContextConvID, pending, &result)
 			case actionTypeUpdateNote:
-				applyUpdateNoteAction(ctx, client, store, sessionSnapshot.ContextConvID, pending, &result)
+				applyUpdateNoteAction(ctx, client, executionStore, sessionSnapshot.ContextConvID, pending, &result)
 			case actionTypeDeleteNote:
-				applyDeleteNoteAction(ctx, client, store, sessionSnapshot.ContextConvID, pending, &result)
+				applyDeleteNoteAction(ctx, client, executionStore, sessionSnapshot.ContextConvID, pending, &result)
 			case actionTypeCreateEdge:
-				applyCreateEdgeAction(ctx, client, store, sessionSnapshot.ContextConvID, pending, &result)
+				applyCreateEdgeAction(ctx, client, executionStore, sessionSnapshot.ContextConvID, pending, &result)
 			case actionTypeDeleteEdge:
-				applyDeleteEdgeAction(ctx, client, store, sessionSnapshot.ContextConvID, pending, &result)
+				applyDeleteEdgeAction(ctx, client, executionStore, sessionSnapshot.ContextConvID, pending, &result)
 			default:
 				applyErr := fmt.Errorf("unsupported action type %q", pending.Action.Type)
-				completed, _ := store.completeFailedAction(pending.SessionID, pending.PlanID, pending.Action.ID, applyErr)
+				completed, _ := executionStore.completeFailedAction(pending.SessionID, pending.PlanID, pending.Action.ID, applyErr)
 				result.Failed = append(result.Failed, applyActionFailure{ActionID: pending.Action.ID, Type: pending.Action.Type, Error: completed.Error})
+			}
+			if personal != nil {
+				plan, _ := executionStore.getPlan(pending.SessionID, pending.PlanID)
+				outcome := pending.Action
+				for _, action := range plan.Actions {
+					if action.ID == pending.Action.ID {
+						outcome = action
+						break
+					}
+				}
+				if len(result.Failed) > failedStart && outcome.Status == actionStatusApplied {
+					outcome.Status, outcome.Error = actionStatusFailed, "one or more reference edges failed"
+				}
+				for _, failure := range result.Failed[failedStart:] {
+					if failure.Outcome == "outcome_unknown" {
+						outcome.Status, outcome.Error = "outcome_unknown", "reference edge outcome unknown; inspect current records"
+					}
+				}
+				if err := completePersonalApproval(personal, receipt, outcome, result.CreatedEdges[edgesStart:], result.Failed[failedStart:]); err != nil {
+					store.completeFailedAction(pending.SessionID, pending.PlanID, pending.Action.ID, &ticketOutcomeUnknown{fmt.Errorf("receipt not saved; inspect current records before further action")})
+					receiptFailure = true
+				} else {
+					// Only committed outcomes become visible to concurrent Apply calls.
+					store.completeAction(pending.SessionID, pending.PlanID, pending.Action.ID, nil, func(action *ProposedAction) { *action = outcome })
+					executionStore.completeAction(pending.SessionID, pending.PlanID, pending.Action.ID, nil, func(action *ProposedAction) { *action = outcome })
+					for i := appliedStart; i < len(result.Applied); i++ {
+						result.Applied[i].Status = outcome.Status
+					}
+				}
 			}
 		}
 
+		if receiptFailure {
+			http.Error(w, "approval receipt unavailable; do not retry writes; recover receipts and inspect records", http.StatusServiceUnavailable)
+			return
+		}
 		for _, applied := range result.Applied {
 			if applied.CreatedEntity != nil {
 				result.CreatedEntities = append(result.CreatedEntities, *applied.CreatedEntity)
@@ -259,11 +363,13 @@ func handleAskSessionReset(store *AgentSessionStore) http.HandlerFunc {
 			return
 		}
 
-		if strings.TrimSpace(req.Workspace) != "" {
-			if sessionSnapshot, ok := store.get(sessionID); ok && sessionSnapshot.Workspace != req.Workspace {
-				http.Error(w, `{"error":"agent session workspace mismatch"}`, http.StatusBadRequest)
-				return
-			}
+		identity, authorized := requireAIIdentity(w, r, req.Workspace)
+		if !authorized {
+			return
+		}
+		if _, ok := store.get(identity.owner(), req.Workspace, sessionID); !ok {
+			http.Error(w, `{"error":"agent session expired or not found"}`, http.StatusNotFound)
+			return
 		}
 
 		reset := store.reset(sessionID)
@@ -273,11 +379,6 @@ func handleAskSessionReset(store *AgentSessionStore) http.HandlerFunc {
 }
 
 func handleAskSessionGet(store *AgentSessionStore) http.HandlerFunc {
-	config := os.Getenv("NRC_WORKSPACE_ACCESS")
-	var policy map[string]json.RawMessage
-	// Empty JSON objects, including whitespace, are the same as no policy.
-	// Invalid configuration remains fail-closed (the proxy rejects startup).
-	restricted := config != "" && (json.Unmarshal([]byte(config), &policy) != nil || policy == nil || len(policy) > 0)
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := strings.TrimSpace(r.PathValue("id"))
 		if sessionID == "" {
@@ -285,26 +386,30 @@ func handleAskSessionGet(store *AgentSessionStore) http.HandlerFunc {
 			return
 		}
 
-		sessionSnapshot, ok := store.get(sessionID)
+		identity, authorized := requireAIIdentity(w, r, r.URL.Query().Get("workspace"))
+		if !authorized {
+			return
+		}
+		sessionSnapshot, ok := store.get(identity.owner(), identity.Workspace, sessionID)
 		if !ok {
 			http.Error(w, `{"error":"agent session expired or not found"}`, http.StatusNotFound)
 			return
 		}
-
-		// Only the trusted Tailscale proxy supplies this header. The session's
-		// stored workspace, not a caller's query parameter, determines access.
-		header := r.Header.Get("X-NRC-Denied-Workspaces")
-		if restricted || header != "" {
-			var denied []string
-			if json.Unmarshal([]byte(header), &denied) != nil || denied == nil {
-				http.Error(w, `{"error":"missing workspace authorization"}`, http.StatusForbidden)
+		if sessionSnapshot.PersonalMemory {
+			a, err := personalMemoryFor(r.Context(), identity, "private")
+			if err != nil || a == nil {
+				http.Error(w, "personal memory access denied", 403)
 				return
 			}
-			for _, workspace := range denied {
-				if workspace == sessionSnapshot.Workspace {
-					http.Error(w, `{"error":"workspace access denied"}`, http.StatusForbidden)
-					return
-				}
+			policy, err := a.scope.Retention(r.Context())
+			if err != nil {
+				http.Error(w, "personal retention unavailable", 503)
+				return
+			}
+			if !policy.Enabled || policy.Epoch != sessionSnapshot.MemoryEpoch {
+				store.reset(sessionID)
+				http.Error(w, "memory changed; session expired", 404)
+				return
 			}
 		}
 
@@ -763,7 +868,14 @@ func createTaskReferenceEdges(ctx context.Context, client *NRCClient, convID uin
 
 		edge, err := client.CreateEdge(ctx, convID, protocol.TargetTypeTask, task.ID, protocol.TargetTypeAsset, assetID, protocol.RelationReferences)
 		if err != nil {
-			failures = append(failures, applyActionFailure{ActionID: action.ID, Type: "create_edge", Error: fmt.Sprintf("edge Task:%d --references--> Asset:%d failed: %v", task.ID, assetID, err)})
+			outcome := actionStatusFailed
+			var unknown *ticketOutcomeUnknown
+			if errors.As(err, &unknown) {
+				outcome = "outcome_unknown"
+			}
+			failures = append(failures, applyActionFailure{ActionID: action.ID, Type: "create_edge", Outcome: outcome,
+				Edge:  &applyCreatedEdge{SourceType: "Task", SourceID: task.ID, TargetType: "Asset", TargetID: assetID, Relation: "references"},
+				Error: fmt.Sprintf("edge Task:%d --references--> Asset:%d failed: %v", task.ID, assetID, err)})
 			continue
 		}
 		if edge == nil {

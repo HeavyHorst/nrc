@@ -24,3 +24,9 @@ Start with the [quickstart](../README.md#quickstart).
 - [Test matrix](TEST_MATRIX.md), [simulation architecture](DETERMINISTIC_SIMULATOR_PLAN.md)
   and [simulation budget](DETERMINISTIC_SIMULATION_BUDGET.md)
 - [Benchmark commands and measurements](BENCHMARKS.md)
+
+## Proposed designs
+
+- [Personal Sullivan memory](SULLIVAN_MEMORY_DESIGN.md): a private summary tree
+  for typed chat and GPT Live; private execution and storage/tree core implemented,
+  retention and cross-channel integration not yet enabled

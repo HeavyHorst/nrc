@@ -1077,6 +1077,14 @@ const COMMANDS = [
     execute: askSullivanFromPalette,
   },
   {
+    id: "settings.sullivan-memory",
+    title: "Sullivan memory",
+    desc: "Personal chat and voice history: enable, disable, export or delete",
+    arg: "on|off|export|forget",
+    group: "Settings",
+    execute: args => window.NRCMemory?.settings(args),
+  },
+  {
     id: "settings.notifications",
     title: "Enable notifications",
     desc: "Enable desktop notifications (requires browser permission)",
@@ -1583,7 +1591,11 @@ async function initializeSession() {
 
   updateRoomUI();
   if (window.NRCAI?.isSullivanView?.()) {
-    loadRoomHistory(window.NRCAI.getDisplayConvId(), { aiContextRoomId: window.NRCAI.getContextConvId() });
+    // A direct Sullivan link resolves its display conversation after session initialization.
+    const displayConvId = window.NRCAI.getDisplayConvId();
+    if (displayConvId != null) {
+      loadRoomHistory(displayConvId, { aiContextRoomId: window.NRCAI.getContextConvId() });
+    }
   } else {
     loadRoomHistory(currentRoomId);
   }
@@ -4633,7 +4645,7 @@ function updateRoomUI() {
   if (title) {
     title.textContent = systemLogVisible
       ? "SYSTEM"
-      : window.NRCAI?.isSullivanView?.() ? "SULLIVAN / AI WORKBENCH" : "MESSAGES";
+      : window.NRCAI?.isSullivanView?.() ? "SULLIVAN" : "MESSAGES";
   }
 
   // Data views never inherit the selected chat's scope.
@@ -4916,7 +4928,7 @@ function clearStoredMessages(roomId = null) {
 }
 
 async function clearCurrentRoomMessages(options = {}) {
-  const { logResult = true, roomId = currentRoomId, aiContextRoomId = null } = options;
+  const { logResult = true, roomId = currentRoomId, aiContextRoomId = null, personalOnly = false, personalRunIDs = new Set() } = options;
 
   clearStoredMessages(roomId);
   if (aiContextRoomId == null) {
@@ -4924,11 +4936,18 @@ async function clearCurrentRoomMessages(options = {}) {
   } else {
     const contextID = String(aiContextRoomId);
     roomHistory.set(roomId, (roomHistory.get(roomId) || []).filter(
-      (message) => String(message.aiContextRoomId) !== contextID,
+      (message) => String(message.aiContextRoomId) !== contextID ||
+        (personalOnly && message.aiExecutionPolicy === "temporary" &&
+          !personalRunIDs.has(message.aiRunId) &&
+          (!message.aiActionPlan || message.aiActionPlan.executionPolicy === "temporary")),
     ));
   }
-  if (roomId === currentRoomId || String(window.NRCAI?.getDisplayConvId?.()) === String(roomId)) {
-    await loadRoomHistory(roomId, { aiContextRoomId });
+  const inSullivan = !!window.NRCAI?.isSullivanView?.();
+  const displayed = inSullivan
+    ? String(window.NRCAI?.getDisplayConvId?.()) === String(roomId)
+    : roomId === currentRoomId;
+  if (displayed) {
+    await loadRoomHistory(roomId, inSullivan ? { aiContextRoomId: window.NRCAI?.getContextConvId?.() } : {});
   }
 
   if (logResult) {
@@ -4941,6 +4960,19 @@ async function clearCurrentRoomMessages(options = {}) {
 
 window.NRCChat = window.NRCChat || {};
 window.NRCChat.clearCurrentRoomMessages = clearCurrentRoomMessages;
+window.NRCChat.clearSullivanHistory = ({ personalOnly = false } = {}) => {
+  // A card is a group of records. Never retain a temporary-tagged fragment of
+  // a run that also contains personal (including legacy untagged) evidence.
+  const personalRunIDs = new Set([...roomHistory.values()].flat()
+    .filter(message => message.aiContextRoomId != null &&
+      (message.aiExecutionPolicy !== "temporary" ||
+        (message.aiActionPlan && message.aiActionPlan.executionPolicy !== "temporary")))
+    .map(message => message.aiRunId).filter(Boolean));
+  return Promise.all([...roomHistory].flatMap(([roomId, messages]) =>
+    [...new Set(messages.filter(message => message.aiContextRoomId != null)
+      .map(message => String(message.aiContextRoomId)))].map(aiContextRoomId =>
+      clearCurrentRoomMessages({ roomId, aiContextRoomId, logResult: false, personalOnly, personalRunIDs }))));
+};
 window.NRCChat.getRetentionState = (convId) => retainedRoomStates.get(BigInt(convId));
 
 // --- UI and Logging ---
@@ -4971,6 +5003,7 @@ function logMessage(type, message, roomId = null, metadata = {}) {
     aiActionPlan: metadata.aiActionPlan || null,
     aiContextRoomId: metadata.aiContextRoomId ?? null,
     aiRunId: metadata.aiRunId || null,
+    aiExecutionPolicy: metadata.aiExecutionPolicy || null,
     aiQuestion: metadata.aiQuestion || null,
     aiAnswer: metadata.aiAnswer || null,
     aiKnowledgeGapSliceId: metadata.aiKnowledgeGapSliceId || null,
@@ -6051,6 +6084,8 @@ function loadRoomHistory(roomId, options = {}) {
     displayMessage(messageData);
   }
   window.NRCChat.endHistory();
+
+  if (contextID === "0") window.NRCMemory?.resume(logOutput);
 
   if ((isAIDMConversation(roomId) || contextID != null) && history.length === 0) {
     window.NRCAI?.renderEmptyState?.();
@@ -7341,6 +7376,14 @@ const CommandPalette = (() => {
 
   function buildArgSuggestions(cmd) {
     if (!cmd.arg) return [];
+    if (cmd.id === "settings.sullivan-memory") {
+      return [
+        { label: "Erinnerung einschalten", value: "on" },
+        { label: "Erinnerung ausschalten (Verlauf behalten)", value: "off" },
+        { label: "Verlauf exportieren", value: "export" },
+        { label: "Verlauf löschen…", value: "forget" },
+      ];
+    }
     if (cmd.arg === "room") {
       const isSwitch = cmd.id === "rooms.switch";
       if (isSwitch) {

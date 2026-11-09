@@ -18,27 +18,33 @@ import (
 )
 
 type askRequest struct {
-	Workspace     string `json:"workspace"`
-	ConvID        uint64 `json:"conv_id"`
-	DisplayConvID uint64 `json:"display_conv_id,omitempty"`
-	Question      string `json:"question"`
-	SessionID     string `json:"session_id,omitempty"`
-	Mode          string `json:"mode,omitempty"`
-	FollowUp      bool   `json:"follow_up,omitempty"`
+	RequireMemory   bool   `json:"require_memory,omitempty"`
+	RunID           string `json:"run_id,omitempty"`
+	Workspace       string `json:"workspace"`
+	ConvID          uint64 `json:"conv_id"`
+	DisplayConvID   uint64 `json:"display_conv_id,omitempty"`
+	Question        string `json:"question"`
+	SessionID       string `json:"session_id,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	FollowUp        bool   `json:"follow_up,omitempty"`
+	ExecutionPolicy string `json:"execution_policy,omitempty"`
 }
 
 func (r *askRequest) UnmarshalJSON(data []byte) error {
 	type askRequestAlias struct {
-		Workspace      string          `json:"workspace"`
-		ConvID         json.RawMessage `json:"conv_id"`
-		ContextConvID  json.RawMessage `json:"context_conv_id,omitempty"`
-		DisplayConvID  json.RawMessage `json:"display_conv_id,omitempty"`
-		Question       string          `json:"question"`
-		Message        string          `json:"message"`
-		SessionID      string          `json:"session_id,omitempty"`
-		AgentSessionID string          `json:"agent_session_id,omitempty"`
-		Mode           string          `json:"mode,omitempty"`
-		FollowUp       bool            `json:"follow_up,omitempty"`
+		RequireMemory   bool            `json:"require_memory,omitempty"`
+		RunID           string          `json:"run_id,omitempty"`
+		Workspace       string          `json:"workspace"`
+		ConvID          json.RawMessage `json:"conv_id"`
+		ContextConvID   json.RawMessage `json:"context_conv_id,omitempty"`
+		DisplayConvID   json.RawMessage `json:"display_conv_id,omitempty"`
+		Question        string          `json:"question"`
+		Message         string          `json:"message"`
+		SessionID       string          `json:"session_id,omitempty"`
+		AgentSessionID  string          `json:"agent_session_id,omitempty"`
+		Mode            string          `json:"mode,omitempty"`
+		FollowUp        bool            `json:"follow_up,omitempty"`
+		ExecutionPolicy string          `json:"execution_policy,omitempty"`
 	}
 
 	var raw askRequestAlias
@@ -60,6 +66,8 @@ func (r *askRequest) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("invalid display_conv_id: %w", err)
 	}
 
+	r.RequireMemory = raw.RequireMemory
+	r.RunID = raw.RunID
 	r.Workspace = raw.Workspace
 	r.ConvID = convID
 	r.DisplayConvID = displayConvID
@@ -73,6 +81,7 @@ func (r *askRequest) UnmarshalJSON(data []byte) error {
 	}
 	r.Mode = raw.Mode
 	r.FollowUp = raw.FollowUp
+	r.ExecutionPolicy = raw.ExecutionPolicy
 	return nil
 }
 
@@ -121,6 +130,9 @@ func parseConvIDRaw(raw json.RawMessage) (uint64, error) {
 }
 
 type askResponse struct {
+	RunID               string           `json:"run_id,omitempty"`
+	RunState            string           `json:"run_state,omitempty"`
+	Recovered           bool             `json:"recovered,omitempty"`
 	Answer              string           `json:"answer"`
 	Sources             []askSource      `json:"sources"`
 	SessionID           string           `json:"session_id,omitempty"`

@@ -1046,9 +1046,10 @@ func taggedNodeLogin(node *tailcfg.Node) (string, error) {
 
 func injectIdentityHeaders(r *http.Request, localClient whoIsClient) (string, error) {
 	// These headers are assertions by this boundary, never by its callers.
-	for _, header := range []string{"X-Tailscale-Login", "X-Tailscale-User", "X-Tailscale-Node", "X-NRC-Auth", "X-NRC-Publish-Auth", "X-NRC-Newsletter-Auth", "X-NRC-Calls-Auth", "X-NRC-User-Type", "X-NRC-Bot-Secret", "X-NRC-Bot-Nickname", "X-NRC-Denied-Workspaces"} {
+	for _, header := range []string{"X-Tailscale-Login", "X-Tailscale-User", "X-Tailscale-Node", "X-NRC-Auth", "X-NRC-AI-Auth", "X-NRC-Publish-Auth", "X-NRC-Newsletter-Auth", "X-NRC-Calls-Auth", "X-NRC-User-Type", "X-NRC-Bot-Secret", "X-NRC-Bot-Nickname", "X-NRC-Denied-Workspaces"} {
 		r.Header.Del(header)
 	}
+	*r = *r.WithContext(context.WithValue(r.Context(), aiSubjectKey{}, ""))
 	remoteIP := extractRemoteIP(r)
 	if remoteIP == "" {
 		return "", fmt.Errorf("missing remote ip")
@@ -1079,6 +1080,10 @@ func injectIdentityHeaders(r *http.Request, localClient whoIsClient) (string, er
 		}
 		if login == "" {
 			return "", fmt.Errorf("empty login")
+		}
+		if whois.UserProfile.ID > 0 {
+			subject := fmt.Sprintf("tailscale:user:%d", whois.UserProfile.ID)
+			*r = *r.WithContext(context.WithValue(r.Context(), aiSubjectKey{}, subject))
 		}
 	}
 
@@ -1166,6 +1171,7 @@ func proxyHandler(proxy http.Handler, localClient tailscaleClient, policy worksp
 	mux.Handle("/publish/api/", publishGateway(os.Getenv("NRC_PUBLISH_BACKEND"), os.Getenv("NRC_PUBLISH_WORKSPACE")))
 	mux.Handle("/newsletter/api/", newsletterGateway(os.Getenv("NRC_NEWSLETTER_BACKEND"), os.Getenv("NRC_NEWSLETTER_WORKSPACE")))
 	mux.Handle("/calls/ws/", callsGateway(os.Getenv("NRC_CALLS_BACKEND")))
+	mux.Handle("/ai/", aiBoundary(proxy))
 	mux.Handle("/", proxy)
 	return workspaceBoundary(mux, localClient, policy)
 }
