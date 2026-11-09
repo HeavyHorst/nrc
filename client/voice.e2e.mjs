@@ -2,13 +2,13 @@
 // shared workspace or billable session. --serve exposes the same review fixture.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
 
 const html = `<!doctype html><html lang="de" data-theme="dark"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/css/main.css"><link rel="stylesheet" href="/css/voice.css"></head><body>
 <div class="retro-container"><div class="app-shell">
 <aside class="app-sidebar"><nav aria-label="Workspace views">Navigation</nav></aside>
-<main class="content-shell"><button id="sullivanVoice" class="btn">VOICE</button><label>Notiz <textarea id="workspaceNote" class="task-detail-textarea">Rollout-Notizen</textarea></label></main>
+<main class="content-shell"><button id="sullivanVoice" class="btn">VOICE</button><button class="btn" data-personal-memory>TEMPORÄR</button><label>Notiz <textarea id="workspaceNote" class="task-detail-textarea">Rollout-Notizen</textarea></label></main>
 <footer class="status-footer"><span>VERBUNDEN</span></footer>
 </div></div>
 <aside id="inspector" class="inspector ledger-context agenda-panel" style="position:fixed;right:0;top:0;width:min(450px,100vw);height:85vh;display:flex;flex-direction:column;background:var(--surface-panel)">
@@ -52,9 +52,14 @@ window.RTCPeerConnection = class extends EventTarget {
 };
 const originalFetch = window.fetch;
 window.fetch = async (url, options) => {
+  if (String(url) === '/ai/ask/memory') {
+    const req = JSON.parse(options.body);
+    if (req.operation === 'inspect') return Response.json({enabled:true,epoch:1});
+    throw new Error('unexpected memory operation: ' + req.operation);
+  }
   if (!String(url).startsWith('/ai/voice/')) return originalFetch(url, options);
   const op = String(url).split('/').at(-1), req = JSON.parse(options.body);
-  if (op === 'create') { fixture.creates++; if (fixture.failCreate) return new Response('GPT-Live is not configured', {status:503}); return Response.json({id:'voice',sdp:'answer'}); }
+  if (op === 'create') { fixture.creates++; fixture.lastCreate=req; if (fixture.failCreate) return new Response('GPT-Live is not configured', {status:503}); return Response.json({id:'voice',sdp:'answer'}); }
   if (op === 'status') return Response.json(fixture.state);
   if (op === 'close') { fixture.closes++; return Response.json({ok:true}); }
   if (op === 'apply') {
@@ -81,12 +86,12 @@ window.fetch = async (url, options) => {
   }
   throw new Error('unexpected voice operation');
 };
-</script><script src="/dialog.js"></script><script src="/detail-ui.js"></script><script src="/inspector.js"></script><script src="/voice.js"></script></body></html>`;
+</script><script src="/dialog.js"></script><script src="/detail-ui.js"></script><script src="/inspector.js"></script><script src="/personal-memory.js"></script><script src="/voice.js"></script></body></html>`;
 
 const server = createServer(async (req, res) => {
   if (req.url === "/") { res.setHeader("Content-Type", "text/html"); res.end(html); return; }
   const pathname = new URL(req.url, "http://fixture").pathname;
-  if (!/^\/(css\/[a-z-]+\.css|dialog\.js|detail-ui\.js|inspector\.js|voice\.js)$/.test(pathname)) { res.writeHead(404).end(); return; }
+  if (!/^\/(css\/[a-z-]+\.css|dialog\.js|detail-ui\.js|inspector\.js|personal-memory\.js|voice\.js)$/.test(pathname)) { res.writeHead(404).end(); return; }
   try {
     res.setHeader("Content-Type", pathname.endsWith(".css") ? "text/css" : "text/javascript");
     res.end(await readFile(new URL(`.${pathname}`, import.meta.url)));
@@ -102,6 +107,59 @@ if (process.argv.includes("--serve")) {
     const page = await browser.newPage({viewport:{width:1280,height:900},deviceScaleFactor:2});
     const errors = []; page.on("pageerror", e => errors.push(e.message));
     const open = async () => { await page.goto(url); };
+    for (const temporary of [false, true]) {
+      await open();
+      if (temporary) {
+        await page.getByRole('button', {name:'Temporäres Gespräch',exact:true}).click();
+        assert.equal(await page.locator('dialog[open]').count(), 0);
+      }
+      await page.click('#sullivanVoice');
+      await page.waitForFunction(() => fixture.lastCreate);
+      assert.equal(await page.evaluate(() => fixture.lastCreate.execution_policy), temporary ? 'temporary' : 'private');
+      assert.equal(await page.evaluate(() => fixture.lastCreate.require_memory), !temporary);
+      await page.waitForFunction(() => document.querySelector('[data-voice-usage]')?.textContent.includes('/ 10:00'));
+      assert.match(await page.locator('[data-voice-usage]').innerText(), temporary ? /TEMPORÄR/ : /voice-test/);
+      await mkdir(new URL('../.amp/in/artifacts/', import.meta.url), {recursive:true});
+      await page.locator('.voice-review').screenshot({path:new URL(`../.amp/in/artifacts/memory-voice-${temporary ? 'temporary' : 'personal'}.png`, import.meta.url).pathname});
+      for (const width of [1280,390]) for (const theme of ['dark','lupine']) {
+        await page.setViewportSize({width,height:900});
+        await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+        await page.screenshot({path:new URL(`../.amp/in/artifacts/memory-voice-${temporary ? 'temporary' : 'personal'}-${width}-${theme}.png`, import.meta.url).pathname});
+      }
+      await page.setViewportSize({width:1280,height:900});
+      await page.waitForSelector('[data-voice-plan] input');
+      const beforeForget = await page.locator('[data-voice-answer]').textContent();
+      await page.evaluate(() => window.dispatchEvent(new CustomEvent('nrc-memory-forgotten', {detail:{workspace:'other-workspace',personalOnly:true}})));
+      assert.equal(await page.locator('[data-voice-answer]').textContent(), beforeForget);
+      await page.evaluate(temporary => {
+        // The listener must use the mode captured when voice began, not a
+        // later page preference or an unrelated workspace's current setting.
+        NRCMemory.options = () => ({execution_policy:temporary ? 'private' : 'temporary',require_memory:temporary});
+        window.dispatchEvent(new CustomEvent('nrc-memory-forgotten', {detail:{workspace:'voice-test',personalOnly:true}}));
+      }, temporary);
+      if (temporary) {
+        assert.equal(await page.locator('[data-voice-answer]').textContent(), beforeForget);
+        assert.equal(await page.evaluate(() => fixture.tracks[0].stopped), false);
+        assert.equal(await page.locator('[data-voice-plan] input').count(), 2);
+        await page.evaluate(() => window.dispatchEvent(new CustomEvent('nrc-memory-forgotten', {detail:{workspace:'voice-test'}})));
+      }
+      assert.equal(await page.locator('[data-voice-answer]').textContent(), '');
+      await page.waitForFunction(() => fixture.tracks[0].stopped);
+    }
+    await open();
+    await page.click('#sullivanVoice');
+    await page.waitForSelector('[data-voice-plan] input');
+    for (const state of ['pending', 'acknowledged', 'rejected', 'unconfirmed']) {
+      await page.evaluate(state => { fixture.state.context_delivery = {'context-1':{state}}; }, state);
+      const expected = state === 'pending' ? 'übermittelt' : state === 'acknowledged' ? 'noch keine Sprachausgabe' : 'nicht vollständig bestätigt';
+      await page.waitForFunction(expected => document.querySelector('[data-voice-delivery]')?.textContent.includes(expected), expected);
+      for (const width of [1280,390]) for (const theme of ['dark','lupine']) {
+        await page.setViewportSize({width,height:900});
+        await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+        await page.locator('.voice-review').screenshot({path:new URL(`../.amp/in/artifacts/memory-delivery-${state}-${width}-${theme}.png`, import.meta.url).pathname});
+      }
+    }
+    await page.setViewportSize({width:1280,height:900});
     await open();
     await page.evaluate(() => {
       fixture.state.result.proposed_actions = [
@@ -216,7 +274,7 @@ if (process.argv.includes("--serve")) {
         fixture.state.result = null;
       }, theme);
       await page.click('#sullivanVoice');
-      await page.waitForFunction(() => !document.querySelector('.voice-actions button').disabled);
+      await page.waitForFunction(() => document.querySelector('.voice-actions button')?.disabled === false);
       await page.evaluate(() => NRCInspector.openEntity({type:'task',id:10}));
       await page.waitForFunction(() => !NRCInspector.isLoading());
       if (expanded) await page.getByRole('button', {name:'ÖFFNEN',exact:true}).click();
@@ -281,6 +339,31 @@ if (process.argv.includes("--serve")) {
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('.voice-panel, .voice-dock, .voice-review').count(), 0, 'Close dismisses a settled result after audio ends');
 
+    // Forgetting removes readable copies but keeps a minimal receipt for an
+    // already approved write, including when the HTTP response is lost.
+    for (const pending of [false, true]) {
+      await open();
+      await page.evaluate(pending => { fixture.holdApply = pending; fixture.unknownApply = true; }, pending);
+      await page.click('#sullivanVoice');
+      await page.waitForSelector('[data-voice-plan] input');
+      if (pending) {
+        await page.locator('[data-voice-plan] input[value="note"]').check();
+        await page.getByRole('button', {name:'AUSWAHL BESTÄTIGEN'}).click();
+        await page.waitForFunction(() => fixture.releaseApply);
+      }
+      await page.evaluate(() => window.dispatchEvent(new CustomEvent('nrc-memory-forgotten', {detail:{workspace:'voice-test'}})));
+      assert.equal(await page.locator('[data-voice-answer]').textContent(), '');
+      assert.equal(await page.locator('[data-voice-plan]').textContent(), '');
+      await page.waitForFunction(() => fixture.tracks[0].stopped);
+      if (pending) {
+        await page.evaluate(() => fixture.releaseApply());
+        await page.waitForFunction(() => document.querySelector('[data-voice-result]').textContent.includes('IDs: 81'));
+        assert.equal(await page.evaluate(() => fixture.applies.length), 1);
+        assert.doesNotMatch(await page.locator('.voice-review').textContent(), /Rollout|Freigabe/);
+        await page.locator('.voice-review').screenshot({path:new URL('../.amp/in/artifacts/memory-forgotten-receipt.png', import.meta.url).pathname});
+      }
+    }
+
     // Source navigation must leave both audio and the result panel alive.
     await open();
     await page.evaluate(() => { fixture.state.result.sources = [{type:'note',id:42,title:'Rollout-Quelle'}]; });
@@ -314,7 +397,7 @@ if (process.argv.includes("--serve")) {
         NRCInspector.setActiveView(view);
       }, view);
       await page.click('#sullivanVoice');
-      await page.waitForFunction(() => document.querySelector('.voice-compact-notice').textContent === '1 FREIGABE');
+      await page.waitForFunction(() => document.querySelector('.voice-compact-notice')?.textContent === '1 FREIGABE');
       await page.getByRole('button', {name:'VORSCHLÄGE PRÜFEN',exact:true}).click();
       await page.locator('[data-voice-plan] input[value="note"]').check();
       assert.equal(await page.locator('#inspector').isVisible(), true);
@@ -409,7 +492,7 @@ if (process.argv.includes("--serve")) {
     await page.evaluate(async () => { fixture.editing=true; await NRCInspector.openEntity({type:'task',id:10}); });
     await page.waitForSelector('#recordDraft');
     await page.click('#sullivanVoice');
-    await page.waitForFunction(() => document.querySelector('.voice-compact-notice').textContent === '1 FREIGABE');
+    await page.waitForFunction(() => document.querySelector('.voice-compact-notice')?.textContent === '1 FREIGABE');
     assert.equal(await page.locator('#recordDraft').inputValue(), 'Ungespeicherter Entwurf');
     assert.equal(await page.evaluate(() => fixture.discards || 0), 0, 'background proposal never asks to discard edits');
     await page.getByRole('button', {name:'VORSCHLÄGE PRÜFEN',exact:true}).click();
@@ -419,7 +502,7 @@ if (process.argv.includes("--serve")) {
     for (const flag of ["deny", "failCreate"]) {
       await open(); await page.evaluate(flag => { fixture[flag] = true; }, flag);
       await page.click('#sullivanVoice');
-      await page.waitForFunction(() => document.querySelector('[data-voice-status]').textContent.includes('fehlgeschlagen'));
+      await page.waitForFunction(() => document.querySelector('[data-voice-status]')?.textContent.includes('fehlgeschlagen'));
       assert.equal(await page.evaluate(() => fixture.tracks.every(track => track.stopped)), true);
     }
     assert.deepEqual(errors, []);

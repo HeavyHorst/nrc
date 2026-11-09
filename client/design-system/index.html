@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261102gap1">
+    <link rel="stylesheet" href="../css/main.css?v=20261108memory9">
     <link rel="stylesheet" href="../css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="../css/voice.css?v=20261105voice12">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
@@ -650,6 +650,9 @@
                         <div class="catalog-subhead"><h3>CONFIRMATION DIALOG</h3><code>.nrc-dialog</code></div>
                         <button class="btn" type="button" id="catalogOpenDialog">OPEN NATIVE DIALOG</button>
                         <p>Shared <code>NRCModal</code> shell: native modal isolation and focus return; callers own content, results and cancellation guards.</p>
+                        <button class="btn header-operation header-register-control" type="button" aria-label="Temporäres Gespräch" aria-pressed="false">TEMPORÄR</button>
+                        <button class="btn header-operation header-register-control active" type="button" aria-label="Temporäres Gespräch" aria-pressed="true">TEMPORÄR</button>
+                        <p class="catalog-usage">Personal history is automatic; the conversation header only toggles TEMPORÄR. Durable preferences use Sullivan memory in the existing Settings command group (on/off/export/forget). There is no separate memory menu. Only deletion opens a confirmation. Storage failure blocks personal submission without opening settings or silently switching mode. Saved disablement survives reload. Restored history and receipts remain inert text.</p>
                         <div class="nrc-dialog new-task-dialog">
                             <div class="nrc-dialog-title">NEW TASK</div>
                             <div class="detail-edit-grid">
@@ -678,6 +681,7 @@ Ziel: Antwort klären, als Wissensnotiz dokumentieren und diese mit der Aufgabe 
                         <section class="voice-review" aria-label="Sullivan-Freigabe">
                             <div class="voice-summary"><p class="nrc-dialog-message" role="status">VERBUNDEN</p><p class="nrc-dialog-message">support · 2:14 / 10:00</p></div>
                             <div class="voice-content">
+                                <p class="ai-action-desc" data-voice-delivery>Zusatzkontext beim Sprachmodell angekommen. Das bestätigt noch keine Sprachausgabe.</p>
                                 <div data-voice-plan><div class="ai-action-plan"><div class="ai-action-plan-header">VORSCHLAG · 1 AKTION · REV 4</div><label class="ai-action-row"><input type="checkbox" aria-label="Aufgabe anlegen: Rollout prüfen"><div class="ai-action-body"><div class="ai-action-title">1. Aufgabe anlegen</div><div><div class="ai-action-desc voice-field"><strong>Titel: </strong><div>Rollout prüfen</div></div><div class="ai-action-desc voice-field voice-field--text"><strong>Beschreibung: </strong><div>Freigabe kontrollieren</div></div></div></div></label><p class="nrc-dialog-message voice-approval-hint">Alle Felder prüfen und Aktionen auswählen. Neue Sprache macht diesen Vorschlag ungültig. Gesprochenes Ja führt nichts aus.</p><button class="btn btn--primary" disabled>AUSWAHL BESTÄTIGEN</button></div></div>
                             </div>
                         </section>
@@ -689,6 +693,7 @@ Ziel: Antwort klären, als Wissensnotiz dokumentieren und diese mit der Aufgabe 
                         </section>
                         </div>
                         <p class="catalog-usage">Long proposal content and descriptions start with a preview of at most 320 characters and four source lines. “Vollständigen Inhalt anzeigen” expands the full, unchanged text in the Inspector's existing scroll area; “Inhalt einklappen” restores the preview. Expanding never selects or confirms an action. Short text stays fully visible.</p>
+                        <p class="catalog-usage">Context delivery is separate from action receipts and speech playback. The quiet hint distinguishes pending, acknowledged and rejected/unconfirmed appends; none approves an action or retries delivery.</p>
                         <p class="catalog-usage">VOICE starts capture in the sidebar controls, or in the footer on narrow screens and focused share views. Proposals and new errors open a temporary Inspector entry; an active editor defers automatic opening. Back and successful execution restore the previous record without taking over later navigation. The Sullivan button opens details. 1 FREIGABE marks a pending plan, PRÜFT an unresolved approval and FEHLER an error. Mobile controls retain 44px targets. Selection starts empty; only a click confirms the exact revision. New speech invalidates the proposal. Unknown outcomes cannot be retried. The shared Inspector CLOSE × control hides the review while audio or an approval is active; it dismisses a settled result after audio ends. ENDE stops audio and removes the voice UI unless an approval is still pending. Final usage arrives in the background without opening an end screen.</p>
                         <div class="nrc-dialog-backdrop catalog-dialog-stage">
                             <div class="nrc-dialog" role="dialog" aria-labelledby="catalogDialogTitle">
@@ -1534,6 +1539,7 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
                     <table class="catalog-inventory-table">
                         <thead><tr><th>FAMILY</th><th>ELEMENTS</th><th>PRODUCTION HOOK</th><th>SOURCE</th><th>SCOPE</th></tr></thead>
                         <tbody id="inventoryBody">
+                            <tr><td>SULLIVAN MEMORY</td><td>Direct temporary toggle; durable preferences in existing Settings commands; deletion confirmation; inert history and receipts</td><td><code>.header-register-control</code>, <code>.sullivan-history</code>, <code>NRCDialog.confirm</code></td><td>personal-memory.js / app.js / ai.js / voice.js / css/entities.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>SULLIVAN VOICE</td><td>Sidebar/mobile-footer controls, temporary Inspector approval with history return and editor guards, explicit microphone start, mute versus end, duration status, revision-bound selected-action approval, partial/unknown results; no visible transcript or spoken approval</td><td><code>.voice-panel</code>, <code>.voice-review</code>, <code>.ai-action-plan</code></td><td>voice.js / css/voice.css / inspector.js</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>CONTACT CARD</td><td>Borderless identity, optional single-company subtitle, role and actionable contact methods with nearby copy. No primary company inferred for multiple links. Per-company service status in read mode, checkbox in edit. Populated provenance under INFO; delete in the shared header.</td><td><code>.contact-card</code>, <code>.contact-company-service</code></td><td>customers.js / css/main.css</td><td><b>COMPOSITE</b></td></tr>
                             <tr><td>INSPECTOR REFINEMENTS</td><td>One header SAVE/CANCEL pair for explicit editors; live-field Slice SAVE remains separate from closure/delete. Neutral READ and persistence STATE, domain status in content. Note PROJECT/TAGS/FORMAT stay visible in read; discussions start collapsed below 769px without losing drafts. Ticket audience uses native exclusive choices and resets to internal after acknowledgement; full filenames wrap above download actions. Shared de-DE record dates; system-log ISO remains unchanged. Generic assets copy exact raw payloads.</td><td><code>.inspector-mode-row</code>, <code>.ticket-audience</code>, <code>.note-inline-metadata</code>, <code>.slice-facts</code></td><td>detail-ui.js / entity renderers / css/entities.css / css/main.css</td><td><b>CONTRACT</b></td></tr>

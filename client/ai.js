@@ -8,6 +8,7 @@
   let aiServiceAvailable = null; // null=unknown, true/false after first call
   let pendingNoteEdges = null; // tracks note+task creation for edge linking
   const askSessionByContext = new Map(); // key: "displayConv:contextConv" -> session_id
+  const askSessionPolicy = new Map(); // session_id -> captured execution policy
   const askPlanByDisplayConv = new Map(); // key: displayConv -> latest pending action plan
   const askLastContextByDisplayConv = new Map(); // key: displayConv -> contextConv
   let assetPreviewHideTimer = null;
@@ -28,9 +29,11 @@
   let activeActionPlanApply = null;
   let aiRunSequence = 0;
   let aiPlanSequence = 0;
+  let historyGeneration = 0;
+  let personalHistoryGeneration = 0;
 
   function isWorkbenchBusy() {
-    return !!activeAskRun || !!activeActionPlanApply;
+    return !!activeAskRun || !!activeActionPlanApply || !!window.NRCMemory?.isBusy();
   }
 
   function isSullivanView() {
@@ -82,10 +85,6 @@
       status.textContent = activeActionPlanApply ? "APPLYING" : activeAskRun ? "RUNNING" : "";
     }
     messageInput.disabled = busy;
-    ["askResetChip", "askClearViewChip"].forEach((id) => {
-      const control = document.getElementById(id);
-      if (control) control.disabled = busy;
-    });
     document.querySelectorAll(".ai-response-actions [data-requires-idle=true]").forEach((control) => {
       control.disabled = isWorkbenchBusy();
     });
@@ -99,11 +98,11 @@
     const state = document.createElement("section");
     state.className = "sullivan-empty";
     const heading = document.createElement("strong");
-    heading.textContent = "SULLIVAN / WORKBENCH READY";
+    heading.textContent = "SULLIVAN";
     const context = document.createElement("div");
-    context.textContent = "MODE: PLAN · HISTORY: EPHEMERAL";
+    context.textContent = window.NRCMemory?.options().require_memory ? "Schreib oder sprich mit mir. Wir machen hier weiter." : "Temporäres Gespräch · ohne persönlichen Verlauf";
     const guidance = document.createElement("div");
-    guidance.textContent = "Sullivan may propose changes; nothing is applied without explicit approval.";
+    guidance.textContent = "Änderungen an NRC-Daten bestätigst du weiterhin selbst.";
     const examples = document.createElement("ul");
     ["Summarize open decisions and cite the evidence.", "Find blocked tasks and explain each blocker.", "Propose a plan for this room's next milestone."].forEach((text) => {
       const item = document.createElement("li");
@@ -124,7 +123,7 @@
       return;
     }
     const title = document.getElementById("chatHeaderTitle");
-    if (title) title.textContent = "SULLIVAN / AI WORKBENCH";
+    if (title) title.textContent = "SULLIVAN";
     messageInput.placeholder = "Ask Sullivan…";
     setRunBusy(activeAskRun);
     document.querySelector("#logOutput > .sullivan-empty")?.remove();
@@ -220,7 +219,7 @@
   }
 
   function ensureAskResetButton() {
-    let button = document.getElementById("askResetChip");
+    let button = document.getElementById("sullivanOptionsChip");
     if (button) return button;
 
     const container = document.getElementById("chatHeaderAIControls");
@@ -228,43 +227,15 @@
 
     button = document.createElement("button");
     button.type = "button";
-    button.id = "askResetChip";
-    button.className = "btn btn--primary header-operation ask-reset-chip header-register-control header-create-action";
+    button.id = "sullivanOptionsChip";
+    button.className = "btn header-operation header-register-control";
     button.style.display = "none";
-    button.textContent = "+ SESSION";
-    button.title = "Reset the AI session and begin a fresh transcript";
-    button.addEventListener("click", async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (isWorkbenchBusy()) return;
-      const displayConvId = BigInt(sullivanDisplayConvId);
-      const contextConvId = resolveAskContextForDisplay(displayConvId).contextConvId;
-      resetAskSession(contextConvId, displayConvId);
-
-      if (window.NRCChat?.clearCurrentRoomMessages) {
-        await window.NRCChat.clearCurrentRoomMessages({ logResult: false, roomId: displayConvId, aiContextRoomId: contextConvId });
-      }
-
-      renderEmptyState();
-    });
-
+    button.dataset.personalMemory = "";
+    button.textContent = "TEMPORÄR";
+    button.setAttribute("aria-label", "Temporäres Gespräch");
+    button.setAttribute("aria-pressed", "false");
     container.appendChild(button);
-    const clear = document.createElement("button");
-    clear.type = "button";
-    clear.id = "askClearViewChip";
-    clear.className = "btn header-operation header-register-control";
-    clear.textContent = "CLEAR VIEW";
-    clear.title = "Clear this ephemeral transcript without resetting the AI session";
-    clear.addEventListener("click", async () => {
-      if (isWorkbenchBusy()) return;
-      const displayConvId = BigInt(sullivanDisplayConvId);
-      const contextConvId = resolveAskContextForDisplay(displayConvId).contextConvId;
-      await window.NRCChat?.clearCurrentRoomMessages?.({ logResult: false, roomId: displayConvId, aiContextRoomId: contextConvId });
-      invalidateActionPlans(String(displayConvId));
-      renderEmptyState();
-    });
-    container.appendChild(clear);
+    window.NRCMemory?.render();
     return button;
   }
 
@@ -1369,6 +1340,7 @@
     updateAskContextChip();
     if (typeof updateRoomUI === "function") updateRoomUI();
     loadRoomHistory(displayConvId, { aiContextRoomId: 0n });
+    window.NRCMemory?.resume(document.getElementById("logOutput"));
     if (typeof clearDMUnread === "function") clearDMUnread(displayConvId);
     roomActivity?.delete?.(displayConvId);
     if (typeof updateDMListUI === "function") updateDMListUI();
@@ -1441,6 +1413,7 @@
   function invalidateAskSession(sessionID, resetBackend = true) {
     const id = String(sessionID || "").trim();
     if (!id) return;
+    askSessionPolicy.delete(id);
     for (const [storedKey, storedSessionID] of askSessionByContext) {
       if (String(storedSessionID) === id) askSessionByContext.delete(storedKey);
     }
@@ -1451,9 +1424,10 @@
     if (resetBackend) resetBackendAskSession(id);
   }
 
-  function logAskRunTerminal(displayConvId, aiRunId, question, mode, contextConvId, status, message) {
+  function logAskRunTerminal(displayConvId, aiRunId, question, mode, contextConvId, status, message, executionPolicy) {
     logMessage("Activity", message, displayConvId, {
       aiRunId,
+      aiExecutionPolicy: executionPolicy,
       aiQuestion: question,
       aiMode: mode,
       aiContextRoomId: contextConvId,
@@ -1483,6 +1457,7 @@
     }
     const sessionIDs = new Set(askSessionByContext.values());
     askSessionByContext.clear();
+    askSessionPolicy.clear();
     askPlanByDisplayConv.clear();
     refreshActionPlanCards();
     askLastContextByDisplayConv.clear();
@@ -1497,13 +1472,36 @@
       logWorkbenchMessage("Error", "SULLIVAN IS BUSY; STOP OR WAIT FOR THE ACTIVE RUN", displayConvId);
       return;
     }
+    const workspace = currentWorkspaceId;
+    const draftDisplay = isSullivanView() ? sullivanDisplayConvId : null;
+    const draftHistory = historyGeneration;
+    const draftPersonalHistory = personalHistoryGeneration;
+    if (window.NRCMemory?.prepare && !await NRCMemory.prepare(workspace)) {
+      if (workspace === currentWorkspaceId && draftDisplay != null && draftDisplay === sullivanDisplayConvId &&
+          draftHistory === historyGeneration && draftPersonalHistory === personalHistoryGeneration &&
+          isSullivanView() && !messageInput.value) {
+        messageInput.value = question;
+      }
+      return;
+    }
+    if (workspace !== currentWorkspaceId || isWorkbenchBusy()) return;
     const originConvId = BigInt(options.displayConvID ?? sullivanDisplayConvId ?? currentRoomId);
     // Open on submission, never after asynchronous preparation: navigation is
     // independent of the request and must not be undone when readiness resolves.
     if (options.forceRoom !== true && !isSullivanView()) window.NRCViewManager?.setActiveView("sullivan");
     const controller = new AbortController();
     const aiRunId = `ai-${Date.now().toString(36)}-${++aiRunSequence}`;
-    activeAskRun = { id: aiRunId, controller, displayConvId: originConvId };
+    const generation = historyGeneration;
+    const personalGeneration = personalHistoryGeneration;
+    const memoryOptions = window.NRCMemory?.options(workspace) || { execution_policy: "temporary", require_memory: false };
+    const executionPolicy = memoryOptions.execution_policy;
+    const forgotten = () => workspace !== currentWorkspaceId || generation !== historyGeneration ||
+      (executionPolicy !== "temporary" && personalGeneration !== personalHistoryGeneration);
+    const logRunMessage = (type, message, displayConvId, metadata) =>
+      logMessage(type, message, displayConvId, { ...metadata, aiExecutionPolicy: executionPolicy });
+    const logTerminal = (displayConvId, status, message) =>
+      logAskRunTerminal(displayConvId, aiRunId, question, SULLIVAN_MODE, 0n, status, message, executionPolicy);
+    activeAskRun = { id: aiRunId, controller, displayConvId: originConvId, executionPolicy };
     invalidateActionPlans(String(originConvId));
     setRunBusy(activeAskRun);
     closeActivePortal();
@@ -1526,11 +1524,11 @@
     const preflightRunVisible = isAIDMConversation(initialDisplayConvId);
     if (preflightRunVisible) {
       document.querySelector(".sullivan-empty")?.remove();
-      logMessage("Sent", buildAskUserTurn(question, contextConvId, initialMode), initialDisplayConvId, {
+      logRunMessage("Sent", buildAskUserTurn(question, contextConvId, initialMode), initialDisplayConvId, {
         author: "YOU", aiRunId, aiQuestion: question, aiMode: initialMode,
         aiContextRoomId: contextConvId, aiRunStatus: "running",
       });
-      logMessage("Activity", "AI PREPARING SERVICE + DISPLAY ...", initialDisplayConvId, {
+      logRunMessage("Activity", "AI PREPARING SERVICE + DISPLAY ...", initialDisplayConvId, {
         aiRunId, aiQuestion: question, aiMode: initialMode,
         aiContextRoomId: contextConvId, aiRunStatus: "running",
       });
@@ -1541,18 +1539,19 @@
       try {
         askReadyInfo = await ensureAskBackendReady(contextConvId, controller.signal);
       } catch (err) {
+        if (forgotten()) return;
         if (err.name === "AbortError" || controller.signal.aborted) {
           if (preflightRunVisible) {
-            logAskRunTerminal(initialDisplayConvId, aiRunId, question, initialMode, contextConvId, "cancelled", "AI RUN CANCELLED");
+            logTerminal(initialDisplayConvId, "cancelled", "AI RUN CANCELLED");
           }
           if (activeAskRun?.id === aiRunId) activeAskRun = null;
           setRunBusy(activeAskRun);
           return;
         }
         aiServiceAvailable = false;
-        logWorkbenchMessage("Error", `AI SERVICE UNAVAILABLE: ${err.message}`, initialDisplayConvId, contextConvId);
+        logWorkbenchMessage("Error", `AI SERVICE UNAVAILABLE: ${err.message}`, initialDisplayConvId, contextConvId, { aiExecutionPolicy: executionPolicy });
         if (preflightRunVisible) {
-          logAskRunTerminal(initialDisplayConvId, aiRunId, question, initialMode, contextConvId, "error", `AI RUN FAILED: ${err.message}`);
+          logTerminal(initialDisplayConvId, "error", `AI RUN FAILED: ${err.message}`);
         }
         if (activeAskRun?.id === aiRunId) activeAskRun = null;
         setRunBusy(activeAskRun);
@@ -1562,17 +1561,18 @@
       try {
         resolvedDisplayInfo = await resolveAskDisplayConversation(false, askReadyInfo.ai_username, controller.signal);
       } catch (err) {
+        if (forgotten()) return;
         if (err.name === "AbortError" || controller.signal.aborted) {
           if (preflightRunVisible) {
-            logAskRunTerminal(initialDisplayConvId, aiRunId, question, initialMode, contextConvId, "cancelled", "AI RUN CANCELLED");
+            logTerminal(initialDisplayConvId, "cancelled", "AI RUN CANCELLED");
           }
           if (activeAskRun?.id === aiRunId) activeAskRun = null;
           setRunBusy(activeAskRun);
           return;
         }
-        logWorkbenchMessage("Error", `FAILED TO OPEN SULLIVAN DM: ${err.message}`, initialDisplayConvId, contextConvId);
+        logWorkbenchMessage("Error", `FAILED TO OPEN SULLIVAN DM: ${err.message}`, initialDisplayConvId, contextConvId, { aiExecutionPolicy: executionPolicy });
         if (preflightRunVisible) {
-          logAskRunTerminal(initialDisplayConvId, aiRunId, question, initialMode, contextConvId, "error", `AI RUN FAILED: ${err.message}`);
+          logTerminal(initialDisplayConvId, "error", `AI RUN FAILED: ${err.message}`);
         }
         if (activeAskRun?.id === aiRunId) activeAskRun = null;
         setRunBusy(activeAskRun);
@@ -1580,6 +1580,7 @@
       }
     }
 
+    if (controller.signal.aborted || forgotten() || activeAskRun?.id !== aiRunId) return;
     if (resolvedDisplayInfo?.mode === "dm") {
       const resolvedDisplayConvId = BigInt(resolvedDisplayInfo.convId);
       sullivanDisplayConvId = resolvedDisplayConvId;
@@ -1610,7 +1611,9 @@
     const explicitSessionID = options.followUp === true && options.sessionID
       ? String(options.sessionID)
       : null;
-    const sessionID = explicitSessionID || askSessionByContext.get(contextKey) || "";
+    const candidateSessionID = explicitSessionID || askSessionByContext.get(contextKey) || "";
+    // Never label a temporary card as isolated while sending personal context.
+    const sessionID = askSessionPolicy.get(candidateSessionID) === executionPolicy ? candidateSessionID : "";
     const followUpRequested = !!sessionID;
     const mode = SULLIVAN_MODE;
     activeAskRun.displayConvId = requestDisplayConvId;
@@ -1618,21 +1621,23 @@
     document.querySelector(".sullivan-empty")?.remove();
 
     if (!preflightRunVisible) {
-      logMessage(
+      logRunMessage(
         "Sent",
         buildAskUserTurn(question, contextConvId, mode),
         requestDisplayConvId,
         { author: "YOU", aiRunId, aiQuestion: question, aiMode: mode, aiContextRoomId: contextConvId, aiRunStatus: "running" },
       );
     }
-    logMessage(
+    logRunMessage(
       "Activity",
       `AI PROCESSING (${followUpRequested ? "FOLLOW-UP" : "FRESH"}) ...`,
       requestDisplayConvId, { aiRunId, aiQuestion: question, aiMode: mode, aiContextRoomId: contextConvId, aiRunStatus: "running" },
     );
 
     const requestBody = {
-      workspace: currentWorkspaceId,
+      workspace,
+      ...memoryOptions,
+      run_id: memoryOptions.require_memory ? crypto.randomUUID() : undefined,
       conv_id: String(contextConvId),
       context_conv_id: String(contextConvId),
       question: question,
@@ -1649,6 +1654,8 @@
       requestBody.agent_session_id = sessionID;
     }
 
+    window.NRCMemory?.trackRun?.(currentWorkspaceId, requestBody.run_id);
+    let answerRendered = false;
     try {
       const response = await fetch(getAiUrl() + "/ask", {
         method: "POST",
@@ -1659,7 +1666,8 @@
 
       if (!response.ok) {
         const errText = await response.text();
-        logMessage("Activity", `AI RUN FAILED: ${response.status} ${errText}`, requestDisplayConvId,
+        if (forgotten()) return;
+        logRunMessage("Activity", `AI RUN FAILED: ${response.status} ${errText}`, requestDisplayConvId,
           { aiRunId, aiQuestion: question, aiMode: mode, aiContextRoomId: contextConvId, aiRunStatus: "error" });
         return;
       }
@@ -1667,9 +1675,13 @@
       aiServiceAvailable = true;
       const data = await response.json();
       const responseSessionID = data.agent_session_id || data.session_id;
+      if (forgotten()) {
+        invalidateAskSession(responseSessionID || sessionID);
+        return;
+      }
       if (controller.signal.aborted || activeAskRun?.id !== aiRunId) {
         invalidateAskSession(responseSessionID || sessionID);
-        logAskRunTerminal(requestDisplayConvId, aiRunId, question, mode, contextConvId, "cancelled", "AI RUN CANCELLED");
+        logTerminal(requestDisplayConvId, "cancelled", "AI RUN CANCELLED");
         return;
       }
 
@@ -1682,6 +1694,7 @@
 
       const responseContextKey = askContextKey(responseDisplayConvId, contextConvId);
       if (responseSessionID) {
+        askSessionPolicy.set(responseSessionID, executionPolicy);
         askSessionByContext.set(initialContextKey, responseSessionID);
         askSessionByContext.set(contextKey, responseSessionID);
         askSessionByContext.set(responseContextKey, responseSessionID);
@@ -1694,6 +1707,7 @@
         invalidateActionPlans(String(responseDisplayConvId));
         actionPlan = {
           agentSessionId: responseSessionID,
+          executionPolicy,
           planId: data.plan_id,
           validityId: `plan-${Date.now().toString(36)}-${++aiPlanSequence}`,
           mode: data.mode || requestBody.mode || "plan",
@@ -1707,7 +1721,7 @@
         invalidateActionPlans(String(responseDisplayConvId));
       }
 
-      logMessage(
+      logRunMessage(
         "Message",
         buildAskAnswerMessage(data, contextConvId),
         responseDisplayConvId,
@@ -1726,18 +1740,21 @@
           suppressNotification: true,
         },
       );
+      answerRendered = true;
     } catch (err) {
+      if (forgotten()) return;
       if (err.name === "AbortError" || controller.signal.aborted) {
         invalidateAskSession(sessionID);
-        logAskRunTerminal(requestDisplayConvId, aiRunId, question, mode, contextConvId, "cancelled", "AI RUN CANCELLED");
+        logTerminal(requestDisplayConvId, "cancelled", "AI RUN CANCELLED");
         return;
       }
       aiServiceAvailable = false;
-      logMessage("Activity", `AI RUN FAILED: ${err.message}`, requestDisplayConvId,
+      logRunMessage("Activity", `AI RUN FAILED: ${err.message}`, requestDisplayConvId,
         { aiRunId, aiQuestion: question, aiMode: mode, aiContextRoomId: contextConvId, aiRunStatus: "error" });
     } finally {
       if (activeAskRun?.id === aiRunId) activeAskRun = null;
       setRunBusy(activeAskRun);
+      window.NRCMemory?.finishRun?.(requestBody.workspace, requestBody.run_id, answerRendered);
     }
   }
 
@@ -2086,7 +2103,7 @@
         });
       } catch (err) {
         status.textContent = err.message || String(err);
-        logWorkbenchMessage("Error", status.textContent, plan.displayConvId, plan.contextConvId);
+        if (isCurrentActionPlan(plan)) logWorkbenchMessage("Error", status.textContent, plan.displayConvId, plan.contextConvId, { aiExecutionPolicy: plan.executionPolicy });
       } finally {
         refreshActionPlanCards();
       }
@@ -2163,7 +2180,7 @@
       const result = await applyActionPlan(plan, shortcut.actionIds || []);
       logSystem(formatApplyResultSummary(result), "ai");
     } catch (err) {
-      logWorkbenchMessage("Error", err.message || String(err), displayConvId, plan.contextConvId);
+      if (isCurrentActionPlan(plan)) logWorkbenchMessage("Error", err.message || String(err), displayConvId, plan.contextConvId, { aiExecutionPolicy: plan.executionPolicy });
     }
   }
 
@@ -3012,8 +3029,42 @@
     }
   });
 
+  async function forgetLocalHistory(workspace, { personalOnly = false } = {}) {
+    if (workspace !== currentWorkspaceId) return;
+    if (personalOnly) {
+      personalHistoryGeneration++;
+      if (activeAskRun && activeAskRun.executionPolicy !== "temporary") {
+        activeAskRun.controller.abort();
+        activeAskRun = null;
+        setRunBusy();
+      }
+      for (const id of new Set(askSessionByContext.values())) {
+        if (askSessionPolicy.get(id) !== "temporary") invalidateAskSession(id);
+      }
+      for (const [display, plan] of askPlanByDisplayConv) {
+        if (plan.executionPolicy !== "temporary") askPlanByDisplayConv.delete(display);
+      }
+      refreshActionPlanCards();
+    } else {
+      historyGeneration++;
+      resetAskSession();
+    }
+    closeSourcePanel(false);
+    await window.NRCChat?.clearSullivanHistory?.({ personalOnly });
+    updateWorkbenchUI();
+  }
+
+  window.addEventListener("nrc-memory-busy", () => setRunBusy());
+  window.addEventListener("nrc-memory-change", event => {
+    if (event.detail.workspace !== currentWorkspaceId) return;
+    resetAskSession();
+    closeSourcePanel(false);
+    updateWorkbenchUI();
+  });
+
   // Expose module
   window.NRCAI = {
+    forgetLocalHistory,
     handlePasteToTask,
     handlePasteToNote,
     handleAsk,

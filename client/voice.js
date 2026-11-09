@@ -73,9 +73,14 @@
     return el;
   };
 
-  function open() {
+  async function open() {
     if (active) { active.expand(); return; }
+    if (window.NRCMemory?.isBusy()) return;
     const workspace = currentWorkspaceId;
+    if (window.NRCMemory?.prepare && !await NRCMemory.prepare(workspace)) return;
+    if (workspace !== currentWorkspaceId || active || window.NRCMemory?.isBusy()) return;
+    const memoryOptions = window.NRCMemory?.options(workspace) || { execution_policy: "temporary" };
+    const memoryLabel = memoryOptions.require_memory ? "" : " · TEMPORÄR";
     const panel = document.createElement("section");
     panel.className = "voice-panel";
     panel.setAttribute("aria-label", "Sullivan-Sprachgespräch");
@@ -110,7 +115,7 @@
     const usage = document.createElement("p");
     usage.className = "nrc-dialog-message";
     usage.setAttribute("data-voice-usage", "");
-    usage.textContent = `Workspace: ${workspace}`;
+    usage.textContent = `${workspace}${memoryLabel}`;
     const actions = document.createElement("div");
     actions.className = "voice-actions";
     panel.append(header, actions);
@@ -133,6 +138,7 @@
     let reconciling = false, reconcileDeadline = 0, approvalRevision = -1, completedApprovalRevision = -1;
     let revision = -1, planKey = "", lastApply = "", localSpeech = false;
     let approvedActions = [];
+    let forgotten = false;
     let collapsed = false, hasProposal = false, dismissed = false;
     let elapsed = "00:00";
     let displayedError = "";
@@ -168,9 +174,14 @@
     review.setAttribute("aria-label", "Sullivan-Freigabe");
     const summary = document.createElement("div"); summary.className = "voice-summary";
     summary.append(status, usage);
+    const delivery = document.createElement("p");
+    delivery.className = "ai-action-desc";
+    delivery.dataset.voiceDelivery = "";
+    delivery.hidden = true;
+    body.prepend(delivery);
     review.append(summary, body);
     let openRequest = 0;
-    active = { end, expand: () => setCollapsed(false, false) };
+    active = { workspace, executionPolicy: memoryOptions.execution_policy, end, forget, expand: () => setCollapsed(false, false) };
     setCollapsed(true);
     toggle.focus();
     panel.addEventListener("keydown", event => {
@@ -286,6 +297,19 @@
         cleanup();
       }, 15000);
     }
+    function forget() {
+      forgotten = true;
+      end();
+      approvedActions = [];
+      lastApply = "";
+      hasProposal = false;
+      displayedError = "";
+      body.querySelector("[data-voice-answer]").replaceChildren();
+      body.querySelector("[data-voice-plan]").replaceChildren();
+      body.querySelector("[data-voice-result]").replaceChildren();
+      status.textContent = reconciling ? "Verlauf gelöscht. Bestätigungsergebnis wird noch geprüft …" : "Verlauf gelöscht.";
+      updatePanel();
+    }
     function onPageHide() { end(); }
     window.addEventListener("pagehide", onPageHide);
 
@@ -325,8 +349,8 @@
             status.textContent = reconciling ? "Gespräch beendet. Bestätigungsergebnis wird noch geprüft …" : "GESPRÄCH BEENDET";
             const seconds = Number(event.usage?.seconds);
             usage.textContent = Number.isFinite(seconds)
-              ? `${workspace} · ${(seconds / 60).toFixed(1)} Minuten`
-              : "Abschlussverbrauch unbestätigt.";
+              ? `${workspace}${memoryLabel} · ${(seconds / 60).toFixed(1)} Minuten`
+              : `Abschlussverbrauch unbestätigt${memoryLabel}.`;
             cleanup();
           }
           if (event.type === "error") end("GPT-Live-Fehler. Gespräch wird beendet.");
@@ -343,7 +367,7 @@
         });
         if (ended) { cleanup(); return; }
         status.textContent = "Verbinde GPT-Live …";
-        const result = await request("create", { sdp: peer.localDescription.sdp });
+        const result = await request("create", { sdp: peer.localDescription.sdp, ...memoryOptions });
         id = result.id; closeOnly = result.close_only === true;
         await peer.setRemoteDescription({ type: "answer", sdp: result.sdp });
         if (ended || closeOnly) {
@@ -356,7 +380,7 @@
           if (currentWorkspaceId !== workspace) { end("Workspace gewechselt. Gespräch beendet."); return; }
           const seconds = Math.floor((Date.now() - started) / 1000);
           if (!ready && seconds >= 15) { end("GPT-Live hat den Gesprächsstart nicht bestätigt."); return; }
-          usage.textContent = `${workspace} · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} / 10:00`;
+          usage.textContent = `${workspace}${memoryLabel} · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} / 10:00`;
           elapsed = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
           updatePanel();
           if (seconds >= 600) end("Zeitlimit erreicht. Gespräch beendet.");
@@ -373,6 +397,14 @@
       if (receiptRevision !== approvalRevision || receiptRevision === completedApprovalRevision) return;
       completedApprovalRevision = receiptRevision;
       reconciling = false;
+      if (forgotten) {
+        lastApply = "receipt";
+        status.textContent = "Verlauf gelöscht. Ergebnis der Bestätigung siehe unten.";
+        const ids = (data.applied || []).map(entry => entry.entity?.id ?? entry.created_entity?.id ?? entry.deleted_entity?.id ?? entry.action_id);
+        body.querySelector("[data-voice-result]").textContent = `${ids.length} Aktionen erfolgreich (IDs: ${ids.join(", ") || "—"}). ${data.failed?.length || 0} mit Fehler oder unbestätigtem Ausgang. Nicht erneut ausführen.`;
+        updatePanel();
+        return;
+      }
       lastApply = JSON.stringify(data);
       hasProposal = false;
       disablePlan();
@@ -425,6 +457,12 @@
       if (ended && !reconciling) return;
       try {
         const data = await request("status");
+        const states = Object.values(data.context_delivery || {}).map(item => item.state);
+        delivery.hidden = !states.length || forgotten;
+        delivery.textContent = states.some(state => state === "rejected" || state === "unconfirmed")
+          ? "Zusatzkontext nicht vollständig bestätigt. Gespeicherter Verlauf bleibt erhalten."
+          : states.includes("pending") ? "Zusatzkontext wird an das Sprachmodell übermittelt…"
+          : "Zusatzkontext beim Sprachmodell angekommen. Das bestätigt noch keine Sprachausgabe.";
         // Operation reconciliation outlives the audio. In particular, a terminal
         // status can contain the only surviving receipt for an applied write.
         if (data.apply_result) {
@@ -433,8 +471,9 @@
         if (data.error && !data.applying && reconciling && data.apply_revision === approvalRevision) {
           reconciling = false;
           hasProposal = false;
-          body.querySelector("[data-voice-result]").textContent = data.error;
-          displayedError = data.error;
+          const error = forgotten ? "Ausgang unbestätigt. Datensätze prüfen; nicht erneut ausführen." : data.error;
+          body.querySelector("[data-voice-result]").textContent = error;
+          displayedError = error;
           setCollapsed(false);
           updatePanel();
         }
@@ -472,6 +511,7 @@
     }
 
     function render(data) {
+      if (forgotten) return;
       const answer = body.querySelector("[data-voice-answer]");
       const plan = body.querySelector("[data-voice-plan]");
       answer.replaceChildren(); plan.replaceChildren();
@@ -522,7 +562,11 @@
         body.querySelectorAll("[data-voice-answer] button").forEach(el => { el.disabled = true; });
         status.textContent = "BESTÄTIGUNG WIRD AUSGEFÜHRT …";
         try { showResult(await request("apply", { revision: data.revision, plan_id: result.plan_id, action_ids: ids }), data.revision); }
-        catch (error) { if (reconciling) status.textContent = `Nicht erneut bestätigen. Status prüfen: ${error.message}`; }
+        catch (error) {
+          if (reconciling) status.textContent = forgotten
+            ? "Ausgang unbestätigt. Datensätze prüfen; nicht erneut ausführen."
+            : `Nicht erneut bestätigen. Status prüfen: ${error.message}`;
+        }
         finally { applying = false; planKey = ""; updatePanel(); }
       }, "btn--primary");
       confirm.disabled = true;
@@ -535,4 +579,11 @@
     connect();
   }
   document.getElementById("sullivanVoice")?.addEventListener("click", open);
+  window.addEventListener("nrc-memory-change", event => {
+    if (active?.workspace === event.detail.workspace) active.end("Memory mode changed; start a new conversation.");
+  });
+  window.addEventListener("nrc-memory-forgotten", event => {
+    if (active?.workspace === event.detail.workspace &&
+        (!event.detail.personalOnly || active.executionPolicy !== "temporary")) active.forget();
+  });
 })();

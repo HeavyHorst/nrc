@@ -10,6 +10,7 @@ try {
   const errors = [];
   page.on("pageerror", e => errors.push(e.message));
   await page.routeWebSocket("**/*", socket => socket.onMessage(() => {}));
+  await page.route("**/ask/memory", route => route.fulfill({ contentType: "application/json", body: JSON.stringify(["inspect", "changes"].includes(route.request().postDataJSON().operation) ? { enabled: true, epoch: 0, revision: 0 } : []) }));
   await page.goto(process.env.NRC_CLIENT_URL || "http://127.0.0.1:8000");
   await page.waitForFunction(() => window.NRCChat && window.NRCViewManager && ws?.readyState === WebSocket.OPEN);
   await page.evaluate(() => {
@@ -148,6 +149,65 @@ try {
     subscribedRooms.add(dm); roomHistory.set(dm, []);
     await NRCAI.openSullivanWithContext(0n, { focused: false });
   });
+  const temporary = page.getByRole('button', {name:'Temporäres Gespräch', exact:true});
+  assert.equal(await temporary.getAttribute('aria-pressed'), 'false');
+  await temporary.click();
+  assert.equal(await temporary.getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('dialog[open]').count(), 0, 'temporary is a direct toggle, not a menu');
+  await temporary.click();
+  if (process.env.NRC_CHAT_NAV_SCREENSHOTS) {
+    await page.getByText("Schreib oder sprich mit mir. Wir machen hier weiter.", { exact: true }).waitFor();
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ["dark", "lupine"]) {
+        await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+        await page.screenshot({ path: `${process.env.NRC_CHAT_NAV_SCREENSHOTS}/sullivan-${width}-${theme}.png` });
+        await temporary.click();
+        await page.screenshot({ path: `${process.env.NRC_CHAT_NAV_SCREENSHOTS}/temporary-${width}-${theme}.png` });
+        await temporary.click();
+      }
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
+  await page.keyboard.press('Control+p');
+  await page.locator('#paletteInput').fill('Sullivan memory');
+  assert.equal(await page.locator('#paletteResults .palette-option-group').innerText(), 'settings');
+  await page.getByText('Sullivan memory', {exact:true}).click();
+  assert.equal(await page.locator('#paletteResults .palette-option').count(), 4);
+  if (process.env.NRC_CHAT_NAV_SCREENSHOTS) {
+    for (const width of [1440,390]) for (const theme of ['dark','lupine']) {
+      await page.setViewportSize({width,height:900});
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      await page.screenshot({path:`${process.env.NRC_CHAT_NAV_SCREENSHOTS}/settings-${width}-${theme}.png`});
+    }
+    await page.setViewportSize({width:1440,height:900});
+  }
+  await page.getByText('Verlauf löschen…', {exact:true}).click();
+  await page.getByRole('dialog', {name:'VERLAUF LÖSCHEN',exact:true}).waitFor();
+  assert.equal(await page.locator('#commandPalette').isHidden(), true);
+  await page.getByRole('button', {name:'Abbrechen',exact:true}).click();
+  await page.waitForFunction(() => !NRCMemory.isBusy());
+  await page.route('**/ask/memory', route => route.fulfill({status:503,body:'unavailable'}));
+  await page.locator('#messageInput').fill('Keep this draft when memory is unavailable');
+  await page.locator('#sullivanSend').click();
+  await page.waitForFunction(() => document.getElementById('messageInput').value === 'Keep this draft when memory is unavailable');
+  assert.equal(askRequests.length, 0);
+  assert.equal(await page.locator('dialog[open]').count(), 0);
+  await page.unroute('**/ask/memory');
+  await page.locator('#messageInput').fill('');
+  const memoryGate = deferred(), memoryArrived = deferred();
+  await page.route('**/ask/memory', async route => {
+    memoryArrived.resolve(); await memoryGate.promise;
+    await route.fulfill({status:503,body:'unavailable'});
+  });
+  await page.evaluate(() => { window.draftAdmission = NRCAI.handleAsk('Do not restore after forgetting'); });
+  await memoryArrived.promise;
+  await page.evaluate(() => NRCAI.forgetLocalHistory(currentWorkspaceId));
+  memoryGate.resolve();
+  await page.evaluate(() => window.draftAdmission);
+  assert.equal(await page.locator('#messageInput').inputValue(), '', 'late admission failure cannot restore a forgotten draft');
+  await page.unroute('**/ask/memory');
+  await page.route('**/ask/memory', route => route.fulfill({json:['inspect','changes'].includes(route.request().postDataJSON().operation) ? {enabled:true,epoch:0,revision:0} : []}));
   readyGate = deferred(); askGate = deferred(); readyArrived = deferred();
   await page.evaluate(() => { window.navigationAsk = NRCAI.handleAsk("Review the workspace"); });
   await readyArrived.promise;
@@ -171,8 +231,8 @@ try {
   const run = await page.locator("#logOutput .ai-workbench-run").first().boundingBox();
   assert.ok(run.x - transcript.x < 32 && run.width <= 760, "Sullivan keeps a bounded reading width at the chat's left edge");
   assert.ok(await page.locator("#sullivanStop").isVisible());
-  assert.ok(await page.locator("#askResetChip").isDisabled());
-  assert.ok(await page.locator("#askClearViewChip").isDisabled());
+  assert.equal(await page.locator("#askResetChip, #askClearViewChip").count(), 0);
+  assert.ok(await page.locator("#sullivanOptionsChip").isEnabled());
   await page.locator("#notesBtn").click();
   askGate.resolve(); askGate = null;
   await page.evaluate(() => window.navigationAsk);
@@ -193,8 +253,8 @@ try {
   assert.equal(await page.locator("#sullivanViewStatus").textContent(), "APPLYING");
   await page.locator("#sullivanBtn").click();
   assert.ok(await page.getByRole("button", { name: "APPLY ALL", exact: true }).isDisabled());
-  assert.ok(await page.locator("#askResetChip").isDisabled());
-  assert.ok(await page.locator("#askClearViewChip").isDisabled());
+  assert.ok(await page.locator("#sullivanOptionsChip").isEnabled());
+  assert.ok(await page.evaluate(() => NRCAI.isWorkbenchBusy()));
   await room(2).click();
   applyGate.resolve(); applyGate = null;
   await page.waitForFunction(() => !NRCAI.isWorkbenchBusy());
@@ -203,7 +263,7 @@ try {
   await page.locator("#sullivanBtn").click();
   await page.locator('.ai-action-row input[data-applied="true"]').waitFor({ state: "attached" });
   assert.equal(await page.locator('.ai-action-row input[data-applied="true"]').count(), 1);
-  assert.ok(await page.locator("#askResetChip").isEnabled());
+  assert.ok(await page.locator("#sullivanOptionsChip").isEnabled());
 
   // Failures stay with Sullivan; Stop remains available after navigating back.
   askStatus = 503; askGate = deferred(); askArrived = deferred();
@@ -240,6 +300,45 @@ try {
   console.log("PASS: Sullivan preparation/answer/apply navigation, correct background routing, chat drafts, return/stop, errors, session guards and single apply.");
   assert.deepEqual(errors, []);
   console.log("PASS: per-chat unread counts, direct/same-room/keyboard navigation, no duplicate Chat view, mobile switcher and Chat shortcut.");
+
+  // Exercise real logMessage metadata storage and real card reconstruction,
+  // not just the lightweight memory-controls fixture's rendering stub.
+  await page.evaluate(() => NRCAI.openSullivanWithContext(0n, {focused:false}));
+  await page.getByRole('button', {name:'Temporäres Gespräch',exact:true}).click();
+  await page.evaluate(() => NRCAI.handleAsk('Temporary production card'));
+  assert.equal(askRequests.at(-1).execution_policy, 'temporary');
+  assert.equal(askRequests.at(-1).agent_session_id, undefined, 'temporary dispatch never carries the earlier personal session');
+  const temporaryRun = await page.evaluate(() => [...roomHistory.values()].flat().findLast(message => message.aiAnswer)?.aiRunId);
+  assert.ok(temporaryRun);
+  assert.equal(await page.evaluate(id => [...roomHistory.values()].flat().filter(message => message.aiRunId === id).every(message => message.aiExecutionPolicy === 'temporary'), temporaryRun), true);
+  await page.evaluate(() => NRCAI.forgetLocalHistory(currentWorkspaceId, {personalOnly:true}));
+  assert.equal(await page.locator(`#logOutput [data-ai-run-id="${temporaryRun}"]`).count(), 1);
+  assert.equal(await page.evaluate(() => [...roomHistory.values()].flat().filter(message => message.aiContextRoomId != null).every(message => message.aiExecutionPolicy === 'temporary')), true);
+  assert.equal(await page.locator('.ai-action-apply').last().isEnabled(), true, 'temporary plan remains executable');
+  await page.evaluate(() => NRCAI.handleAsk('Temporary production follow-up'));
+  assert.equal(askRequests.at(-1).agent_session_id, 'navigation-session');
+  await page.evaluate(() => NRCAI.forgetLocalHistory(currentWorkspaceId));
+  assert.equal(await page.evaluate(() => [...roomHistory.values()].flat().filter(message => message.aiContextRoomId != null).length), 0);
+  console.log('PASS: production temporary cards, metadata, plans and sessions survive personal-only invalidation; explicit forget remains broad.');
+
+  const linked = await context.newPage();
+  linked.on("pageerror", e => errors.push(e.message));
+  await linked.routeWebSocket("**/*", socket => socket.onMessage(() => {}));
+  await linked.route("**/ask/ready", route => route.fulfill({ json: { ai_username: "sullivan-navigation" } }));
+  await linked.route("**/ask/memory", route => route.fulfill({ json: ["inspect", "changes"].includes(route.request().postDataJSON().operation) ? { enabled: true, epoch: 0, revision: 0 } : [] }));
+  await linked.goto(`${process.env.NRC_CLIENT_URL || "http://127.0.0.1:8000"}/#/sullivan/deep-link-proof`);
+  await linked.waitForFunction(() => typeof pendingInitialization === "function");
+  assert.equal(await linked.evaluate(() => NRCAI.getDisplayConvId()), null);
+  await linked.evaluate(async () => {
+    myNickname = "reviewer"; nicknameReceived = true;
+    activeDMs.set(DM_CONV_FLAG | 999n, { username: "sullivan-navigation", online: true });
+    await pendingInitialization();
+  });
+  await linked.waitForFunction(() => NRCAI.getDisplayConvId() != null);
+  assert.equal(await linked.evaluate(() => NRCViewManager.getActiveView()), "sullivanShare");
+  assert.ok(await linked.locator("#sullivanSend").isVisible());
+  assert.deepEqual(errors, []);
+  console.log("PASS: direct Sullivan link initializes before its display conversation is resolved.");
 } finally {
   await browser.close();
 }
