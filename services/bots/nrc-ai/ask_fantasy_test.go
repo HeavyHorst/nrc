@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -28,6 +30,28 @@ type timingTestModel struct {
 	err      error
 }
 
+func TestSummaryModelConfiguration(t *testing.T) {
+	for _, tc := range []struct{ provider, override, want string }{
+		{"", "", "gpt-6.1-sol"},
+		{"openai", "", "gpt-6.1-sol"},
+		{" OpenAI ", "", "gpt-6.1-sol"},
+		{"openai", "custom-summary", "custom-summary"},
+		{"anthropic", "", "chat-model"},
+		{"openai-compat", "", "chat-model"},
+	} {
+		t.Run(tc.provider+"/"+tc.override, func(t *testing.T) {
+			t.Setenv("LLM_PROVIDER", tc.provider)
+			t.Setenv("LLM_MODEL", "chat-model")
+			t.Setenv("NRC_MEMORY_SUMMARY_MODEL", tc.override)
+			t.Setenv("LLM_MAX_OUTPUT_TOKENS", "16384")
+			cfg := loadConfig()
+			if cfg.MemorySummaryModel != tc.want || cfg.LLMModel != "chat-model" || cfg.LLMMaxOutputTokens != 16384 {
+				t.Fatalf("summary=%q chat=%q output=%d", cfg.MemorySummaryModel, cfg.LLMModel, cfg.LLMMaxOutputTokens)
+			}
+		})
+	}
+}
+
 func TestOpenAIServiceTierRequests(t *testing.T) {
 	for _, tier := range []string{"", "fast"} {
 		for _, modelName := range []string{"gpt-6.1-terra", "gpt-6-luna", "gpt-4o"} {
@@ -41,6 +65,21 @@ func TestOpenAIServiceTierRequests(t *testing.T) {
 					}
 					if body["model"] != modelName || (tier != "" && body["service_tier"] != tier) || (tier == "" && body["service_tier"] != nil) {
 						t.Errorf("unexpected model/tier: %v", body)
+					}
+					if input, ok := body["input"].([]any); ok && len(input) == 3 {
+						for i, item := range input {
+							message := item.(map[string]any)
+							parts, ok := message["content"].([]any)
+							if !ok {
+								continue
+							}
+							for _, part := range parts {
+								_, marked := part.(map[string]any)["prompt_cache_breakpoint"]
+								if marked != (i == 1) {
+									t.Errorf("cache boundary on input %d: %v", i, marked)
+								}
+							}
+						}
 					}
 					w.Header().Set("Content-Type", "application/json")
 					if modelName == "gpt-4o" {
@@ -70,6 +109,11 @@ func TestOpenAIServiceTierRequests(t *testing.T) {
 				if response.Content.Text() != "OK" {
 					t.Errorf("unexpected response: %+v", response)
 				}
+				agent := fantasy.NewAgent(model, fantasy.WithSystemPrompt("Stable instructions"))
+				answer, _, err := runFantasyAskWithRetry(t.Context(), agent, "Changing current context", fantasy.NewUserMessage("Stable historical evidence"))
+				if err != nil || answer != "OK" {
+					t.Fatalf("marked request: %q %v", answer, err)
+				}
 			})
 		}
 	}
@@ -91,7 +135,7 @@ func TestAskModelTiming(t *testing.T) {
 			if failed {
 				response, wantErr, status = nil, context.DeadlineExceeded, "error"
 			}
-			got, err := (timedAskModel{timingTestModel{response: response, err: wantErr}}).Generate(ctx, fantasy.Call{})
+			got, err := (timedAskModel{LanguageModel: timingTestModel{response: response, err: wantErr}, maxContextTokens: 128000, maxOutputTokens: 1024}).Generate(ctx, fantasy.Call{})
 			if got != response || err != wantErr {
 				t.Fatal("instrumentation changed the provider result")
 			}
@@ -109,6 +153,164 @@ func TestAskModelTiming(t *testing.T) {
 				t.Fatalf("incorrect provider usage: %v", entry)
 			}
 		})
+	}
+}
+
+type budgetTestModel struct {
+	fantasy.LanguageModel
+	calls    []fantasy.Call
+	response *fantasy.Response
+}
+
+func (m *budgetTestModel) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	m.calls = append(m.calls, call)
+	return m.response, nil
+}
+
+func TestAskInputBudgetBoundaryAndUnchangedCall(t *testing.T) {
+	reserve := int64(100)
+	call := fantasy.Call{
+		Prompt:          fantasy.Prompt{fantasy.NewSystemMessage("system rules"), fantasy.NewUserMessage("small request")},
+		MaxOutputTokens: &reserve,
+		Tools:           []fantasy.Tool{fantasy.FunctionTool{Name: "lookup", Description: "Lookup a record", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}}}},
+	}
+	bound, err := askCallInputBound(call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delta := range []int64{-1, 0, 1} {
+		t.Run(fmt.Sprint(delta), func(t *testing.T) {
+			provider := &budgetTestModel{response: &fantasy.Response{FinishReason: fantasy.FinishReasonStop}}
+			model := timedAskModel{LanguageModel: provider, maxContextTokens: bound + reserve + delta, maxOutputTokens: reserve}
+			before, _ := json.Marshal(call)
+			response, err := model.Generate(t.Context(), call)
+			if delta < 0 {
+				if !errors.Is(err, errAskInputBudget) || len(provider.calls) != 0 {
+					t.Fatalf("over-budget call reached provider: %v", err)
+				}
+				if _, err := model.Stream(t.Context(), call); !errors.Is(err, errAskInputBudget) {
+					t.Fatalf("stream bypass: %v", err)
+				}
+			} else if err != nil || response != provider.response || len(provider.calls) != 1 || !reflect.DeepEqual(provider.calls[0], call) {
+				t.Fatalf("small call changed: %v", err)
+			}
+			after, _ := json.Marshal(call)
+			if !bytes.Equal(before, after) {
+				t.Fatal("budget guard mutated the call")
+			}
+		})
+	}
+	// A larger per-call output allowance must also be reserved.
+	model := timedAskModel{maxContextTokens: bound + reserve, maxOutputTokens: reserve}
+	reserve++
+	if !errors.Is(model.checkInputBudget(call), errAskInputBudget) {
+		t.Fatal("per-call output reserve ignored")
+	}
+}
+
+func TestAskInputBudgetCountsEveryInput(t *testing.T) {
+	base := fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("x")}}
+	baseBound, _ := askCallInputBound(base)
+	for _, text := range []string{strings.Repeat("x", 2000), strings.Repeat("界🙂", 1000)} {
+		for _, kind := range []string{"system", "schema", "tool-result", "tool-error", "reasoning", "tool-call"} {
+			t.Run(kind+fmt.Sprint(len(text)), func(t *testing.T) {
+				call := fantasy.Call{Prompt: append(fantasy.Prompt{}, base.Prompt...)}
+				switch kind {
+				case "system":
+					call.Prompt = append(call.Prompt, fantasy.NewSystemMessage(text))
+				case "schema":
+					call.Tools = []fantasy.Tool{fantasy.FunctionTool{Name: "lookup", InputSchema: map[string]any{"description": text}}}
+				case "tool-result":
+					call.Prompt = append(call.Prompt, fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "1", Output: fantasy.ToolResultOutputContentText{Text: text}}}})
+				case "tool-error":
+					call.Prompt = append(call.Prompt, fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "1", Output: fantasy.ToolResultOutputContentError{Error: errors.New(text)}}}})
+				case "reasoning":
+					call.Prompt = append(call.Prompt, fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ReasoningPart{Text: text}}})
+				case "tool-call":
+					call.Prompt = append(call.Prompt, fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolName: "lookup", Input: text}}})
+				}
+				bound, err := askCallInputBound(call)
+				if err != nil || bound < baseBound+int64(len(text)) {
+					t.Fatalf("bytes omitted: bound=%d base=%d err=%v", bound, baseBound, err)
+				}
+				model := timedAskModel{maxContextTokens: baseBound + 100, maxOutputTokens: 100}
+				if _, err := model.Generate(t.Context(), call); !errors.Is(err, errAskInputBudget) {
+					t.Fatalf("oversized input accepted: %v", err)
+				}
+			})
+		}
+	}
+	// UTF-8 bytes, not rune counts or characters/4.
+	a, _ := askCallInputBound(fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("a")}})
+	u, _ := askCallInputBound(fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("🙂")}})
+	if u-a != 3 {
+		t.Fatalf("unicode byte accounting: %d", u-a)
+	}
+}
+
+func TestAskInputBudgetToolLoopDoesNotRetry(t *testing.T) {
+	provider := &budgetTestModel{response: &fantasy.Response{
+		Content:      fantasy.ResponseContent{fantasy.ToolCallContent{ToolCallID: "1", ToolName: "lookup", Input: `{}`}},
+		FinishReason: fantasy.FinishReasonToolCalls,
+	}}
+	toolCalls := 0
+	lookup := fantasy.NewAgentTool("lookup", "Lookup", func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		toolCalls++
+		return fantasy.NewTextResponse(strings.Repeat("private tool result", 2000)), nil
+	})
+	agent := fantasy.NewAgent(timedAskModel{LanguageModel: provider, maxContextTokens: 8000, maxOutputTokens: 100},
+		fantasy.WithSystemPrompt("system rules"), fantasy.WithTools(lookup), fantasy.WithMaxOutputTokens(100), fantasy.WithMaxRetries(2))
+	_, attempts, err := runFantasyAskWithRetry(t.Context(), agent, "small request")
+	if !errors.Is(err, errAskInputBudget) || attempts != 1 || len(provider.calls) != 1 || toolCalls != 1 {
+		t.Fatalf("growth not stopped or retried: attempts=%d provider=%d tool=%d err=%v", attempts, len(provider.calls), toolCalls, err)
+	}
+	wrapped := fmt.Errorf("temporary timeout: %w", err)
+	if shouldRetryADKRunError(wrapped) || adkAskHTTPStatus(wrapped) != http.StatusRequestEntityTooLarge {
+		t.Fatal("budget error classified as transient")
+	}
+	if strings.Contains(err.Error(), "private tool result") {
+		t.Fatal("payload leaked")
+	}
+}
+
+func TestAskInputBudgetFailsClosed(t *testing.T) {
+	for _, model := range []timedAskModel{{}, {maxContextTokens: -1, maxOutputTokens: 100}, {maxContextTokens: 100, maxOutputTokens: 100}, {maxContextTokens: 10000}} {
+		if _, err := model.Generate(t.Context(), fantasy.Call{}); !errors.Is(err, errAskInputBudget) {
+			t.Fatalf("invalid budget accepted: %v", err)
+		}
+	}
+	for _, call := range []fantasy.Call{
+		{Tools: []fantasy.Tool{fantasy.FunctionTool{InputSchema: map[string]any{"private": make(chan int)}}}},
+		{Prompt: fantasy.Prompt{{Role: fantasy.MessageRoleUser, Content: []fantasy.MessagePart{fantasy.FilePart{Data: []byte("private")}}}}},
+	} {
+		model := timedAskModel{maxContextTokens: 100000, maxOutputTokens: 100}
+		if _, err := model.Generate(t.Context(), call); err != errAskInputBudget {
+			t.Fatalf("unmeasurable call accepted or payload exposed: %v", err)
+		}
+	}
+}
+
+func TestAskInputBudgetHTTPRejection(t *testing.T) {
+	var calls atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "unexpected provider invocation", http.StatusInternalServerError)
+	}))
+	defer provider.Close()
+	client, _ := connectedListingTestClient(t)
+	wm := &WorkspaceManager{ctx: t.Context(), clients: map[string]*NRCClient{"ws": client}}
+	handler, err := handleAskFantasy(wm, nil, nil, Config{LLMProvider: "openai-compat", LLMModel: "fixture", LLMAPIKey: "test", LLMBaseURL: provider.URL, LLMMaxOutputTokens: 1024}, 4096, newAgentSessionStore(time.Minute, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No initial retrieval in temporary mode: the complete system/tool input alone
+	// exceeds this small budget, even though the user request is tiny.
+	body, _ := json.Marshal(askRequest{Workspace: "ws", Question: "private question", ExecutionPolicy: "temporary"})
+	r := httptest.NewRequest("POST", "/ask", bytes.NewReader(body)).WithContext(context.WithValue(t.Context(), aiIdentityKey{}, testAIIdentity("ws")))
+	w := httptest.NewRecorder()
+	handler(w, r)
+	if w.Code != http.StatusRequestEntityTooLarge || calls.Load() != 0 || strings.TrimSpace(w.Body.String()) != errAskInputBudget.Error() {
+		t.Fatalf("budget rejection: status=%d calls=%d body=%s", w.Code, calls.Load(), w.Body.String())
 	}
 }
 
@@ -440,8 +642,9 @@ func TestAskHandlerRegistersListingTools(t *testing.T) {
 }
 
 func TestAskStartsWithRetrieveAndLoadsOnlyRequestedTask(t *testing.T) {
-	for _, scenario := range []string{"initial", "follow-up", "search-unavailable", "graph", "list_tasks", "search_tasks"} {
+	for _, scenario := range []string{"initial", "follow-up", "search-unavailable", "graph", "list_tasks", "search_tasks", "private", "temporary"} {
 		t.Run(scenario, func(t *testing.T) {
+			private := scenario == "private" || scenario == "temporary"
 			client, requests := connectedListingTestClient(t)
 			if scenario == "graph" {
 				client.protocolVersion.Store(graphRankProtocolVersion)
@@ -453,8 +656,13 @@ func TestAskStartsWithRetrieveAndLoadsOnlyRequestedTask(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			wm := &WorkspaceManager{ctx: ctx, clients: map[string]*NRCClient{"ws": client}}
-			store := newAgentSessionStore(time.Minute, 10)
-			session, _ := store.getOrCreate("ws", 0, 0, "", agentModeAsk)
+			store := newAgentSessionStore(time.Minute, 20)
+			session, _ := store.getOrCreate(testAIOwner, "ws", 0, 0, "", agentModeAsk)
+			policy := "workspace"
+			if private {
+				policy = scenario
+			}
+			store.setExecutionPolicy(session.ID, policy)
 			question := "What is the rollout status?"
 			if scenario == "follow-up" {
 				store.appendTurn(session.ID, AgentTurn{UserText: question, Answer: "Release task #7 covers the rollout."})
@@ -499,6 +707,8 @@ func TestAskStartsWithRetrieveAndLoadsOnlyRequestedTask(t *testing.T) {
 			}))
 			defer searchServer.Close()
 			var modelCalls atomic.Int32
+			var previousMessages []byte
+			var previousCount int
 			modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				call := modelCalls.Add(1)
 				var request struct {
@@ -510,12 +720,56 @@ func TestAskStartsWithRetrieveAndLoadsOnlyRequestedTask(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Error(err)
 				}
-				if searchCalls.Load() == 0 {
+				if private {
+					if call == 22 || call == 33 {
+						if len(request.Messages) != 13 {
+							t.Errorf("block rollover retained %d messages, want 13", len(request.Messages))
+						}
+						previousCount = 0
+					}
+					if previousCount > 0 {
+						if len(request.Messages) <= previousCount {
+							t.Error("follow-up did not extend provider history")
+							return
+						}
+						prefix, _ := json.Marshal(request.Messages[:previousCount])
+						if !bytes.Equal(prefix, previousMessages) {
+							t.Error("follow-up rewrote the provider-visible cached prefix")
+						}
+					}
+					// Only the explicit history prefix is reusable. Current retrieval
+					// context must not be copied into the next turn's history.
+					previousCount = len(request.Messages) - 1
+					previousMessages, _ = json.Marshal(request.Messages[:previousCount])
+				}
+				if !private && searchCalls.Load() == 0 {
 					t.Error("model called before initial retrieval")
 				}
-				prompt := string(request.Messages[1].Content)
+				var prompt string
+				for _, message := range request.Messages[1:] {
+					if message.Role == "user" {
+						prompt += string(message.Content)
+					}
+				}
 				if !strings.Contains(prompt, "INITIAL WORKSPACE CONTEXT") {
 					t.Error("missing initial context")
+				}
+				if private && strings.Count(prompt, "INITIAL WORKSPACE CONTEXT") != 1 {
+					t.Error("historical requests duplicated retrieval context")
+				}
+				if scenario == "follow-up" {
+					// Cache reuse depends on the actual provider-visible prefix:
+					// history needs a message boundary before volatile request metadata.
+					lastTurn := strings.Index(prompt, "Release task #7")
+					if lastTurn < 0 || strings.Index(prompt, "Current time:") < lastTurn || strings.Index(prompt, "AgentSessionID:") < lastTurn {
+						t.Error("volatile request metadata breaks the reusable history prefix")
+					}
+					for _, message := range request.Messages {
+						text := string(message.Content)
+						if strings.Contains(text, "Release task #7") && (message.Role != "user" || strings.Contains(text, "Current time:")) {
+							t.Error("historical evidence must retain its own user-level cache boundary")
+						}
+					}
 				}
 				if scenario == "graph" && (!strings.Contains(prompt, "Graph-only task evidence") || !strings.Contains(prompt, "Graph-only asset evidence") || strings.Contains(prompt, "graph ranking unavailable")) {
 					t.Error("successful graph hydration missing from first model context")
@@ -523,6 +777,10 @@ func TestAskStartsWithRetrieveAndLoadsOnlyRequestedTask(t *testing.T) {
 				if scenario == "search-unavailable" {
 					if !strings.Contains(prompt, "results are partial") || !strings.Contains(prompt, "empty results do not imply") {
 						t.Error("lost retrieval failure warning")
+					}
+				} else if private {
+					if searchCalls.Load() != 0 || !strings.Contains(string(request.Messages[0].Content), "PRIVATE EXECUTION POLICY") {
+						t.Error("private request searched automatically or lost trusted policy")
 					}
 				} else if !strings.Contains(prompt, "END 7") || strings.Contains(prompt, "END 10") {
 					t.Error("initial context did not apply top-three payload policy")
@@ -550,12 +808,16 @@ func TestAskStartsWithRetrieveAndLoadsOnlyRequestedTask(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			body, _ := json.Marshal(askRequest{Workspace: "ws", Question: question, SessionID: session.ID})
+			display := uint64(0)
+			if private {
+				display = 919
+			}
+			body, _ := json.Marshal(askRequest{Workspace: "ws", Question: question, SessionID: session.ID, ExecutionPolicy: policy, DisplayConvID: display})
 			recorder := httptest.NewRecorder()
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				handler(recorder, httptest.NewRequest("POST", "/ask", bytes.NewReader(body)).WithContext(ctx))
+				handler(recorder, httptest.NewRequest("POST", "/ask", bytes.NewReader(body)).WithContext(context.WithValue(ctx, aiIdentityKey{}, testAIIdentity("ws"))))
 			}()
 			reads, graphReads, assetReads, pageReads := 0, 0, 0, 0
 		loop:
@@ -649,7 +911,22 @@ func TestAskStartsWithRetrieveAndLoadsOnlyRequestedTask(t *testing.T) {
 			if scenario == "graph" && (graphReads != 1 || assetReads != 1) {
 				t.Fatalf("graph reads=%d asset reads=%d", graphReads, assetReads)
 			}
-			if answer == "See #7." && scenario != "search-unavailable" && (len(response.Sources) != 1 || response.Sources[0].ID != 7 || response.Sources[0].Title == "") {
+			if private {
+				got, ok := store.get(testAIOwner, "ws", response.SessionID)
+				if !ok || got.DisplayConvID != 0 || got.ExecutionPolicy != policy {
+					t.Fatal("private session lost policy")
+				}
+				for turn := 2; turn <= 34; turn++ {
+					next := fmt.Sprintf("Discussion %d: discuss task #19 instead; do not write anything.", turn)
+					body, _ := json.Marshal(askRequest{Workspace: "ws", Question: next, SessionID: session.ID, ExecutionPolicy: policy})
+					rr := httptest.NewRecorder()
+					handler(rr, httptest.NewRequest("POST", "/ask", bytes.NewReader(body)).WithContext(context.WithValue(ctx, aiIdentityKey{}, testAIIdentity("ws"))))
+					if rr.Code != http.StatusOK {
+						t.Fatalf("follow-up failed: %d %s", rr.Code, rr.Body.String())
+					}
+				}
+			}
+			if !private && answer == "See #7." && scenario != "search-unavailable" && (len(response.Sources) != 1 || response.Sources[0].ID != 7 || response.Sources[0].Title == "") {
 				t.Fatalf("lost task citation without snapshot: %+v", response.Sources)
 			}
 		})

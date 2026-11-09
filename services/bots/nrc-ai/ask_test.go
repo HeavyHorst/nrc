@@ -162,7 +162,7 @@ func TestNormalizeAgentModeReadOnlyAliases(t *testing.T) {
 
 func TestAgentSessionPlanApplyIdempotencyState(t *testing.T) {
 	store := newAgentSessionStore(time.Hour, 5)
-	session, _ := store.getOrCreate("main", 10, 20, "", agentModePlan)
+	session, _ := store.getOrCreate(testAIOwner, "main", 10, 20, "", agentModePlan)
 	plan, ok := store.startPlan(session.ID)
 	if !ok {
 		t.Fatal("expected plan")
@@ -207,7 +207,7 @@ func TestAgentSessionPlanApplyIdempotencyState(t *testing.T) {
 
 func TestAgentSessionUpdateTaskActions(t *testing.T) {
 	store := newAgentSessionStore(time.Hour, 5)
-	session, _ := store.getOrCreate("main", 10, 20, "", agentModePlan)
+	session, _ := store.getOrCreate(testAIOwner, "main", 10, 20, "", agentModePlan)
 	plan, ok := store.startPlan(session.ID)
 	if !ok {
 		t.Fatal("expected plan")
@@ -252,7 +252,7 @@ func TestAgentSessionUpdateTaskActions(t *testing.T) {
 
 func TestAgentSessionNoteAndEdgeActions(t *testing.T) {
 	store := newAgentSessionStore(time.Hour, 5)
-	session, _ := store.getOrCreate("main", 10, 20, "", agentModePlan)
+	session, _ := store.getOrCreate(testAIOwner, "main", 10, 20, "", agentModePlan)
 	plan, ok := store.startPlan(session.ID)
 	if !ok {
 		t.Fatal("expected plan")
@@ -328,7 +328,7 @@ func TestAgentSessionNoteAndEdgeActions(t *testing.T) {
 
 func TestCreateEdgeConcreteIDsOverrideActionIDs(t *testing.T) {
 	store := newAgentSessionStore(time.Hour, 5)
-	session, _ := store.getOrCreate("main", 10, 20, "", agentModePlan)
+	session, _ := store.getOrCreate(testAIOwner, "main", 10, 20, "", agentModePlan)
 	plan, ok := store.startPlan(session.ID)
 	if !ok {
 		t.Fatal("expected plan")
@@ -348,7 +348,7 @@ func TestCreateEdgeConcreteIDsOverrideActionIDs(t *testing.T) {
 
 func TestUpdateNoteRequiresExpectedUpdatedAt(t *testing.T) {
 	store := newAgentSessionStore(time.Hour, 5)
-	session, _ := store.getOrCreate("main", 10, 20, "", agentModePlan)
+	session, _ := store.getOrCreate(testAIOwner, "main", 10, 20, "", agentModePlan)
 	plan, ok := store.startPlan(session.ID)
 	if !ok {
 		t.Fatal("expected plan")
@@ -378,7 +378,7 @@ func TestNoteFormatDefaultAndHTMLTeaser(t *testing.T) {
 
 func TestAgentSessionDeleteNoteAndEdgeActions(t *testing.T) {
 	store := newAgentSessionStore(time.Hour, 5)
-	session, _ := store.getOrCreate("main", 10, 20, "", agentModePlan)
+	session, _ := store.getOrCreate(testAIOwner, "main", 10, 20, "", agentModePlan)
 	plan, ok := store.startPlan(session.ID)
 	if !ok {
 		t.Fatal("expected plan")
@@ -461,7 +461,7 @@ func TestFormatProposedActionsTextMixedActions(t *testing.T) {
 
 func TestAgentSessionDiscardEmptyPlan(t *testing.T) {
 	store := newAgentSessionStore(time.Hour, 5)
-	session, _ := store.getOrCreate("main", 10, 20, "", agentModePlan)
+	session, _ := store.getOrCreate(testAIOwner, "main", 10, 20, "", agentModePlan)
 	plan, ok := store.startPlan(session.ID)
 	if !ok {
 		t.Fatal("expected plan")

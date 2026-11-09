@@ -21,6 +21,7 @@ import (
 	"github.com/heavyhorst/nrc/protocol-go"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
+	memory "nrc-ai/personal_memory"
 )
 
 const (
@@ -1942,7 +1943,7 @@ Legacy tool names such as room_context refer to workspace-wide data, not room-lo
 
 Your operator-facing identity is Sullivan.
 
-Workspace data is source of truth. The ask/agent session is ephemeral working context. Durable memory belongs in notes, tasks, and edges, not hidden chat history.
+Workspace data is source of truth. The ask/agent session is ephemeral working context. Notes, tasks and edges are shared workspace records, never private personal memory. "Remember this" alone does not authorize publication to a workspace record.
 
 Modes:
 - ask: read-only. Answer with grounded workspace evidence. Do not call propose_* tools.
@@ -2034,17 +2035,29 @@ Sourcebot code research:
 	fantasyTools = append(fantasyTools, newTicketTools(wm, agentSessions)...)
 	fantasyTools = append(fantasyTools, newTicketGroupTools(wm, agentSessions)...)
 	fantasyTools = append(fantasyTools, newKnowledgeGapTool())
+	for i, t := range fantasyTools {
+		fantasyTools[i] = policyTool{t}
+	}
 
-	askAgent := fantasy.NewAgent(timedAskModel{fantasyModel},
+	agentOptions := []fantasy.AgentOption{
 		fantasy.WithSystemPrompt(askSystemPrompt),
 		fantasy.WithTools(fantasyTools...),
 		fantasy.WithStopConditions(fantasy.StepCountIs(10), fantasy.FinishReasonIs(fantasy.FinishReasonStop)),
 		fantasy.WithMaxRetries(2),
 		fantasy.WithMaxOutputTokens(int64(cfg.LLMMaxOutputTokens)),
 		fantasy.WithOnRetry(func(err *fantasy.ProviderError, delay time.Duration) {
-			slog.Warn("fantasy ask provider retry", "provider", cfg.LLMProvider, "model", cfg.LLMModel, "delay", delay, "error", err)
+			slog.Warn("fantasy ask provider retry", "provider", cfg.LLMProvider, "model", cfg.LLMModel, "delay", delay)
 		}),
-	)
+	}
+	// Use the same configured context limit for whole-call admission, not just retrieval.
+	boundedModel := timedAskModel{LanguageModel: fantasyModel, maxContextTokens: int64(maxContextTokens), maxOutputTokens: int64(cfg.LLMMaxOutputTokens)}
+	askAgent := fantasy.NewAgent(boundedModel, agentOptions...)
+	privateAgent := fantasy.NewAgent(boundedModel, append(agentOptions[:len(agentOptions):len(agentOptions)], fantasy.WithSystemPrompt(askSystemPrompt+privateExecutionInstructions+temporaryMemoryInstructions))...)
+	memoryTools := append([]fantasy.AgentTool{}, fantasyTools...)
+	for _, t := range newPersonalMemoryTools() {
+		memoryTools = append(memoryTools, policyTool{t})
+	}
+	memoryAgent := fantasy.NewAgent(boundedModel, append(agentOptions[:len(agentOptions):len(agentOptions)], fantasy.WithSystemPrompt(askSystemPrompt+privateExecutionInstructions+personalMemoryInstructions), fantasy.WithTools(memoryTools...))...)
 
 	return func(w http.ResponseWriter, rHTTP *http.Request) {
 		started := time.Now()
@@ -2072,6 +2085,28 @@ Sourcebot code research:
 			http.Error(w, `{"error":"workspace is required"}`, http.StatusBadRequest)
 			return
 		}
+		identity, authorized := requireAIIdentity(w, rHTTP, req.Workspace)
+		if !authorized {
+			return
+		}
+		policy, err := executionPolicy(req.ExecutionPolicy)
+		if err != nil {
+			http.Error(w, "invalid execution_policy", http.StatusBadRequest)
+			return
+		}
+		req.ExecutionPolicy = policy
+		personal, err := personalMemoryFor(rHTTP.Context(), identity, policy)
+		if err != nil {
+			http.Error(w, "personal memory access denied", http.StatusForbidden)
+			return
+		}
+		if req.RequireMemory && personal == nil {
+			http.Error(w, "personal memory unavailable; request not started", http.StatusConflict)
+			return
+		}
+		if req.ExecutionPolicy != "workspace" {
+			req.DisplayConvID = 0
+		}
 		if req.ConvID != protocol.WorkspaceDataConvID {
 			http.Error(w, `{"error":"context_conv_id must be 0 (workspace scope)"}`, http.StatusBadRequest)
 			return
@@ -2084,6 +2119,99 @@ Sourcebot code research:
 
 		ctx, cancel := context.WithTimeout(context.WithValue(rHTTP.Context(), askTimingLoggerKey{}, logger), adkAskRequestTimeout)
 		defer cancel()
+		var capture *personalCapture
+		var inputGeneration int64
+		if personal != nil {
+			var release func()
+			personal, ctx, release, err = personal.execution(ctx)
+			if err != nil {
+				http.Error(w, "personal retention unavailable", http.StatusConflict)
+				return
+			}
+			defer release()
+		}
+
+		// Durable replay is read-only and survives loss of the ephemeral session.
+		// New input still requires session validation before BeginRun below.
+		if delegated, _ := ctx.Value(voiceMemoryKey{}).(bool); personal != nil && !delegated && req.RunID != "" {
+			payload, _ := json.Marshal(req)
+			run, err := personal.scope.ReplayRun(ctx, "chat", req.RunID, payload)
+			if err == nil {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(recoveredAskRun(run))
+				return
+			}
+			if errors.Is(err, memory.ErrConflict) {
+				http.Error(w, "run_id already used for a different request", http.StatusConflict)
+				return
+			}
+			if !errors.Is(err, memory.ErrNotFound) {
+				http.Error(w, "personal memory unavailable; request not started", http.StatusServiceUnavailable)
+				return
+			}
+		}
+
+		// Reject stale or incompatible sessions before accepting a durable original.
+		// The execution lease still fences a deletion racing this validation.
+		if req.SessionID != "" {
+			if previous, ok := agentSessions.get(identity.owner(), req.Workspace, req.SessionID); !ok {
+				http.Error(w, `{"error":"agent session expired or not found"}`, http.StatusNotFound)
+				return
+			} else if previous.ExecutionPolicy != req.ExecutionPolicy || previous.PersonalMemory != (personal != nil) {
+				http.Error(w, "start a new session to change execution_policy", http.StatusConflict)
+				return
+			} else if personal != nil && previous.MemoryEpoch != personal.scope.Epoch() {
+				agentSessions.reset(req.SessionID)
+				http.Error(w, "memory changed; start a new session", http.StatusConflict)
+				return
+			}
+		}
+
+		if personal != nil {
+			// Live captures original fragments itself; never persist its synthetic
+			// delegation prompt as a second copy of the user's conversation.
+			if delegated, _ := ctx.Value(voiceMemoryKey{}).(bool); delegated {
+				var ok bool
+				inputGeneration, ok = ctx.Value(voiceInputGenerationKey{}).(int64)
+				if !ok {
+					http.Error(w, "missing voice input generation", http.StatusConflict)
+					return
+				}
+			} else {
+				if len(req.RunID) == 0 || len(req.RunID) > 128 {
+					http.Error(w, "run_id (1–128 bytes) is required for retained requests", http.StatusBadRequest)
+					return
+				}
+				payload, _ := json.Marshal(req)
+				run, created, err := personal.scope.BeginRun(ctx, req.RunID, "chat", payload, []memory.Record{{Role: "user", Text: req.Question}})
+				if err != nil {
+					if errors.Is(err, memory.ErrConflict) {
+						http.Error(w, "run_id already used for a different request", http.StatusConflict)
+						return
+					}
+					http.Error(w, "personal memory unavailable; request not started", http.StatusServiceUnavailable)
+					return
+				}
+				if !created {
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(recoveredAskRun(run))
+					return
+				}
+				capture = &personalCapture{personal.scope, run.Segment}
+				inputGeneration = run.UserInputGeneration
+				defer func() {
+					if capture.segment.State == "active" {
+						state := "failed"
+						if ctx.Err() != nil {
+							state = "cancelled"
+						}
+						if err := capture.finish(state); err != nil {
+							logger.Error("memory finalization failed", "error", err)
+						}
+					}
+				}()
+			}
+		}
 
 		client, err := wm.GetOrCreateClient(req.Workspace)
 		if err != nil {
@@ -2101,20 +2229,33 @@ Sourcebot code research:
 		emitAskProgress(client, statusConvID, "RECEIVED REQUEST. PREPARING CONTEXT ...")
 		emitAskProgress(client, statusConvID, "SEARCHING WORKSPACE CONTEXT + TRAVERSING GRAPH ...")
 
-		sessionSnapshot, _ := agentSessions.getOrCreate(req.Workspace, req.ConvID, req.DisplayConvID, req.SessionID, req.Mode)
+		sessionSnapshot, created := agentSessions.getOrCreate(identity.owner(), req.Workspace, req.ConvID, req.DisplayConvID, req.SessionID, req.Mode)
+		if created {
+			agentSessions.setExecutionPolicy(sessionSnapshot.ID, req.ExecutionPolicy, personal != nil)
+			if personal != nil {
+				agentSessions.setMemoryEpoch(sessionSnapshot.ID, personal.scope.Epoch())
+			}
+			sessionSnapshot.ExecutionPolicy = req.ExecutionPolicy
+		}
+		if personal != nil {
+			stop := context.AfterFunc(ctx, func() { agentSessions.reset(sessionSnapshot.ID) })
+			defer stop()
+		}
 		history := append([]AgentTurn(nil), sessionSnapshot.Turns...)
 
 		activePlan := ActionPlan{}
 		createdPlanThisTurn := false
 		if req.Mode == agentModePlan {
-			if req.FollowUp {
+			// Retained follow-ups get a fresh proposal: old actions must not gain
+			// approval freshness merely because another user message arrived.
+			if req.FollowUp && personal == nil {
 				if pendingPlan, ok := agentSessions.latestPendingPlan(sessionSnapshot.ID); ok {
 					activePlan = pendingPlan
 				}
 			}
 			if activePlan.ID == "" {
 				var ok bool
-				activePlan, ok = agentSessions.startPlan(sessionSnapshot.ID)
+				activePlan, ok = agentSessions.startPlan(sessionSnapshot.ID, inputGeneration)
 				if !ok {
 					emitAskProgress(client, statusConvID, "FAILED TO INITIALIZE ACTION PLAN.")
 					http.Error(w, `{"error":"failed to initialize action plan"}`, http.StatusInternalServerError)
@@ -2128,6 +2269,7 @@ Sourcebot code research:
 
 		traceCollector := newToolTraceCollector()
 		runCtx := context.WithValue(ctx, toolTraceCollectorKey{}, traceCollector)
+		runCtx = context.WithValue(runCtx, executionPolicyKey{}, req.ExecutionPolicy)
 		runCtx = context.WithValue(runCtx, workspaceContextKey{}, req.Workspace)
 		runCtx = context.WithValue(runCtx, convIDContextKey{}, uint64(protocol.WorkspaceDataConvID))
 		runCtx = context.WithValue(runCtx, agentModeContextKey{}, req.Mode)
@@ -2138,20 +2280,37 @@ Sourcebot code research:
 
 		logger.Info("ask phase timing", "phase", phase, "duration_ms", time.Since(phaseStarted).Milliseconds())
 		phase, phaseStarted = "retrieve", time.Now()
-		retrieveReq := req
-		retrieveReq.Question = initialRetrieveQuery(req, sessionSnapshot)
-		contextBlock, assetTitles, taskTitles := buildContext(runCtx, client, search, retrieveReq, maxContextTokens)
+		contextBlock := "No automatic workspace retrieval in private execution. Use focused tools only when needed."
+		var assetTitles, taskTitles map[uint64]string
+		selectedAgent := privateAgent
+		if req.ExecutionPolicy == "workspace" {
+			retrieveReq := req
+			retrieveReq.Question = initialRetrieveQuery(req, sessionSnapshot)
+			contextBlock, assetTitles, taskTitles = buildContext(runCtx, client, search, retrieveReq, maxContextTokens)
+			selectedAgent = askAgent
+		}
 		assetSourceCache.put(req.Workspace, req.ConvID, assetTitles)
 		taskSourceCache.put(req.Workspace, req.ConvID, taskTitles)
 		if ctx.Err() != nil {
 			agentSessions.reset(sessionSnapshot.ID)
 			return
 		}
-		modelPrompt := buildAgentModelInput(req, sessionSnapshot, activePlan) + "\nINITIAL WORKSPACE CONTEXT\n" + contextBlock
+		promptSession := sessionSnapshot
+		if personal != nil {
+			// Durable tree history replaces the rolling session window. Session
+			// identity and approval state remain unchanged.
+			promptSession.Turns, promptSession.Summary = nil, ""
+			runCtx = context.WithValue(runCtx, personalContextKey{}, &personalContext{scope: personal.scope})
+		}
+		modelPrompt, modelHistory := buildAgentModelInput(req, promptSession, activePlan)
+		modelPrompt += "\nINITIAL WORKSPACE CONTEXT\n" + contextBlock
+		if personal != nil {
+			selectedAgent = memoryAgent
+		}
 		logger.Info("ask phase timing", "phase", phase, "duration_ms", time.Since(phaseStarted).Milliseconds())
 		emitAskProgress(client, statusConvID, "RUNNING REASONING PASS ...")
 		phase, phaseStarted = "agent", time.Now()
-		answerText, attempts, runErr := runFantasyAskWithRetry(runCtx, askAgent, modelPrompt)
+		answerText, attempts, runErr := runFantasyAskWithRetry(runCtx, selectedAgent, modelPrompt, modelHistory...)
 		if runErr != nil {
 			if ctx.Err() != nil {
 				agentSessions.reset(sessionSnapshot.ID)
@@ -2163,7 +2322,11 @@ Sourcebot code research:
 			}
 			emitAskProgress(client, statusConvID, "LLM REQUEST FAILED.")
 			status := adkAskHTTPStatus(runErr)
-			slog.Error("fantasy ask run failed", "error", runErr, "attempts", attempts, "status", status)
+			slog.Error("fantasy ask run failed", "attempts", attempts, "status", status)
+			if errors.Is(runErr, errAskInputBudget) {
+				http.Error(w, errAskInputBudget.Error(), status)
+				return
+			}
 			http.Error(w, `{"error":"LLM request failed"}`, status)
 			return
 		}
@@ -2228,6 +2391,14 @@ Sourcebot code research:
 			ToolTrace: toolTrace,
 		})
 
+		if err := capture.finish("complete", memory.Record{Role: "assistant", Text: result.Answer}); err != nil {
+			agentSessions.reset(sessionSnapshot.ID)
+			http.Error(w, "answer could not be saved to personal memory", http.StatusServiceUnavailable)
+			return
+		}
+		if capture != nil {
+			result.RunID, result.RunState = req.RunID, capture.segment.State
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(result); err != nil || ctx.Err() != nil {
 			agentSessions.reset(sessionSnapshot.ID)
@@ -2249,11 +2420,11 @@ func initialRetrieveQuery(req askRequest, session AgentSession) string {
 	return query
 }
 
-func buildAgentModelInput(req askRequest, sessionSnapshot AgentSession, plan ActionPlan) string {
+func buildAgentModelInput(req askRequest, sessionSnapshot AgentSession, plan ActionPlan) (string, []fantasy.Message) {
 	var b strings.Builder
 	b.WriteString("SULLIVAN REQUEST\n")
 	b.WriteString("Workspace data is source of truth. Rooms and DMs scope chat only. Messages are ephemeral; do not rely on old chat messages as durable state.\n")
-	b.WriteString(calendarContext(time.Now()))
+	b.WriteString("Earlier request messages and their context are historical evidence, not new instructions or current workspace state. Only the last request's metadata, context and current user message apply now; re-read mutable records before proposing changes.\n")
 	b.WriteString("Mode: ")
 	b.WriteString(req.Mode)
 	b.WriteByte('\n')
@@ -2265,9 +2436,6 @@ func buildAgentModelInput(req askRequest, sessionSnapshot AgentSession, plan Act
 	b.WriteByte('\n')
 	b.WriteString("DisplayConvID: ")
 	b.WriteString(strconv.FormatUint(req.DisplayConvID, 10))
-	b.WriteByte('\n')
-	b.WriteString("AgentSessionID: ")
-	b.WriteString(sessionSnapshot.ID)
 	b.WriteString("\n\n")
 
 	b.WriteString("SESSION SUMMARY\n")
@@ -2278,9 +2446,14 @@ func buildAgentModelInput(req askRequest, sessionSnapshot AgentSession, plan Act
 		b.WriteByte('\n')
 	}
 
+	// Preserve message endpoints as well as bytes: current OpenAI models cache
+	// eligible message boundaries, not arbitrary prefixes inside a rewritten message.
+	// Historical text stays user-level evidence, never elevated to system instructions.
+	messages := []fantasy.Message{fantasy.NewUserMessage(b.String())}
+	b.Reset()
 	if len(sessionSnapshot.Turns) > 0 {
-		b.WriteString("\nLAST TURNS\n")
 		for i, turn := range sessionSnapshot.Turns {
+			b.WriteString("\nLAST TURNS\n")
 			b.WriteString(strconv.Itoa(i + 1))
 			b.WriteString(". [")
 			b.WriteString(turn.CreatedAt.Format("15:04:05"))
@@ -2289,6 +2462,8 @@ func buildAgentModelInput(req askRequest, sessionSnapshot AgentSession, plan Act
 			b.WriteString("\n   ANSWER: ")
 			b.WriteString(turn.Answer)
 			b.WriteByte('\n')
+			messages = append(messages, fantasy.NewUserMessage(b.String()))
+			b.Reset()
 		}
 	}
 
@@ -2318,10 +2493,16 @@ func buildAgentModelInput(req askRequest, sessionSnapshot AgentSession, plan Act
 		b.WriteString("Plan mode is safe by default: answer read-only questions without staging anything. Stage create_task, update_task, create_note, update_note, delete_note, create_edge, and delete_edge only when the current user message explicitly asks to create/stage/add/record/turn/capture/update/delete/link/unlink durable room objects. Call one matching propose_* tool per staged action. For update_task, call get_task first and pass expected_updated_at plus full replacement title/description/task_status/priority/blocked_by; task deletion is not stageable yet. For create_note, include project and tags when the note has a durable scope. For update_note, call get_asset first, verify Note, preserve or intentionally replace title/content/project/tags, and pass expected_updated_at from the loaded note; do not stage an update from a truncated payload unless the user supplied the full replacement content. For delete_note, call get_asset first, verify Note, and pass expected_updated_at from the loaded note. For create_edge, use source_id/target_id for existing tasks/assets/notes; notes are Asset endpoints. For create_edge endpoints produced earlier in this same plan, use source_action_id or target_action_id. For delete_edge, identify the exact edge_id from graph_walk/task_neighbors before staging. Do not claim any action was applied. If no action is staged, say so explicitly.\n")
 	}
 
-	b.WriteString("\nCURRENT USER MESSAGE\n")
+	// Keep the unchanged conversation prefix reusable across provider calls.
+	// Time remains exact, but neither it nor an execution ID belongs before history.
+	b.WriteString("\nCURRENT REQUEST METADATA\n")
+	b.WriteString(calendarContext(time.Now()))
+	b.WriteString("AgentSessionID: ")
+	b.WriteString(sessionSnapshot.ID)
+	b.WriteString("\n\nCURRENT USER MESSAGE\n")
 	b.WriteString(req.Question)
 	b.WriteByte('\n')
-	return b.String()
+	return b.String(), messages
 }
 
 func ensureProposedActionsInAnswer(answer string, actions []ProposedAction) string {
@@ -2464,7 +2645,12 @@ func emitAskProgress(client *NRCClient, convID uint64, message string) {
 	}
 }
 
-func runFantasyAskWithRetry(ctx context.Context, askAgent fantasy.Agent, prompt string) (string, int, error) {
+func runFantasyAskWithRetry(ctx context.Context, askAgent fantasy.Agent, prompt string, history ...fantasy.Message) (string, int, error) {
+	if len(history) > 0 {
+		// Fantasy prepends one system message. Mark the last stable history
+		// message, not the current request with its changing retrieval context.
+		ctx = context.WithValue(ctx, askCacheBoundaryKey{}, len(history))
+	}
 	var lastErr error
 	for attempt := 1; attempt <= adkAskRetryMaxAttempts; attempt++ {
 		attemptCtx := ctx
@@ -2485,7 +2671,7 @@ func runFantasyAskWithRetry(ctx context.Context, askAgent fantasy.Agent, prompt 
 		logger := askTimingLogger(ctx).With("attempt", attempt)
 		attemptCtx = context.WithValue(attemptCtx, askTimingLoggerKey{}, logger)
 		started := time.Now()
-		result, err := askAgent.Generate(attemptCtx, fantasy.AgentCall{Prompt: prompt})
+		result, err := askAgent.Generate(attemptCtx, fantasy.AgentCall{Prompt: prompt, Messages: history})
 		logger.Info("ask attempt timing", "duration_ms", time.Since(started).Milliseconds(), "failed", err != nil)
 		attemptCancel()
 		if err == nil {
@@ -2496,6 +2682,9 @@ func runFantasyAskWithRetry(ctx context.Context, askAgent fantasy.Agent, prompt 
 		}
 
 		lastErr = err
+		if errors.Is(err, errAskInputBudget) {
+			return "", attempt, err
+		}
 		if !shouldRetryADKRunError(err) || attempt == adkAskRetryMaxAttempts {
 			break
 		}
@@ -2505,7 +2694,7 @@ func runFantasyAskWithRetry(ctx context.Context, askAgent fantasy.Agent, prompt 
 			delay = adkAskRetryMaxDelay
 		}
 
-		logger.Warn("fantasy ask transient failure, retrying", "max_attempts", adkAskRetryMaxAttempts, "delay", delay, "error", err)
+		logger.Warn("fantasy ask transient failure, retrying", "max_attempts", adkAskRetryMaxAttempts, "delay", delay)
 
 		select {
 		case <-ctx.Done():
@@ -2524,7 +2713,7 @@ func runFantasyAskWithRetry(ctx context.Context, askAgent fantasy.Agent, prompt 
 }
 
 func shouldRetryADKRunError(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, errAskInputBudget) {
 		return false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
@@ -2558,6 +2747,9 @@ func shouldRetryADKRunError(err error) bool {
 func adkAskHTTPStatus(err error) int {
 	if err == nil {
 		return http.StatusOK
+	}
+	if errors.Is(err, errAskInputBudget) {
+		return http.StatusRequestEntityTooLarge
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -2657,13 +2849,9 @@ func logToolTraceEntry(entry ToolTraceEntry) {
 		"workspace", entry.Workspace,
 		"conv_id", entry.ContextConvID,
 		"duration_ms", entry.DurationMS,
-		"args", entry.Args,
-	}
-	if entry.Outcome != nil {
-		attrs = append(attrs, "outcome", entry.Outcome)
 	}
 	if entry.Status == "error" {
-		attrs = append(attrs, "status", "error", "error", entry.Error)
+		attrs = append(attrs, "status", "error")
 		slog.Warn("adk tool trace", attrs...)
 		return
 	}
@@ -2936,7 +3124,7 @@ func searchTasksForTool(ctx context.Context, wm *WorkspaceManager, search *Searc
 				return out, nil
 			}
 		}
-		slog.Warn("search_tasks falling back to loaded task cache", "workspace", workspace, "conv_id", convID, "error", err)
+		slog.Warn("search_tasks falling back to loaded task cache", "workspace", workspace, "conv_id", convID)
 	}
 
 	warning := "nrc-search unavailable; results use only nrc-ai's loaded task cache and may omit unloaded or completed tasks"

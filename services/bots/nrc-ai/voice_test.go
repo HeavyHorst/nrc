@@ -12,7 +12,124 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	memory "nrc-ai/personal_memory"
 )
+
+func TestVoiceCoalescesPublicTranscriptEvents(t *testing.T) {
+	_, ctx, access := personalFixture(t)
+	connections := make(chan *websocket.Conn, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/live/sessions" {
+			w.WriteHeader(201)
+			fmt.Fprint(w, `{"session":{"id":"coalescing"},"transport":{"sdp":"answer"}}`)
+			return
+		}
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		connections <- conn
+	}))
+	defer upstream.Close()
+	v := newVoiceService("fixture", "", func(w http.ResponseWriter, r *http.Request) {}, nil)
+	v.baseURL = upstream.URL
+	mux := http.NewServeMux()
+	v.register(mux)
+	call := func(op, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("POST", "/voice/"+op, strings.NewReader(body)).WithContext(ctx))
+		return w
+	}
+	created := call("create", `{"workspace":"ws","sdp":"offer","execution_policy":"private"}`)
+	if created.Code != 200 {
+		t.Fatal(created.Code, created.Body)
+	}
+	var result struct{ ID string }
+	if err := json.Unmarshal(created.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	conn := <-connections
+	defer conn.Close()
+	write := func(event any) {
+		t.Helper()
+		if err := conn.WriteJSON(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 174; i++ {
+		text := " x"
+		if i == 0 {
+			text = " Lavendel"
+		}
+		if i == 1 {
+			text = " Otto"
+		}
+		event := map[string]any{"type": "session.input_transcript.delta", "event_id": fmt.Sprint(i), "delta": text, "start_ms": i, "end_ms": i + 1}
+		write(event)
+		write(event) // Provider replay must not duplicate records or transcript.
+	}
+	write(map[string]any{"type": "session.output_transcript.delta", "event_id": "answer", "delta": "ja"})
+	write(map[string]any{"type": "session.output_transcript.done"})
+	write(map[string]any{"type": "session.output_transcript.delta", "event_id": "next", "delta": "weiter"})
+	write(map[string]any{"type": "session.closed", "reason": "close_requested"})
+	// Race-instrumented SQLite still commits all 176 events individually.
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("expected closed listener")
+	} else if timeout, ok := err.(interface{ Timeout() bool }); ok && timeout.Timeout() {
+		t.Fatal(err)
+	}
+	seg, err := access.scope.Read(ctx, 0)
+	if err != nil || seg.State != "complete" || len(seg.Records) != 174 || seg.Revision != 175 {
+		t.Fatal(seg, err)
+	}
+	if seg.Records[0].Text != " Lavendel" || seg.Records[1].Text != " Otto" || seg.Records[1].EventID != "1" || *seg.Records[1].StartMS != 1 || *seg.Records[1].EndMS != 2 {
+		t.Fatal("lost exact evidence", seg)
+	}
+	ids, err := access.scope.Search(ctx, "Lavendel AND Otto", 10)
+	if err != nil || len(ids) != 1 || ids[0] != 0 {
+		t.Fatal(ids, err)
+	}
+	for i := int64(1); i <= 2; i++ {
+		seg, err := access.scope.Read(ctx, i)
+		if err != nil || seg.State != "complete" || len(seg.Records) != 1 {
+			t.Fatal(seg, err)
+		}
+	}
+	policy, err := access.scope.Retention(ctx)
+	if err != nil || policy.Segments != 3 {
+		t.Fatal(policy, err)
+	}
+	body := fmt.Sprintf(`{"workspace":"ws","id":%q}`, result.ID)
+	for i := 0; i < 2; i++ {
+		if w := call("close", body); w.Code != 200 {
+			t.Fatal(w.Code, w.Body)
+		}
+	}
+	if err := v.shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVoiceCaptureSplitsAtEncodedBound(t *testing.T) {
+	_, ctx, access := personalFixture(t)
+	s := &voiceSession{id: "bounded", memory: access}
+	for i := 0; i < 3; i++ {
+		if err := s.captureFragment(ctx, memory.Record{Role: "user", Text: strings.Repeat("\x00", 5000), EventID: fmt.Sprint(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(s.memoryCaptures) != 2 || s.memoryCaptures[0].segment.State != "complete" || len(s.memoryCaptures[0].segment.Records) != 2 || s.memoryCaptures[1].segment.State != "active" {
+		t.Fatal("incorrect split", s.memoryCaptures)
+	}
+	for _, capture := range s.memoryCaptures {
+		body, err := json.Marshal(capture.segment.Records)
+		if err != nil || len(body) > memory.MaxOriginalBytes {
+			t.Fatal(len(body), err)
+		}
+	}
+}
 
 func TestVoiceDefaultOmitsAudioOverride(t *testing.T) {
 	var received atomic.Bool
@@ -29,6 +146,9 @@ func TestVoiceDefaultOmitsAudioOverride(t *testing.T) {
 		if string(request.Session["model"]) != `"gpt-live-1"` {
 			t.Error("missing session model")
 		}
+		if string(request.Session["store"]) != "false" || !strings.Contains(string(request.Session["instructions"]), "PRIVATE EXECUTION POLICY") {
+			t.Error("voice session lost privacy configuration")
+		}
 		received.Store(true)
 		// Only inspect creation; no billed provider session or sideband is needed.
 		http.Error(w, "fixture stops after inspecting creation", http.StatusBadRequest)
@@ -37,9 +157,13 @@ func TestVoiceDefaultOmitsAudioOverride(t *testing.T) {
 	v := newVoiceService("test-key", "", func(http.ResponseWriter, *http.Request) {}, nil)
 	v.baseURL = upstream.URL
 	r := httptest.NewRequest("POST", "/voice/create", strings.NewReader(`{"workspace":"support","sdp":"offer"}`))
-	r.Header.Set("X-Tailscale-User", "alice")
+	r.Header.Set("X-NRC-AI-Auth", testAIToken(testAIIdentity("support")))
+	authenticate, err := newAIAuthentication(testAIKey, "test-issuer")
+	if err != nil {
+		t.Fatal(err)
+	}
 	w := httptest.NewRecorder()
-	v.handle(w, r)
+	authenticate(http.HandlerFunc(v.handle)).ServeHTTP(w, r)
 	if !received.Load() || w.Code != http.StatusBadGateway {
 		t.Fatalf("creation did not reach fixture: HTTP %d, %s", w.Code, w.Body.String())
 	}
@@ -95,6 +219,9 @@ func TestVoiceApprovalAndCorrections(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Error(err)
 		}
+		if req.ExecutionPolicy != "temporary" {
+			t.Error("voice delegation lost temporary policy")
+		}
 		n := questions.Add(1)
 		if n == 1 {
 			close(firstStarted)
@@ -142,12 +269,23 @@ func TestVoiceApprovalAndCorrections(t *testing.T) {
 	v.baseURL = upstream.URL
 	mux := http.NewServeMux()
 	v.register(mux)
+	authenticate, err := newAIAuthentication(testAIKey, "test-issuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := authenticate(mux)
 	call := func(op, owner string, req voiceRequest) *httptest.ResponseRecorder {
 		b, _ := json.Marshal(req)
 		r := httptest.NewRequest("POST", "/voice/"+op, bytes.NewReader(b))
-		r.Header.Set("X-Tailscale-User", owner)
+		identity := testAIIdentity(req.Workspace)
+		if owner != "alice" {
+			identity.Subject = "tailscale:user:99"
+		}
+		if owner != "" {
+			r.Header.Set("X-NRC-AI-Auth", testAIToken(identity))
+		}
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, r)
+		handler.ServeHTTP(w, r)
 		return w
 	}
 	created := call("create", "alice", voiceRequest{Workspace: "support", SDP: "offer"})
@@ -161,11 +299,19 @@ func TestVoiceApprovalAndCorrections(t *testing.T) {
 	}
 	ws := <-connection
 	defer ws.Close()
+	contextEvents := make(chan string, 32)
 	// Drain appends so the service can always finish sending.
 	go func() {
 		for {
-			if _, _, err := ws.ReadMessage(); err != nil {
+			var event struct {
+				Type string `json:"type"`
+				ID   string `json:"event_id"`
+			}
+			if err := ws.ReadJSON(&event); err != nil {
 				return
+			}
+			if event.Type == "session.commentary.append" {
+				contextEvents <- event.ID
 			}
 			appends.Add(1)
 		}
@@ -181,8 +327,9 @@ func TestVoiceApprovalAndCorrections(t *testing.T) {
 		Revision               uint64
 		Result                 *askResponse
 		Busy, Applying, Closed bool
-		ApplyResult            json.RawMessage `json:"apply_result"`
-		FinalUsage             bool            `json:"final_usage"`
+		ApplyResult            json.RawMessage                 `json:"apply_result"`
+		FinalUsage             bool                            `json:"final_usage"`
+		ContextDelivery        map[string]voiceContextDelivery `json:"context_delivery"`
 		Seconds                float64
 	}
 	status := func() voiceStatus {
@@ -232,6 +379,27 @@ func TestVoiceApprovalAndCorrections(t *testing.T) {
 	wait(func() bool { return status().Result != nil })
 	if status().Result.Answer != "Antwort 2" {
 		t.Fatal("published stale result")
+	}
+	var contextID string
+	select {
+	case contextID = <-contextEvents:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no context append")
+	}
+	if contextID == "" || status().ContextDelivery[contextID].State != "pending" {
+		t.Fatal("send treated as acknowledged")
+	}
+	emit(map[string]any{"type": "session.commentary.appended", "client_event_id": "foreign", "start_ms": 10, "end_ms": 20})
+	emit(map[string]any{"type": "session.usage.updated", "usage": map[string]any{"seconds": 7}})
+	wait(func() bool { return status().Seconds == 7 })
+	if status().ContextDelivery[contextID].State != "pending" {
+		t.Fatal("unrelated acknowledgment accepted")
+	}
+	emit(map[string]any{"type": "session.commentary.appended", "client_event_id": contextID, "start_ms": 125, "end_ms": 375})
+	wait(func() bool { return status().ContextDelivery[contextID].State == "acknowledged" })
+	delivery := status().ContextDelivery[contextID]
+	if delivery.StartMS == nil || *delivery.StartMS != 125 || delivery.EndMS == nil || *delivery.EndMS != 375 {
+		t.Fatal(delivery)
 	}
 	approval := request
 	approval.Revision = 3
@@ -325,11 +493,34 @@ func TestVoiceApprovalAndCorrections(t *testing.T) {
 	if got := call("apply", "alice", approval); got.Code != 409 || writes.Load() != 2 {
 		t.Fatal("unknown write replayed")
 	}
+	var rejectedID string
+	for id, delivery := range status().ContextDelivery {
+		if delivery.State == "pending" {
+			rejectedID = id
+			break
+		}
+	}
+	if rejectedID == "" {
+		t.Fatal("missing pending delivery")
+	}
+	emit(map[string]any{"type": "error", "error": map[string]any{"client_event_id": rejectedID}})
+	wait(func() bool { return status().ContextDelivery[rejectedID].State == "rejected" })
 	emit(map[string]any{"type": "session.usage.updated", "usage": map[string]any{"seconds": 10}})
 	emit(map[string]any{"type": "session.usage.updated", "usage": map[string]any{"seconds": 20}})
 	emit(map[string]any{"type": "session.closed", "usage": map[string]any{"seconds": 21}})
 	wait(func() bool { return status().FinalUsage })
 	if !status().FinalUsage || status().Seconds != 21 {
 		t.Fatal("usage snapshots were added or lost")
+	}
+	wait(func() bool {
+		for _, d := range status().ContextDelivery {
+			if d.State == "pending" {
+				return false
+			}
+		}
+		return true
+	})
+	if status().ContextDelivery[contextID].State != "acknowledged" || status().ContextDelivery[rejectedID].State != "rejected" {
+		t.Fatal("terminal delivery evidence lost")
 	}
 }
