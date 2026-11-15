@@ -98,6 +98,23 @@ func (c *Client) Recv() (*protocol.Message, bool) {
 	return msg, ok
 }
 
+// RecvContext waits without retrying a request whose outcome is unknown.
+func (c *Client) RecvContext(ctx context.Context) (*protocol.Message, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case msg, ok := <-c.inbox:
+			if !ok {
+				return nil, fmt.Errorf("connection closed")
+			}
+			if msg.Opcode != protocol.S_ServerReady {
+				return msg, nil
+			}
+		}
+	}
+}
+
 // RecvSkipServerReady receives a message, skipping S_ServerReady if present
 func (c *Client) RecvSkipServerReady(expectedOpcode uint16) (*protocol.Message, bool) {
 	msg, ok := <-c.inbox

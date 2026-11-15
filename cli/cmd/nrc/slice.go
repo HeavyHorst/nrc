@@ -163,18 +163,12 @@ type sliceListing struct {
 func fetchTaskSlices(s *conn.Session, query protocol.SliceQuery) (sliceListing, error) {
 	var listing sliceListing
 	for {
-		if err := s.Client.Send(&protocol.Message{
+		resp, err := s.SendAndRecv(&protocol.Message{
 			Opcode: protocol.C_ListTaskSlices,
 			Data:   protocol.EncodeListTaskSlices(protocol.WorkspaceDataConvID, query, 0),
-		}); err != nil {
-			return listing, &conn.ConnectionError{Err: fmt.Errorf("sending: %w", err)}
-		}
-		resp, ok := s.Client.RecvSkipServerReady(0)
-		if !ok {
-			return listing, &conn.ConnectionError{Err: fmt.Errorf("connection closed")}
-		}
-		if resp.Opcode == protocol.S_ErrorResponse {
-			return listing, conn.DecodeServerError(resp.Data)
+		})
+		if err != nil {
+			return listing, err
 		}
 		if resp.Opcode != protocol.S_TaskSliceList {
 			return listing, fmt.Errorf("unexpected response: %d", resp.Opcode)

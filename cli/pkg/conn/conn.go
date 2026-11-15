@@ -1,7 +1,9 @@
 package conn
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -294,13 +296,29 @@ func DecodeServerError(data []byte) error {
 // SendAndRecv sends a message and waits for the response, skipping S_ServerReady.
 // Returns an error if the response is S_ErrorResponse or connection closes.
 func (s *Session) SendAndRecv(msg *protocol.Message) (*protocol.Message, error) {
-	if err := s.Client.Send(msg); err != nil {
-		return nil, &ConnectionError{Err: fmt.Errorf("sending: %w", err)}
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+	defer cancel()
+	exchange := func(ctx context.Context) (*protocol.Message, error) {
+		if err := s.Client.Send(msg); err != nil {
+			return nil, err
+		}
+		return s.Client.RecvContext(ctx)
 	}
-
-	resp, ok := s.Client.RecvSkipServerReady(0)
-	if !ok {
-		return nil, &ConnectionError{Err: fmt.Errorf("connection closed")}
+	var resp *protocol.Message
+	var err error
+	correlation, retryable := databaseCorrelation(msg)
+	if retryable {
+		resp, err = protocol.RetryDatabaseRequest(ctx, msg.Opcode, correlation, exchange)
+	} else {
+		resp, err = exchange(ctx)
+	}
+	if err != nil {
+		return nil, &ConnectionError{Err: err}
+	}
+	if retryable {
+		if code := protocol.DatabaseOverload(resp, msg.Opcode, correlation); code != "" {
+			return nil, &ServerError{Message: code, OriginOpcode: msg.Opcode, CorrelationID: correlation}
+		}
 	}
 
 	if resp.Opcode == protocol.S_ErrorResponse {
@@ -308,6 +326,146 @@ func (s *Session) SendAndRecv(msg *protocol.Message) (*protocol.Message, error) 
 	}
 
 	return resp, nil
+}
+
+// Only known database request layouts participate; never infer a chat request
+// ID or an unknown opcode's correlation from arbitrary trailing bytes.
+func databaseCorrelation(msg *protocol.Message) (uint32, bool) {
+	b := msg.Data
+	if len(b) < 4 {
+		return 0, false
+	}
+	switch msg.Opcode {
+	case protocol.C_GetTasksByIDs, protocol.C_GetAssetsByIDs:
+		if len(b) < 12 {
+			return 0, false
+		}
+		return binary.BigEndian.Uint32(b[8:]), true
+	case protocol.C_ListAssetsPaged:
+		if len(b) < 18 {
+			return 0, false
+		}
+		o := 14
+		if b[13] != 0 {
+			o += 16
+		}
+		if o+4 > len(b) {
+			return 0, false
+		}
+		return binary.BigEndian.Uint32(b[o:]), true
+	case protocol.C_ListTaskSlices:
+		o := 9
+		for i := 0; i < 2; i++ {
+			if o+3 > len(b) {
+				return 0, false
+			}
+			o += 3 + int(binary.BigEndian.Uint16(b[o+1:]))
+		}
+		o += 2
+		if o >= len(b) {
+			return 0, false
+		}
+		cursor := b[o]
+		o++
+		if cursor != 0 {
+			o += 17
+		}
+		if o+4 > len(b) {
+			return 0, false
+		}
+		return binary.BigEndian.Uint32(b[o:]), true
+	case protocol.C_CreateTask, protocol.C_UpdateTask, protocol.C_CreateAsset:
+		// These formats can append project or parent-version data after the ID.
+		o := 8
+		skipString := func() bool {
+			if o+2 > len(b) {
+				return false
+			}
+			o += 2 + int(binary.BigEndian.Uint16(b[o:]))
+			return o <= len(b)
+		}
+		if msg.Opcode == protocol.C_CreateAsset {
+			o = 25
+		}
+		if msg.Opcode == protocol.C_UpdateTask {
+			o = 16
+		}
+		if !skipString() || !skipString() {
+			return 0, false
+		}
+		if msg.Opcode == protocol.C_UpdateTask {
+			o++
+			if !skipString() {
+				return 0, false
+			}
+		}
+		if msg.Opcode != protocol.C_CreateAsset {
+			o += 2
+			if !skipString() {
+				return 0, false
+			}
+			o += 8
+			if msg.Opcode == protocol.C_UpdateTask {
+				o += 8
+			}
+		}
+		if o+2 > len(b) {
+			return 0, false
+		}
+		if msg.Opcode == protocol.C_UpdateTask && binary.BigEndian.Uint16(b[o:]) == 65535 {
+			o += 2
+		} else {
+			if binary.BigEndian.Uint16(b[o:]) > 10 {
+				return 0, false
+			}
+			reader := bytes.NewReader(b[o:])
+			if _, err := protocol.DecodeAttachments(reader); err != nil {
+				return 0, false
+			}
+			o = len(b) - reader.Len()
+		}
+		if msg.Opcode == protocol.C_CreateTask {
+			o++
+		}
+		if o+4 > len(b) {
+			return 0, false
+		}
+		return binary.BigEndian.Uint32(b[o:]), true
+	case protocol.C_ApplyTransaction:
+		if len(b) < 8 {
+			return 0, false
+		}
+		return binary.BigEndian.Uint32(b[4:]), true
+	case 62: // C_ListHistory: fixed binary body, correlation follows limit.
+		if len(b) != 31 {
+			return 0, false
+		}
+		return binary.BigEndian.Uint32(b[27:]), true
+	case protocol.C_QueryTickets: // Tickets prefix their JSON with correlation.
+		return binary.BigEndian.Uint32(b), true
+	case protocol.C_QueryTasks:
+		// Skip fixed filters, optional filter strings, then the cursor.
+		o := 23
+		for i := 0; i < 2; i++ {
+			if o+3 > len(b) {
+				return 0, false
+			}
+			o += 3 + int(binary.BigEndian.Uint16(b[o+1:]))
+		}
+		o += 9
+		if o+2 > len(b) {
+			return 0, false
+		}
+		o += 2 + int(binary.BigEndian.Uint16(b[o:])) + 8
+		if o+4 > len(b) {
+			return 0, false
+		}
+		return binary.BigEndian.Uint32(b[o:]), true
+	}
+	if (msg.Opcode >= 16 && msg.Opcode <= 47 && msg.Opcode != 19) || (msg.Opcode >= 52 && msg.Opcode <= 67) {
+		return binary.BigEndian.Uint32(b[len(b)-4:]), true
+	}
+	return 0, false
 }
 
 // Fatal prints an error and exits.
@@ -362,6 +520,9 @@ func Classify(err error) Classification {
 	}
 	var serverErr *ServerError
 	if errors.As(err, &serverErr) {
+		if _, ok := protocol.DatabaseRetryDelay(serverErr.Message, 0); ok {
+			return Classification{Code: serverErr.Message, Retryable: true}
+		}
 		if serverErr.OriginOpcode == protocol.C_SendMessageV2 && serverErr.Message == "retained_send_overloaded" {
 			return Classification{Code: "retained_send_overloaded", Retryable: true}
 		}

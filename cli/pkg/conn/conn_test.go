@@ -1,6 +1,7 @@
 package conn
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"net/http"
@@ -12,6 +13,115 @@ import (
 	"github.com/heavyhorst/nrc/cli/pkg/config"
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
+
+func TestSessionRetriesOnlyExplicitDatabaseOverload(t *testing.T) {
+	for _, code := range []string{protocol.DBConnectionOverloaded, protocol.DBWorkerOverloaded} {
+		t.Run(code, func(t *testing.T) {
+			correlation := uint32(73)
+			request := &protocol.Message{Opcode: protocol.C_ListTaskSlices, Data: protocol.EncodeListTaskSlices(0, protocol.SliceQuery{Project: "project-after-correlation", Limit: 10}, correlation)}
+			if code == protocol.DBConnectionOverloaded {
+				request = &protocol.Message{Opcode: protocol.C_CreateTask, Data: protocol.EncodeTaskCreateFullWithCorrelation(0, "synthetic", "body", 1, "project-after-correlation", nil, correlation)}
+			}
+			upgrader := websocket.Upgrader{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer c.Close()
+				var first []byte
+				for i := 0; i < 4; i++ {
+					_, data, err := c.ReadMessage()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					if i == 0 {
+						first = data
+					} else if !bytes.Equal(first, data) {
+						t.Error("retry changed request bytes")
+					}
+					payload := make([]byte, 10+len(code))
+					binary.BigEndian.PutUint16(payload, protocol.S_ErrorResponse)
+					binary.BigEndian.PutUint16(payload[2:], request.Opcode)
+					binary.BigEndian.PutUint16(payload[4:], uint16(len(code)))
+					copy(payload[6:], code)
+					binary.BigEndian.PutUint32(payload[6+len(code):], correlation)
+					if err := c.WriteMessage(websocket.BinaryMessage, payload); err != nil {
+						t.Error(err)
+						return
+					}
+				}
+			}))
+			defer server.Close()
+			t.Setenv("HOME", t.TempDir())
+			if err := (&config.Config{Server: "ws" + strings.TrimPrefix(server.URL, "http") + "/", WorkspaceID: "test"}).Save(); err != nil {
+				t.Fatal(err)
+			}
+			s, err := Dial("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			_, err = s.SendAndRecv(request)
+			if got := Classify(err); got.Code != code || !got.Retryable {
+				t.Fatalf("%v: %+v", err, got)
+			}
+		})
+	}
+}
+
+func TestSessionRetriesHistoryWithNonzeroCorrelation(t *testing.T) {
+	const correlation = uint32(73)
+	request := &protocol.Message{Opcode: 62, Data: make([]byte, 31)}
+	binary.BigEndian.PutUint16(request.Data[25:], 10)
+	binary.BigEndian.PutUint32(request.Data[27:], correlation)
+	wire, _ := request.Write()
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer c.Close()
+		for _, body := range []string{`{"error":"db_worker_overloaded"}`, `{"events":[],"nextBefore":"0"}`} {
+			_, data, err := c.ReadMessage()
+			if err != nil {
+				return
+			}
+			if !bytes.Equal(data, wire) {
+				t.Error("history retry changed request bytes")
+			}
+			response := make([]byte, 6+len(body))
+			binary.BigEndian.PutUint16(response, 168)
+			binary.BigEndian.PutUint32(response[2:], correlation)
+			copy(response[6:], body)
+			if err := c.WriteMessage(websocket.BinaryMessage, response); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	t.Setenv("HOME", t.TempDir())
+	if err := (&config.Config{Server: "ws" + strings.TrimPrefix(server.URL, "http") + "/", WorkspaceID: "test"}).Save(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Dial("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	response, err := s.SendAndRecv(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Opcode != 168 || len(response.Data) < 4 || binary.BigEndian.Uint32(response.Data) != correlation || string(response.Data[4:]) != `{"events":[],"nextBefore":"0"}` {
+		t.Fatalf("history did not recover from overload: %+v", response)
+	}
+}
 
 func TestResolveDMConversationIDs(t *testing.T) {
 	resolvers := map[string]func(string) (int64, error){
