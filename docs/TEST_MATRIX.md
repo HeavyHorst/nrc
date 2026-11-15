@@ -56,7 +56,7 @@ successfully from the repository root.
 odin build .
 odin build . -define:NRC_SIMULATION=true
 odin test . -o:speed -define:NRC_SIMULATION=true -define:HEGEL_REQUIRED=true -define:ODIN_TEST_LOG_LEVEL=error \
-  -define:ODIN_TEST_NAMES=main.test_generated_transactional_shard_semantic_replay_fixture,main.test_hegel_generated_transactional_shard_state_matches_replay,main.test_shard_checkpoint_preserves_floors_after_every_entity_is_deleted,main.test_shard_checkpoint_floor_witness_routes_to_every_logical_shard,main.test_hegel_simulation_generated_message_fanout_matches_model,main.test_hegel_simulation_delayed_send_completion_lifetime_choices,main.test_hegel_shard_compaction_manifest_roundtrip,main.test_hegel_generated_jwt_tokens_preserve_validation_contract,
+  -define:ODIN_TEST_NAMES=main.test_hegel_sqlite_histories_match_model,main.test_hegel_retained_expiry_cancel_rollover_crash_histories,main.test_hegel_global_event_interleaving_campaign,main.test_hegel_simulation_generated_message_fanout_matches_model,main.test_hegel_simulation_delayed_send_completion_lifetime_choices,main.test_hegel_generated_jwt_tokens_preserve_validation_contract,
 ```
 
 `ODIN_TEST_NAMES` accepts a comma-separated list of fully qualified tests. A trailing comma is supported and makes copied failure commands easy to reuse.
@@ -406,11 +406,105 @@ python3 test/run_hegel_campaign.py --seed 2026090902 --runs 1 --seconds 190
 ```
 
 The runner builds one optimized simulation executable, waits for the compiler to exit, then
-runs 15 durability, compaction-publication, and connection-lifecycle properties in sequential
+runs the SQLite model, retained-storage and connection-lifecycle properties listed in its `TESTS` array in sequential
 processes. Each process uses a distinct nonzero `HEGEL_SEED`, a fresh example database, one
 test thread, multiplier 1, and fatal memory checks. Odin's test-order seed stays fixed; it
-does **not** control Hegel generation. Diagnostics verify that every selected property ran
-with the requested generation seed.
+does **not** control Hegel generation. Diagnostics require exactly one start with
+the requested seed and one successful finish with a positive executed-case count
+for every selected property. Native errors, interesting cases and duplicate or
+missing finishes fail coverage even if the test process exits zero. This proves
+execution, not that a property body contains meaningful assertions.
+
+The SQLite property generates 40 histories per seed, each with 16 transactions
+of three mutations across two workspaces, four tasks, two Notes, one File,
+one Ticket and two Slices per workspace.
+It compares canonical tasks/assets and memberships, Slice counters/extrema/order keys,
+project references and workspace coverage against an independent value-array model.
+Generated mutations include task updates/deletion, membership toggles in both
+directions, member-asset updates/deletion/recreation, and Slice deletion/recreation
+with dangling edges. Member types remain fixed. Note project changes share
+reference counts with Tasks and other Notes; File/Ticket previews must not
+contribute projects. Asset movement timestamps can displace Task timestamps,
+but assets must not change work counts, task coverage or oldest-task age. Slice creation
+times vary on creation, recreation and low-level timestamp corrections; both the Slice and its
+members can determine the ordering key. Project checks compare the exact row
+set and positive reference counts, rejecting zero-ref and empty-project rows.
+Every history includes full rollback, savepoint rollback, commit and database close/reopen.
+Status Note, empty projects, overlapping memberships and zero/negative timestamps
+exercise exclusion and extrema rules. Each case uses a fresh temporary SQLite file.
+This checks storage/projection semantics, not WebSocket authorization, executor
+scheduling, process crashes or power-loss recovery. Retained-message simulations
+remain separate; the removed workspace-WAL replay properties are not selected.
+The Python runner tests check that every selected name still exists in the root
+suite. A focused negative-control test injects incorrect project rows and order
+keys into disposable data and verifies that the model checker rejects them.
+A mixed-member regression checks project changes, deletion of movement winners,
+resurrection and membership removal across rollback and reopen. Its negative
+controls swap member-category counts and introduce false project references.
+
+The command property adds 40 histories per seed through `C_ApplyTransaction`.
+Each history has eight create/reject/patch/delete cycles with two Tasks, a child
+Note and an edge. It generates workspace, priority, project, patch ordering and
+request timestamps on both sides of the monotonic-update boundary. Every history
+executes all eight transaction operation types, both explicit and cascading
+deletion, and both stale-guard and late dependency rejections. An independent
+value model checks result IDs/status, canonical fields, preserved patch fields,
+automatic unblocking, Note projections, edge endpoints, history action counts,
+system-unblock events and record/history ID floors. Rejected batches must leave
+state unchanged and emit no events. Successful patches and deletions are checked
+after reopening the database. These are structured generated histories, not
+arbitrary permutations of all operations or fields. The property calls the
+command handler inside real SQLite transactions; it does not exercise executor
+scheduling, WebSocket delivery, all asset types, crash recovery or all history
+body fields.
+
+Two additional command properties enforce mandatory coverage in every history:
+
+| Property | Mandatory cases | Checks |
+| --- | --- | --- |
+| `test_hegel_sqlite_command_fields` (40 histories/seed) | All ten TaskPatch fields: set, change, clear, and invalid value or numeric endpoint; every valid status and color | Independent expected values for all ten patch fields, omitted-patch-field preservation, completion metadata, IDs, monotonic timestamps, rejection and periodic reopen |
+| `test_hegel_sqlite_command_assets` (20 histories/seed) | All 14 asset types: create, preview-only/payload-only/combined patch, clearing either field, stale guard, actor restriction, invalid encoding/Plain length, delete | Result status/IDs, canonical fields, omitted-field preservation, unchanged state on rejection, asset ID floor and reopen after every patch |
+
+The field property follows its mandatory cases with 24 generated field/value
+choices against the evolving model, including stale guards. Text fields exercise
+their exact length limit and limit+1. Priority accepts the full u8 range and due
+time the full i64 range; their endpoints must succeed. Empty titles and invalid
+status/color values must fail. Coverage bits are set only after checking command
+results and persisted state; a missing bit fails the history. Compile-time guards
+require updates when TaskPatch fields or AssetTypes change.
+The blocker-change case switches directly from existing blocker 1 to existing
+blocker 3 before clearing it; it is not a repeated assignment of the same ID.
+This field model does not compare `created_by`, `order_index` or `conv_id`.
+
+The asset property rotates type order. Agenda and RoomMapping creation must fail
+inside a transaction; it then checks their normal create command, including
+Agenda upsert and RoomMapping's stable ID. RoomMapping mutation must fail.
+Personal Reminder and version-2 Appointment patches and deletes by another actor
+must fail. Rejected deletes have explicit coverage bits and are followed by
+reopen, a presence check and a successful owner delete. Required preview/body
+fields cannot be cleared. These are type-level
+contracts, not exhaustive JSON-metadata-field coverage. The server-generated
+RoomMapping payload is not compared byte-for-byte; its canonical preview and
+unique mapping key are checked instead.
+
+All rejected commands using the shared model helper compare logical snapshots
+of every application table before and after the transaction, including canonical
+records, history bodies, record/history ID floors, projections and pending Slice
+work. This checks unchanged state, not the correctness of every history field.
+Temporary tables and SQLite's physical page/WAL layout are excluded.
+The root regression `test_sqlite_command_late_asset_rejection_rolls_back` also
+rejects the fourth operation for Slice, Reminder, Appointment and TicketEntry
+after a valid Task create, a linked Note project change and another Note create.
+It checks the full snapshot again after reopen. The identical three-operation
+prefix must then commit, reuse the rolled-back IDs and produce the expected
+history count and Note/Slice project changes. This deterministic regression runs
+in the root suites, separately from the seeded campaign.
+
+Together these properties cover all transaction operation kinds and patch-field
+envelopes, not every possible combination. Attachments, arbitrary metadata-field
+combinations, valid compressed payloads, every parent/ACL interaction and all
+history body fields remain outside this command model. Existing focused tests
+for those areas are not replaced by the campaign.
 
 The default execution budget is 15 minutes, excluding compilation. Each process has a
 180-second timeout; the runner avoids starting another seed when it is unlikely to finish
@@ -422,7 +516,12 @@ instructions, and records an `interrupted` result before removing temporary file
 Results default to a new `.amp/in/artifacts/hegel-campaign-<UTC timestamp>/` directory, or
 use `--output <new-directory>`. It contains compiler/source metadata, the tracked source diff,
 a runner snapshot, per-seed logs, case counts, and a summary. Failures also retain the Hegel
-database and a reproduction command. With diagnostics enabled, native failures print their
+database and a reproduction command. `source.patch` includes binary tracked changes,
+but untracked files are not copied. `SOURCE_SNAPSHOT.txt`, the console warning and
+the failure instructions explicitly mark such snapshots incomplete; `metadata.json`
+lists the missing paths. Keep the original working tree, or commit the sources
+before generating a reconstructible Git-visible snapshot. Ignored dependencies
+and toolchains are never archived. With diagnostics enabled, native failures print their
 minimized reproduction blobs even when the caller suppresses its logger. A native error or
 timeout may not produce a minimized example. Successful campaigns demonstrate only the
 selected histories, not exhaustive correctness. These runs measure correctness, not throughput.

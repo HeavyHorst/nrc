@@ -17,6 +17,10 @@ import time
 
 ROOT = Path(__file__).resolve().parent.parent
 TESTS = [
+    "test_hegel_sqlite_histories_match_model",
+    "test_hegel_sqlite_commands_match_model",
+    "test_hegel_sqlite_command_fields",
+    "test_hegel_sqlite_command_assets",
     "test_hegel_retained_expiry_cancel_rollover_crash_histories",
     "test_hegel_global_event_interleaving_campaign",
     "test_hegel_cached_dm_transport_authorization_and_ownership",
