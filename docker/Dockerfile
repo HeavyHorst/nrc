@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     libopus-dev \
     libzstd-dev \
+    libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Odin
@@ -37,6 +38,7 @@ RUN apt-get update && apt-get install -y \
     tzdata \
     libopus0 \
     libzstd1 \
+    libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

@@ -11,7 +11,7 @@ step() {
 }
 
 step "Installing missing system packages"
-packages=(age build-essential ca-certificates clang containerd.io curl docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin ffmpeg git jq libopus-dev libzstd-dev libnginx-mod-http-brotli-static linux-perf llvm nginx poppler-utils procps psmisc python3 strace unzip)
+packages=(age build-essential ca-certificates clang containerd.io curl docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin ffmpeg git jq libopus-dev libsqlite3-dev libzstd-dev libnginx-mod-http-brotli-static linux-perf llvm nginx poppler-utils procps psmisc python3 strace unzip)
 missing=()
 for package in "${packages[@]}"; do
 	if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq 'install ok installed'; then
