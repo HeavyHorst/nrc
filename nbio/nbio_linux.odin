@@ -199,7 +199,7 @@ has_userspace_work :: #force_inline proc(io: ^IO) -> bool {
 	)
 }
 
-wait_for_ring_events :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd, timed_out, externally_woken: ^bool) -> linux.Errno {
+wait_for_ring_events :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd, extra_wake_fd: linux.Fd, timed_out, externally_woken: ^bool) -> linux.Errno {
 	if timeout_nsec <= 0 {
 		timed_out^ = true
 		return .NONE
@@ -207,9 +207,20 @@ wait_for_ring_events :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linu
 
 	wait_started_at := clock.now_monotonic()
 	remaining := timeout_nsec
-	poll_fds: [2]linux.Poll_Fd = {{fd = io.ring.fd, events = {.IN, .ERR, .HUP}}, {fd = wake_fd, events = {.IN, .ERR, .HUP}}}
+	poll_fds: [3]linux.Poll_Fd
+	poll_fds[0] = {
+		fd     = io.ring.fd,
+		events = {.IN, .ERR, .HUP},
+	}
 	poll_count := 1
-	if wake_fd >= 0 do poll_count = 2
+	for fd in ([2]linux.Fd{wake_fd, extra_wake_fd}) {
+		if fd < 0 do continue
+		poll_fds[poll_count] = {
+			fd     = fd,
+			events = {.IN, .ERR, .HUP},
+		}
+		poll_count += 1
+	}
 
 	for {
 		remaining_ns := time.duration_nanoseconds(remaining)
@@ -221,10 +232,11 @@ wait_for_ring_events :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linu
 		n, err := linux.ppoll(poll_fds[:poll_count], &timeout_spec, nil)
 		if err == .NONE {
 			timed_out^ = n == 0
-			if poll_count == 2 && poll_fds[1].revents != {} {
+			for ready in poll_fds[1:poll_count] {
+				if ready.revents == {} do continue
 				value: u64
 				for {
-					_, read_err := linux.read(wake_fd, ([^]byte)(&value)[:size_of(value)])
+					_, read_err := linux.read(ready.fd, ([^]byte)(&value)[:size_of(value)])
 					if read_err == .EINTR do continue
 					if read_err != .NONE && read_err != .EAGAIN do return read_err
 					break
@@ -255,7 +267,14 @@ wait_for_ring_events :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linu
 // buffer-holding receives and ordinary callbacks alternate, FIFO within each
 // class, so buffers recycle without starving other I/O. Combine with
 // yield_after_callbacks for one wave per tick. The default is unbounded waves.
-tick :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd = -1, yield_after_callbacks := false, callback_limit := max(int)) -> linux.Errno {
+tick :: proc(
+	io: ^IO,
+	timeout_nsec: time.Duration,
+	wake_fd: linux.Fd = -1,
+	yield_after_callbacks := false,
+	callback_limit := max(int),
+	extra_wake_fd: linux.Fd = -1,
+) -> linux.Errno {
 	assert(callback_limit > 0)
 	if ferr, had_callbacks := flush(io, 0, callback_limit); ferr != .NONE {
 		return ferr
@@ -285,14 +304,14 @@ tick :: proc(io: ^IO, timeout_nsec: time.Duration, wake_fd: linux.Fd = -1, yield
 		}
 
 		remaining := timeout_nsec - elapsed
-		if io.ios_in_kernel == 0 && wake_fd < 0 {
+		if io.ios_in_kernel == 0 && wake_fd < 0 && extra_wake_fd < 0 {
 			time.sleep(remaining)
 			break
 		}
 
 		wait_timed_out := false
 		externally_woken := false
-		if werr := wait_for_ring_events(io, remaining, wake_fd, &wait_timed_out, &externally_woken); werr != .NONE do return werr
+		if werr := wait_for_ring_events(io, remaining, wake_fd, extra_wake_fd, &wait_timed_out, &externally_woken); werr != .NONE do return werr
 		if wait_timed_out do break
 		if externally_woken do break
 

@@ -3912,36 +3912,43 @@ external_wake_test_writer :: proc(data_raw: rawptr) {
 
 @(test)
 test_tick_external_wake_interrupts_idle_wait :: proc(t: ^testing.T) {
-	io: IO
-	err := init(&io, ring_entries = 64)
-	expect(t, err == .NONE, fmt.tprintf("nbio init failed: %v", err))
-	if err != .NONE do return
-	defer destroy(&io)
+	// Original handoff wake, second wake alongside it, and second wake alone.
+	for variant in 0 ..< 3 {
+		io: IO
+		err := init(&io, ring_entries = 64)
+		expect(t, err == .NONE, fmt.tprintf("nbio init failed: %v", err))
+		if err != .NONE do return
+		defer destroy(&io)
 
-	wake_fd, wake_err := linux.eventfd(0, {.CLOEXEC, .NONBLOCK})
-	expect(t, wake_err == .NONE, fmt.tprintf("eventfd init failed: %v", wake_err))
-	if wake_err != .NONE do return
-	defer linux.close(wake_fd)
-	// Keep one-time per-thread TSC calibration outside the measured wait.
-	_ = clock.now_monotonic()
+		wake_fd, wake_err := linux.eventfd(0, {.CLOEXEC, .NONBLOCK})
+		expect(t, wake_err == .NONE, fmt.tprintf("eventfd init failed: %v", wake_err))
+		if wake_err != .NONE do return
+		defer linux.close(wake_fd)
+		extra_fd, extra_err := linux.eventfd(0, {.CLOEXEC, .NONBLOCK})
+		expect(t, extra_err == .NONE)
+		if extra_err != .NONE do return
+		defer linux.close(extra_fd)
+		// Keep one-time per-thread TSC calibration outside the measured wait.
+		_ = clock.now_monotonic()
 
-	data := External_Wake_Test_Data {
-		wake_fd = wake_fd,
+		data := External_Wake_Test_Data {
+			wake_fd = variant == 0 ? wake_fd : extra_fd,
+		}
+		writer := thread.create_and_start_with_data(&data, external_wake_test_writer, context)
+		expect(t, writer != nil, "external wake writer thread should start")
+		if writer == nil do return
+		defer thread.destroy(writer)
+
+		start := clock.now_monotonic()
+		tick_err := tick(&io, 500 * time.Millisecond, variant == 2 ? -1 : wake_fd, extra_wake_fd = variant == 0 ? -1 : extra_fd)
+		elapsed := time.diff(start, clock.now_monotonic())
+		expect(t, tick_err == .NONE, fmt.tprintf("externally woken tick failed: %v", tick_err))
+		testing.expectf(t, elapsed < 200 * time.Millisecond, "external wake took %v instead of interrupting the 500ms wait", elapsed)
+
+		value: u64
+		_, read_err := linux.read(data.wake_fd, ([^]byte)(&value)[:size_of(value)])
+		expect(t, read_err == .EAGAIN, "tick should drain the external eventfd before returning")
 	}
-	writer := thread.create_and_start_with_data(&data, external_wake_test_writer, context)
-	expect(t, writer != nil, "external wake writer thread should start")
-	if writer == nil do return
-	defer thread.destroy(writer)
-
-	start := time.now()
-	tick_err := tick(&io, 500 * time.Millisecond, wake_fd)
-	elapsed := time.since(start)
-	expect(t, tick_err == .NONE, fmt.tprintf("externally woken tick failed: %v", tick_err))
-	testing.expectf(t, elapsed < 200 * time.Millisecond, "external wake took %v instead of interrupting the 500ms wait", elapsed)
-
-	value: u64
-	_, read_err := linux.read(wake_fd, ([^]byte)(&value)[:size_of(value)])
-	expect(t, read_err == .EAGAIN, "tick should drain the external eventfd before returning")
 }
 
 @(test)
