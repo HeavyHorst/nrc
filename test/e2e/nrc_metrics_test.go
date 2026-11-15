@@ -52,6 +52,15 @@ func TestMetricsCollectorStaticModeSingleWorkspace(t *testing.T) {
 	if upValue != 1 {
 		t.Errorf("nrc_metrics_connection_up{thread_id=%q} = %v, want 1", threadLabel, upValue)
 	}
+	if available := extractMetricWithLabel(t, metricsOutput, "nrc_db_metrics_available", "thread_id", threadLabel); available != 1 {
+		t.Fatalf("SQLite telemetry not available: %v", available)
+	}
+	if capacity := extractMetricWithLabel(t, metricsOutput, "nrc_db_capacity", "thread_id", threadLabel); capacity != 64 {
+		t.Fatalf("SQLite worker capacity: %v", capacity)
+	}
+	if !strings.Contains(metricsOutput, "# TYPE nrc_db_commit_seconds histogram\n") || !hasMetric(t, metricsOutput, "nrc_db_commit_seconds_count") {
+		t.Fatal("missing SQLite histogram exposition")
+	}
 }
 
 func TestMetricsCollectorStaticModeMultipleWorkspaces(t *testing.T) {
@@ -375,6 +384,10 @@ func TestMetricsCollectorReconnectionAfterServerRestart(t *testing.T) {
 	metricsOutput := fetchMetrics(t, metrics.metricsURL())
 	if !hasMetric(t, metricsOutput, "nrc_metrics_connection_up") {
 		t.Error("missing nrc_metrics_connection_up metric after restart")
+	}
+	threadLabel := extractThreadIDLabelForConnection(t, metricsOutput)
+	if available := extractMetricWithLabel(t, metricsOutput, "nrc_db_metrics_available", "thread_id", threadLabel); available != 1 {
+		t.Fatalf("SQLite telemetry did not resume after process-generation change: %v", available)
 	}
 }
 

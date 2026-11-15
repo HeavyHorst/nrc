@@ -32,7 +32,8 @@ Do not expose the endpoint to untrusted users.
 
 Import [the supplied dashboard](grafana/nrc-metrics-dashboard.json) into Grafana.
 Select a Prometheus data source. Use its `thread_id` and `wal_kind` filters to
-inspect individual workers and persistence metrics.
+inspect individual workers. Its old WAL panels are compatibility panels, not
+SQLite health indicators; use the `nrc_db_*` series below for SQLite.
 
 `GET /health` reports connections and worker coverage. `status: "degraded"` means
 no bot connection is up, an expected worker is missing, or the configured worker
@@ -53,22 +54,83 @@ Routing uses `xxhash(workspace_id) % 256` for the logical shard, then
 Metrics uses stats requests, not room subscriptions or room creation.
 
 The exporter reports collector coverage, connection liveness, queue pressure,
-worker memory and buffer pools, io_uring, WAL and compaction statistics.
+worker memory and buffer pools, io_uring and SQLite executor statistics.
 Interpret these metrics carefully:
 
 - `send_queue_*` and `send_backpressure` describe the bot connection, not all
   user connections on that worker.
-- `nrc_thread_wal_*` contains aggregate WAL metrics.
-  `nrc_thread_wal_kind_*` separates telemetry by `wal_kind=task|asset|edge`.
-- `nrc_thread_shard_sweep_{input,dirty}_bytes_total` reports processed and
-  reclaimed WAL bytes. Prefix, latest, measure, copy and replay read-byte counters
-  report reads separately. Sum their rates and divide by the input-byte rate to
-  calculate read amplification. Aggregate workers with `sum(...)`.
-- `nrc_thread_shard_sweep_metadata_fallbacks_total` counts cases requiring the
-  strict WAL fallback. `nrc_thread_shard_sweep_metadata_written_bytes_total`
-  counts successfully published metadata bytes.
-- Sweep counters reset when NRC restarts. Use rates rather than treating totals
-  as permanent history.
+- `nrc_thread_wal_*`, `nrc_thread_wal_kind_*` and `nrc_thread_shard_sweep_*`
+  are retired entity-WAL compatibility fields. SQLite builds return zero.
+  They do not measure SQLite WAL files or retained chat-message storage.
+
+## SQLite telemetry
+
+Upgrade the server before this exporter: polling opts into stats extension v2
+with a ninth request byte. Ordinary eight-byte stats requests retain their old
+response format. `nrc_db_metrics_available{thread_id}` reports whether the latest
+worker sample contains ordered telemetry. The server still supports v1 requests,
+but this exporter needs v2 identity fields; v1 DB metrics are unavailable.
+Missing data is not exported as zero.
+Counters reset on server restart. All SQLite series use only `thread_id`; multiple
+monitoring workspaces on one worker are deduplicated. Shared executor threads
+charge each request/group to its submitting worker, so summing workers does not
+multiply executor totals.
+
+Each server start creates a random 128-bit process generation. Each worker numbers
+its snapshots across all connections. The exporter rejects duplicate and older
+sequences, regardless of response arrival order or counter values. A generation
+change invalidates every worker's old DB sample; retired generations cannot return.
+An unseen generation on a poll already outstanding at the last transition is
+ignored until a newer poll confirms it. This can delay restart detection by a poll.
+Poll tokens are local serials echoed by the server, not synchronized clocks.
+Run one exporter against one NRC process, not a load-balanced pool. Generation
+and sequence are internal freshness metadata, not Prometheus labels.
+
+If the connection supplying a worker's newest sample disconnects, older DB
+samples from other connections are suppressed until a new poll arrives.
+`nrc_db_metrics_available` is zero during that gap; counters and histograms are
+absent. A new process can restart its sequence and counters at lower values.
+
+| Series | Meaning |
+| --- | --- |
+| `nrc_db_in_flight`, `charged_bytes`, `capacity`, `byte_budget` | Credits held by admitted jobs, including completed results not yet released, and their limits. Each name has the `nrc_db_` prefix. |
+| `nrc_db_writer_in_flight`, `writer_bytes`, `read_reserved_requests`, `read_reserved_bytes` | Writer credit usage and reserved reader capacity; same prefix convention. |
+| `nrc_db_admitted_{write,read}_total`, `nrc_db_completed_{write,read}_total` | Admission and first completion publication; streamed chunks do not count as new jobs. |
+| `nrc_db_rejected_{connection,worker,unavailable}_total` | Connection fairness/limit, worker capacity/bytes, and unavailable/invalid executor submission. Only the first two are retryable overload. |
+| `nrc_db_errors_total`, `nrc_db_busy_total` | Non-OK job results at first publication, with SQLite BUSY as a subset. A failed group counts its failed jobs, not one error per transaction. Later streaming delivery failures are not counted. |
+| `nrc_db_group_transactions_total`, `nrc_db_group_jobs_total` | Attempted groups and jobs in those groups, including failures. Their rate ratio is mean group size, not fsync savings. |
+| `nrc_db_cache_{hits,misses,writes}_total` | SQLite pager counters, sampled/reset on the owning executor after each job/group. Includes first-request connection initialization. These are page operations, not disk bytes or OS cache misses. |
+| `nrc_db_{writer,reader}_queue_seconds` | Admission until execution starts, including FIFO dependencies, lazy open and group collection. |
+| `nrc_db_{writer,reader}_execution_seconds` | BEGIN/savepoint and handler/output preparation, before commit/release. The outer group BEGIN belongs to its first job, including failed BEGIN attempts. |
+| `nrc_db_{writer,reader}_publication_seconds` | Admission until first completion publication, including group commit. Not WebSocket ACK latency or full streamed delivery. |
+| `nrc_db_projection_finalize_seconds`, `nrc_db_commit_seconds` | Projection finalization and SQL COMMIT attempts, once per writer transaction, not once per grouped job. |
+
+The seconds series are Prometheus histograms with boundaries from 50 µs to 1 s
+and an overflow bucket. Samples are captured for every operation, not just when
+the exporter polls. Snapshots use atomic counters but are not transactionally
+consistent across fields. Queue/execution samples require reaching execution;
+failed lazy opens still increment completion/error counters. Rollback/cleanup
+time is included in publication, not execution.
+
+Example writer p99:
+
+```promql
+histogram_quantile(0.99, sum by (le) (rate(nrc_db_writer_publication_seconds_bucket[5m])))
+```
+
+Compare queue, execution, finalization and commit histograms separately; their
+percentiles cannot be added. For mean group size:
+
+```promql
+sum(rate(nrc_db_group_jobs_total[5m])) / sum(rate(nrc_db_group_transactions_total[5m]))
+```
+
+COMMIT time includes any synchronous auto-checkpoint SQLite runs inside COMMIT.
+This instrumentation does not replace SQLite's WAL hook or run extra checkpoints.
+Separate checkpoint duration/backlog, fsync latency, prepare time, per-query
+statistics and client retry exhaustion are not yet measured. Retained chat has
+its own storage path and is not covered by `nrc_db_*`. The supplied dashboard
+does not yet have panels for these new series.
 
 ## Configuration
 

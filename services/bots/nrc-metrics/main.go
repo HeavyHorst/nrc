@@ -101,10 +101,14 @@ type Collector struct {
 	expectedThreads      uint32
 	threadExpectation    uint32
 
-	mu            sync.RWMutex
-	connected     map[string]bool
-	samples       map[string]WorkspaceSample
-	renderThreads uint32
+	mu                            sync.RWMutex
+	connected                     map[string]bool
+	samples                       map[string]WorkspaceSample
+	databaseGeneration            [2]uint64
+	retiredGenerations            map[[2]uint64]struct{}
+	databaseSequences             map[uint32]uint64
+	databasePoll, generationFence int64
+	renderThreads                 uint32
 }
 
 type NRCClient struct {
@@ -176,6 +180,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
 		metrics.WritePrometheus(w, true)
+		writeDatabaseMetrics(w, collector.ComputeState())
 	})
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
@@ -614,6 +619,8 @@ func NewCollector(workspaces []string, expectedThreads uint32, threadExpectation
 		threadExpectation:    threadExpectation,
 		connected:            connected,
 		samples:              make(map[string]WorkspaceSample, len(workspaces)),
+		retiredGenerations:   make(map[[2]uint64]struct{}),
+		databaseSequences:    make(map[uint32]uint64),
 	}
 
 	c.refreshMetrics()
@@ -629,6 +636,11 @@ func (c *Collector) SetConnected(workspace string, connected bool) {
 }
 
 func (c *Collector) UpdatePong(workspace string, pong protocol.StatsResponse) {
+	c.mu.Lock()
+	if !c.acceptDatabaseSample(&pong) {
+		c.mu.Unlock()
+		return
+	}
 	sample := WorkspaceSample{
 		Workspace:  workspace,
 		ThreadID:   pong.ThreadID,
@@ -636,7 +648,6 @@ func (c *Collector) UpdatePong(workspace string, pong protocol.StatsResponse) {
 		Pong:       pong,
 	}
 
-	c.mu.Lock()
 	c.samples[workspace] = sample
 	c.mu.Unlock()
 
@@ -680,7 +691,11 @@ func (c *Collector) ComputeState() CollectorState {
 		}
 
 		existing, ok := state.ThreadSamples[sample.ThreadID]
-		if !ok || sample.ReceivedAt.After(existing.ReceivedAt) {
+		newer := sample.ReceivedAt.After(existing.ReceivedAt)
+		if db, previous := sample.Pong.Database, existing.Pong.Database; db != nil && previous != nil {
+			newer = db.Sequence > previous.Sequence
+		}
+		if !ok || newer {
 			state.ThreadSamples[sample.ThreadID] = ThreadSample{
 				ThreadID:         sample.ThreadID,
 				SourceWorkspace:  workspace,
@@ -692,7 +707,13 @@ func (c *Collector) ComputeState() CollectorState {
 	}
 
 	state.CoveredThreadIDs = make([]uint32, 0, len(state.ThreadSamples))
-	for threadID := range state.ThreadSamples {
+	for threadID, sample := range state.ThreadSamples {
+		if db := sample.Pong.Database; db != nil && (db.Generation != c.databaseGeneration || db.Sequence != c.databaseSequences[threadID]) {
+			// The latest source may have disconnected. Keep coverage, but never
+			// fall back to an older snapshot still held by another connection.
+			sample.Pong.Database = nil
+			state.ThreadSamples[threadID] = sample
+		}
 		state.CoveredThreadIDs = append(state.CoveredThreadIDs, threadID)
 	}
 	sort.Slice(state.CoveredThreadIDs, func(i, j int) bool {
@@ -1104,7 +1125,7 @@ func (c *NRCClient) sendPing() error {
 		incCounter(metricWithLabels("nrc_metrics_client_ping_sent_total", "thread_id", "unknown"))
 	}
 
-	if err := c.sendProtocolMessage(protocol.C_Stats, protocol.EncodeStats(time.Now().UnixNano())); err != nil {
+	if err := c.sendProtocolMessage(protocol.C_Stats, protocol.EncodeDatabaseStats(c.collector.nextDatabasePoll())); err != nil {
 		incCounter(metricWithLabels("nrc_metrics_client_ping_error_total", "workspace", c.workspace))
 		if threadID, ok := c.getThreadID(); ok {
 			thread := strconv.FormatUint(uint64(threadID), 10)
