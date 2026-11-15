@@ -46,6 +46,7 @@ const ReminderState = {
 // Filter state
 let myTasksOnly = false;
 let taskDetailSaveGeneration = 0;
+const taskDetailSaves = new Map();
 // Note: notesViewActive moved to notes.js
 
 // Task detail panel state
@@ -3831,6 +3832,10 @@ function sendPendingTaskMarkdown(state, task) {
 
 function queueTaskMarkdownUpdate(task, markdown) {
   const key = getTaskMarkdownUpdateKey(task);
+  if (taskDetailSaves.has(key)) {
+    showToast("WAIT FOR THE DESCRIPTION SAVE TO FINISH BEFORE CHANGING CHECKBOXES");
+    return;
+  }
   let state = taskMarkdownUpdates.get(key);
   if (!state) {
     state = { key, draft: getTaskMarkdown(task), inFlight: false };
@@ -4328,6 +4333,11 @@ function saveTaskFromDetailPanel() {
   if (!currentDetailTask) return;
 
   const task = currentDetailTask;
+  const key = getTaskMarkdownUpdateKey(task);
+  if (taskMarkdownUpdates.has(key)) {
+    showToast("WAIT FOR THE CHECKBOX UPDATE TO FINISH BEFORE SAVING");
+    return;
+  }
   const descriptionField = document.getElementById("taskDetailDesc");
   if (!descriptionField) return;
   const descValue = descriptionField.value;
@@ -4335,28 +4345,48 @@ function saveTaskFromDetailPanel() {
     window.NRCDetailUI.setSaveState("FAILED", document);
     return;
   }
-  const description = descValue === "" && task.description ? "\x00" : descValue;
   const generation = ++taskDetailSaveGeneration;
   window.NRCDetailUI.setSaveState("SAVING", document);
+  const pending = taskDetailSaves.get(key);
+  if (pending) {
+    pending.draft = descValue;
+    pending.generation = generation;
+    return;
+  }
+  const state = { key, task, draft: descValue, generation };
+  taskDetailSaves.set(key, state);
+  sendPendingTaskDetailSave(state);
+}
+
+function sendPendingTaskDetailSave(state) {
+  const { task, draft, generation } = state;
+  const description = draft === "" && task.description ? "\x00" : draft;
+  const fail = () => {
+    if (taskDetailSaves.get(state.key) !== state) return;
+    taskDetailSaves.delete(state.key);
+    if (state.generation !== taskDetailSaveGeneration) return;
+    taskDetailDirty = true;
+    window.NRCDetailUI.setSaveState("FAILED", document);
+  };
   const sent = sendUpdateTask(task.convId, task.id, "", description, 255, "", 255, 255, "", 0n, 0n,
     null, "", {
       onSuccess: ({ task: updatedTask }) => {
+        if (taskDetailSaves.get(state.key) !== state) return;
+        if (state.generation !== generation) {
+          state.task = updatedTask;
+          sendPendingTaskDetailSave(state);
+          return;
+        }
+        taskDetailSaves.delete(state.key);
         if (generation !== taskDetailSaveGeneration) return;
         currentDetailTask = updatedTask;
         descriptionFocusDraft = updatedTask.description || "";
         snapshotTaskDetail(updatedTask);
         window.NRCDetailUI.setSaveState("SAVED", document);
       },
-      onError: () => {
-        if (generation !== taskDetailSaveGeneration) return;
-        taskDetailDirty = true;
-        window.NRCDetailUI.setSaveState("FAILED", document);
-      },
+      onError: fail,
     });
-  if (!sent) {
-    taskDetailDirty = true;
-    window.NRCDetailUI.setSaveState("FAILED", document);
-  }
+  if (!sent) fail();
 }
 
 // --- Inline title error (task detail) --------------------------------------

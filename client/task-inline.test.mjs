@@ -67,3 +67,92 @@ test("assignee and project inline pickers include indexed and loaded task values
   h.context.fieldControl(task, "project");
   assert.deepEqual(Array.from(h.getOptions().suggestions()), ["Indexed project", "Loaded project"]);
 });
+
+function descriptionHarness() {
+  const editor = { value: "" }, sent = [], states = [], messages = [];
+  const context = {
+    TextEncoder, MAX_TASK_DESCRIPTION_LENGTH: 4096,
+    currentDetailTask: { id: 7n, convId: 0n, description: "original" },
+    taskDetailSaveGeneration: 0, taskDetailDirty: false, taskDetailSaves: new Map(),
+    taskMarkdownUpdates: new Map(),
+    getTaskMarkdown: task => task.description,
+    getCanonicalTask: task => task,
+    renderSelectedTaskMarkdown() {}, requestTask() {},
+    logMessage: (_kind, message) => messages.push(message),
+    showToast: message => messages.push(message),
+    document: { getElementById: () => editor },
+    window: { NRCDetailUI: { setSaveState: state => states.push(state) } },
+    getTaskMarkdownUpdateKey: task => `${task.convId}:${task.id}`,
+    snapshotTaskDetail() { context.taskDetailDirty = false; },
+    sendUpdateTask(...args) {
+      sent.push({ id: args[1], description: args[3], callbacks: args.at(-1) });
+      return sent.length;
+    },
+  };
+  vm.runInNewContext(functionSource("saveTaskFromDetailPanel") +
+    functionSource("sendPendingTaskDetailSave") + functionSource("queueTaskMarkdownUpdate") +
+    functionSource("sendPendingTaskMarkdown"), context);
+  return { context, editor, sent, states, messages,
+    save(value) { editor.value = value; context.saveTaskFromDetailPanel(); },
+    ack(index) {
+      const request = sent[index];
+      request.callbacks.onSuccess({ task: { id: request.id, convId: 0n, description: request.description === "\x00" ? "" : request.description } });
+    },
+  };
+}
+
+test("description saves wait for the previous result and retain only the latest submitted draft", () => {
+  const h = descriptionHarness();
+  h.save("A"); // This request can be waiting for an overload retry.
+  h.save("B");
+  h.save("C");
+  assert.deepEqual(h.sent.map(request => request.description), ["A"]);
+  h.ack(0);
+  assert.deepEqual(h.sent.map(request => request.description), ["A", "C"]);
+  assert.notEqual(h.states.at(-1), "SAVED");
+  h.ack(1);
+  assert.equal(h.context.currentDetailTask.description, "C");
+  assert.equal(h.states.at(-1), "SAVED");
+});
+
+test("description save failures retain the latest draft and other tasks can save independently", () => {
+  const h = descriptionHarness();
+  h.save("A"); h.save("B");
+  h.sent[0].callbacks.onError();
+  assert.equal(h.editor.value, "B");
+  assert.equal(h.context.taskDetailDirty, true);
+  assert.equal(h.states.at(-1), "FAILED");
+  h.save("B");
+  h.context.currentDetailTask = { id: 8n, convId: 0n, description: "other" };
+  h.save("");
+  assert.deepEqual(h.sent.map(request => request.id), [7n, 7n, 8n]);
+  h.ack(1); // Acknowledging the previous task must not replace this editor.
+  assert.equal(h.context.currentDetailTask.id, 8n);
+  h.ack(2);
+  assert.equal(h.context.currentDetailTask.description, "");
+});
+
+for (const outcome of ["success", "failure"]) {
+  test(`checkbox and detail writes exclude each other until ${outcome}, without blocking other tasks`, () => {
+    const h = descriptionHarness();
+    const first = h.context.currentDetailTask;
+    h.save("- [ ] saved description");
+    h.context.queueTaskMarkdownUpdate(first, "- [x] conflicting checkbox");
+    assert.equal(h.sent.length, 1);
+    assert.match(h.messages.at(-1), /WAIT.*SAVE/);
+    const other = { ...first, id: 8n };
+    h.context.queueTaskMarkdownUpdate(other, "- [x] independent");
+    assert.equal(h.sent.length, 2);
+    if (outcome === "success") h.ack(0); else h.sent[0].callbacks.onError();
+    h.context.queueTaskMarkdownUpdate(first, "- [x] checkbox after detail");
+    assert.equal(h.sent.length, 3);
+    h.save("new draft must stay in editor");
+    assert.equal(h.sent.length, 3);
+    assert.equal(h.editor.value, "new draft must stay in editor");
+    assert.match(h.messages.at(-1), /WAIT.*CHECKBOX/);
+    if (outcome === "success") h.ack(2); else h.sent[2].callbacks.onError();
+    h.save(h.editor.value);
+    assert.equal(h.sent.length, 4);
+    assert.equal(h.sent[3].description, "new draft must stay in editor");
+  });
+}

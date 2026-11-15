@@ -49,6 +49,17 @@ try {
       const bytes = Uint8Array.from(sent);
       assert.equal(new DataView(bytes.buffer).getUint16(20), size);
       assert.equal(new TextDecoder().decode(bytes.slice(22, 22 + size)), description);
+      // The fake transport must acknowledge this save before the next byte-
+      // boundary case; detail saves now serialize until their ACK arrives.
+      await page.evaluate(description => {
+        const bytes = Uint8Array.from(__sends.at(-1));
+        const correlationId = new DataView(bytes.buffer).getUint32(bytes.length - 6);
+        const task = { ...roomTasks.get(0n).get(469n), description };
+        const decode = NRCFrames.decodeServerFrame;
+        NRCFrames.decodeServerFrame = () => ({ task, correlationId });
+        try { NRCTasks.handleTaskUpdated(new DataView(new ArrayBuffer(0))); }
+        finally { NRCFrames.decodeServerFrame = decode; }
+      }, description);
     }
   }
   for (const theme of ["white", "matte-black"]) {
