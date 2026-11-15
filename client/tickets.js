@@ -3,6 +3,7 @@
   const statuses = ['open', 'in_progress', 'waiting_customer', 'resolved', 'closed'];
   const statusLabels = { open: 'OPEN', in_progress: 'IN PROGRESS', waiting_customer: 'WAITING ON CUSTOMER', resolved: 'RESOLVED', closed: 'CLOSED' };
   const priorities = ['low', 'normal', 'high', 'urgent'];
+  const categories = { '': 'NOT CLASSIFIED', bug: 'BUG', support: 'SUPPORT', feature: 'FEATURE', unclear: 'UNCLEAR' };
   const kinds = ['internal_note', 'public_reply'];
   const kindLabels = { public_reply: 'PUBLIC REPLY', customer_reply: 'CUSTOMER REPLY', internal_note: 'INTERNAL NOTE' };
   const state = { tickets: [], entries: [], selected: '', drafts: new Map(), filters: {}, pending: false, error: '', loading: false, notice: '', sort: 'activity', direction: 'desc' };
@@ -529,6 +530,7 @@
       <div class="detail-read-register task-detail-read-register">${control('status', 'STATUS', { display: statusLabels[m.status], options: statuses.map(value => ({ value, label: statusLabels[value] })) })}
       ${control('assignee', 'ASSIGNEE', { maxBytes: 64, suggestions: () => [...new Set([...(typeof userDirectory === 'function' ? userDirectory() : []), ...state.tickets.map(a => metadata(a).assignee)].filter(Boolean))] })}
       ${control('priority', 'PRIORITY', { display: m.priority.toUpperCase(), options: priorities.map(value => ({ value, label: value.toUpperCase() })) })}
+      ${control('category', 'CATEGORY', { display: categories[m.category || ''] || m.category, options: Object.entries(categories).map(([value, label]) => ({ value, label })) })}
       ${control('follow_up_at', 'FOLLOW-UP · LOCAL TIME', { type: 'datetime-local', clearable: !!m.follow_up_at, value: followUpInput(m.follow_up_at), display: followUpLabel(m.follow_up_at), save: value => saveMetadata(asset, { follow_up_at: followUpValue(value) }, identity) })}</div>
       <details class="ticket-customer-details"${customerOpen ? ' open' : ''}><summary>CUSTOMER DETAILS <span>${esc(customerName(m.company_id) || m.requester_name || m.requester || 'NOT ASSIGNED')}</span></summary><div class="record-document"><div class="detail-read-register task-detail-read-register">
       ${customer('company_id', 'COMPANY')}${customer('contact_id', 'CONTACT')}
@@ -564,6 +566,7 @@
         <form id="ticketFields">${field('title', 'TITLE')}${field('company_id', 'COMPANY ID')}${field('contact_id', 'CONTACT ID')}${field('requester', 'REQUESTER · PORTAL ACCOUNT IDENTITY')}${field('requester_name', 'REQUESTER NAME')}${field('assignee', 'ASSIGNEE')}
           <label class="task-detail-row">STATUS <select name="status" class="filter-select">${statuses.map(s => `<option value="${s}" ${d.status === s ? 'selected' : ''}>${statusLabels[s]}</option>`).join('')}</select></label>
           <label class="task-detail-row">PRIORITY <select name="priority" class="filter-select">${priorities.map(value => `<option value="${value}" ${d.priority === value ? 'selected' : ''}>${value.toUpperCase()}</option>`).join('')}</select></label>
+          <label class="task-detail-row">CATEGORY <select name="category" class="filter-select">${Object.entries(categories).map(([value, label]) => `<option value="${value}" ${(d.category || '') === value ? 'selected' : ''}>${value ? label : 'AUTOMATIC'}</option>`).join('')}</select></label>
           <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">FOLLOW-UP · LOCAL TIME</span><input name="follow_up_at" type="datetime-local" class="task-detail-input" value="${esc(followUpInput(d.follow_up_at))}"></label>
           <label class="detail-edit-field ticket-original-request"><span class="detail-edit-label">ORIGINAL REQUEST</span><textarea name="body" class="task-detail-textarea" rows="5" maxlength="32000">${esc(d.body)}</textarea></label>
           <button class="btn btn--primary" data-save>SAVE TICKET</button>

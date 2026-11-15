@@ -24,7 +24,7 @@ header a { color: var(--header-text); margin-right: 24px; }
 h1, h2 { line-height: 1.2; overflow-wrap: anywhere; }
 article, form { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; margin: 20px 0; }
 label { display: block; font-weight: 600; margin: 16px 0; }
-input, textarea { display: block; width: 100%; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--input-border); border-radius: calc(var(--radius)/2); padding: 12px; }
+input, textarea, select { display: block; width: 100%; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--input-border); border-radius: calc(var(--radius)/2); padding: 12px; }
 button, .button { display: inline-block; background: var(--accent); color: var(--on-accent); border: 0; border-radius: calc(var(--radius)/2); padding: 12px 20px; font: inherit; text-decoration: none; cursor: pointer; }
 button:hover, .button:hover { background: var(--accent-hover); }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }

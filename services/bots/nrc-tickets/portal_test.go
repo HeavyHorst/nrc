@@ -143,6 +143,34 @@ func call(s *portal, method, path, form, origin, login, password string) *httpte
 func own(s *portal, method, path, form string) *httptest.ResponseRecorder {
 	return call(s, method, path, form, s.origin, "anna", "fixture-password-only")
 }
+
+func TestTicketCategorySelection(t *testing.T) {
+	for _, category := range []string{"", "bug", "support", "feature", "unclear", "invalid", "bug&category=support"} {
+		t.Run(category, func(t *testing.T) {
+			s, f := fixture(t)
+			w := own(s, "POST", "/tickets", "title=Export&body=Hilfe&category="+category)
+			if category == "invalid" || strings.Contains(category, "&") {
+				if w.Code != 400 || f.writes != 0 {
+					t.Fatal("invalid category accepted", w.Code)
+				}
+				return
+			}
+			if w.Code != 303 || f.writes != 1 {
+				t.Fatal("create failed", w.Code, w.Body)
+			}
+			var v ticketPreview
+			if json.Unmarshal([]byte(f.assets[f.next].Preview), &v) != nil || v.Category != category {
+				t.Fatalf("selection lost: %+v", v)
+			}
+			if category == "unclear" {
+				if body := own(s, "GET", w.Header().Get("Location"), "").Body.String(); !strings.Contains(body, "· Unklar") {
+					t.Fatal("manual Unklar not displayed")
+				}
+			}
+		})
+	}
+}
+
 func TestPrivacyAndRendering(t *testing.T) {
 	s, f := fixture(t)
 	privateEntry := f.assets[11]

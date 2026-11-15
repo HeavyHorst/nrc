@@ -25,6 +25,7 @@ type ticketPreview struct {
 	RequesterName string `json:"requester_name"`
 	Status        string `json:"status"`
 	Assignee      string `json:"assignee"`
+	Category      string `json:"category,omitempty"`
 }
 type entryPreview struct {
 	Version int    `json:"version"`
@@ -56,6 +57,7 @@ func (v *ticketPreview) UnmarshalJSON(data []byte) error {
 		"version": &v.Version, "title": &v.Title, "company_id": &v.CompanyID,
 		"contact_id": &v.ContactID, "requester": &v.Requester,
 		"requester_name": &v.RequesterName, "status": &v.Status, "assignee": &v.Assignee,
+		"category": &v.Category,
 	})
 }
 func (v *entryPreview) UnmarshalJSON(data []byte) error {
@@ -71,6 +73,7 @@ type publicTicket struct {
 	ID          uint64             `json:"id"`
 	Title       string             `json:"title"`
 	Status      string             `json:"status"`
+	Category    string             `json:"category,omitempty"`
 	Shared      bool               `json:"shared"`
 	SubmittedBy string             `json:"submitted_by,omitempty"`
 	Body        string             `json:"body,omitempty"`
@@ -180,7 +183,8 @@ func (s *portal) project(a p.Asset, who account, peers map[string]bool) (publicT
 	if status == "" {
 		return publicTicket{}, false
 	}
-	return publicTicket{ID: a.AssetID, Title: v.Title, Status: status, Body: a.Payload, Shared: shared, SubmittedBy: v.RequesterName}, true
+	category := map[string]string{"bug": "Bug", "support": "Support", "feature": "Feature", "unclear": "Unklar"}[v.Category]
+	return publicTicket{ID: a.AssetID, Title: v.Title, Status: status, Category: category, Body: a.Payload, Shared: shared, SubmittedBy: v.RequesterName}, true
 }
 func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -412,12 +416,17 @@ func (s *portal) write(w http.ResponseWriter, r *http.Request, who account, pare
 			}
 			continue
 		}
-		if key != "title" && key != "body" {
+		if key != "title" && key != "body" && !(parent == 0 && key == "category") {
 			http.Error(w, "Unbekanntes Formularfeld.", 400)
 			return
 		}
 	}
 	body, title := strings.TrimSpace(r.PostForm.Get("body")), strings.TrimSpace(r.PostForm.Get("title"))
+	category := r.PostForm.Get("category")
+	if len(r.PostForm["category"]) > 1 || !p.ValidTicketCategory(category) {
+		http.Error(w, "Ungültige Kategorie.", 400)
+		return
+	}
 	if body == "" || len(body) > 32000 || (parent == 0 && (title == "" || len(title) > 200)) {
 		http.Error(w, "Bitte Betreff (max. 200 Byte) und Nachricht (max. 32000 Byte) ausfüllen.", 400)
 		return
@@ -439,7 +448,7 @@ func (s *portal) write(w http.ResponseWriter, r *http.Request, who account, pare
 	}
 	a := p.Asset{AssetType: ticketType, Payload: body, Attachments: attachments}
 	if parent == 0 {
-		b, _ := json.Marshal(ticketPreview{Version: 1, Title: title, CompanyID: who.CompanyID, ContactID: who.ContactID, Requester: who.Requester, RequesterName: who.Name, Status: "open"})
+		b, _ := json.Marshal(ticketPreview{Version: 1, Title: title, CompanyID: who.CompanyID, ContactID: who.ContactID, Requester: who.Requester, RequesterName: who.Name, Status: "open", Category: category})
 		a.Preview = string(b)
 	} else {
 		// File uploads can take minutes. Recheck a team grant immediately before
@@ -501,10 +510,11 @@ var page = template.Must(template.New("portal").Parse(`<!doctype html>
 <h1>Wie können wir Ihnen helfen?</h1><p>Schildern Sie uns Ihr Anliegen. Wir kümmern uns darum.</p>
 <form method="post" action="/tickets" enctype="multipart/form-data">
 <label>Betreff<input name="title" maxlength="200" required></label>
+<label>Kategorie (optional)<select name="category"><option value="">Automatisch einordnen</option><option value="bug">Bug</option><option value="support">Support</option><option value="feature">Feature</option><option value="unclear">Unklar</option></select></label>
 <label>Ihre Nachricht<textarea name="body" rows="8" maxlength="32000" required></textarea></label>
 {{template "upload"}}<button>Anfrage senden</button></form>
 {{else if .Ticket}}
-<a href="/">← Alle Anfragen</a><h1>{{.Ticket.Title}}</h1><p class="muted">Anfrage #{{.Ticket.ID}} · {{.Ticket.Status}}</p>
+<a href="/">← Alle Anfragen</a><h1>{{.Ticket.Title}}</h1><p class="muted">Anfrage #{{.Ticket.ID}} · {{.Ticket.Status}}{{if .Ticket.Category}} · {{.Ticket.Category}}{{end}}</p>
 <article><h2>{{if .Ticket.Shared}}Teamanfrage{{if .Ticket.SubmittedBy}} von {{.Ticket.SubmittedBy}}{{end}}{{else}}Ihre Anfrage{{end}}</h2><div class="body">{{.Ticket.Body}}</div>{{template "attachments" .Ticket.Attachments}}</article>
 {{range .Ticket.Entries}}<article><strong>{{.Author}}</strong><div class="body">{{.Body}}</div>{{template "attachments" .Attachments}}</article>{{end}}
 <form method="post" action="/tickets/{{.Ticket.ID}}/reply" enctype="multipart/form-data">

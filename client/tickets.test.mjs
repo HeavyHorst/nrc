@@ -294,8 +294,9 @@ test('selection failure never substitutes another record; failed refresh retains
 
 test('create adopts acknowledged ID; a later save updates instead of duplicating the ticket', async () => {
   const f = fixture(); await f.api.reload(); f.api.open('42');
-  f.input('title', 'New request'); f.input('body', 'Original'); await f.submit('#ticketFields');
+  f.input('title', 'New request'); f.input('body', 'Original'); f.input('category', 'unclear'); await f.submit('#ticketFields');
   assert.equal(f.sent[0][1], 13); assert.equal(f.sent[0][2], 0);
+  assert.equal(JSON.parse(f.sent[0][4]).category, 'unclear', 'explicit unclear is not automatic');
   const asset = { ...f.records[0], assetId: 3n, preview: f.sent[0][4], payload: f.sent[0][5] };
   f.input('body', 'Late draft must not masquerade as the original');
   f.records.push(asset); f.ack({ asset }); await new Promise(resolve => setImmediate(resolve));
@@ -318,6 +319,9 @@ test('ticket scheduling defaults legacy priority and saves local follow-up times
   assert.equal(f.api.matches(f.records[0], { priority: 'normal' }), true);
   assert.equal(f.api.matches(f.records[0], { follow_up: 'due' }), false);
   for (const [field, value, key, expected] of [
+    ['CATEGORY', 'bug', 'category', 'bug'],
+    ['CATEGORY', 'unclear', 'category', 'unclear'],
+    ['CATEGORY', '', 'category', ''],
     ['PRIORITY', 'urgent', 'priority', 'urgent'],
     ['FOLLOW-UP · LOCAL TIME', '2020-01-02T13:45', 'follow_up_at', String(new Date(2020, 0, 2, 13, 45).getTime())],
     ['FOLLOW-UP · LOCAL TIME', '', 'follow_up_at', ''],
