@@ -14,7 +14,6 @@ import "base:intrinsics"
 import "core:container/queue"
 import "core:log"
 import "core:net"
-import "core:sync"
 
 import "byte_pool"
 import nbio "nbio/poly"
@@ -24,7 +23,7 @@ import ws "websocket"
 // Maximum allowed frame size (128KB) - prevents memory exhaustion attacks
 MAX_FRAME_SIZE :: 131072
 // Maximum allowed protocol payload size (bytes), excluding WebSocket frame header
-MAX_PROTOCOL_PAYLOAD_SIZE :: 131072
+MAX_PROTOCOL_PAYLOAD_SIZE :: pr.MAX_PROTOCOL_PAYLOAD_SIZE
 
 // Helper function to create binary WebSocket frame header
 create_binary_header :: proc(payload_len: u64) -> ws.header {
@@ -165,100 +164,6 @@ reset_receive_accumulator :: proc(c: ^NRC_Connection) {
 // on_recv_websocket_fixed is defined in callbacks.odin (Category 1 callback).
 // See callbacks.odin for the implementation and buffer architecture documentation.
 
-SHARD_DEFERRED_REQUEST_MAX_COUNT :: 512
-SHARD_DEFERRED_REQUEST_MAX_BYTES :: 32 * 1024 * 1024
-
-Shard_Deferred_Request :: struct {
-	connection: Connection_IO_Context,
-	payload:    []byte,
-}
-
-Shard_Protocol_Dispatch_Context :: struct {
-	connection: ^NRC_Connection,
-	payload:    []byte,
-}
-
-@(thread_local)
-shard_protocol_dispatch_context: Shard_Protocol_Dispatch_Context
-
-@(thread_local)
-shard_protocol_replay_active: bool
-
-defer_current_shard_protocol_request :: proc(writer: ^Shard_Transaction_Writer) -> bool {
-	c := shard_protocol_dispatch_context.connection
-	payload := shard_protocol_dispatch_context.payload
-	if writer == nil ||
-	   c == nil ||
-	   len(payload) == 0 ||
-	   len(writer.deferred_requests) >= SHARD_DEFERRED_REQUEST_MAX_COUNT ||
-	   len(payload) > SHARD_DEFERRED_REQUEST_MAX_BYTES - min(SHARD_DEFERRED_REQUEST_MAX_BYTES, writer.deferred_request_bytes) {
-		return false
-	}
-	owned := make([]byte, len(payload))
-	copy(owned, payload)
-	if !connection_io_pin(c) {
-		delete(owned)
-		return false
-	}
-	io := connection_io_context_make(c)
-	io.pinned = true
-	if _, append_err := append(&writer.deferred_requests, Shard_Deferred_Request{connection = io, payload = owned}); append_err != nil {
-		connection_io_unpin(io)
-		delete(owned)
-		return false
-	}
-	writer.deferred_request_bytes += len(owned)
-	c.deferred_shard_requests += 1
-	return true
-}
-
-release_shard_deferred_connection :: proc(request: Shard_Deferred_Request) {
-	c := connection_from_io_context(request.connection)
-	assert(c != nil && c.deferred_shard_requests > 0, "deferred shard request must retain its connection gate")
-	if c != nil && c.deferred_shard_requests > 0 do c.deferred_shard_requests -= 1
-}
-
-discard_shard_deferred_requests :: proc(writer: ^Shard_Transaction_Writer) {
-	if writer == nil do return
-	for request in writer.deferred_requests {
-		delete(request.payload)
-		release_shard_deferred_connection(request)
-		connection_io_unpin(request.connection)
-	}
-	delete(writer.deferred_requests)
-	writer.deferred_requests = nil
-	writer.deferred_request_bytes = 0
-}
-
-drain_shard_deferred_requests :: proc(writer: ^Shard_Transaction_Writer) {
-	if writer == nil || len(writer.deferred_requests) == 0 do return
-	requests := writer.deferred_requests
-	writer.deferred_requests = nil
-	writer.deferred_request_bytes = 0
-	defer delete(requests)
-	for request, index in requests {
-		c := connection_from_io_context(request.connection)
-		server_running := td.server == nil || !sync.atomic_load(&td.server.closing)
-		if !writer.poisoned && td.state == .Running && server_running && c != nil && c.state < .Will_Close {
-			previous_replay := shard_protocol_replay_active
-			shard_protocol_replay_active = true
-			process_protocol_payload(c, request.payload)
-			shard_protocol_replay_active = previous_replay
-		}
-		delete(request.payload)
-		release_shard_deferred_connection(request)
-		connection_io_unpin(request.connection)
-		if len(writer.deferred_requests) > 0 {
-			// A replay that re-defers remains ahead of the untouched tail. Move
-			// its existing ownership, rather than dispatching or pinning it again.
-			_, err := append(&writer.deferred_requests, ..requests[index + 1:])
-			assert(err == nil)
-			for pending in requests[index + 1:] do writer.deferred_request_bytes += len(pending.payload)
-			break
-		}
-	}
-}
-
 reset_fragment_accumulator :: proc(c: ^NRC_Connection) {
 	if c.fragment_buf != nil {
 		byte_pool.release(td.spool, c.fragment_buf)
@@ -325,7 +230,7 @@ append_fragment_accumulator :: proc(c: ^NRC_Connection, payload: []byte) -> bool
 	return true
 }
 
-process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
+process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte, dm_authorized := false) {
 	if len(frame_data) < 2 {
 		log.errorf("[T%d] Protocol payload too short (%d bytes) from %v", td.thread_index, len(frame_data), c.sock)
 		send_error_response(c, pr.Opcode(0xFFFF), "Protocol payload too short")
@@ -337,23 +242,8 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 		connection_close(c, false)
 		return
 	}
-	previous_dispatch := shard_protocol_dispatch_context
-	shard_protocol_dispatch_context = {
-		connection = c,
-		payload    = frame_data,
-	}
-	defer shard_protocol_dispatch_context = previous_dispatch
-	writer := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)c.workspace_id)
-	store := message_store_for_workspace(&td.message_stores, transmute([]byte)c.workspace_id)
-	if writer != nil &&
-		   (writer.write_in_flight || writer.lifecycle_in_flight || writer.pending_publication != nil || store != nil && store.lifecycle_in_flight) ||
-	   c.deferred_shard_requests > 0 && !shard_protocol_replay_active {
-		if writer != nil && defer_current_shard_protocol_request(writer) do return
-		send_websocket_close_frame_and_close(c, 1013, "Server too busy")
-		return
-	}
-
 	opcode := pr.get_opcode(frame_data)
+	if !dm_authorized && worker_db_defer_dm_access(c, opcode, frame_data[2:]) do return
 	if opcode != .C_ListHistory && is_workspace_data_opcode(opcode) && !workspace_data_scope_valid(frame_data[2:]) {
 		send_error_response(c, opcode, "Workspace data requires scope 0; update your client")
 		return
@@ -361,7 +251,11 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	#partial switch opcode {
 	case .C_ListTaskDependents:
 		req, err := pr.parseListTaskDependentsRequest(frame_data[2:])
-		if err == nil {process_list_task_dependents(c, req)} else {send_error_response(c, opcode, "Failed to parse request")}
+		if err != nil {
+			send_error_response(c, opcode, "Failed to parse request")
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
 	case .C_ListHistory:
 		process_list_history(c, frame_data[2:])
 	case .C_SendMessage:
@@ -444,7 +338,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 		attachments: [pr.MAX_ATTACHMENTS_PER_TASK]pr.Attachment
 		req, parse_err := pr.parseUpdateTaskRequest(frame_data[2:], attachments[:])
 		if parse_err == nil {
-			process_update_task(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse UpdateTaskRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_UpdateTask, "Failed to parse request")
@@ -452,7 +346,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_DeleteTask:
 		req, parse_err := pr.parseDeleteTaskRequest(frame_data[2:])
 		if parse_err == nil {
-			process_delete_task(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse DeleteTaskRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_DeleteTask, "Failed to parse request")
@@ -460,7 +354,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_MoveTask:
 		req, parse_err := pr.parseMoveTaskRequest(frame_data[2:])
 		if parse_err == nil {
-			process_move_task(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse MoveTaskRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_MoveTask, "Failed to parse request")
@@ -468,7 +362,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_GetTasks:
 		req, parse_err := pr.parseGetTasksRequest(frame_data[2:])
 		if parse_err == nil {
-			process_get_tasks(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse GetTasksRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_GetTasks, "Failed to parse request")
@@ -478,15 +372,13 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 		req, parse_err := pr.parseGetRecordsByIDsRequest(frame_data[2:], ids[:])
 		if parse_err != nil {
 			send_error_response(c, opcode, "Invalid ID batch", req.correlation_id)
-		} else if opcode == .C_GetTasksByIDs {
-			process_get_tasks_by_ids(c, req)
 		} else {
-			handle_get_assets_by_ids(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		}
 	case .C_ListTasksPaged:
 		req, parse_err := pr.parseListTasksPagedRequest(frame_data[2:])
 		if parse_err == nil {
-			process_list_tasks_paged(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse ListTasksPagedRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_ListTasksPaged, "Failed to parse request")
@@ -509,39 +401,60 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 					return
 				}
 			}
-			process_apply_transaction(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse ApplyTransactionRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_ApplyTransaction, "Failed to parse request")
 		}
 	case .C_QueryTasks:
 		req, parse_err := pr.parseTaskQueryRequest(frame_data[2:])
-		if parse_err == nil {process_query_tasks(c, req)} else {send_error_response(c, .C_QueryTasks, "Failed to parse request")}
-	case .C_ListTaskProjects:
-		req, parse_err := pr.parseListTaskProjectsRequest(frame_data[2:])
-		if parse_err == nil {process_list_task_projects(c, req)} else {send_error_response(c, .C_ListTaskProjects, "Failed to parse request")}
-	case .C_ListTaskAssignees:
+		if parse_err != nil {
+			send_error_response(c, opcode, "Failed to parse request")
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
+	case .C_ListTaskProjects, .C_ListTaskAssignees:
 		// Assignee metadata uses the same scope/correlation request as projects.
 		req, parse_err := pr.parseListTaskProjectsRequest(frame_data[2:])
-		if parse_err == nil {process_list_task_assignees(c, req)} else {send_error_response(c, .C_ListTaskAssignees, "Failed to parse request")}
+		if parse_err != nil {
+			send_error_response(c, opcode, "Failed to parse request")
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
 	case .C_ListSliceOwners, .C_ListTicketAssignees, .C_ListCalendarPeople:
 		req, parse_err := pr.parseListTaskProjectsRequest(frame_data[2:])
-		if parse_err == nil {process_list_people(c, req, opcode)} else {send_error_response(c, opcode, "Failed to parse request")}
+		if parse_err != nil {
+			send_error_response(c, opcode, "Failed to parse request")
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
 	case .C_QueryCalendar:
 		req, parse_err := pr.parseCalendarRequest(frame_data[2:])
-		if parse_err == nil {process_calendar_query(c, req)} else {send_error_response(c, .C_QueryCalendar, "Failed to parse request")}
+		if parse_err != nil {
+			send_error_response(c, opcode, "Failed to parse request")
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
 	case .C_ListTaskSlices:
 		req, parse_err := pr.parseListTaskSlicesRequest(frame_data[2:])
-		if parse_err == nil {process_list_task_slices(c, req)} else {send_error_response(c, .C_ListTaskSlices, "Failed to parse request")}
+		if parse_err != nil {
+			send_error_response(c, opcode, "Failed to parse request")
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
 	case .C_GetWorkspaceOverview:
 		// Same fixed scope/correlation body as the metadata queries.
 		req, parse_err := pr.parseListTaskProjectsRequest(frame_data[2:])
-		if parse_err == nil {process_workspace_overview(c, req)} else {send_error_response(c, .C_GetWorkspaceOverview, "Failed to parse request")}
+		if parse_err != nil {
+			send_error_response(c, opcode, "Failed to parse request")
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
 	case .C_CreateAsset:
 		attachments: [pr.MAX_ATTACHMENTS_PER_TASK]pr.Attachment
 		req, parse_err := pr.parseCreateAssetRequestWithAttachments(frame_data[2:], attachments[:])
 		if parse_err == nil {
-			handle_create_asset(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse CreateAssetRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_CreateAsset, "Failed to parse request")
@@ -550,7 +463,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 		attachments: [pr.MAX_ATTACHMENTS_PER_TASK]pr.Attachment
 		req, parse_err := pr.parseUpdateAssetRequestWithAttachments(frame_data[2:], attachments[:])
 		if parse_err == nil {
-			handle_update_asset(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse UpdateAssetRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_UpdateAsset, "Failed to parse request")
@@ -558,7 +471,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_DeleteAsset:
 		req, parse_err := pr.parseDeleteAssetRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_delete_asset(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse DeleteAssetRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_DeleteAsset, "Failed to parse request")
@@ -566,7 +479,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_GetAsset:
 		req, parse_err := pr.parseGetAssetRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_get_asset(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse GetAssetRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_GetAsset, "Failed to parse request")
@@ -574,7 +487,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_ListAssets:
 		req, parse_err := pr.parseListAssetsRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_list_assets(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse ListAssetsRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_ListAssets, "Failed to parse request")
@@ -582,7 +495,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_ListAssetsPaged:
 		req, parse_err := pr.parseListAssetsPagedRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_list_assets_paged(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse ListAssetsPagedRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_ListAssetsPaged, "Failed to parse request")
@@ -590,7 +503,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_ListAssetsPagedByProject:
 		req, parse_err := pr.parseListAssetsPagedByProjectRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_list_assets_paged_by_project(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse ListAssetsPagedByProjectRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_ListAssetsPagedByProject, "Failed to parse request")
@@ -598,7 +511,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_ListNoteProjects:
 		req, parse_err := pr.parseListNoteProjectsRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_list_note_projects(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse ListNoteProjectsRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_ListNoteProjects, "Failed to parse request")
@@ -606,7 +519,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_ListAssetsPagedByTag:
 		req, parse_err := pr.parseListAssetsPagedByTagRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_list_assets_paged_by_tag(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse ListAssetsPagedByTagRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_ListAssetsPagedByTag, "Failed to parse request")
@@ -614,7 +527,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_ListNoteTags:
 		req, parse_err := pr.parseListNoteTagsRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_list_note_tags(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse ListNoteTagsRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_ListNoteTags, "Failed to parse request")
@@ -623,7 +536,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_CreateEdge:
 		req, parse_err := pr.parseCreateEdgeRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_create_edge(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse CreateEdgeRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_CreateEdge, "Failed to parse request")
@@ -631,7 +544,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_DeleteEdge:
 		req, parse_err := pr.parseDeleteEdgeRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_delete_edge(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse DeleteEdgeRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_DeleteEdge, "Failed to parse request")
@@ -639,7 +552,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_ListEdges:
 		req, parse_err := pr.parseListEdgesRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_list_edges(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse ListEdgesRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_ListEdges, "Failed to parse request")
@@ -647,7 +560,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_ListAllEdges:
 		req, parse_err := pr.parseListAllEdgesRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_list_all_edges(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse ListAllEdgesRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_ListAllEdges, "Failed to parse request")
@@ -655,27 +568,36 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_ListAllEdgesPaged:
 		req, parse_err := pr.parseListAllEdgesPagedRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_list_all_edges_paged(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			send_error_response(c, .C_ListAllEdgesPaged, "Failed to parse request")
 		}
 	case .C_ListEdgesPaged:
 		req, parse_err := pr.parseListEdgesPagedRequest(frame_data[2:])
-		if parse_err == nil do handle_list_edges_paged(c, req)
-		else do send_error_response(c, .C_ListEdgesPaged, "Failed to parse request")
+		if parse_err != nil {
+			send_error_response(c, .C_ListEdgesPaged, "Failed to parse request")
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
 	case .C_SearchCustomers:
 		req, parse_err := pr.parseSearchCustomersRequest(frame_data[2:])
-		if parse_err == nil do handle_search_customers(c, req)
-		else do send_error_response(c, .C_SearchCustomers, "Failed to parse request")
+		if parse_err != nil {
+			send_error_response(c, opcode, "Failed to parse request")
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
 	case .C_QueryTickets:
 		req, parse_err := pr.parseTicketQueryRequest(frame_data[2:])
-		if parse_err == nil do handle_query_tickets(c, req)
-		else do send_error_response(c, .C_QueryTickets, "Failed to parse request")
+		if parse_err != nil {
+			send_error_response(c, .C_QueryTickets, "Failed to parse request")
+		} else {
+			worker_db_submit_tickets(c, frame_data[2:], req)
+		}
 	// Graph Query operations
 	case .C_GraphQuery:
 		req, parse_err := pr.parseGraphQueryRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_graph_query(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse GraphQueryRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_GraphQuery, "Failed to parse request")
@@ -683,7 +605,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_GraphShortestPath:
 		req, parse_err := pr.parseGraphShortestPathRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_shortest_path(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse GraphShortestPathRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_GraphShortestPath, "Failed to parse request")
@@ -691,7 +613,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_GraphDegree:
 		req, parse_err := pr.parseGraphDegreeRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_degree_query(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse GraphDegreeRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_GraphDegree, "Failed to parse request")
@@ -699,7 +621,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_GraphCommonNeighbors:
 		req, parse_err := pr.parseGraphCommonNeighborsRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_common_neighbors(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse GraphCommonNeighborsRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_GraphCommonNeighbors, "Failed to parse request")
@@ -707,7 +629,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_GraphRank:
 		req, parse_err := pr.parseGraphRankRequest(frame_data[2:])
 		if parse_err == nil {
-			handle_graph_rank(c, req)
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse GraphRankRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_GraphRank, "Failed to parse request")
@@ -715,7 +637,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_StartDM:
 		req, parse_err := pr.parseStartDMRequest(frame_data[2:])
 		if parse_err == nil {
-			process_start_dm(c, req)
+			worker_db_submit_dm(c, opcode, frame_data[2:], req.correlation_id, req.username)
 		} else {
 			log.errorf("[T%d] Failed to parse StartDMRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_StartDM, "Failed to parse request")
@@ -723,7 +645,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_ListDMs:
 		req, parse_err := pr.parseListDMsRequest(frame_data[2:])
 		if parse_err == nil {
-			process_list_dms(c, req)
+			worker_db_submit_dm(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse ListDMsRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_ListDMs, "Failed to parse request")
@@ -731,7 +653,7 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte) {
 	case .C_LeaveDM:
 		req, parse_err := pr.parseLeaveDMRequest(frame_data[2:])
 		if parse_err == nil {
-			process_leave_dm(c, req)
+			worker_db_submit_dm(c, opcode, frame_data[2:], req.correlation_id)
 		} else {
 			log.errorf("[T%d] Failed to parse LeaveDMRequest: %v", td.thread_index, parse_err)
 			send_error_response(c, .C_LeaveDM, "Failed to parse request")
@@ -912,20 +834,10 @@ outbox_enqueue :: proc(c: ^NRC_Connection, item: Send_Item, priority: bool = fal
 	}
 }
 
-// Queued bytes are immutable snapshots. Holding every application response from
-// a dirty shard also prevents queries/broadcasts from exposing speculative state.
+// SQLite completions are already committed; retained responses still wait for
+// their message WAL's existing durability boundary.
 outbox_item_is_durable :: proc(item: ^Send_Item) -> bool {
-	return outbox_item_shard_is_durable(item) && outbox_item_message_is_durable(item)
-}
-
-outbox_item_shard_is_durable :: proc(item: ^Send_Item) -> bool {
-	if item == nil || item.durability_writer == nil do return true
-	writer := item.durability_writer
-	return(
-		!writer.poisoned &&
-		writer.wal.enabled &&
-		(item.durability_generation < writer.durability_generation || item.durability_record <= writer.wal.durable_record_count) \
-	)
+	return outbox_item_message_is_durable(item)
 }
 
 outbox_item_message_is_durable :: proc(item: ^Send_Item) -> bool {
@@ -955,10 +867,6 @@ wait_for_durable_outbox :: proc(c: ^NRC_Connection, waiters: ^[dynamic]Connectio
 		return
 	}
 	c.outbox_waiting_durability = true
-}
-
-resume_shard_durable_outboxes :: proc(writer: ^Shard_Transaction_Writer) {
-	resume_durable_outboxes(&writer.durability_waiters)
 }
 
 resume_durable_outboxes :: proc(pending: ^[dynamic]Connection_Handle) {
@@ -1081,11 +989,7 @@ pump_outbox :: proc(c: ^NRC_Connection) {
 	}
 
 	if item := send_queue_peek(c); !outbox_item_is_durable(item) {
-		if !outbox_item_shard_is_durable(item) {
-			wait_for_durable_outbox(c, &item.durability_writer.durability_waiters)
-		} else {
-			wait_for_durable_outbox(c, &item.message_store.durability_waiters)
-		}
+		wait_for_durable_outbox(c, &item.message_store.durability_waiters)
 		c.send_started_at = {}
 		send_watchdog_untrack(c)
 		return
@@ -1237,14 +1141,6 @@ websocket_send_all_with_priority :: proc(
 		handle   = c.handle,
 		action   = action,
 		observer = observer,
-	}
-	if writer := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)c.workspace_id); !shard_independent && writer != nil {
-		record := writer.wal.record_count + writer.wal.buffered_record_count
-		if writer.poisoned || !writer.wal.enabled || record > writer.wal.durable_record_count {
-			item.durability_writer = writer
-			item.durability_generation = writer.durability_generation
-			item.durability_record = record
-		}
 	}
 	if store := message_store_for_workspace(&td.message_stores, transmute([]byte)c.workspace_id); !shard_independent && store != nil {
 		record := store.wal.record_count + store.wal.buffered_record_count

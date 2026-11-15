@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,13 @@ import run_hegel_campaign as campaign
 
 
 class CampaignTests(unittest.TestCase):
-    def exercise(self, output, codes, wrong_seed=False, seconds=900):
+    def test_selected_properties_exist_in_current_root_suite(self):
+        sources = "\n".join(path.read_text() for path in campaign.ROOT.glob("*test.odin"))
+        declared = set(re.findall(r"@\(test\)\s+(\w+)\s*::\s*proc", sources))
+        self.assertEqual(len(campaign.TESTS), len(set(campaign.TESTS)))
+        self.assertEqual(set(campaign.TESTS) - declared, set(), "stale Hegel campaign selection")
+
+    def exercise(self, output, codes, wrong_seed=False, seconds=900, finish_fault=None, untracked=b""):
         builds, seeds, workdirs = [], [], []
         processes = []
 
@@ -33,8 +40,17 @@ class CampaignTests(unittest.TestCase):
             (work / ".hegel" / "example").write_text("minimized example")
             for name in campaign.TESTS:
                 kwargs["stdout"].write(
-                    f"[hegel diag] start pid=1 caller={name} seed={seed + wrong_seed} derandomize=false\n"
-                    f"[hegel diag] finish pid=1 caller={name} executed=7 interesting=0 passed=true\n")
+                    f"[hegel diag] start pid=1 caller={name} seed={seed + wrong_seed} derandomize=false\n")
+                fault = finish_fault if name == campaign.TESTS[0] else None
+                if fault == "missing":
+                    continue
+                finish = (f"[hegel diag] finish pid=1 caller={name} executed={0 if fault == 'zero' else 7} "
+                          f"interesting={1 if fault == 'interesting' else 0} "
+                          f"passed={'false' if fault == 'failed' else 'true'} "
+                          f"err={'Native_Error' if fault == 'error' else 'None'}\n")
+                kwargs["stdout"].write(finish)
+                if fault == "duplicate":
+                    kwargs["stdout"].write(finish)
             process = Mock(pid=123456)
             code = codes[len(seeds) - 1]
             process.wait.side_effect = [KeyboardInterrupt(), 0, 0] if code == "interrupt" else [code]
@@ -48,6 +64,7 @@ class CampaignTests(unittest.TestCase):
         with patch.object(sys, "argv", args), \
                 patch.object(campaign.subprocess, "check_output", side_effect=lambda command, **kw:
                              "/tmp/pinned-libhegel.so\n" if command[0].endswith("fetch_libhegel.sh")
+                             else untracked if command[:2] == ["git", "ls-files"]
                              else "version" if kw.get("text") else b"diff"), \
                 patch.object(campaign.subprocess, "run", side_effect=run), \
                 patch.object(campaign.subprocess, "Popen", side_effect=run), \
@@ -80,6 +97,27 @@ class CampaignTests(unittest.TestCase):
             self.assertEqual(summary["status"], "failed")
             self.assertEqual((output / "seed-91-hegel/example").read_text(), "minimized example")
             self.assertIn("--seed 91 --runs 1", (output / "REPRODUCE.txt").read_text())
+
+    def test_success_exit_requires_one_successful_nonempty_finish_per_property(self):
+        for fault in ("missing", "zero", "failed", "interesting", "error", "duplicate"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "output"
+                status, _, summary = self.exercise(output, [0], finish_fault=fault)
+                self.assertEqual(status, 1)
+                self.assertEqual(summary["completed_seeds"], 0)
+                self.assertFalse(json.loads((output / "results.json").read_text())[0]["coverage_ok"])
+
+    def test_untracked_sources_mark_reproduction_incomplete(self):
+        for untracked in (b"", b"sqlite_model_test.odin\0workspace_db/new file.odin\0"):
+            with self.subTest(untracked=untracked), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "output"
+                self.exercise(output, [1], untracked=untracked)
+                snapshot = json.loads((output / "metadata.json").read_text())["source_snapshot"]
+                self.assertEqual(snapshot["complete_for_git_visible_files"], not untracked)
+                self.assertEqual(snapshot["untracked_paths_not_archived"],
+                                 [p.decode() for p in untracked.split(b"\0") if p])
+                for filename in ("SOURCE_SNAPSHOT.txt", "REPRODUCE.txt"):
+                    self.assertEqual("INCOMPLETE SOURCE SNAPSHOT" in (output / filename).read_text(), bool(untracked))
 
     def test_success_exit_with_wrong_generation_seed_is_failure(self):
         with tempfile.TemporaryDirectory() as directory:

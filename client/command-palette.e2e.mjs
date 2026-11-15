@@ -68,22 +68,6 @@ function waitForTcp(port, timeoutMs = 10_000) {
   });
 }
 
-function initializeEmptyShardedLayout(workDir) {
-  const dataDir = path.join(workDir, "data");
-  const generationDir = path.join(dataDir, "sharded-00000000000000000001");
-  for (let shard = 0; shard < 256; shard += 1) {
-    const shardDir = path.join(generationDir, `shard_${String(shard).padStart(3, "0")}`);
-    fs.mkdirSync(shardDir, { recursive: true });
-    fs.writeFileSync(path.join(shardDir, "active.wal"), Buffer.alloc(0));
-  }
-  // Fixed generation-1 Sharded_V1 manifest. The server still validates the
-  // production wire format and complete generation before it starts.
-  fs.writeFileSync(
-    path.join(dataDir, "storage-layout.manifest"),
-    Buffer.from("TlJDTAABAAAAAAAAAAAAAQIBAAAAAAAAAAABAAABAACsNnTeRP92XA==", "base64"),
-  );
-}
-
 function contentType(filePath) {
   if (filePath.endsWith(".html")) return "text/html; charset=utf-8";
   if (filePath.endsWith(".js")) return "text/javascript; charset=utf-8";
@@ -191,7 +175,8 @@ async function main() {
 
   try {
     await run(odinBin, ["build", ".", `-out:${serverBin}`], { cwd: repoRoot });
-    initializeEmptyShardedLayout(tmpDir);
+    // Exercise the server's SQLite bootstrap, without seeding a legacy WAL layout.
+    fs.mkdirSync(path.join(tmpDir, "data"));
 
     serverProcess = spawn(serverBin, [], {
       cwd: tmpDir,

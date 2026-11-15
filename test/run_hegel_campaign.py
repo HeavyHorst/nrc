@@ -17,23 +17,9 @@ import time
 
 ROOT = Path(__file__).resolve().parent.parent
 TESTS = [
-    "test_hegel_generated_transactional_shard_state_matches_replay",
-    "test_hegel_client_atomic_transaction_failure_histories",
     "test_hegel_retained_expiry_cancel_rollover_crash_histories",
-    "test_hegel_slice_membership_recovers_exact_durable_prefix",
-    "test_hegel_customer_membership_search_matches_model",
-    "test_hegel_edge_create_delete_parser_direct_semantic_equivalence",
-    "test_hegel_note_paging_parser_direct_semantic_equivalence",
-    "test_hegel_semantic_handler_graph_swarm",
-    "test_hegel_generated_semantic_histories_recover_exact_durable_prefix",
-    "test_hegel_mixed_semantic_history_recovers_exact_durable_prefix",
-    "test_hegel_generated_compaction_kernel_histories",
-    "test_hegel_fine_grained_publication_crashes_recover_later_generation_authority",
-    "test_hegel_shard_compaction_repeated_publication_history",
-    "test_hegel_generated_two_worker_global_event_schedules",
-    "test_hegel_semantic_transport_persistence_interleavings",
-    "test_hegel_semantic_transport_persistence_dependent_update_interleavings",
-    "test_hegel_global_segmented_deferred_interleavings",
+    "test_hegel_global_event_interleaving_campaign",
+    "test_hegel_cached_dm_transport_authorization_and_ownership",
     "test_hegel_generated_stale_callback_completions_do_not_target_reused_sockets",
     "test_hegel_generated_stale_callback_buffer_ownership_is_released_once",
     "test_hegel_generated_pending_callback_interleavings_match_pool_model",
@@ -80,8 +66,23 @@ def main():
         "first_seed": args.seed, "tests": TESTS, "build_flags": flags,
         "database": "empty at start of every process", "multiplier": 1,
     }
+    untracked = subprocess.check_output(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=ROOT)
+    untracked_paths = [os.fsdecode(path) for path in untracked.split(b"\0") if path]
+    metadata["source_snapshot"] = {
+        "complete_for_git_visible_files": not untracked_paths,
+        "untracked_paths_not_archived": untracked_paths,
+        "ignored_files_archived": False,
+    }
+    source_warning = (
+        "INCOMPLETE SOURCE SNAPSHOT: untracked files listed in metadata.json are NOT archived. "
+        "Commit plus source.patch cannot reconstruct this run; retain the original working tree.\n"
+        if untracked_paths else
+        "Source snapshot covers Git-visible files only; ignored dependencies and toolchains are not archived.\n")
+    (output / "SOURCE_SNAPSHOT.txt").write_text(source_warning)
+    print(source_warning, end="", flush=True)
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    (output / "source.patch").write_bytes(subprocess.check_output(["git", "diff", "HEAD"], cwd=ROOT))
+    (output / "source.patch").write_bytes(subprocess.check_output(["git", "diff", "--binary", "--full-index", "HEAD"], cwd=ROOT))
     shutil.copy2(__file__, output / "runner.py")
     results = []
     with tempfile.TemporaryDirectory(prefix="nrc-hegel-campaign-") as scratch:
@@ -143,7 +144,15 @@ def main():
                 text = log_path.read_text(errors="replace")
                 starts = re.findall(r"\[hegel diag\] start .*?caller=(\S+).*? seed=(\d+) ", text)
                 seen = {name.rsplit(".", 1)[-1] for name, _ in starts}
-                coverage_ok = seen == set(TESTS) and all(int(value) == seed for _, value in starts)
+                finishes = re.findall(
+                    r"\[hegel diag\] finish .*?caller=(\S+).*? executed=(\d+) interesting=(\d+) passed=(\w+) err=(\S+)", text)
+                finished = {name.rsplit(".", 1)[-1] for name, *_ in finishes}
+                coverage_ok = (
+                    len(starts) == len(finishes) == len(TESTS)
+                    and seen == finished == set(TESTS)
+                    and all(int(value) == seed for _, value in starts)
+                    and all(int(count) > 0 and int(interesting) == 0 and passed == "true" and error == "None"
+                            for _, count, interesting, passed, error in finishes))
                 run_status = "passed" if returncode == 0 and coverage_ok else "failed"
                 if returncode == 124:
                     run_status = "budget_exhausted" if remaining < args.run_timeout else "timeout"
@@ -152,7 +161,7 @@ def main():
                 elif returncode in (137, -signal.SIGKILL):
                     # SIGKILL can be timeout escalation or an external/OOM kill.
                     run_status = "killed"
-                cases = sum(map(int, re.findall(r"\[hegel diag\] finish .*? executed=(\d+)", text)))
+                cases = sum(int(count) for _, count, *_ in finishes)
                 result = {"seed": seed, "status": run_status, "exit_code": returncode,
                           "coverage_ok": coverage_ok, "executed_cases": cases,
                           "elapsed_seconds": round(time.monotonic() - run_started, 3)}
@@ -164,7 +173,8 @@ def main():
                     if (work / ".hegel").exists():
                         shutil.copytree(work / ".hegel", output / f"seed-{seed}-hegel")
                     (output / "REPRODUCE.txt").write_text(
-                        f"Commit: {metadata['commit']} plus source.patch; runner.py is a saved copy.\n"
+                        source_warning + f"Commit: {metadata['commit']}; source.patch covers tracked changes only.\n"
+                        "runner.py is a saved copy. Check SOURCE_SNAPSHOT.txt and metadata.json before reconstruction.\n"
                         "Copy runner.py to test/run_hegel_campaign.py if the checkout lacks it.\n"
                         "From that repository checkout (fresh example DB is automatic):\n"
                         f"python3 test/run_hegel_campaign.py --seed {seed} --runs 1 "

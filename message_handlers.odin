@@ -15,6 +15,7 @@ import "core:net"
 import "core:os"
 import "core:strconv"
 import "core:sync"
+import db "workspace_db"
 
 import "byte_pool"
 import nbio "nbio/poly"
@@ -303,56 +304,48 @@ process_stats :: proc(c: ^NRC_Connection, req: pr.StatsRequest) {
 	wal_fsync_ns := wal_details[0].total_fsync_ns + wal_details[1].total_fsync_ns + wal_details[2].total_fsync_ns
 	wal_write_ns := wal_details[0].total_write_ns + wal_details[1].total_write_ns + wal_details[2].total_write_ns
 	wal_writes := wal_details[0].write_count + wal_details[1].write_count + wal_details[2].write_count
-	sweep_metrics := shard_writer_registry_sweep_metrics(&td.shard_writers)
 
 	stats_response := pr.StatsResponse {
-		timestamp = req.timestamp,
-		server_timestamp = server_ts,
-		thread_id = u32(td.thread_index),
-		total_threads = u32(thread_count),
-		connections = conn_count,
-		memory_total_mb = mem_mb,
-		buffer_pool_percent = mem_percent,
-		io_pending = u32(nrc_io_num_waiting()),
-		io_ring_depth = io_stats.ring_depth,
-		io_ring_available = io_stats.ring_available,
-		io_sq_overflow = io_stats.unqueued_depth,
+		timestamp            = req.timestamp,
+		server_timestamp     = server_ts,
+		thread_id            = u32(td.thread_index),
+		total_threads        = u32(thread_count),
+		connections          = conn_count,
+		memory_total_mb      = mem_mb,
+		buffer_pool_percent  = mem_percent,
+		io_pending           = u32(nrc_io_num_waiting()),
+		io_ring_depth        = io_stats.ring_depth,
+		io_ring_available    = io_stats.ring_available,
+		io_sq_overflow       = io_stats.unqueued_depth,
 		io_total_completions = io_stats.total_completions,
-		io_total_latency_ns = io_stats.total_latency_ns,
-		io_latency_count = io_stats.latency_sample_count,
-		send_queue_depth = q_depth,
-		send_queue_limit = q_limit,
-		send_backpressure = backpressure,
-		send_dropped = 0, // Current policy disconnects, so drops are 0
+		io_total_latency_ns  = io_stats.total_latency_ns,
+		io_latency_count     = io_stats.latency_sample_count,
+		send_queue_depth     = q_depth,
+		send_queue_limit     = q_limit,
+		send_backpressure    = backpressure,
+		send_dropped         = 0, // Current policy disconnects, so drops are 0
 
 		// WAL metrics
-		wal_file_size = wal_file_size,
-		wal_pending_bytes = wal_pending,
-		wal_record_count = wal_records,
-		wal_fsync_count = wal_fsyncs,
-		wal_total_fsync_ns = wal_fsync_ns,
-		wal_total_write_ns = wal_write_ns,
-		wal_write_count = wal_writes,
-		wal_details_version = pr.PONG_WAL_DETAIL_VERSION,
-		wal_details_count = pr.PONG_WAL_DETAIL_MAX_COUNT,
-		wal_details = wal_details,
-		shard_sweep_version = pr.PONG_SHARD_SWEEP_VERSION,
-		shard_sweep = {
-			runs_total = sweep_metrics.runs,
-			ordinary_runs_total = sweep_metrics.ordinary_runs,
-			raw_runs_total = sweep_metrics.raw_runs,
-			input_bytes_total = sweep_metrics.input_bytes,
-			dirty_bytes_total = sweep_metrics.dirty_bytes,
-			prefix_read_bytes_total = sweep_metrics.prefix_read_bytes,
-			latest_read_bytes_total = sweep_metrics.latest_read_bytes,
-			measure_read_bytes_total = sweep_metrics.measure_read_bytes,
-			copy_read_bytes_total = sweep_metrics.copy_read_bytes,
-			replay_read_bytes_total = sweep_metrics.replay_read_bytes,
-			metadata_fallbacks_total = sweep_metrics.metadata_fallbacks,
-			metadata_written_bytes_total = sweep_metrics.metadata_written_bytes,
-		},
+		wal_file_size        = wal_file_size,
+		wal_pending_bytes    = wal_pending,
+		wal_record_count     = wal_records,
+		wal_fsync_count      = wal_fsyncs,
+		wal_total_fsync_ns   = wal_fsync_ns,
+		wal_total_write_ns   = wal_write_ns,
+		wal_write_count      = wal_writes,
+		wal_details_version  = pr.PONG_WAL_DETAIL_VERSION,
+		wal_details_count    = pr.PONG_WAL_DETAIL_MAX_COUNT,
+		wal_details          = wal_details,
+		// Keep the wire extension, with zero counters for retired compaction.
+		shard_sweep_version  = pr.PONG_SHARD_SWEEP_VERSION,
 	}
 
+	if req.database_stats && td.database.port != nil {
+		stats_response.database_stats = true
+		stats_response.database_version = req.database_version
+		stats_response.database = db.metrics_snapshot(td.database.port)
+		if td.server != nil do stats_response.database.generation = td.server.metrics_generation
+	}
 	send_stats_response(c, stats_response)
 }
 

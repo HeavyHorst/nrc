@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,7 +15,23 @@ func TestTaskPersistenceAcrossRestart(t *testing.T) {
 	serverWorkDir := t.TempDir()
 	workspace := fmt.Sprintf("e2e-task-persist-%d", time.Now().UnixNano())
 
-	server := startServerInWorkDir(t, serverWorkDir)
+	server := startServerInWorkDirWithEnv(t, serverWorkDir, map[string]string{"NRC_THREAD_COUNT": "5"})
+	t.Cleanup(func() {
+		server.stop(t)
+		if t.Failed() {
+			t.Logf("server logs:\n%s", server.logs.String())
+		}
+	})
+	generation := filepath.Join(serverWorkDir, "data", "sharded-00000000000000000001")
+	for shard := 0; shard < 256; shard++ {
+		dir := filepath.Join(generation, fmt.Sprintf("shard_%03d", shard))
+		if _, err := os.Stat(filepath.Join(dir, "workspace.sqlite3")); err != nil {
+			t.Fatalf("missing SQLite shard: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "active.wal")); !os.IsNotExist(err) {
+			t.Fatalf("unexpected legacy workspace WAL: %v", err)
+		}
+	}
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, ""))
 	if err != nil {
@@ -68,7 +86,7 @@ func TestTaskPersistenceAcrossRestart(t *testing.T) {
 	_ = conn.Close()
 	server.stop(t)
 
-	server = startServerInWorkDir(t, serverWorkDir)
+	server = startServerInWorkDirWithEnv(t, serverWorkDir, map[string]string{"NRC_THREAD_COUNT": "3"})
 	defer server.stop(t)
 
 	connAfterRestart, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, ""))

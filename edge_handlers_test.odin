@@ -1,384 +1,277 @@
 package main
 
-import "core:log"
-import "core:os"
+import "core:encoding/endian"
+import "core:mem"
 import "core:testing"
 
 import pr "protocol"
+import sql "sqlite"
+import ws "websocket"
+import db "workspace_db"
 
-when !NRC_SIMULATION {
-	_ :: log.nil_logger
-	_ :: os.remove
-	_ :: pr.parseErrorResponseMessage
+worker_db_test_sqlite_edges :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstring) {
+	store, rc := db.open(path); if !testing.expect_value(t, rc, sql.OK) do return
+	defer db.close(&store)
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(
+		t,
+		sql.exec(
+			store.db,
+			"DELETE FROM edges; DELETE FROM assets; DELETE FROM tasks; DELETE FROM history; DELETE FROM history_sequences; UPDATE sequences SET high_water=x'0000000000000064' WHERE domain='edge'",
+			nil,
+			nil,
+			nil,
+		),
+		sql.OK,
+	)
+	for id in ([2]u64{700, 701}) {
+		task := pr.Task {
+			id    = id,
+			title = transmute([]byte)string("Task endpoint"),
+		}
+		testing.expect_value(t, db.put_task(&store, c.workspace_id, &task), sql.OK)
+	}
+	foreign_task := pr.Task {
+		id = 702,
+	}
+	testing.expect_value(t, db.put_task(&store, "foreign-edge", &foreign_task), sql.OK)
+	a := pr.Asset {
+		asset_id   = 700,
+		asset_type = .Note,
+		preview    = transmute([]byte)string(`{"title":"Asset endpoint"}`),
+	}
+	testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &a), sql.OK)
+	a = {
+		asset_id   = 950,
+		asset_type = .Reminder,
+		owner      = transmute([]byte)string("alice"),
+		preview    = transmute([]byte)string(`{"visibility":"personal"}`),
+	}
+	testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &a), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	observer := connection_test_install_fake(
+		{
+			sock = connection_test_fake_socket(5),
+			state = .Idle,
+			workspace_id = c.workspace_id,
+			authenticated = true,
+			verified_username = "bob",
+			init_send_queue = true,
+		},
+	)
+	defer connection_test_uninstall(observer)
+	observer.is_sending = true; subscribe_to_conversation(observer, 0)
+	buffer: [128]byte
+	create := pr.CreateEdgeRequest {
+		source_type    = .Task,
+		source_id      = 700,
+		target_type    = .Asset,
+		target_id      = 700,
+		relation       = .MemberOf,
+		correlation_id = 901,
+	}
+	for id in u64(101) ..= 103 {
+		if id > 101 do create.relation = .RelatedTo
+		n := pr.serializeCreateEdgeRequest(create, buffer[:]); assert(n > 0)
+		process_protocol_payload(c, buffer[:n]); mem.zero(raw_data(buffer[:]), len(buffer)); worker_db_test_pump(t)
+		for recipient in ([2]^NRC_Connection{c, observer}) {
+			if !testing.expect_value(t, send_queue_len(recipient), 1) do continue
+			item := send_queue_pop(recipient); defer frame_lease_dispose(&item.lease)
+			frame := frame_lease_data(item.lease); _, offset, _ := ws.readFrameHeader(frame)
+			msg, err := pr.parseEdgeCreatedMessage(frame[offset:])
+			testing.expect(
+				t,
+				err == nil &&
+				msg.edge.edge_id == id &&
+				msg.edge.source_type == .Task &&
+				msg.edge.target_type == .Asset &&
+				msg.edge.source_id == 700 &&
+				msg.edge.target_id == 700,
+			)
+			testing.expect(
+				t,
+				msg.edge.relation == create.relation &&
+				string(msg.edge.created_by) == "alice" &&
+				msg.edge.created_at > 0 &&
+				msg.correlation_id == (recipient == c ? 901 : 0),
+			)
+		}
+	}
+	sqlite_projection_test_assert(
+		t,
+		&store,
+		"SELECT count(*)=3 FROM history WHERE entity_kind=3 AND source_kind=1 AND target_kind=2 AND json_extract(body,'$.sourceLabel')='Task endpoint' AND json_extract(body,'$.targetLabel')='Asset endpoint' AND json_extract(body,'$.fields')='[\"source\",\"target\",\"relation\"]'",
+	)
+	for f in ([?]struct {
+			source:   pr.TargetType,
+			sid:      u64,
+			target:   pr.TargetType,
+			tid:      u64,
+			relation: pr.RelationType,
+			error:    string,
+		}{{.Asset, 700, .Task, 700, .MemberOf, "Member is already assigned to this slice"}, {.Task, 700, .Asset, 700, .MemberOf, "Member is already assigned to this slice"}, {.Task, 700, .Task, 700, .RelatedTo, "Self-edge not allowed"}, {.Task, 702, .Task, 700, .RelatedTo, "Edge source entity not found"}, {.Task, 700, .Task, 702, .RelatedTo, "Edge target entity not found"}, {.Task, 700, .Asset, 950, .RelatedTo, "Personal reminders cannot have shared relations"}, {.Task, 700, .Asset, 700, pr.RelationType(0), "Invalid edge relation"}}) {
+		n := pr.serializeCreateEdgeRequest(
+			{source_type = f.source, source_id = f.sid, target_type = f.target, target_id = f.tid, relation = f.relation, correlation_id = 902},
+			buffer[:],
+		); assert(n > 0)
+		process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t)
+		if testing.expect_value(t, send_queue_len(c), 1) {
+			item := send_queue_pop(c); defer frame_lease_dispose(&item.lease)
+			frame := frame_lease_data(item.lease); _, offset, _ := ws.readFrameHeader(frame)
+			msg, err := pr.parseErrorResponseMessage(
+				frame[offset:],
+			); testing.expect(t, err == nil && msg.correlation_id == 902 && string(msg.error_msg) == f.error)
+		}
+		testing.expect_value(t, send_queue_len(observer), 0)
+	}
+	// A history failure must roll back insertion/deletion and the sequence floor.
+	testing.expect_value(
+		t,
+		sql.exec(store.db, "CREATE TRIGGER reject_edge_history BEFORE INSERT ON history BEGIN SELECT RAISE(ABORT,'fixture'); END", nil, nil, nil),
+		sql.OK,
+	)
+	for deleting in ([2]bool{false, true}) {
+		n := deleting ? pr.serializeDeleteEdgeRequest(0, 101, buffer[:], 901) : pr.serializeCreateEdgeRequest(create, buffer[:])
+		process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t); worker_db_test_asset_error(t, c, 901)
+		testing.expect_value(t, send_queue_len(observer), 0)
+	}
+	sqlite_projection_test_assert(t, &store, "SELECT count(*)=3 FROM edges")
+	sqlite_projection_test_assert(t, &store, "SELECT high_water=x'0000000000000067' FROM sequences WHERE domain='edge'")
+	testing.expect_value(t, sql.exec(store.db, "DROP TRIGGER reject_edge_history", nil, nil, nil), sql.OK)
+	n := pr.serializeDeleteEdgeRequest(0, 103, buffer[:], 903)
+	process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t)
+	for recipient in ([2]^NRC_Connection{c, observer}) {
+		if !testing.expect_value(t, send_queue_len(recipient), 1) do continue
+		item := send_queue_pop(recipient); defer frame_lease_dispose(&item.lease)
+		frame := frame_lease_data(item.lease); _, offset, _ := ws.readFrameHeader(frame)
+		msg, err := pr.parseEdgeDeletedMessage(
+			frame[offset:],
+		); testing.expect(t, err == nil && msg.edge_id == 103 && msg.correlation_id == (recipient == c ? 903 : 0))
+	}
+	process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t); worker_db_test_asset_error(t, c, 903)
+	// Disconnect after admission: commit still broadcasts, without a stale ACK.
+	initiator := connection_test_install_fake(
+		{sock = connection_test_fake_socket(6), state = .Idle, workspace_id = c.workspace_id, authenticated = true, verified_username = "alice"},
+	)
+	n = pr.serializeCreateEdgeRequest(
+		create,
+		buffer[:],
+	); process_protocol_payload(initiator, buffer[:n]); connection_test_uninstall(initiator); worker_db_test_pump(t)
+	for recipient in ([2]^NRC_Connection{c, observer}) {
+		if !testing.expect_value(t, send_queue_len(recipient), 1) do continue
+		item := send_queue_pop(recipient); defer frame_lease_dispose(&item.lease)
+		frame := frame_lease_data(item.lease); _, offset, _ := ws.readFrameHeader(frame)
+		msg, err := pr.parseEdgeCreatedMessage(frame[offset:]); testing.expect(t, err == nil && msg.edge.edge_id == 104 && msg.correlation_id == 0)
+	}
+	worker_db_test_sqlite_edge_lists(t, c, &store)
+	testing.expect(t, td.database.port.in_flight == 0 && td.database.port.charged_bytes == 0)
 }
 
-when NRC_SIMULATION {
-	edge_handler_test_init_writer :: proc(workspace_id: string) -> (path: string, ok: bool) {
-		path = test_wal_path("edge_handler_simulation.log")
-		_ = os.remove(path)
-		if os.write_entire_file(path, nil) != nil do return path, false
-		shard := int(shard_for_workspace(transmute([]byte)workspace_id))
-		td.shard_writers.worker = 0
-		td.shard_writers.worker_count = 1
-		for &index in td.shard_writers.writer_index do index = -1
-		_, append_err := append(&td.shard_writers.writers, Shard_Transaction_Writer{})
-		if append_err != nil || !init_shard_transaction_writer(&td.shard_writers.writers[0], path, shard, 0, 1) {
-			shutdown_shard_writer_registry(&td.shard_writers)
-			return path, false
+worker_db_test_sqlite_edge_lists :: proc(t: ^testing.T, c: ^NRC_Connection, store: ^db.Store) {
+	testing.expect_value(t, db.begin(store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM edges", nil, nil, nil), sql.OK)
+	// Mix endpoint directions, an imported self-edge, unsigned IDs, and a same-ID
+	// task which is NOT the requested asset. No RAM graph is populated.
+	for f in ([?]struct {
+			id:     u64,
+			source: pr.TargetType,
+			sid:    u64,
+			target: pr.TargetType,
+			tid:    u64,
+		}{{3, .Asset, 700, .Task, 701}, {5, .Task, 701, .Asset, 700}, {7, .Asset, 700, .Asset, 700}, {8, .Task, 700, .Task, 701}, {u64(1) << 63, .Asset, 700, .Task, 701}, {max(u64), .Task, 701, .Asset, 700}}) {
+		key := pr.Asset {
+			asset_id = f.id,
 		}
-		td.shard_writers.writer_index[shard] = 0
-		td.shard_writers.mode = .Active
-		return path, true
-	}
-
-	edge_handler_test_install_client :: proc(
-		ctx: ^Sim_Test_Context,
-		client_id: int,
-		workspace_id, username: string,
-		cache_workspace: bool = true,
-	) -> ^NRC_Connection {
-		sock := connection_test_fake_socket(client_id)
-		nrc_sim_register_client(&ctx.sim, sock)
-		conn := connection_test_install_fake(
-			Fake_Connection_Options {
-				sock = sock,
-				state = .Idle,
-				workspace_id = workspace_id,
-				verified_username = username,
-				authenticated = true,
-				user_type = .User,
-				track_active_socket = true,
-				cache_workspace = cache_workspace,
-			},
+		testing.expect_value(
+			t,
+			sqlite_projection_write(
+				store,
+				"INSERT INTO edges VALUES(?1,?2,?3,?4,?5,?6,2,123,x'616c696365')",
+				c.workspace_id,
+				&key,
+				{i64(f.source), f.sid, i64(f.target), f.tid},
+			),
+			sql.OK,
 		)
-		if conn != nil {
-			conn.rooms = make(map[pr.ConversationID]bool, 4)
-			ctx.conns[client_id] = conn
-		}
-		return conn
 	}
-
-	edge_handler_test_payload :: proc(t: ^testing.T, sim: ^Sim_Runtime, conn: ^NRC_Connection, expected: pr.Opcode) -> (payload: []u8, ok: bool) {
-		testing.expect(t, simulation_test_commit_shards(sim))
-		frame_count := nrc_sim_client_frame_count(sim, conn.sock)
-		testing.expect_value(t, frame_count, 1)
-		if frame_count != 1 do return
-		payload, ok = nrc_sim_frame_protocol_payload(nrc_sim_client_frame(sim, conn.sock, 0))
-		testing.expect(t, ok, "captured edge response should be a complete WebSocket frame")
-		if !ok do return
-		testing.expect_value(t, pr.get_opcode(payload), expected)
-		return
+	key := pr.Asset {
+		asset_id = 1,
 	}
-
-	edge_handler_test_expect_error :: proc(t: ^testing.T, sim: ^Sim_Runtime, conn: ^NRC_Connection, origin: pr.Opcode, message: string, correlation_id: u32) {
-		payload, ok := edge_handler_test_payload(t, sim, conn, .S_ErrorResponse)
-		if !ok do return
-		response, parse_err := pr.parseErrorResponseMessage(payload)
-		testing.expect(t, parse_err == nil, "S_ErrorResponse should decode")
-		if parse_err != nil do return
-		testing.expect_value(t, response.origin_opcode, origin)
-		testing.expect(t, string(response.error_msg) == message, "S_ErrorResponse should preserve the rejection reason")
-		testing.expect_value(t, response.correlation_id, correlation_id)
-	}
-
-	edge_handler_test_add_asset :: proc(conv: ^Conversation_State, conv_id: pr.ConversationID, asset_id: pr.AssetID) -> bool {
-		asset := alloc_asset(transmute([]byte)string("edge-test"), nil, nil)
-		if asset == nil do return false
-		asset.asset_id = asset_id
-		asset.conv_id = conv_id
-		asset.asset_type = .Document
-		conv.assets[asset_id] = asset
-		return true
-	}
-
-	edge_handler_test_add_edge :: proc(
-		conv: ^Conversation_State,
-		conv_id: pr.ConversationID,
-		edge_id: pr.EdgeID,
-		source_id, target_id: u64,
-		relation: pr.RelationType,
-	) -> ^pr.Edge {
-		edge := alloc_edge(transmute([]byte)string("edge-test"))
-		if edge == nil do return nil
-		edge.edge_id = edge_id
-		edge.conv_id = conv_id
-		edge.source_type = .Asset
-		edge.source_id = source_id
-		edge.target_type = .Asset
-		edge.target_id = target_id
-		edge.relation = relation
-		conv.edges[edge_id] = edge
-		add_edge_to_adjacency(conv, .Asset, source_id, edge_id)
-		add_edge_to_adjacency(conv, .Asset, target_id, edge_id)
-		return edge
-	}
-}
-
-@(test)
-test_simulation_edge_create_rejections_are_protocol_visible_and_non_mutating :: proc(t: ^testing.T) {
-	when !NRC_SIMULATION {
-		return
-	} else {
-		ctx: Sim_Test_Context
-		simulation_test_begin(&ctx, 125)
-		defer simulation_test_end(&ctx)
-		workspace_id := "edge-handler-validation"
-		conn := edge_handler_test_install_client(&ctx, 1, workspace_id, "alice")
-		if conn == nil do return
-		conv_id := pr.ConversationID(81)
-		conv := get_or_create_conversation(conn.workspace, conv_id)
-		testing.expect(t, edge_handler_test_add_asset(conv, conv_id, 1), "source fixture should allocate")
-		testing.expect(t, edge_handler_test_add_asset(conv, conv_id, 2), "target fixture should allocate")
-		if len(conv.assets) != 2 do return
-
-		requests := [?]struct {
-			req:     pr.CreateEdgeRequest,
-			message: string,
-		} {
-			{
-				req = {
-					conv_id = conv_id,
-					source_type = .Asset,
-					source_id = 1,
-					target_type = .Asset,
-					target_id = 2,
-					relation = pr.RelationType(99),
-					correlation_id = 201,
-				},
-				message = "Invalid edge relation",
-			},
-			{
-				req = {
-					conv_id = conv_id,
-					source_type = .Asset,
-					source_id = 99,
-					target_type = .Asset,
-					target_id = 2,
-					relation = .References,
-					correlation_id = 202,
-				},
-				message = "Edge source entity not found",
-			},
-			{
-				req = {
-					conv_id = conv_id,
-					source_type = .Asset,
-					source_id = 1,
-					target_type = .Asset,
-					target_id = 99,
-					relation = .References,
-					correlation_id = 203,
-				},
-				message = "Edge target entity not found",
-			},
-			{
-				req = {
-					conv_id = conv_id,
-					source_type = .Asset,
-					source_id = 1,
-					target_type = .Asset,
-					target_id = 1,
-					relation = .References,
-					correlation_id = 204,
-				},
-				message = "Self-edge not allowed",
-			},
-		}
-
-		for test_case in requests {
-			nrc_sim_clear_inboxes(&ctx.sim)
-			edge_count := len(conv.edges)
-			adjacency_count := len(conv.edges_by_entity)
-			edge_seq := td.edge_seq
-			previous_logger := context.logger
-			context.logger = log.nil_logger()
-			handle_create_edge(conn, test_case.req)
-			context.logger = previous_logger
-			edge_handler_test_expect_error(t, &ctx.sim, conn, .C_CreateEdge, test_case.message, test_case.req.correlation_id)
-			testing.expect_value(t, len(conv.edges), edge_count)
-			testing.expect_value(t, len(conv.edges_by_entity), adjacency_count)
-			testing.expect_value(t, td.edge_seq, edge_seq)
-		}
-	}
-}
-
-@(test)
-test_simulation_edge_delete_missing_state_returns_correlated_errors_without_mutation :: proc(t: ^testing.T) {
-	when !NRC_SIMULATION {
-		return
-	} else {
-		ctx: Sim_Test_Context
-		simulation_test_begin(&ctx, 126)
-		defer simulation_test_end(&ctx)
-		workspace_id := "edge-handler-delete-errors"
-		conn := edge_handler_test_install_client(&ctx, 1, workspace_id, "alice", false)
-		if conn == nil do return
-		previous_logger := context.logger
-		context.logger = log.nil_logger()
-		handle_delete_edge(conn, pr.DeleteEdgeRequest{conv_id = 82, edge_id = 1, correlation_id = 211})
-		context.logger = previous_logger
-		edge_handler_test_expect_error(t, &ctx.sim, conn, .C_DeleteEdge, "Workspace not found", 211)
-
-		ws := get_or_create_workspace(workspace_id)
-		conn.workspace = ws
-		nrc_sim_clear_inboxes(&ctx.sim)
-		context.logger = log.nil_logger()
-		handle_delete_edge(conn, pr.DeleteEdgeRequest{conv_id = 82, edge_id = 1, correlation_id = 212})
-		context.logger = previous_logger
-		edge_handler_test_expect_error(t, &ctx.sim, conn, .C_DeleteEdge, "Conversation not found", 212)
-
-		conv := get_or_create_conversation(ws, 82)
-		testing.expect(t, edge_handler_test_add_asset(conv, 82, 1), "source fixture should allocate")
-		testing.expect(t, edge_handler_test_add_asset(conv, 82, 2), "target fixture should allocate")
-		testing.expect(t, edge_handler_test_add_edge(conv, 82, 7, 1, 2, .References) != nil, "edge fixture should allocate")
-		existing_edge := conv.edges[7]
-		nrc_sim_clear_inboxes(&ctx.sim)
-		context.logger = log.nil_logger()
-		handle_delete_edge(conn, pr.DeleteEdgeRequest{conv_id = 82, edge_id = 99, correlation_id = 213})
-		context.logger = previous_logger
-		edge_handler_test_expect_error(t, &ctx.sim, conn, .C_DeleteEdge, "Edge not found", 213)
-		testing.expect_value(t, len(conv.edges), 1)
-		testing.expect_value(t, len(conv.edges_by_entity), 2)
-		testing.expect(t, conv.edges[7] == existing_edge, "missing-edge rejection must retain the existing edge allocation")
-		for asset_id in 1 ..= 2 {
-			edge_ids := conv.edges_by_entity[Edge_Entity_Key{target_type = .Asset, target_id = u64(asset_id)}]
-			testing.expect_value(t, len(edge_ids), 1)
-			if len(edge_ids) == 1 do testing.expect_value(t, edge_ids[0], pr.EdgeID(7))
-		}
-	}
-}
-
-@(test)
-test_simulation_edge_lists_decode_correlations_and_ignore_stale_entries :: proc(t: ^testing.T) {
-	when !NRC_SIMULATION {
-		return
-	} else {
-		ctx: Sim_Test_Context
-		simulation_test_begin(&ctx, 127)
-		defer simulation_test_end(&ctx)
-		workspace_id := "edge-handler-listing"
-		conn := edge_handler_test_install_client(&ctx, 1, workspace_id, "alice")
-		if conn == nil do return
-		conv_id := pr.ConversationID(83)
-		conv := get_or_create_conversation(conn.workspace, conv_id)
-		for asset_id in 1 ..= 3 {
-			testing.expect(t, edge_handler_test_add_asset(conv, conv_id, pr.AssetID(asset_id)), "asset fixture should allocate")
-		}
-		testing.expect(t, edge_handler_test_add_edge(conv, conv_id, 11, 1, 2, .References) != nil, "first edge fixture should allocate")
-		testing.expect(t, edge_handler_test_add_edge(conv, conv_id, 12, 2, 3, .DependsOn) != nil, "second edge fixture should allocate")
-		append(&conv.edges_by_entity[Edge_Entity_Key{target_type = .Asset, target_id = 1}], 999)
-		conv.edges[998] = nil
-
-		handle_list_edges(conn, pr.ListEdgesRequest{conv_id = conv_id, target_type = .Asset, target_id = 1, correlation_id = 221})
-		payload, ok := edge_handler_test_payload(t, &ctx.sim, conn, .S_EdgeList)
-		if ok {
-			edges: [4]pr.Edge
-			listed, parse_err := pr.parseEdgeListMessage(payload, edges[:])
-			testing.expect(t, parse_err == nil, "S_EdgeList should decode")
-			testing.expect_value(t, listed.conv_id, conv_id)
-			testing.expect_value(t, listed.target_type, pr.TargetType.Asset)
-			testing.expect_value(t, listed.target_id, u64(1))
-			testing.expect_value(t, listed.correlation_id, u32(221))
-			testing.expect_value(t, len(listed.edges), 1)
-			if len(listed.edges) == 1 do testing.expect_value(t, listed.edges[0].edge_id, pr.EdgeID(11))
-		}
-
-		nrc_sim_clear_inboxes(&ctx.sim)
-		handle_list_all_edges(conn, pr.ListAllEdgesRequest{conv_id = conv_id, correlation_id = 222})
-		payload, ok = edge_handler_test_payload(t, &ctx.sim, conn, .S_AllEdgeList)
-		if ok {
-			edges: [4]pr.Edge
-			listed, parse_err := pr.parseAllEdgeListMessage(payload, edges[:])
-			testing.expect(t, parse_err == nil, "S_AllEdgeList should decode")
-			testing.expect_value(t, listed.conv_id, conv_id)
-			testing.expect_value(t, listed.correlation_id, u32(222))
-			testing.expect_value(t, len(listed.edges), 2)
-			seen_11, seen_12 := false, false
-			for edge in listed.edges {
-				seen_11 = seen_11 || edge.edge_id == 11
-				seen_12 = seen_12 || edge.edge_id == 12
+	testing.expect_value(
+		t,
+		sqlite_projection_write(store, "INSERT INTO edges VALUES(?1,?2,1,?3,2,?4,2,0,x'')", "foreign-edge", &key, {u64(700), u64(701)}),
+		sql.OK,
+	)
+	testing.expect_value(t, db.commit(store), sql.OK)
+	buffer: [128]byte
+	for incident in ([2]bool{false, true}) {
+		for f in ([?]struct {
+				after: u64,
+				ids:   []u64,
+				more:  bool,
+			}{{0, {3, 5}, true}, {5, {7}, true}, {8, {u64(1) << 63, max(u64)}, false}, {max(u64), {}, false}}) {
+			// A one-item page at ID 5 has the same answer in both variants.
+			limit: u16 = f.after == 5 ? 1 : 2
+			n :=
+				incident ? pr.serializeListEdgesPagedRequest({target_type = .Asset, target_id = 700, limit = limit, after_edge_id = f.after, correlation_id = 910}, buffer[:]) : pr.serializeListAllEdgesPagedRequest({limit = limit, after_edge_id = f.after, correlation_id = 910}, buffer[:])
+			process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t)
+			if !testing.expect_value(t, send_queue_len(c), 1) do continue
+			item := send_queue_pop(c); defer frame_lease_dispose(&item.lease)
+			frame := frame_lease_data(item.lease); _, offset, _ := ws.readFrameHeader(frame); body := frame[offset:]
+			if !testing.expect(t, pr.get_opcode(body) == (incident ? .S_EdgeListPage : .S_AllEdgeListPage)) do continue
+			base := incident ? 20 : 10
+			cursor, _ := endian.get_u64(body[base + 1:], .Big); total, _ := endian.get_u32(body[base + 9:], .Big)
+			count, _ := endian.get_u16(body[base + 13:], .Big); corr, _ := endian.get_u32(body[base + 15:], .Big)
+			testing.expect(t, int(count) == len(f.ids) && body[base] == (f.more ? 1 : 0) && corr == 910 && total == (incident ? 5 : 6))
+			testing.expect_value(t, cursor, len(f.ids) > 0 ? f.ids[len(f.ids) - 1] : 0)
+			pos := base + 19
+			for id in f.ids {
+				actual, _ := endian.get_u64(body[pos:], .Big); testing.expect_value(t, actual, id)
+				length, _ := endian.get_u16(body[pos + 46:], .Big); testing.expect_value(t, string(body[pos + 48:][:int(length)]), "alice")
+				pos += 48 + int(length)
 			}
-			testing.expect(t, seen_11 && seen_12, "all-edge listing should contain each live edge and omit nil map entries")
+			testing.expect_value(t, pos, len(body))
 		}
-
-		testing.expect_value(t, len(conv.edges), 3)
-		testing.expect_value(t, len(conv.edges_by_entity[Edge_Entity_Key{target_type = .Asset, target_id = 1}]), 2)
+		n :=
+			incident ? pr.serializeListEdgesRequest({target_type = .Asset, target_id = 700, correlation_id = 911}, buffer[:]) : pr.serializeListAllEdgesRequest({correlation_id = 911}, buffer[:])
+		process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t)
+		if !testing.expect_value(t, send_queue_len(c), 1) do continue
+		item := send_queue_pop(c); defer frame_lease_dispose(&item.lease)
+		frame := frame_lease_data(item.lease); _, offset, _ := ws.readFrameHeader(frame)
+		edges: [6]pr.Edge
+		if incident {
+			msg, err := pr.parseEdgeListMessage(
+				frame[offset:],
+				edges[:],
+			); testing.expect(t, err == nil && len(msg.edges) == 5 && msg.target_type == .Asset && msg.target_id == 700 && msg.correlation_id == 911)
+		} else {
+			msg, err := pr.parseAllEdgeListMessage(frame[offset:], edges[:]); testing.expect(t, err == nil && len(msg.edges) == 6 && msg.correlation_id == 911)
+		}
 	}
-}
-
-@(test)
-test_simulation_edge_create_delete_broadcasts_exclude_requester_and_zero_peer_correlation :: proc(t: ^testing.T) {
-	when !NRC_SIMULATION {
-		return
-	} else {
-		ctx: Sim_Test_Context
-		simulation_test_begin(&ctx, 128)
-		defer simulation_test_end(&ctx)
-		workspace_id := "edge-handler-broadcast"
-		wal_path, writer_ok := edge_handler_test_init_writer(workspace_id)
-		defer os.remove(wal_path)
-		testing.expect(t, writer_ok, "edge handler simulation writer should initialize")
-		if !writer_ok do return
-		defer shutdown_shard_writer_registry(&td.shard_writers)
-		td.edge_seq = 0
-
-		sender := edge_handler_test_install_client(&ctx, 1, workspace_id, "alice")
-		peer := edge_handler_test_install_client(&ctx, 2, workspace_id, "bob")
-		outsider := edge_handler_test_install_client(&ctx, 3, workspace_id, "carol")
-		if sender == nil || peer == nil || outsider == nil do return
-		conv_id := pr.ConversationID(84)
-		conv := get_or_create_conversation(sender.workspace, conv_id)
-		testing.expect(t, edge_handler_test_add_asset(conv, conv_id, 1), "source fixture should allocate")
-		testing.expect(t, edge_handler_test_add_asset(conv, conv_id, 2), "target fixture should allocate")
-		conversation_add_subscriber(conv, sender)
-		conversation_add_subscriber(conv, peer)
-
-		handle_create_edge(
-			sender,
-			pr.CreateEdgeRequest {
-				conv_id = conv_id,
-				source_type = .Asset,
-				source_id = 1,
-				target_type = .Asset,
-				target_id = 2,
-				relation = .RelatedTo,
-				correlation_id = 231,
-			},
-		)
-		sender_payload, sender_ok := edge_handler_test_payload(t, &ctx.sim, sender, .S_EdgeCreated)
-		peer_payload, peer_ok := edge_handler_test_payload(t, &ctx.sim, peer, .S_EdgeCreated)
-		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, outsider.sock), 0)
-		if sender_ok {
-			created, parse_err := pr.parseEdgeCreatedMessage(sender_payload)
-			testing.expect(t, parse_err == nil, "requester S_EdgeCreated should decode")
-			testing.expect_value(t, created.correlation_id, u32(231))
-			testing.expect_value(t, created.edge.edge_id, pr.EdgeID(1))
-		}
-		if peer_ok {
-			created, parse_err := pr.parseEdgeCreatedMessage(peer_payload)
-			testing.expect(t, parse_err == nil, "peer S_EdgeCreated should decode")
-			testing.expect_value(t, created.correlation_id, u32(0))
-			testing.expect_value(t, created.edge.edge_id, pr.EdgeID(1))
-		}
-
-		nrc_sim_clear_inboxes(&ctx.sim)
-		handle_delete_edge(sender, pr.DeleteEdgeRequest{conv_id = conv_id, edge_id = 1, correlation_id = 232})
-		sender_payload, sender_ok = edge_handler_test_payload(t, &ctx.sim, sender, .S_EdgeDeleted)
-		peer_payload, peer_ok = edge_handler_test_payload(t, &ctx.sim, peer, .S_EdgeDeleted)
-		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, outsider.sock), 0)
-		if sender_ok {
-			deleted, parse_err := pr.parseEdgeDeletedMessage(sender_payload)
-			testing.expect(t, parse_err == nil, "requester S_EdgeDeleted should decode")
-			testing.expect_value(t, deleted.correlation_id, u32(232))
-			testing.expect_value(t, deleted.edge_id, pr.EdgeID(1))
-		}
-		if peer_ok {
-			deleted, parse_err := pr.parseEdgeDeletedMessage(peer_payload)
-			testing.expect(t, parse_err == nil, "peer S_EdgeDeleted should decode")
-			testing.expect_value(t, deleted.correlation_id, u32(0))
-			testing.expect_value(t, deleted.edge_id, pr.EdgeID(1))
-		}
-		testing.expect_value(t, len(conv.edges), 0)
-		testing.expect_value(t, len(conv.edges_by_entity), 0)
+	// The test output credit is 4 KiB: two large creator fields split a page.
+	testing.expect_value(
+		t,
+		sql.exec(store.db, "UPDATE edges SET created_by=zeroblob(2200) WHERE id IN(x'0000000000000003',x'0000000000000005')", nil, nil, nil),
+		sql.OK,
+	)
+	n := pr.serializeListAllEdgesPagedRequest({limit = 10, correlation_id = 912}, buffer[:]); process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t)
+	if testing.expect_value(t, send_queue_len(c), 1) {
+		item := send_queue_pop(c); defer frame_lease_dispose(&item.lease)
+		frame := frame_lease_data(item.lease); _, offset, _ := ws.readFrameHeader(frame)
+		edges: [2]pr.Edge; page, err := pr.parseAllEdgeListPageMessage(frame[offset:], edges[:]); testing.expect(t, err == nil && page.has_more && len(page.edges) == 1 && page.next_edge_id == 3 && page.total_count == 6)
+	}
+	n = pr.serializeListAllEdgesRequest(
+		{correlation_id = 913},
+		buffer[:],
+	); process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t); worker_db_test_asset_error(t, c, 913)
+	// An empty incident set is a valid empty page, not a missing-entity error.
+	n = pr.serializeListEdgesPagedRequest(
+		{target_type = .Asset, target_id = 999, correlation_id = 914},
+		buffer[:],
+	); process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t)
+	if testing.expect_value(t, send_queue_len(c), 1) {
+		item := send_queue_pop(c); defer frame_lease_dispose(&item.lease)
+		frame := frame_lease_data(item.lease); _, offset, _ := ws.readFrameHeader(frame)
+		testing.expect(t, len(frame[offset:]) == 39 && pr.get_opcode(frame[offset:]) == .S_EdgeListPage)
 	}
 }

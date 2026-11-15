@@ -10,6 +10,7 @@ import nbio "nbio/poly"
 import pr "protocol"
 import "storage_io"
 import ws "websocket"
+import db "workspace_db"
 
 when !NRC_SIMULATION {
 	_ :: fmt.tprintf
@@ -22,6 +23,7 @@ when !NRC_SIMULATION {
 	_ :: byte_pool.alloc
 	_ :: nbio.init
 	_ :: storage_io.make_directory
+	_ :: db.DM_State
 } else {
 	// The simulated transport captures send buffers. Decode every complete WS
 	// frame within them, just as a real WebSocket peer does on its byte stream.
@@ -203,20 +205,22 @@ when !NRC_SIMULATION {
 		mobile := simulation_test_install_client(&ctx.sim, 2, "presence-dm", "bob", init_send_queue = true)
 		ctx.conns[1], ctx.conns[2] = desktop, mobile
 		workspace := get_connection_workspace(mobile)
-		conv_id := pr.ConversationID((u64(1) << 63) | 42)
-		conv := get_or_create_conversation(workspace, conv_id)
-		conv.dm_participants = new(DM_Participants)
-		conv.dm_participants^ = {
-			user_a = "alice",
-			user_b = "bob",
-		}
-		add_user_dm(workspace, "bob", conv_id) // Alice has already left.
+		conv_id := pr.make_dm_conversation_id("alice", "bob")
+		// Transport fixture: Alice's leave is already committed. CRUD and
+		// durability are covered by worker_db_test_dms, not by this wave test.
+		worker_db_apply_dm_state(workspace, {id = conv_id, user_a = "alice", user_b = "bob", members = 2})
 		subscribe_to_dm_internal(desktop, conv_id)
 		subscribe_to_dm_internal(mobile, conv_id)
 		begin_presence_batch_wave()
 		connection_close(desktop, false)
 		testing.expect_value(t, td.presence_batch_count, 1)
-		process_leave_dm(mobile, pr.LeaveDMRequest{conv_id = conv_id, correlation_id = 9})
+		states := [1]db.DM_State{{id = conv_id, user_a = "alice", user_b = "bob", previous_members = 2, members = 0}}
+		job := db.Completion {
+			request = {workspace = mobile.workspace_id, actor = "bob", opcode = .C_LeaveDM},
+		}
+		job.result.command.dm_states = states[:]
+		worker_db_complete_dm(mobile, 9, &job)
+		dm_test_evict_idle(workspace, conv_id)
 		testing.expect(t, get_conversation(workspace, conv_id) == nil)
 		testing.expect_value(t, td.presence_batch_count, 0)
 		_, ok := worker_finish_callback_wave()

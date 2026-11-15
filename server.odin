@@ -17,7 +17,6 @@ import "core:container/queue"
 import "core:fmt"
 import "core:log"
 import "core:mem"
-import "core:mem/virtual"
 import "core:net"
 import "core:os"
 import "core:reflect"
@@ -29,13 +28,13 @@ import "core:sys/linux"
 import "core:thread"
 import "core:time"
 
-import "btree"
 import "byte_pool"
 import "clock"
 import nbio "nbio/poly"
 import "persistence"
 import pr "protocol"
 import "spsc"
+import db "workspace_db"
 
 // Suppress unused import warnings when ODIN_DEBUG is false.
 _ :: mem.tracking_allocator_init
@@ -47,6 +46,8 @@ runtime_storage_layout: Storage_Layout_Manifest
 PENDING_QUEUE_CAPACITY :: 16384
 
 NRC_Server :: struct {
+	metrics_generation:          [2]u64, // Random incarnation, initialized before worker startup.
+	databases:                   []^db.Executor,
 	sock:                        net.TCP_Socket,
 	threads:                     []^thread.Thread,
 	closing:                     bool,
@@ -58,18 +59,18 @@ NRC_Server :: struct {
 	// The queue will hold socket descriptors for handoff.
 	pending_connections:         []Pending_Connection_Queue,
 	worker_startup:              chan.Chan(bool),
-	shard_compaction_jobs:       chan.Chan(Shard_Compaction_Job),
-	storage_control_jobs:        chan.Chan(Shard_Compaction_Job),
+	storage_bulk_jobs:           chan.Chan(Storage_Service_Job),
+	storage_control_jobs:        chan.Chan(Storage_Service_Job),
 	storage_control_streak:      int, // Service-owned; bounded priority without starving bulk work.
 	storage_bulk_executor_count: int,
 	storage_bulk_threads:        [MAX_STORAGE_BULK_EXECUTORS]^thread.Thread,
-	storage_bulk_results:        chan.Chan(Shard_Compaction_Result),
-	storage_bulk_pending:        [MAX_STORAGE_BULK_EXECUTORS]Shard_Compaction_Result,
+	storage_bulk_results:        chan.Chan(Storage_Service_Result),
+	storage_bulk_pending:        [MAX_STORAGE_BULK_EXECUTORS]Storage_Service_Result,
 	storage_bulk_pending_valid:  [MAX_STORAGE_BULK_EXECUTORS]bool, // Service-owned backpressure slots.
-	// One compactor producer and one owning-worker consumer per result queue.
+	// One storage-service producer and one owning-worker consumer per result queue.
 	// Main drains leftovers only after the wait group synchronizes completion.
-	shard_compaction_results:    []^spsc.Queue(Shard_Compaction_Result),
-	shard_compactor_thread:      ^thread.Thread,
+	storage_service_results:     []^spsc.Queue(Storage_Service_Result),
+	storage_service_thread:      ^thread.Thread,
 }
 
 Server_State :: enum {
@@ -133,12 +134,10 @@ MAX_CONNECTIONS_PER_THREAD :: 65535
 
 // DM_Participants stores the two participants of a DM conversation
 DM_Participants :: struct {
-	user_a:                string, // alphabetically first (interned)
-	user_b:                string, // alphabetically second (interned)
-	persistent:            bool,
-	// Latest metadata mutation must be durable before retaining a message body.
-	durability_generation: u64,
-	durability_record:     u64,
+	user_a:      string, // alphabetically first
+	user_b:      string, // alphabetically second
+	owned_names: bool, // SQLite cache owns names; test fixtures may borrow them.
+	persistent:  bool,
 }
 
 Note_Sort_Key :: struct {
@@ -146,77 +145,13 @@ Note_Sort_Key :: struct {
 	asset_id:   pr.AssetID,
 }
 
-Task_Sort_Key :: struct {
-	sort_at: i64,
-	task_id: pr.TaskID,
-}
-
-Task_Query_Key :: struct {
-	number:      i64,
-	text:        []byte,
-	due_missing: bool,
-	task_id:     pr.TaskID,
-}
-
-// The sort slot determines the active member; Priority and CreatedAt use numeric.
-// Share header storage rather than retaining unused full-key trees in every scope.
-Task_Query_Tree :: struct #raw_union {
-	general: btree.BTreeG(Task_Query_Key, Task_Query_Order),
-	numeric: btree.BTreeG(Task_Numeric_Key, Task_Numeric_Order),
-}
-
-Task_Query_Index_Set :: struct {
-	// Priority ascending is the canonical membership/count tree. Other orders
-	// are materialized on first use and then kept current by mutations.
-	trees:       [8][2]Task_Query_Tree,
-	initialized: [8][2]bool,
-}
-
-Task_Query_Secondary_Index :: struct {
-	key:     string,
-	indexes: Task_Query_Index_Set,
-}
-
-Room_Mapping_State :: struct {
-	conv_id:  pr.ConversationID,
-	asset_id: pr.AssetID,
-}
-
-// Conversation_State holds all per-conversation data in a single allocation.
-// Entity maps expose borrowed read-only pointers. Production mutations must use
-// task_store_*, asset_store_* or edge_store_* so ownership and indexes stay in
-// sync. Only initialization/teardown and isolated index test fixtures bypass them.
+// Conversations retain live chat/subscriber state, not workspace records.
 Conversation_State :: struct {
-	subscriber_entries:        [dynamic]Subscriber_Entry, // dense socket/handle list for broadcast fanout
-	subscriber_index:          map[net.TCP_Socket]int, // socket -> index in subscriber_entries
-	subscribers_dirty:         bool, // dense list needs optional re-sort by handle index
-	agenda:                    string, // agenda content (cloned, owned)
-	tasks:                     map[pr.TaskID]^pr.Task, // task_id -> task
-	task_index:                btree.BTreeG(Task_Sort_Key, Task_Sort_Order), // task ordering index for keyset pagination
-	task_index_keys:           map[pr.TaskID]Task_Sort_Key, // task_id -> current sort key
-	task_query_indexes:        Task_Query_Index_Set, // all sortable task query orders
-	task_status_indexes:       [4]Task_Query_Index_Set, // status-filtered sortable indexes
-	task_project_indexes:      map[string]^Task_Query_Secondary_Index,
-	task_assignee_indexes:     map[string]^Task_Query_Secondary_Index,
-	task_blockers:             btree.BTreeG(Entity_Reference_Key, Entity_Reference_Order), // blocker task -> blocked tasks
-	calendar_index:            btree.BTreeG(pr.CalendarKey, Calendar_Order),
-	calendar_reminder_keys:    map[pr.AssetID]pr.CalendarKey,
-	calendar_appointments:     btree.BTreeG(Appointment_Index_Key, Appointment_Index_Order),
-	calendar_appointment_keys: map[pr.AssetID]Appointment_Index_Key,
-	calendar_ready:            bool,
-	assets:                    map[pr.AssetID]^pr.Asset, // asset_id -> asset
-	note_index:                btree.BTreeG(Note_Sort_Key, Note_Sort_Order), // note ordering index for pagination
-	note_index_keys:           map[pr.AssetID]Note_Sort_Key, // asset_id -> current note sort key
-	note_project_assets:       map[string]^Note_Secondary_Index, // project name -> sorted note index
-	note_tag_assets:           map[string]^Note_Secondary_Index, // tag name -> sorted note index
-	asset_parents:             btree.BTreeG(Entity_Reference_Key, Entity_Reference_Order), // parent kind/id -> child assets
-	ticket_index:              map[pr.AssetID]^Ticket_Index_Row,
-	ticket_assignees:          btree.BTreeG(Ticket_Assignee_Key, Ticket_Assignee_Order),
-	slice_owners:              map[string]Person_Count,
-	appointment_people:        map[string]Person_Count,
-	edges:                     map[pr.EdgeID]^pr.Edge, // edge_id -> edge (knowledge graph links)
-	edges_by_entity:           map[Edge_Entity_Key][dynamic]pr.EdgeID, // entity -> incident edge IDs (for O(1) lookup)
-	dm_participants:           ^DM_Participants, // nil for regular rooms, set for DM conversations
+	subscriber_entries: [dynamic]Subscriber_Entry, // dense socket/handle list for broadcast fanout
+	subscriber_index:   map[net.TCP_Socket]int, // socket -> index in subscriber_entries
+	subscribers_dirty:  bool, // dense list needs optional re-sort by handle index
+	agenda:             string, // agenda content (cloned, owned)
+	dm_participants:    ^DM_Participants, // nil for regular rooms, set for DM conversations
 }
 
 // Edge_Entity_Key identifies an entity (asset or task) for edge adjacency lookup
@@ -225,12 +160,15 @@ Edge_Entity_Key :: struct {
 	target_id:   u64,
 }
 
+User_DMs :: struct {
+	username: string, // Owns the map key until the last membership is removed.
+	ids:      [dynamic]pr.ConversationID,
+}
+
 // Workspace_State holds all per-workspace data
 Workspace_State :: struct {
-	history:                             [dynamic][]byte, // Immutable history-domain payloads, including deleted entities.
 	conversations:                       map[pr.ConversationID]^Conversation_State, // conversation-scoped data
-	room_mappings:                       map[string]Room_Mapping_State, // normalized room name -> room mapping registry entry
-	user_dms:                            map[string][dynamic]pr.ConversationID, // username -> list of DM conv_ids user is in
+	user_dms:                            map[string]User_DMs, // username -> list of DM conv_ids user is in
 	user_connection_head:                map[string]Connection_Handle, // username -> active-connection list head for DM targeting
 	user_connection_next:                map[Connection_Handle]Connection_Handle, // links only additional devices; singleton users need no entry
 	user_connection_count:               map[string]int, // username -> count of active connections (for online detection)
@@ -254,6 +192,8 @@ Server_Thread :: struct {
 
 	// Reference to this thread's pending handoff queue
 	my_pending_queue:          Pending_Connection_Queue,
+	// SQLite executor and bounded request/completion transport.
+	database:                  Worker_DB,
 
 	// Consolidated workspace state (replaces 6 separate maps)
 	workspaces:                map[string]^Workspace_State,
@@ -263,14 +203,6 @@ Server_Thread :: struct {
 
 	// Thread-local send buffer pool
 	spool:                     ^byte_pool.BufferPool,
-
-	// Synchronous graph scratch only; response leases never borrow this memory.
-	graph_scratch:             virtual.Arena,
-	graph_scratch_in_use:      bool,
-
-	// Synchronous history labels/validation; serialized records own their bytes.
-	history_scratch:           virtual.Arena,
-	history_scratch_in_use:    bool,
 
 	// Thread-local cache for batch writev metadata (reduces heap churn)
 	batch_state_pool:          Batch_State_Pool,
@@ -306,19 +238,7 @@ Server_Thread :: struct {
 	// stalled-send scan from the same maintenance timer.
 	idle_scan_cursor:          int,
 	next_send_watchdog_at:     time.Time,
-
-	// Monotonic task ID generator (thread-local, no atomics needed)
-	task_seq:                  u64,
-
-	// This worker's active logical-shard WAL writers.
-	shard_writers:             Shard_Writer_Registry,
 	message_stores:            Message_Store_Registry,
-
-	// Monotonic asset ID generator (thread-local, no atomics needed)
-	asset_seq:                 u64,
-
-	// Monotonic edge ID generator (thread-local, no atomics needed)
-	edge_seq:                  u64,
 
 	// Workspace string interning pool (reduces duplicate allocations)
 	workspace_intern:          strings.Intern,
@@ -344,11 +264,6 @@ bot_auth_secret: string
 @(thread_local)
 td: Server_Thread
 
-@(thread_local)
-// Test/diagnostic marker set when persistent_mutation_failed is reached.
-// Server shutdown itself is driven by td.server.closing.
-persistent_mutation_failure_seen: bool
-
 parse_log_level :: proc(value: string) -> (log.Level, bool) {
 	switch value {
 	case "debug", "DEBUG", "Debug":
@@ -367,6 +282,10 @@ parse_log_level :: proc(value: string) -> (log.Level, bool) {
 }
 
 main :: proc() {
+	when #config(NRC_SQLITE_PROJECTION_BUILDER, false) {
+		sqlite_projection_builder_main()
+		return
+	}
 	defer jwt_validation_scratch_destroy()
 	gc_options, gc_requested, gc_args_ok := attachment_gc_parse_command(os.args)
 	if gc_requested && !gc_args_ok {
@@ -513,17 +432,19 @@ main :: proc() {
 		}
 		defer release_data_directory_lock(&storage_lock)
 		manifest, found, valid := load_storage_layout_manifest(persistence.DATA_DIR)
-		if !found || !valid || !active_sharded_generation_structure_is_valid(persistence.DATA_DIR, manifest.generation) {
-			log.error("Attachment GC refused to run because the sharded storage layout is absent or invalid")
+		if !found || !valid || manifest.mode != .SQLite_V1 || !sqlite_generation_valid(persistence.DATA_DIR, manifest.generation) {
+			log.error("Attachment GC refused to run because the SQLite storage layout is absent or invalid")
 			os.exit(1)
 		}
 		runtime_storage_layout = manifest
 		if !run_attachment_gc(gc_options) do os.exit(1)
 		return
 	}
-	storage_lock, storage_ok := sharded_storage_layout_gate(persistence.DATA_DIR, thread_count)
+	storage_lock, storage_ok := sqlite_storage_layout_gate(persistence.DATA_DIR, thread_count)
 	if !storage_ok {
-		log.error("Sharded storage layout validation failed. Migrate legacy data with the pinned 70d3da1 server image before starting this version")
+		log.error(
+			"SQLite storage layout validation failed. Existing WAL layouts require offline migration and explicit activation; startup never converts or repairs them",
+		)
 		os.exit(1)
 	}
 	defer release_data_directory_lock(&storage_lock)
@@ -571,6 +492,21 @@ start_server :: proc() -> bool {
 	// Note: td (thread-local) for the *main* thread is not fully initialized
 	// as a worker thread here. The main thread doesn't run the worker_thread loop.
 	defer free(server)
+	generation_bytes := ([^]byte)(&server.metrics_generation)[:size_of(server.metrics_generation)]
+	for offset := 0; offset < len(generation_bytes); {
+		n, err := linux.getrandom(generation_bytes[offset:], {})
+		if err == .EINTR do continue
+		if err != .NONE || n <= 0 {
+			log.error("Unable to initialize metrics process generation")
+			return false
+		}
+		offset += n
+	}
+	if !start_server_databases(server, persistence.DATA_DIR, runtime_storage_layout.generation, thread_count) {
+		log.error("SQLite shard validation failed before worker/listener startup")
+		return false
+	}
+	defer stop_server_databases(server)
 
 	server_shutdown_on_interrupt(server)
 
@@ -600,16 +536,16 @@ start_server :: proc() -> bool {
 	defer chan.destroy(server.worker_startup)
 	{
 		err: runtime.Allocator_Error
-		server.shard_compaction_jobs, err = chan.create_buffered(chan.Chan(Shard_Compaction_Job), LOGICAL_SHARD_COUNT, context.allocator)
+		server.storage_bulk_jobs, err = chan.create_buffered(chan.Chan(Storage_Service_Job), LOGICAL_SHARD_COUNT, context.allocator)
 		if err != .None {
-			log.fatalf("Failed to allocate shard compaction job channel: %v", err)
+			log.fatalf("Failed to allocate storage bulk job channel: %v", err)
 			return false
 		}
 	}
-	defer chan.destroy(server.shard_compaction_jobs)
+	defer chan.destroy(server.storage_bulk_jobs)
 	{
 		err: runtime.Allocator_Error
-		server.storage_control_jobs, err = chan.create_buffered(chan.Chan(Shard_Compaction_Job), LOGICAL_SHARD_COUNT, context.allocator)
+		server.storage_control_jobs, err = chan.create_buffered(chan.Chan(Storage_Service_Job), LOGICAL_SHARD_COUNT, context.allocator)
 		if err != .None {
 			log.fatalf("Failed to allocate storage control job channel: %v", err)
 			return false
@@ -618,27 +554,27 @@ start_server :: proc() -> bool {
 	defer chan.destroy(server.storage_control_jobs)
 	{
 		err: runtime.Allocator_Error
-		server.storage_bulk_results, err = chan.create_buffered(chan.Chan(Shard_Compaction_Result), server.storage_bulk_executor_count, context.allocator)
+		server.storage_bulk_results, err = chan.create_buffered(chan.Chan(Storage_Service_Result), server.storage_bulk_executor_count, context.allocator)
 		if err != .None {
 			log.fatalf("Failed to allocate bulk completion channel: %v", err)
 			return false
 		}
 	}
 	defer chan.destroy(server.storage_bulk_results)
-	server.shard_compaction_results = make([]^spsc.Queue(Shard_Compaction_Result), thread_count)
-	defer delete(server.shard_compaction_results)
+	server.storage_service_results = make([]^spsc.Queue(Storage_Service_Result), thread_count)
+	defer delete(server.storage_service_results)
 	defer {
-		for result_queue in server.shard_compaction_results {
+		for result_queue in server.storage_service_results {
 			// Allocation can fail before every worker's queue is initialized.
 			if result_queue != nil do spsc.destroy(result_queue)
 		}
 	}
 	for i in 0 ..< thread_count {
 		err: runtime.Allocator_Error
-		// At most one shard compaction and one retained seal per logical shard.
-		server.shard_compaction_results[i], err = spsc.create(Shard_Compaction_Result, 2 * LOGICAL_SHARD_COUNT, context.allocator)
+		// Retained lifecycle/seal completions and disk probes share this queue.
+		server.storage_service_results[i], err = spsc.create(Storage_Service_Result, 2 * LOGICAL_SHARD_COUNT, context.allocator)
 		if err != .None {
-			log.fatalf("Failed to allocate shard compaction result queue for worker %d: %v", i, err)
+			log.fatalf("Failed to allocate storage service result queue for worker %d: %v", i, err)
 			return false
 		}
 	}
@@ -657,9 +593,9 @@ start_server :: proc() -> bool {
 	// Start worker threads
 	log.infof("Starting server with %d worker threads...", thread_count)
 	sync.wait_group_add(&server.wg, thread_count + 1 + server.storage_bulk_executor_count)
-	server.shard_compactor_thread = thread.create_and_start_with_poly_data(Shard_Compactor_Thread_Data{server = server}, shard_compactor_thread, context)
+	server.storage_service_thread = thread.create_and_start_with_poly_data(Storage_Service_Thread_Data{server = server}, storage_service_thread, context)
 	for &bulk_thread, i in server.storage_bulk_threads[:server.storage_bulk_executor_count] {
-		bulk_thread = thread.create_and_start_with_poly_data(Shard_Compactor_Thread_Data{server = server, bulk_index = i}, storage_bulk_thread, context)
+		bulk_thread = thread.create_and_start_with_poly_data(Storage_Service_Thread_Data{server = server, bulk_index = i}, storage_bulk_thread, context)
 	}
 	server.threads = make([]^thread.Thread, thread_count)
 	for i in 0 ..< thread_count {
@@ -711,16 +647,16 @@ start_server :: proc() -> bool {
 	// Wait for all worker threads to finish.
 	sync.wait(&server.wg)
 	discard_queued_pending_connections(server)
-	// A worker can race the compactor's shutdown drain after cloning a job
+	// A worker can race the storage service's shutdown drain after cloning a job
 	// path but before publishing it. Once every producer has joined, this final
 	// drain closes that ownership window before the channel is destroyed.
-	discard_queued_shard_compaction_jobs(server)
-	discard_queued_shard_compaction_results(server)
+	discard_queued_storage_service_jobs(server)
+	discard_queued_storage_service_results(server)
 	log.debug("server threads are done, shutting down")
 
 	for t in server.threads do thread.destroy(t)
 	delete(server.threads)
-	thread.destroy(server.shard_compactor_thread)
+	thread.destroy(server.storage_service_thread)
 	for t in server.storage_bulk_threads[:server.storage_bulk_executor_count] do thread.destroy(t)
 	return workers_ready && !sync.atomic_load(&server.fatal_storage_error)
 }
@@ -744,28 +680,6 @@ server_shutdown :: proc(s: ^NRC_Server) {
 server_shutdown_after_storage_error :: proc(s: ^NRC_Server) {
 	sync.atomic_store(&s.fatal_storage_error, true)
 	server_shutdown(s)
-}
-
-persistent_mutation_failed :: proc(domain: string, op: string, workspace_id: string) {
-	if consume_shard_append_deferred() do return
-	persistent_mutation_failure_seen = true
-	if consume_shard_append_backpressure() {
-		log.warnf("[T%d] Persistent %s %s rejected by shard storage backpressure for workspace %s", td.thread_index, domain, op, workspace_id)
-		if conn := shard_protocol_dispatch_context.connection; conn != nil {
-			send_websocket_close_frame_and_close(conn, 1013, "Server too busy")
-		}
-		return
-	}
-	log.errorf(
-		"[T%d] Persistent %s %s rejected by WAL for workspace %s; shutting down to preserve persistence/RAM consistency",
-		td.thread_index,
-		domain,
-		op,
-		workspace_id,
-	)
-	if td.server != nil {
-		server_shutdown_after_storage_error(td.server)
-	}
 }
 
 // --- on_accept (Runs on Main Thread with multishot semantics) ---

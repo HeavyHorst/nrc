@@ -1,681 +1,719 @@
 package main
 
+import "base:runtime"
+import "core:c"
 import "core:encoding/endian"
+import "core:fmt"
+import "core:os"
+import "core:strings"
+import "core:sys/linux"
 import "core:testing"
 
 import pr "protocol"
+import sql "sqlite"
+import ws "websocket"
+import db "workspace_db"
 
-slice_test_bytes :: proc(value: string) -> []byte {return transmute([]byte)value}
-
-@(test)
-test_slice_ticket_membership :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-	slice_asset := slice_test_slice_asset(77, `{"version":1,"name":"Tickets"}`)
-	slice_test_add_asset(&conv, &slice_asset)
-	assets := [?]pr.Asset {
-		{asset_id = 1, asset_type = .Ticket, updated_at = 9000},
-		{asset_id = 2, asset_type = .TicketEntry, updated_at = 10000},
-		{asset_id = 3, asset_type = .Ticket, updated_at = 11000},
-	}
-	for &asset in assets do slice_test_add_asset(&conv, &asset)
-	slice_test_member_of(&conv, .Asset, 1, 77)
-	slice_test_member_of(&conv, .Asset, 2, 77)
-	slice_test_member_of(&conv, .Asset, 3, 77, .RelatedTo)
-	slices := make([dynamic]pr.TaskSlice)
-	defer delete(slices)
-	page := collect_task_slices(&conv, Slice_Query{limit = 10, with_work_counters = true}, &slices, nil, context.temp_allocator)
-	testing.expect_value(t, page.assigned_tasks, u32(0))
-	testing.expect_value(t, page.unassigned_tasks, u32(0))
-	testing.expect_value(t, len(slices), 1)
-	if len(slices) != 1 do return
-	testing.expect_value(t, slices[0].tickets, u16(1))
-	testing.expect_value(t, pr.task_slice_member_count(slices[0]), 1)
-	testing.expect_value(t, pr.task_slice_open_count(slices[0]), u16(0))
-	testing.expect_value(t, slices[0].last_moved_at, i64(9000))
+// Test-only instrumentation separates page selection from the deliberately
+// register-wide totals. VM work, unlike wall time, detects the excluded scan.
+foreign import slice_test_sqlite "system:sqlite3"
+foreign slice_test_sqlite {
+	@(link_name = "sqlite3_trace_v2")
+	slice_test_trace :: proc "c" (db: ^sql.Database, mask: c.uint, callback: proc "c" (c.uint, rawptr, rawptr, rawptr) -> c.int, data: rawptr) -> c.int ---
+	@(link_name = "sqlite3_sql")
+	slice_test_sql :: proc "c" (statement: ^sql.Statement) -> cstring ---
+	@(link_name = "sqlite3_stmt_status")
+	slice_test_status :: proc "c" (statement: ^sql.Statement, operation, reset: c.int) -> c.int ---
 }
 
 @(test)
-test_slice_member_category_boundaries :: proc(t: ^testing.T) {
-	// Each wire category accepts 65535, and the next fold must signal overflow
-	// without wrapping. Blocked is independent of the status categories.
-	for category in 0 ..< 8 {
-		entry: pr.TaskSlice
-		overflow := false
-		task := pr.Task {
-			status = .Backlog,
+test_slice_page_skips_closed_index_range :: proc(t: ^testing.T) {
+	dir, err := os.make_directory_temp("", "nrc-slice-page-*", context.allocator)
+	if !testing.expect(t, err == nil) do return
+	defer {os.remove_all(dir); delete(dir)}
+	name := fmt.aprintf("%s/shard.sqlite3", dir); defer delete(name)
+	path := strings.clone_to_cstring(name); defer delete(path)
+	store, rc := db.open(path, create = true)
+	if !testing.expect_value(t, rc, sql.OK) do return
+	defer db.close(&store)
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	for id in 1 ..= 10000 {
+		asset := slice_test_slice_asset(u64(id), `{"version":1,"name":"Closed","closed":true}`)
+		testing.expect_value(t, sqlite_put_asset(&store, "w", &asset), sql.OK)
+	}
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	work: [2]int // Number of page statements and their accumulated VM steps.
+	testing.expect_value(t, slice_test_trace(store.db, 2, proc "c" (_: c.uint, data, statement, _: rawptr) -> c.int {
+		context = runtime.default_context()
+		s := (^sql.Statement)(statement)
+		if strings.has_prefix(string(slice_test_sql(s)), "WITH page AS MATERIALIZED") {
+			work := (^ [2]int)(data)
+			work[0] += 1
+			work[1] += int(slice_test_status(s, 4, 0)) // SQLITE_STMTSTATUS_VM_STEP
 		}
-		asset := pr.Asset {
-			asset_type = .Note,
+		return 0
+	}, &work), sql.OK)
+	defer slice_test_trace(store.db, 0, nil, nil)
+	for with_open in ([2]bool{false, true}) {
+		if with_open {
+			asset := slice_test_slice_asset(10001, `{"version":1,"name":"Open"}`, 10)
+			testing.expect_value(t, db.begin(&store), sql.OK)
+			testing.expect_value(t, sqlite_put_asset(&store, "w", &asset), sql.OK)
+			testing.expect_value(t, db.commit(&store), sql.OK)
 		}
-		count: ^u16
-		switch category {
-		case 0:
-			count = &entry.backlog
-		case 1:
-			task.status = .Todo; count = &entry.todo
-		case 2:
-			task.status = .InProgress; count = &entry.in_progress
-		case 3:
-			task.status = .Done; count = &entry.done
-		case 4:
-			task.blocked_by = 1; count = &entry.blocked
-		case 5:
-			count = &entry.notes
-		case 6:
-			asset.asset_type = .File; count = &entry.files
-		case 7:
-			asset.asset_type = .Ticket; count = &entry.tickets
-		}
-		for i in 0 ..< 65535 {
-			if category < 5 {
-				// Split blocked work across statuses to test blocked alone.
-				if category == 4 && i >= 40000 do task.status = .Todo
-				_ = fold_task_member(&entry, &task, &overflow)
-			} else {
-				fold_asset_member(&entry, &asset, &overflow)
+		for has_owner in ([2]bool{false, true}) {
+			for cursor in 0 ..< 3 {
+				req := pr.ListTaskSlicesRequest{limit = 1, has_owner = has_owner, has_cursor = cursor != 0, cursor_closed = cursor == 2, cursor_sort_at = 10, cursor_slice_id = 10001}
+				buffer: [1024]byte
+				n := pr.serializeListTaskSlicesRequest(req, buffer[:])
+				request := db.Request{workspace = "w", opcode = .C_ListTaskSlices, body = buffer[2:n]}
+				output := db.Command_Output{limit = 4096}; defer db.destroy_command_output(&output)
+				work = {}
+				testing.expect_value(t, db.begin(&store), sql.OK)
+				testing.expect_value(t, sqlite_execute_task_command(&store, &request, &output), sql.OK)
+				testing.expect_value(t, db.rollback(&store), sql.OK)
+				testing.expect_value(t, work[0], 1)
+				testing.expect(t, work[1] < 1000, fmt.tprintf("page selection executed %d VM steps", work[1]))
+				want := pr.TaskSliceList{success = true, total_count = with_open ? 1 : 0}
+				if with_open && cursor == 0 {
+					want.slices = {pr.TaskSlice{slice_id = 10001, name = slice_test_bytes("Open")}}
+					want.next_cursor_slice_id = 10001; want.next_cursor_sort_at = 10
+				}
+				encoded: [4096]byte
+				written := pr.serializeTaskSliceList(want, encoded[:])
+				if testing.expect_value(t, output.count, 1) do testing.expect_value(t, string(output.frames[0].payload), string(encoded[:written]))
 			}
 		}
-		testing.expect(t, !overflow, "65535 fits each category")
-		testing.expect_value(t, count^, u16(65535))
-		if category < 5 {
-			_ = fold_task_member(&entry, &task, &overflow)
-		} else {
-			fold_asset_member(&entry, &asset, &overflow)
+	}
+	// A rare project must not probe every unrelated slice, even when closed
+	// records are eligible. Include continuation and a completely absent project.
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	task := pr.Task{id = 20000, status = .Todo, project = slice_test_bytes("rare")}
+	testing.expect_value(t, db.put_task(&store, "w", &task), sql.OK)
+	edge := pr.Asset{asset_id = 20000}
+	testing.expect_value(t, sqlite_projection_write(&store, "INSERT INTO edges VALUES(?1,?2,2,?2,1,?3,7,0,x'')", "w", &edge, {u64(10000)}), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	for project in ([2]string{"rare", "absent"}) {
+		for cursor in ([2]bool{false, true}) {
+			req := pr.ListTaskSlicesRequest{limit = 1, include_closed = true, project = slice_test_bytes(project), has_cursor = cursor, cursor_closed = true, cursor_slice_id = 10000}
+			buffer: [1024]byte
+			n := pr.serializeListTaskSlicesRequest(req, buffer[:])
+			request := db.Request{workspace = "w", opcode = .C_ListTaskSlices, body = buffer[2:n]}
+			output := db.Command_Output{limit = 4096}; defer db.destroy_command_output(&output)
+			work = {}
+			testing.expect_value(t, db.begin(&store), sql.OK)
+			testing.expect_value(t, sqlite_execute_task_command(&store, &request, &output), sql.OK)
+			testing.expect_value(t, db.rollback(&store), sql.OK)
+			testing.expect_value(t, work[0], 1)
+			testing.expect(t, work[1] < 1000, fmt.tprintf("project page executed %d VM steps", work[1]))
+			want := pr.TaskSliceList{success = true, total_count = project == "rare" ? 1 : 0}
+			if project == "rare" && !cursor {
+				want.slices = {pr.TaskSlice{slice_id = 10000, name = slice_test_bytes("Closed"), flags = pr.TaskSliceFlag_CLOSED, todo = 1}}
+				want.next_cursor_closed = true; want.next_cursor_slice_id = 10000
+			}
+			encoded: [4096]byte
+			written := pr.serializeTaskSliceList(want, encoded[:])
+			if testing.expect_value(t, output.count, 1) do testing.expect_value(t, string(output.frames[0].payload), string(encoded[:written]))
 		}
-		testing.expect(t, overflow, "65536 exceeds the category representation")
-		testing.expect_value(t, count^, u16(65535))
-	}
-}
-
-@(test)
-test_slice_independent_categories_can_exceed_total_u16 :: proc(t: ^testing.T) {
-	entry: pr.TaskSlice
-	overflow := false
-	task := pr.Task {
-		status = .Backlog,
-	}
-	for _ in 0 ..< 40000 do _ = fold_task_member(&entry, &task, &overflow)
-	task.status = .Todo
-	for _ in 0 ..< 30000 do _ = fold_task_member(&entry, &task, &overflow)
-	task.status = .Done
-	for _ in 0 ..< 65535 do _ = fold_task_member(&entry, &task, &overflow)
-	testing.expect(t, !overflow, "only per-category limits apply")
-	testing.expect_value(t, entry.backlog, u16(40000))
-	testing.expect_value(t, entry.todo, u16(30000))
-	testing.expect_value(t, entry.done, u16(65535))
-	testing.expect_value(t, u32(entry.backlog) + u32(entry.todo), u32(70000))
-}
-
-@(test)
-test_slice_listing_rejects_member_category_overflow :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-	asset := slice_test_slice_asset(77, `{"version":1,"name":"Boundary"}`)
-	slice_test_add_asset(&conv, &asset)
-	tasks := make([]pr.Task, 65536)
-	defer delete(tasks)
-	for i in 0 ..< 65535 {
-		tasks[i] = pr.Task {
-			id     = pr.TaskID(i + 1),
-			status = .Backlog,
+		// Missing summaries inside/outside the project are errors, unless the
+		// damaged slice is excluded by owner or closure. Roll back each probe.
+		for scope in 0 ..< 4 {
+			req := pr.ListTaskSlicesRequest{limit = 1, include_closed = scope != 3, has_owner = scope == 2, project = slice_test_bytes(project)}
+			buffer: [1024]byte
+			n := pr.serializeListTaskSlicesRequest(req, buffer[:])
+			request := db.Request{workspace = "w", opcode = .C_ListTaskSlices, body = buffer[2:n]}
+			output := db.Command_Output{limit = 4096}; defer db.destroy_command_output(&output)
+			testing.expect_value(t, db.begin(&store), sql.OK)
+			key := pr.Asset{asset_id = scope == 1 ? 10000 : 1}
+			if scope == 2 {
+				testing.expect_value(t, sqlite_projection_write(&store, "UPDATE slice_metadata SET owner=x'6f74686572' WHERE workspace=?1 AND asset_id=?2", "w", &key, nil), sql.OK)
+			}
+			testing.expect_value(t, sqlite_projection_write(&store, "DELETE FROM slice_summaries WHERE workspace=?1 AND slice_id=?2", "w", &key, nil), sql.OK)
+			testing.expect_value(t, sqlite_execute_task_command(&store, &request, &output), scope < 2 ? sql.CORRUPT : sql.OK)
+			if scope < 2 {
+				testing.expect_value(t, output.count, 0)
+			} else {
+				want := pr.TaskSliceList{success = true}
+				if scope == 2 && project == "rare" {
+					want.total_count = 1
+					want.slices = {pr.TaskSlice{slice_id = 10000, name = slice_test_bytes("Closed"), flags = pr.TaskSliceFlag_CLOSED, todo = 1}}
+					want.next_cursor_closed = true; want.next_cursor_slice_id = 10000
+				}
+				encoded: [4096]byte
+				written := pr.serializeTaskSliceList(want, encoded[:])
+				if testing.expect_value(t, output.count, 1) do testing.expect_value(t, string(output.frames[0].payload), string(encoded[:written]))
+			}
+			testing.expect_value(t, db.rollback(&store), sql.OK)
 		}
-		conv.tasks[tasks[i].id] = &tasks[i]
-		slice_test_member_of(&conv, .Task, u64(tasks[i].id), 77)
 	}
-	slices := make([dynamic]pr.TaskSlice)
-	defer delete(slices)
-	page := collect_task_slices(&conv, Slice_Query{limit = 10}, &slices, nil, context.temp_allocator)
-	testing.expect_value(t, page.error, "")
-	testing.expect_value(t, len(slices), 1)
-	if len(slices) == 1 do testing.expect_value(t, slices[0].backlog, u16(65535))
-	tasks[65535] = pr.Task {
-		id     = 65536,
-		status = .Backlog,
+}
+
+worker_db_test_slice_expect :: proc(t: ^testing.T, c: ^NRC_Connection, req: pr.ListTaskSlicesRequest, want: pr.TaskSliceList) {
+	buffer: [1024]byte
+	n := pr.serializeListTaskSlicesRequest(req, buffer[:]); assert(n > 0)
+	process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t)
+	if !testing.expect_value(t, send_queue_len(c), 1) do return
+	item := send_queue_pop(c); defer frame_lease_dispose(&item.lease)
+	frame := frame_lease_data(item.lease); _, offset, _ := ws.readFrameHeader(frame)
+	expected := want; expected.correlation_id = req.correlation_id
+	encoded: [4096]byte
+	written := pr.serializeTaskSliceList(expected, encoded[:]); assert(written > 0)
+	testing.expect_value(t, string(frame[offset:]), string(encoded[:written]))
+}
+
+worker_db_test_slices :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstring) {
+	store, rc := db.open(path); if !testing.expect_value(t, rc, sql.OK) do return
+	defer db.close(&store)
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM edges; DELETE FROM assets; DELETE FROM tasks", nil, nil, nil), sql.OK)
+	tasks := [?]pr.Task {
+		{id = 1, status = .Todo, blocked_by = 2, project = slice_test_bytes("srv"), created_at = 10, updated_at = 30},
+		{id = 2, status = .Done, created_at = 5, updated_at = 40},
+		{id = 3, status = .InProgress, created_at = 20, updated_at = 50},
+		{id = 4, status = .Backlog},
+		{id = 5, status = .Note},
 	}
-	conv.tasks[65536] = &tasks[65535]
-	slice_test_member_of(&conv, .Task, 65536, 77)
-	page = collect_task_slices(&conv, Slice_Query{limit = 10}, &slices, nil, context.temp_allocator)
-	testing.expect_value(t, page.error, "Slice listing representation limit exceeded: member category exceeds 65535")
-	testing.expect_value(t, len(slices), 0)
-	testing.expect(t, !page.has_more, "an error is not a successful partial listing")
+	for &task in tasks do testing.expect_value(t, db.put_task(&store, c.workspace_id, &task), sql.OK)
+	assets := [?]pr.Asset {
+		slice_test_slice_asset(71, `{"version":1,"name":"Änderung","owner":"alice"}`),
+		slice_test_slice_asset(72, `{"version":1,"name":"Closed","closed":true}`, 100),
+		slice_test_slice_asset(max(u64), `{"version":1,"name":"Empty"}`, 60),
+		slice_test_slice_asset(74, `{"version":1}`), // Invalid projections stay absent.
+		{asset_id = 1, asset_type = .Note, preview = slice_test_bytes(`{"project":"NRC"}`), updated_at = 60},
+		{asset_id = 2, asset_type = .File, updated_at = 55},
+	}
+	for &asset in assets do testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &asset), sql.OK)
+	testing.expect_value(t, sqlite_put_asset(&store, "foreign-slices", &assets[0]), sql.OK)
+	edges := [?]pr.Edge {
+		{source_type = .Task, source_id = 1, target_type = .Asset, target_id = 71},
+		{source_type = .Asset, source_id = 71, target_type = .Task, target_id = 2},
+		{source_type = .Task, source_id = 2, target_type = .Asset, target_id = 72},
+		{source_type = .Task, source_id = 3, target_type = .Asset, target_id = 72},
+		{source_type = .Task, source_id = 5, target_type = .Asset, target_id = 71},
+		{source_type = .Asset, source_id = 1, target_type = .Asset, target_id = 71},
+		{source_type = .Asset, source_id = 71, target_type = .Asset, target_id = 2},
+		{source_type = .Task, source_id = 999, target_type = .Asset, target_id = 71},
+	}
+	for edge, i in edges {
+		key := pr.Asset {
+			asset_id = u64(i + 1),
+		}
+		testing.expect_value(
+			t,
+			sqlite_projection_write(
+				&store,
+				"INSERT INTO edges VALUES(?1,?2,?3,?4,?5,?6,?7,0,x'')",
+				c.workspace_id,
+				&key,
+				{i64(edge.source_type), edge.source_id, i64(edge.target_type), edge.target_id, i64(pr.RelationType.MemberOf)},
+			),
+			sql.OK,
+		)
+	}
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	open := pr.TaskSlice {
+		slice_id         = 71,
+		name             = slice_test_bytes("Änderung"),
+		owner            = slice_test_bytes("alice"),
+		todo             = 1,
+		done             = 1,
+		blocked          = 1,
+		notes            = 1,
+		files            = 1,
+		oldest_active_at = 10,
+		last_moved_at    = 60,
+	}
+	empty := pr.TaskSlice {
+		slice_id = max(u64),
+		name     = slice_test_bytes("Empty"),
+	}
+	closed := pr.TaskSlice {
+		slice_id         = 72,
+		name             = slice_test_bytes("Closed"),
+		flags            = pr.TaskSliceFlag_CLOSED,
+		in_progress      = 1,
+		done             = 1,
+		oldest_active_at = 20,
+		last_moved_at    = 50,
+	}
+	req := pr.ListTaskSlicesRequest {
+		limit          = 1,
+		correlation_id = 930,
+	}
+	worker_db_test_slice_expect(
+		t,
+		c,
+		req,
+		{
+			success = true,
+			slices = {open},
+			total_count = 2,
+			has_more = true,
+			next_cursor_sort_at = 60,
+			next_cursor_slice_id = 71,
+			assigned_tasks = 3,
+			unassigned_tasks = 1,
+		},
+	)
+	req.has_cursor = true; req.cursor_sort_at = 60; req.cursor_slice_id = 71
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {empty}, total_count = 2, next_cursor_sort_at = 60, next_cursor_slice_id = max(u64)})
+	// Crossing the open/closed boundary must seek the next range rather than
+	// dropping a closed record whose timestamp sorts above the open cursor.
+	req.include_closed = true; req.cursor_slice_id = max(u64)
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {closed}, total_count = 3, next_cursor_closed = true, next_cursor_sort_at = 100, next_cursor_slice_id = 72})
+	// Continue through closed timestamp ties across the signed-ID boundary,
+	// then into older closed records. Check both ordering indexes over the wire.
+	saved_req := req
+	extra_closed := [?]pr.Asset {
+		slice_test_slice_asset(u64(1) << 63, `{"version":1,"name":"High ID","closed":true}`, 100),
+		slice_test_slice_asset(max(u64) - 1, `{"version":1,"name":"Higher ID","closed":true}`, 100),
+		slice_test_slice_asset(75, `{"version":1,"name":"Older","closed":true}`, 80),
+	}
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	for &asset in extra_closed do testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &asset), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	closed_pages := [?]pr.TaskSlice {
+		closed,
+		{slice_id = u64(1) << 63, name = slice_test_bytes("High ID"), flags = pr.TaskSliceFlag_CLOSED},
+		{slice_id = max(u64) - 1, name = slice_test_bytes("Higher ID"), flags = pr.TaskSliceFlag_CLOSED},
+		{slice_id = 75, name = slice_test_bytes("Older"), flags = pr.TaskSliceFlag_CLOSED},
+	}
+	for has_owner in ([2]bool{false, true}) {
+		req = saved_req; req.has_owner = has_owner
+		total: u32 = has_owner ? 5 : 6
+		for entry, i in closed_pages {
+			at: i64 = i == 3 ? 80 : 100
+			worker_db_test_slice_expect(t, c, req, {success = true, slices = {entry}, total_count = total, has_more = i < 3, next_cursor_closed = true, next_cursor_sort_at = at, next_cursor_slice_id = entry.slice_id})
+			req.cursor_closed = true; req.cursor_sort_at = at; req.cursor_slice_id = entry.slice_id
+		}
+		worker_db_test_slice_expect(t, c, req, {success = true, total_count = total})
+	}
+	// The project-driven path must retain the same closed cursor ordering.
+	project_task := tasks[1]; project_task.project = slice_test_bytes("paging")
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, db.put_task(&store, c.workspace_id, &project_task), sql.OK)
+	for asset, i in extra_closed {
+		key := pr.Asset{asset_id = u64(200 + i)}
+		testing.expect_value(t, sqlite_projection_write(&store, "INSERT INTO edges VALUES(?1,?2,2,?3,1,?4,7,0,x'')", c.workspace_id, &key, {u64(2), asset.asset_id}), sql.OK)
+		closed_pages[i + 1].done = 1
+		closed_pages[i + 1].last_moved_at = 40
+	}
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	// Five matches at limit four use the project path and need a lookahead.
+	req = saved_req; req.has_cursor = false; req.limit = 4; req.project = slice_test_bytes("paging")
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {open, closed_pages[0], closed_pages[1], closed_pages[2]}, total_count = 5, has_more = true, next_cursor_closed = true, next_cursor_sort_at = 100, next_cursor_slice_id = max(u64) - 1})
+	req.has_cursor = true; req.cursor_closed = true; req.cursor_sort_at = 100; req.cursor_slice_id = max(u64) - 1
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {closed_pages[3]}, total_count = 5, next_cursor_closed = true, next_cursor_sort_at = 80, next_cursor_slice_id = 75})
+	for has_owner in ([2]bool{false, true}) {
+		req = saved_req; req.has_owner = has_owner; req.project = slice_test_bytes("paging")
+		total: u32 = has_owner ? 4 : 5
+		req.limit = 4
+		worker_db_test_slice_expect(t, c, req, {success = true, slices = closed_pages[:], total_count = total, next_cursor_closed = true, next_cursor_sort_at = 80, next_cursor_slice_id = 75})
+		// Exercise both sides of the strategy boundary with closed cursors,
+		// including timestamp ties spanning 2^63 and the exhausted final page.
+		for extra in ([2]u16{1, 2}) {
+			req.limit = u16(total) - extra
+			for cursor, i in closed_pages {
+				req.cursor_closed = true; req.cursor_sort_at = i == 3 ? 80 : 100; req.cursor_slice_id = cursor.slice_id
+				end := min(i + 1 + int(req.limit), len(closed_pages))
+				want := pr.TaskSliceList{success = true, total_count = total, slices = closed_pages[i + 1:end], has_more = end < len(closed_pages)}
+				if end > i + 1 {
+					want.next_cursor_closed = true
+					want.next_cursor_sort_at = end == 4 ? 80 : 100
+					want.next_cursor_slice_id = closed_pages[end - 1].slice_id
+				}
+				worker_db_test_slice_expect(t, c, req, want)
+			}
+		}
+		req = saved_req; req.has_owner = has_owner; req.project = slice_test_bytes("paging")
+		req.limit = 1
+		for entry, i in closed_pages {
+			at: i64 = i == 3 ? 80 : 100
+			worker_db_test_slice_expect(t, c, req, {success = true, slices = {entry}, total_count = total, has_more = i < 3, next_cursor_closed = true, next_cursor_sort_at = at, next_cursor_slice_id = entry.slice_id})
+			req.cursor_closed = true; req.cursor_sort_at = at; req.cursor_slice_id = entry.slice_id
+		}
+		worker_db_test_slice_expect(t, c, req, {success = true, total_count = total})
+	}
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	for _, i in extra_closed {
+		key := pr.Asset{asset_id = u64(200 + i)}
+		testing.expect_value(t, sqlite_projection_write(&store, "DELETE FROM edges WHERE workspace=?1 AND id=?2", c.workspace_id, &key, nil), sql.OK)
+	}
+	testing.expect_value(t, db.put_task(&store, c.workspace_id, &tasks[1]), sql.OK)
+	for &asset in extra_closed do testing.expect_value(t, sqlite_projection_write(&store, "DELETE FROM assets WHERE workspace=?1 AND id=?2", c.workspace_id, &asset, nil), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	req = saved_req
+	req.has_cursor = false; req.include_closed = true; req.limit = 10
+	worker_db_test_slice_expect(
+		t,
+		c,
+		req,
+		{
+			success = true,
+			slices = {open, empty, closed},
+			total_count = 3,
+			next_cursor_closed = true,
+			next_cursor_sort_at = 100,
+			next_cursor_slice_id = 72,
+			assigned_tasks = 3,
+			unassigned_tasks = 1,
+		},
+	)
+	req.has_owner = true; req.owner = nil
+	worker_db_test_slice_expect(
+		t,
+		c,
+		req,
+		{success = true, slices = {empty, closed}, total_count = 2, next_cursor_closed = true, next_cursor_sort_at = 100, next_cursor_slice_id = 72},
+	)
+	req.has_owner = false; req.has_name = true; req.name = slice_test_bytes("ÄND")
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {open}, total_count = 1, next_cursor_sort_at = 60, next_cursor_slice_id = 71})
+	req.has_name = false; req.name = nil; req.project = slice_test_bytes("NRC")
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {open}, total_count = 1, next_cursor_sort_at = 60, next_cursor_slice_id = 71})
+	req.project = slice_test_bytes("nrc")
+	worker_db_test_slice_expect(t, c, req, {success = true})
+	// Project matching and ordering follow note edits even when the asset has
+	// the same ID as a task. Missing projections still use the canonical record.
+	member := assets[4]
+	member.updated_at = 80
+	member.preview = slice_test_bytes(`{"project":"Changed"}`)
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &member), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	req.project = slice_test_bytes("NRC")
+	worker_db_test_slice_expect(t, c, req, {success = true})
+	req.project = slice_test_bytes("Changed")
+	changed := open; changed.last_moved_at = 80
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {changed}, total_count = 1, next_cursor_sort_at = 80, next_cursor_slice_id = 71})
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(
+		t,
+		sqlite_projection_write(&store, "DELETE FROM note_metadata WHERE workspace=?1 AND asset_id=?2", c.workspace_id, &member, nil),
+		sql.OK,
+	)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	worker_db_test_slice_expect(t, c, req, {success = true})
+	req.project = nil; req.has_name = true; req.name = slice_test_bytes("ÄND")
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {changed}, total_count = 1, next_cursor_sort_at = 80, next_cursor_slice_id = 71})
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &assets[4]), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	req.has_name = false; req.name = nil
+	worker_db_test_query_expect(t, c, {status_mask = 15, color = 255, sort = .WorkOrder, slice_id = 71, limit = 1, correlation_id = 931}, tasks[:], {0, 1})
+	req.project = nil
+	buffer: [1024]byte
+	n := pr.serializeListTaskSlicesRequest(req, buffer[:])
+	request := db.Request {
+		workspace = c.workspace_id,
+		opcode    = .C_ListTaskSlices,
+		body      = buffer[2:n],
+	}
+	for budget in ([2]int{1, 4096}) {
+		output := db.Command_Output {
+			limit = budget,
+		}; defer db.destroy_command_output(&output)
+		testing.expect_value(t, db.begin(&store), sql.OK)
+		testing.expect_value(t, sqlite_execute_task_command(&store, &request, &output), budget == 1 ? sql.TOOBIG : sql.OK)
+		testing.expect_value(t, output.count, budget == 1 ? 0 : 1)
+		// Indexed pages must not materialize the whole register, even on failure.
+		sqlite_projection_test_assert(t, &store, "SELECT count(*)=0 FROM sqlite_temp_master WHERE name='nrc_slices'")
+		testing.expect_value(t, db.rollback(&store), sql.OK)
+	}
+	// Change records through the other connection after summaries are warm.
+	tasks[0].status = .Done; tasks[0].blocked_by = 0; tasks[0].updated_at = 90
+	tasks[0].project = slice_test_bytes("ChangedTask")
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, db.put_task(&store, c.workspace_id, &tasks[0]), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	changed = open; changed.todo = 0; changed.done = 2; changed.blocked = 0
+	changed.oldest_active_at = 0; changed.last_moved_at = 90
+	req.project = slice_test_bytes("srv")
+	worker_db_test_slice_expect(t, c, req, {success = true})
+	req.project = slice_test_bytes("ChangedTask")
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {changed}, total_count = 1, next_cursor_sort_at = 90, next_cursor_slice_id = 71})
+	tasks[0].status = .Note
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, db.put_task(&store, c.workspace_id, &tasks[0]), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	changed.done = 1; changed.last_moved_at = 60
+	req.project = nil
+	worker_db_test_slice_expect(
+		t,
+		c,
+		req,
+		{
+			success = true,
+			slices = {changed, empty, closed},
+			total_count = 3,
+			next_cursor_closed = true,
+			next_cursor_sort_at = 100,
+			next_cursor_slice_id = 72,
+			assigned_tasks = 2,
+			unassigned_tasks = 1,
+		},
+	)
+	// Removing a reverse membership must invalidate the same slice.
+	key := pr.Asset {
+		asset_id = 2,
+	}
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sqlite_projection_write(&store, "DELETE FROM edges WHERE workspace=?1 AND id=?2", c.workspace_id, &key, nil), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	changed.done = 0
+	req.has_name = true; req.name = slice_test_bytes("ÄND")
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {changed}, total_count = 1, next_cursor_sort_at = 60, next_cursor_slice_id = 71})
+	// A previously dangling task becomes a real member without editing its edge.
+	late := pr.Task {
+		id         = 999,
+		status     = .Backlog,
+		created_at = 11,
+		updated_at = 110,
+	}
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, db.put_task(&store, c.workspace_id, &late), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	changed.backlog = 1; changed.oldest_active_at = 11; changed.last_moved_at = 110
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {changed}, total_count = 1, next_cursor_sort_at = 110, next_cursor_slice_id = 71})
+	// Rebuilding inside a rolled-back transaction cannot publish derived state.
+	late.status = .Done; late.updated_at = 120
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, db.put_task(&store, c.workspace_id, &late), sql.OK)
+	output := db.Command_Output {
+		limit = 4096,
+	}; defer db.destroy_command_output(&output)
+	testing.expect_value(t, sqlite_execute_task_command(&store, &request, &output), sql.OK)
+	testing.expect_value(t, output.count, 1)
+	testing.expect_value(t, db.rollback(&store), sql.OK)
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {changed}, total_count = 1, next_cursor_sort_at = 110, next_cursor_slice_id = 71})
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, db.remove_task(&store, c.workspace_id, 0, 999), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	changed.backlog = 0; changed.oldest_active_at = 0; changed.last_moved_at = 60
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {changed}, total_count = 1, next_cursor_sort_at = 60, next_cursor_slice_id = 71})
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(
+		t,
+		sqlite_projection_write(&store, "INSERT INTO edges VALUES(?1,?2,1,?3,2,?4,7,0,x'')", c.workspace_id, &key, {u64(71), u64(4)}),
+		sql.OK,
+	)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	changed.backlog = 1
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {changed}, total_count = 1, next_cursor_sort_at = 60, next_cursor_slice_id = 71})
+	// Moving an edge invalidates both the old and new endpoints.
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(
+		t,
+		sqlite_projection_write(
+			&store,
+			"UPDATE edges SET source_type=2,source_id=?3,target_type=1,target_id=?4 WHERE workspace=?1 AND id=?2",
+			c.workspace_id,
+			&key,
+			{u64(4), u64(72)},
+		),
+		sql.OK,
+	)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	changed.backlog = 0
+	worker_db_test_slice_expect(t, c, req, {success = true, slices = {changed}, total_count = 1, next_cursor_sort_at = 60, next_cursor_slice_id = 71})
+	req.name = slice_test_bytes("Closed"); closed.backlog = 1
+	worker_db_test_slice_expect(
+		t,
+		c,
+		req,
+		{success = true, slices = {closed}, total_count = 1, next_cursor_closed = true, next_cursor_sort_at = 100, next_cursor_slice_id = 72},
+	)
+	// A fresh executor reads summaries persisted by the writer's finalization.
+	want_closed := pr.TaskSliceList {
+		success              = true,
+		slices               = {closed},
+		total_count          = 1,
+		next_cursor_closed   = true,
+		next_cursor_sort_at  = 100,
+		next_cursor_slice_id = 72,
+	}
+	// Reject any rebuild to distinguish persisted reuse from recomputation.
+	testing.expect_value(
+		t,
+		sql.exec(
+			store.db,
+			"CREATE TRIGGER reject_slice_rebuild BEFORE INSERT ON slice_summaries BEGIN SELECT RAISE(ABORT,'unexpected rebuild'); END",
+			nil,
+			nil,
+			nil,
+		),
+		sql.OK,
+	)
+	worker_db_test_slice_reopen(t, path, c.workspace_id, req, want_closed)
+	testing.expect_value(t, sql.exec(store.db, "DROP TRIGGER reject_slice_rebuild", nil, nil, nil), sql.OK)
+	tasks[3].created_at = 15; tasks[3].project = slice_test_bytes("Restart")
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, db.put_task(&store, c.workspace_id, &tasks[3]), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	closed.oldest_active_at = 15
+	want_closed.slices[0] = closed
+	req.project = slice_test_bytes("Restart")
+	worker_db_test_slice_reopen(t, path, c.workspace_id, req, want_closed)
+	worker_db_test_slice_expect(t, c, req, want_closed)
+	// A malformed offline write is not repaired by a reader. Writer-side repair
+	// must also roll back if a deferred FK violation fires at COMMIT.
+	testing.expect_value(
+		t,
+		sql.exec(
+			store.db,
+			`CREATE TABLE slice_fault_parent(id INTEGER PRIMARY KEY);
+ CREATE TABLE slice_fault_child(id INTEGER REFERENCES slice_fault_parent(id) DEFERRABLE INITIALLY DEFERRED);
+ CREATE TRIGGER slice_fault AFTER UPDATE OF oldest ON slice_summaries
+ BEGIN INSERT INTO slice_fault_child VALUES(1); END;`,
+			nil,
+			nil,
+			nil,
+		),
+		sql.OK,
+	)
+	tasks[3].status = .Done
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, db.put_task(&store, c.workspace_id, &tasks[3]), sql.OK)
+	// Deliberately bypass finalization to simulate an incomplete offline import.
+	testing.expect_value(t, sql.exec(store.db, "COMMIT", nil, nil, nil), sql.OK)
+	worker_db_test_slice_expect(t, c, req, {error = slice_test_bytes("Failed to read slices")})
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.CONSTRAINT)
+	testing.expect_value(t, db.rollback(&store), sql.OK)
+	sqlite_projection_test_assert(t, &store, "SELECT count(*)=0 FROM slice_fault_child")
+	sqlite_projection_test_assert(t, &store, "SELECT count(*)=1 FROM slice_summaries WHERE backlog=1 AND oldest=15")
+	sqlite_projection_test_assert(t, &store, "SELECT count(*)=1 FROM slice_pending")
+	testing.expect_value(t, sql.exec(store.db, "DROP TRIGGER slice_fault; DROP TABLE slice_fault_child; DROP TABLE slice_fault_parent", nil, nil, nil), sql.OK)
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	closed.backlog = 0; closed.done = 2; closed.oldest_active_at = 20
+	want_closed.slices[0] = closed
+	worker_db_test_slice_reopen(t, path, c.workspace_id, req, want_closed)
+	worker_db_test_slice_expect(t, c, req, want_closed)
+	worker_db_test_slice_reopen(
+		t,
+		path,
+		c.workspace_id,
+		{limit = 10, include_closed = true},
+		{
+			success = true,
+			slices = {changed, empty, closed},
+			total_count = 3,
+			next_cursor_closed = true,
+			next_cursor_sort_at = 100,
+			next_cursor_slice_id = 72,
+			assigned_tasks = 3,
+		},
+	)
+	// Drop the closed slice projection after coverage was materialized. Its
+	// membership rows must disappear even though canonical edges still exist.
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM slice_metadata WHERE asset_id=x'0000000000000048'", nil, nil, nil), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	req = {
+		limit          = 10,
+		correlation_id = 932,
+	}
+	for _ in 0 ..< 2 do worker_db_test_slice_expect(t, c, req, {success = true, slices = {changed, empty}, total_count = 2, next_cursor_sort_at = 60, next_cursor_slice_id = max(u64), unassigned_tasks = 3})
+	// Exercise the wire category boundary on both rebuilds and cache hits.
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM edges; DELETE FROM assets; DELETE FROM tasks", nil, nil, nil), sql.OK)
+	boundary := slice_test_slice_asset(71, `{"version":1,"name":"Boundary"}`)
+	testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &boundary), sql.OK)
+	testing.expect_value(t, db.put_task(&store, c.workspace_id, &tasks[0]), sql.OK)
+	testing.expect_value(
+		t,
+		sql.exec(
+			store.db,
+			`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<65536)
+ INSERT INTO tasks SELECT workspace,CAST(printf('%08d',x) AS BLOB),x'',x'',CASE WHEN x=65536 THEN 4 ELSE 1 END,0,x'',0,0,x'',CASE WHEN x=2 THEN 0 ELSE 10 END,0,x'',0,x'0000000000000000',0,x'',x'' FROM n CROSS JOIN tasks WHERE id=x'0000000000000001';
+ DELETE FROM tasks WHERE id=x'0000000000000001';
+ INSERT INTO edges SELECT workspace,id,2,id,1,x'0000000000000047',7,0,x'' FROM tasks;`,
+			nil,
+			nil,
+			nil,
+		),
+		sql.OK,
+	)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	boundary_entry := pr.TaskSlice {
+		slice_id         = 71,
+		name             = slice_test_bytes("Boundary"),
+		todo             = 65535,
+		oldest_active_at = 10,
+	}
+	want_boundary := pr.TaskSliceList {
+		success              = true,
+		slices               = {boundary_entry},
+		total_count          = 1,
+		next_cursor_slice_id = 71,
+		assigned_tasks       = 65535,
+	}
+	for _ in 0 ..< 2 do worker_db_test_slice_expect(t, c, req, want_boundary)
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "UPDATE tasks SET status=1,project=CAST('overflow' AS BLOB) WHERE id=CAST('00065536' AS BLOB)", nil, nil, nil), sql.OK)
+	first_page := slice_test_slice_asset(73, `{"version":1,"name":"First page"}`, 200)
+	testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &first_page), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	req.limit = 1 // The overflowing slice is outside the requested page.
+	for _ in 0 ..< 2 do worker_db_test_slice_expect(t, c, req, {error = slice_test_bytes("Slice listing representation limit exceeded: member category exceeds 65535")})
+	req.project = slice_test_bytes("absent")
+	worker_db_test_slice_expect(t, c, req, {success = true})
+	req.project = slice_test_bytes("overflow"); req.has_cursor = true; req.cursor_closed = true
+	worker_db_test_slice_expect(t, c, req, {error = slice_test_bytes("Slice listing representation limit exceeded: member category exceeds 65535")})
+	req.has_owner = true; req.owner = slice_test_bytes("excluded")
+	worker_db_test_slice_expect(t, c, req, {success = true})
+	req.project = nil; req.has_cursor = false; req.cursor_closed = false; req.has_owner = false; req.owner = nil
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM assets WHERE id=x'0000000000000049'", nil, nil, nil), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM tasks WHERE id=CAST('00065536' AS BLOB)", nil, nil, nil), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	for _ in 0 ..< 2 do worker_db_test_slice_expect(t, c, req, want_boundary)
+	// Missing creation times never displace a known active creation time.
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "UPDATE tasks SET created_at=0 WHERE id=CAST('00065535' AS BLOB)", nil, nil, nil), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	boundary_entry.oldest_active_at = 10
+	want_boundary.slices[0] = boundary_entry
+	for _ in 0 ..< 2 do worker_db_test_slice_expect(t, c, req, want_boundary)
 }
 
-slice_test_state :: proc(conv: ^Conversation_State) {
-	conv.tasks = make(map[pr.TaskID]^pr.Task)
-	conv.assets = make(map[pr.AssetID]^pr.Asset)
-	conv.edges = make(map[pr.EdgeID]^pr.Edge)
-	conv.edges_by_entity = make(map[Edge_Entity_Key][dynamic]pr.EdgeID)
-	init_task_index(conv)
-	init_note_index(conv)
+worker_db_test_slice_reopen :: proc(t: ^testing.T, path: cstring, workspace: string, req: pr.ListTaskSlicesRequest, want: pr.TaskSliceList) {
+	paths := [1]cstring{path}
+	e, err := db.start_executor(paths[:], 1, 2, 65536, 4096, td.backing_allocator, command_handler = sqlite_execute_task_command)
+	if !testing.expect_value(t, err, .None) do return
+	defer db.destroy_executor(e)
+	p := &e.ports[0]
+	defer {db.finish_submissions(p); db.join_executor(e)}
+	buffer: [1024]byte
+	n := pr.serializeListTaskSlicesRequest(req, buffer[:])
+	if !testing.expect(t, db.submit(p, {operation = .Command, workspace = workspace, opcode = .C_ListTaskSlices, body = buffer[2:n]})) do return
+	for {
+		if job, ok := db.receive(p); ok {
+			defer db.release_completion(p, job)
+			testing.expect_value(t, job.result.status, sql.OK)
+			if testing.expect_value(t, job.result.command.count, 1) {
+				expected := want; expected.correlation_id = req.correlation_id
+				encoded: [4096]byte
+				written := pr.serializeTaskSliceList(expected, encoded[:])
+				testing.expect_value(t, string(job.result.command.frames[0].payload), string(encoded[:written]))
+			}
+			break
+		}
+		db.rearm_completions(p)
+		fds := [1]linux.Poll_Fd{{fd = p.wake.fd, events = {.IN}}}
+		count, poll_err := linux.poll(fds[:], 5000)
+		if poll_err == .EINTR do continue
+		assert(poll_err == .NONE && count == 1, "slice reopen completion timed out")
+	}
 }
 
-slice_test_destroy :: proc(conv: ^Conversation_State) {
-	destroy_task_index(conv)
-	destroy_note_index(conv)
-	for _, edge in conv.edges do free(edge)
-	for _, edge_ids in conv.edges_by_entity do delete(edge_ids)
-	delete(conv.edges_by_entity)
-	delete(conv.edges)
-	delete(conv.tasks)
-	delete(conv.assets)
-}
-
-slice_test_add_task :: proc(conv: ^Conversation_State, task: ^pr.Task) {
-	conv.tasks[task.id] = task
-	index_task(conv, task)
-}
-
-// slice_test_add_asset registers an asset and returns it, so a test can link
-// notes and files the way a client does.
-slice_test_add_asset :: proc(conv: ^Conversation_State, asset: ^pr.Asset) {
-	conv.assets[asset.asset_id] = asset
-}
-
-// slice_test_member_of links a member to a slice with one MemberOf edge and
-// indexes it for both endpoints, which is what the create-edge handler does.
-slice_test_member_of :: proc(
-	conv: ^Conversation_State,
-	member_type: pr.TargetType,
-	member_id: u64,
-	slice_id: pr.AssetID,
-	relation := pr.RelationType.MemberOf,
-) {
-	edge := new(pr.Edge)
-	edge.edge_id = pr.EdgeID(len(conv.edges) + 1)
-	edge.source_type = member_type
-	edge.source_id = member_id
-	edge.target_type = .Asset
-	edge.target_id = u64(slice_id)
-	edge.relation = relation
-	conv.edges[edge.edge_id] = edge
-	add_edge_to_adjacency(conv, edge.source_type, edge.source_id, edge.edge_id)
-	add_edge_to_adjacency(conv, edge.target_type, edge.target_id, edge.edge_id)
-}
-
+slice_test_bytes :: proc(value: string) -> []byte {return transmute([]byte)value}
 // slice_test_slice_asset registers a slice record. The preview is spelled out at
 // each call site so a test shows exactly what it stores. The record's own creation
 // time is the floor of the register's order, so a test that cares about the order
 // sets it; every other test leaves it at zero.
 slice_test_slice_asset :: proc(id: pr.AssetID, preview: string, created_at: i64 = 0) -> pr.Asset {
 	return pr.Asset{asset_type = .Slice, asset_id = id, created_at = created_at, updated_at = 4000, preview = slice_test_bytes(preview)}
-}
-
-// slice_test_query is the register's default request: every open slice, the
-// workspace counters folded, and a page bound the whole fixture fits in. A test
-// that exercises a filter or a later page builds its own query.
-slice_test_query :: proc(include_closed := false) -> Slice_Query {
-	return {include_closed = include_closed, limit = pr.MAX_TASK_SLICE_COUNT, with_work_counters = true}
-}
-
-@(test)
-test_slice_project_filter_preserves_whole_slices :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-	assets := [?]pr.Asset {
-		slice_test_slice_asset(71, `{"version":1,"name":"Mixed","owner":"anke"}`),
-		slice_test_slice_asset(72, `{"version":1,"name":"Notes","owner":"anke"}`),
-		slice_test_slice_asset(73, `{"version":1,"name":"Not members"}`, 99000),
-		slice_test_slice_asset(74, `{"version":1,"name":"Empty"}`, 98000),
-		slice_test_slice_asset(75, `{"version":1,"name":"Closed","closed":true}`),
-		{asset_id = 81, asset_type = .Note, preview = slice_test_bytes(`{"project":"NRC"}`), updated_at = 5000},
-		{asset_id = 82, asset_type = .File, preview = slice_test_bytes(`{"category":"NRC","project":"NRC"}`), updated_at = 9000},
-		{asset_id = 83, asset_type = .Ticket, preview = slice_test_bytes(`{"project":"NRC"}`)},
-	}
-	for &asset in assets do slice_test_add_asset(&conv, &asset)
-	tasks := [?]pr.Task {
-		{id = 1, status = .Todo, project = slice_test_bytes("NRC"), created_at = 100, updated_at = 3000},
-		{id = 2, status = .InProgress, project = slice_test_bytes("srv"), created_at = 50, updated_at = 8000, blocked_by = 1},
-		{id = 3, status = .Note, project = slice_test_bytes("NRC")},
-	}
-	for &task in tasks do slice_test_add_task(&conv, &task)
-	slice_test_member_of(&conv, .Task, 1, 71)
-	slice_test_member_of(&conv, .Task, 2, 71)
-	slice_test_member_of(&conv, .Asset, 82, 71)
-	slice_test_member_of(&conv, .Asset, 81, 72)
-	// Reverse membership direction is equally valid.
-	edge := conv.edges[pr.EdgeID(len(conv.edges))]
-	edge.source_type = .Asset; edge.source_id = 72
-	edge.target_type = .Asset; edge.target_id = 81
-	slice_test_member_of(&conv, .Task, 1, 73, .RelatedTo)
-	slice_test_member_of(&conv, .Task, 3, 73)
-	slice_test_member_of(&conv, .Asset, 82, 73)
-	slice_test_member_of(&conv, .Asset, 83, 73)
-	slice_test_member_of(&conv, .Asset, 72, 73) // No transitive project inference.
-	slice_test_member_of(&conv, .Task, 1, 75)
-	slices := make([dynamic]pr.TaskSlice)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{})
-	defer delete(assigned)
-	query := Slice_Query {
-		project = "NRC",
-		limit   = 1,
-	}
-	page := collect_task_slices(&conv, query, &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, page.total_count, u32(2))
-	testing.expect(t, page.has_more)
-	testing.expect_value(t, len(slices), 1)
-	if len(slices) != 1 do return
-	testing.expect_value(t, slices[0].slice_id, pr.AssetID(71))
-	testing.expect_value(t, slices[0].todo, u16(1))
-	testing.expect_value(t, slices[0].in_progress, u16(1))
-	testing.expect_value(t, slices[0].blocked, u16(1))
-	testing.expect_value(t, slices[0].files, u16(1))
-	testing.expect_value(t, slices[0].oldest_active_at, i64(50))
-	testing.expect_value(t, slices[0].last_moved_at, i64(9000))
-	testing.expect_value(t, page.assigned_tasks, u32(0))
-	testing.expect_value(t, page.unassigned_tasks, u32(0))
-	query.has_cursor = true
-	query.cursor_sort_at = page.next_cursor.sort_at
-	query.cursor_slice_id = page.next_cursor.slice_id
-	clear(&slices)
-	page = collect_task_slices(&conv, query, &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, page.total_count, u32(2))
-	testing.expect(t, !page.has_more)
-	if testing.expect_value(t, len(slices), 1) do testing.expect_value(t, slices[0].slice_id, pr.AssetID(72))
-	expected_counts := [4]u32{1, 0, 0, 4}
-	for project, expected in ([?]string{"srv", "nrc", "NR", ""}) {
-		clear(&slices)
-		page = collect_task_slices(&conv, {project = project, limit = 100}, &slices, nil, context.temp_allocator)
-		testing.expect_value(t, page.total_count, expected_counts[expected])
-	}
-	clear(&slices)
-	page = collect_task_slices(
-		&conv,
-		{project = "NRC", include_closed = true, limit = 100, has_owner = true, owner = "anke", has_name = true, name = "NOTE"},
-		&slices,
-		nil,
-		context.temp_allocator,
-	)
-	testing.expect_value(t, page.total_count, u32(1))
-	clear(&slices)
-	page = collect_task_slices(&conv, {project = "NRC", include_closed = true, limit = 100}, &slices, nil, context.temp_allocator)
-	testing.expect_value(t, page.total_count, u32(3))
-}
-
-slice_test_slice_by_name :: proc(slices: []pr.TaskSlice, name: string) -> (pr.TaskSlice, bool) {
-	for entry in slices do if string(entry.name) == name do return entry, true
-	return {}, false
-}
-
-// A membership edge is read as an unordered pair: the member is whichever endpoint
-// is not the slice. The slice itself is never a member, even if a self-edge were
-// ever replayed from a record this server did not write.
-@(test)
-test_slice_member_endpoint_reads_either_direction :: proc(t: ^testing.T) {
-	slice_id := pr.AssetID(11)
-
-	member_first := pr.Edge {
-		edge_id     = 1,
-		source_type = .Task,
-		source_id   = 13,
-		target_type = .Asset,
-		target_id   = u64(slice_id),
-		relation    = .MemberOf,
-	}
-	member_type, member_id, found := slice_member_endpoint(&member_first, slice_id)
-	testing.expect(t, found && member_type == .Task && member_id == 13, "a member -> slice edge names the member")
-
-	slice_first := pr.Edge {
-		edge_id     = 2,
-		source_type = .Asset,
-		source_id   = u64(slice_id),
-		target_type = .Asset,
-		target_id   = 12,
-		relation    = .MemberOf,
-	}
-	member_type, member_id, found = slice_member_endpoint(&slice_first, slice_id)
-	testing.expect(t, found && member_type == .Asset && member_id == 12, "a slice -> member edge names the member")
-
-	self_edge := pr.Edge {
-		edge_id     = 3,
-		source_type = .Asset,
-		source_id   = u64(slice_id),
-		target_type = .Asset,
-		target_id   = u64(slice_id),
-		relation    = .MemberOf,
-	}
-	_, _, found = slice_member_endpoint(&self_edge, slice_id)
-	testing.expect(t, !found, "a slice is not its own member")
-
-	unrelated := pr.Edge {
-		edge_id     = 4,
-		source_type = .Task,
-		source_id   = 1,
-		target_type = .Task,
-		target_id   = 2,
-		relation    = .MemberOf,
-	}
-	_, _, found = slice_member_endpoint(&unrelated, slice_id)
-	testing.expect(t, !found, "an edge that does not touch the slice is not a membership")
-}
-
-@(test)
-test_task_slice_counts_its_members_from_member_of_edges :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	slice_asset := slice_test_slice_asset(77, `{"version":1,"name":"Shard hardening","owner":"rene","outcome":"Ship it.","closed":false}`)
-	slice_test_add_asset(&conv, &slice_asset)
-
-	tasks := [5]pr.Task {
-		{id = 1, status = .Backlog, created_at = 100, updated_at = 500},
-		{id = 2, status = .Todo, created_at = 200, updated_at = 900, blocked_by = 4},
-		{id = 3, status = .Done, created_at = 50, updated_at = 300},
-		{id = 4, status = .InProgress, created_at = 400, updated_at = 700},
-		// A task retired into a note is not work, even when it is linked.
-		{id = 5, status = .Note, created_at = 20, updated_at = 950},
-	}
-	for i in 0 ..< len(tasks) {
-		slice_test_add_task(&conv, &tasks[i])
-		slice_test_member_of(&conv, .Task, u64(tasks[i].id), 77)
-	}
-
-	notes := [2]pr.Asset{{asset_type = .Note, asset_id = 11, updated_at = 4100}, {asset_type = .Note, asset_id = 12, updated_at = 4200}}
-	files := [1]pr.Asset{{asset_type = .File, asset_id = 21, updated_at = 4300}}
-	// A reminder that ends up linked is not a member of a work stream.
-	reminders := [1]pr.Asset{{asset_type = .Reminder, asset_id = 31, updated_at = 4400}}
-	for i in 0 ..< len(notes) {
-		slice_test_add_asset(&conv, &notes[i])
-		slice_test_member_of(&conv, .Asset, u64(notes[i].asset_id), 77)
-	}
-	for i in 0 ..< len(files) {
-		slice_test_add_asset(&conv, &files[i])
-		slice_test_member_of(&conv, .Asset, u64(files[i].asset_id), 77)
-	}
-	for i in 0 ..< len(reminders) {
-		slice_test_add_asset(&conv, &reminders[i])
-		slice_test_member_of(&conv, .Asset, u64(reminders[i].asset_id), 77)
-	}
-
-	slices := make([dynamic]pr.TaskSlice, 0, 8)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{}, 8)
-	defer delete(assigned)
-	page := collect_task_slices(&conv, slice_test_query(), &slices, &assigned, context.temp_allocator)
-
-	testing.expect_value(t, page.total_count, 1)
-	testing.expect(t, !page.has_more, "one slice fits one response")
-
-	entry, ok := slice_test_slice_by_name(slices[:], "Shard hardening")
-	testing.expect(t, ok, "the slice asset is the slice")
-	testing.expect_value(t, entry.slice_id, pr.AssetID(77))
-	testing.expect_value(t, string(entry.owner), "rene")
-	testing.expect(t, !slice_has_flag(entry, pr.TaskSliceFlag_CLOSED), "an open slice is not closed")
-	testing.expect_value(t, entry.backlog, u16(1))
-	testing.expect_value(t, entry.todo, u16(1))
-	testing.expect_value(t, entry.in_progress, u16(1))
-	testing.expect_value(t, entry.done, u16(1))
-	testing.expect_value(t, entry.blocked, u16(1))
-	testing.expect_value(t, entry.notes, u16(2))
-	testing.expect_value(t, entry.files, u16(1))
-	testing.expect_value(t, pr.task_slice_open_count(entry), u16(3))
-	// The linked reminder is not a member, so it does not widen the count.
-	testing.expect_value(t, pr.task_slice_member_count(entry), 7)
-	// Done members do not hold the oldest-active age back.
-	testing.expect_value(t, entry.oldest_active_at, i64(100))
-	// Movement is the newest member change, notes and files included.
-	testing.expect_value(t, entry.last_moved_at, i64(4300))
-
-	// Only the four work tasks have a home; the retired one does not.
-	testing.expect_value(t, len(assigned), 4)
-	testing.expect(t, pr.TaskID(5) not_in assigned, "a task retired into a note is not assigned work")
-}
-
-@(test)
-test_task_slice_without_members_is_still_a_slice :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	// A slice is what a human created, not what its members imply: an empty
-	// slice is a slice, and it reports no movement because nothing moved.
-	slice_asset := slice_test_slice_asset(78, `{"version":1,"name":"Customer records","owner":"anke","closed":false}`)
-	slice_test_add_asset(&conv, &slice_asset)
-
-	slices := make([dynamic]pr.TaskSlice, 0, 8)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{}, 8)
-	defer delete(assigned)
-	page := collect_task_slices(&conv, slice_test_query(), &slices, &assigned, context.temp_allocator)
-
-	testing.expect_value(t, page.total_count, 1)
-	entry, ok := slice_test_slice_by_name(slices[:], "Customer records")
-	testing.expect(t, ok, "an empty slice is still a slice")
-	testing.expect_value(t, pr.task_slice_member_count(entry), 0)
-	testing.expect_value(t, entry.oldest_active_at, i64(0))
-	testing.expect_value(t, entry.last_moved_at, i64(0))
-	testing.expect_value(t, len(assigned), 0)
-}
-
-@(test)
-test_task_slice_closed_is_excluded_unless_requested :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	open_asset := slice_test_slice_asset(77, `{"version":1,"name":"Alpha","owner":"rene","closed":false}`)
-	closed_asset := slice_test_slice_asset(78, `{"version":1,"name":"Beta","owner":"marco","closed":true,"closed_at":9000,"closed_by":"marco"}`)
-	slice_test_add_asset(&conv, &open_asset)
-	slice_test_add_asset(&conv, &closed_asset)
-
-	task := pr.Task {
-		id         = 1,
-		status     = .Todo,
-		created_at = 100,
-		updated_at = 200,
-	}
-	slice_test_add_task(&conv, &task)
-	// Closing a slice does not unassign its tasks.
-	slice_test_member_of(&conv, .Task, 1, 78)
-
-	slices := make([dynamic]pr.TaskSlice, 0, 8)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{}, 8)
-	defer delete(assigned)
-	page := collect_task_slices(&conv, slice_test_query(), &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, page.total_count, 1)
-	_, open_ok := slice_test_slice_by_name(slices[:], "Alpha")
-	testing.expect(t, open_ok, "the open slice is listed")
-	testing.expect_value(t, len(assigned), 1)
-
-	with_closed := make([dynamic]pr.TaskSlice, 0, 8)
-	defer delete(with_closed)
-	closed_page := collect_task_slices(&conv, slice_test_query(true), &with_closed, &assigned, context.temp_allocator)
-	testing.expect_value(t, closed_page.total_count, 2)
-
-	beta, beta_ok := slice_test_slice_by_name(with_closed[:], "Beta")
-	testing.expect(t, beta_ok, "include_closed should surface closed slices")
-	testing.expect(t, slice_has_flag(beta, pr.TaskSliceFlag_CLOSED), "Beta is closed")
-	testing.expect_value(t, string(beta.owner), "marco")
-	testing.expect_value(t, beta.todo, u16(1))
-}
-
-@(test)
-test_task_slice_counts_only_membership_relations :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	alpha := slice_test_slice_asset(77, `{"version":1,"name":"Alpha","owner":"rene","closed":false}`)
-	beta := slice_test_slice_asset(78, `{"version":1,"name":"Beta","owner":"rene","closed":false}`)
-	slice_test_add_asset(&conv, &alpha)
-	slice_test_add_asset(&conv, &beta)
-
-	task := pr.Task {
-		id         = 1,
-		status     = .Todo,
-		created_at = 100,
-		updated_at = 200,
-	}
-	slice_test_add_task(&conv, &task)
-	// A reference to a slice is not a membership, and an edge between two
-	// slices is not a member of either one.
-	slice_test_member_of(&conv, .Task, 1, 77, pr.RelationType.References)
-	slice_test_member_of(&conv, .Asset, 78, 77, pr.RelationType.MemberOf)
-
-	slices := make([dynamic]pr.TaskSlice, 0, 8)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{}, 8)
-	defer delete(assigned)
-	page := collect_task_slices(&conv, slice_test_query(), &slices, &assigned, context.temp_allocator)
-
-	testing.expect_value(t, page.total_count, 2)
-	testing.expect_value(t, len(assigned), 0)
-	entry, ok := slice_test_slice_by_name(slices[:], "Alpha")
-	testing.expect(t, ok, "Alpha is listed")
-	testing.expect_value(t, pr.task_slice_member_count(entry), 0)
-	beta_entry, beta_ok := slice_test_slice_by_name(slices[:], "Beta")
-	testing.expect(t, beta_ok, "Beta is listed")
-	testing.expect_value(t, pr.task_slice_member_count(beta_entry), 0)
-}
-
-@(test)
-test_task_slice_invalid_preview_does_not_invent_identity :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	// Not JSON, JSON without a version, an empty name, and a version from the
-	// future are all rejected: a corrupt record is not a slice.
-	broken := [4]pr.Asset {
-		{asset_type = .Slice, asset_id = 1, preview = slice_test_bytes("not json")},
-		{asset_type = .Slice, asset_id = 2, preview = slice_test_bytes(`{"name":"Alpha"}`)},
-		{asset_type = .Slice, asset_id = 3, preview = slice_test_bytes(`{"version":1,"name":""}`)},
-		{asset_type = .Slice, asset_id = 4, preview = slice_test_bytes(`{"version":2,"name":"Alpha"}`)},
-	}
-	for i in 0 ..< len(broken) do slice_test_add_asset(&conv, &broken[i])
-
-	good := slice_test_slice_asset(5, `{"version":1,"name":"Alpha","owner":"rene","closed":false}`)
-	slice_test_add_asset(&conv, &good)
-
-	slices := make([dynamic]pr.TaskSlice, 0, 4)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{}, 4)
-	defer delete(assigned)
-	page := collect_task_slices(&conv, slice_test_query(), &slices, &assigned, context.temp_allocator)
-
-	testing.expect_value(t, page.total_count, 1)
-	entry, ok := slice_test_slice_by_name(slices[:], "Alpha")
-	testing.expect(t, ok, "the valid record is the slice")
-	testing.expect_value(t, entry.slice_id, pr.AssetID(5))
-}
-
-@(test)
-test_unassigned_task_count_reports_work_without_a_slice :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	slice_asset := slice_test_slice_asset(77, `{"version":1,"name":"Alpha","owner":"rene","closed":false}`)
-	slice_test_add_asset(&conv, &slice_asset)
-
-	tasks := [4]pr.Task {
-		{id = 1, status = .Todo, created_at = 100, updated_at = 200},
-		{id = 2, status = .Done, created_at = 100, updated_at = 200},
-		{id = 3, status = .Backlog, created_at = 100, updated_at = 200},
-		// A retired task is not work, so it is neither assigned nor waiting.
-		{id = 4, status = .Note, created_at = 100, updated_at = 200},
-	}
-	for i in 0 ..< len(tasks) do slice_test_add_task(&conv, &tasks[i])
-	slice_test_member_of(&conv, .Task, 1, 77)
-
-	slices := make([dynamic]pr.TaskSlice, 0, 8)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{}, 8)
-	defer delete(assigned)
-	_ = collect_task_slices(&conv, slice_test_query(), &slices, &assigned, context.temp_allocator)
-
-	testing.expect_value(t, len(assigned), 1)
-	testing.expect_value(t, unassigned_task_count(&conv, &assigned), u32(2))
-}
-
-// The register's order is the one its rows can explain: the work stream moved most
-// recently stands on top, a slice that carries no members yet falls back to the time
-// it was created, closed slices sink below the active ones, and the slice ID breaks
-// the remaining ties.
-@(test)
-test_task_slice_listing_is_ordered_by_movement :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	assets := [6]pr.Asset {
-		slice_test_slice_asset(71, `{"version":1,"name":"Alpha","owner":"rene","closed":false}`, created_at = 1000),
-		slice_test_slice_asset(72, `{"version":1,"name":"Beta","owner":"rene","closed":false}`, created_at = 2000),
-		slice_test_slice_asset(73, `{"version":1,"name":"Gamma","owner":"rene","closed":false}`, created_at = 8000),
-		slice_test_slice_asset(74, `{"version":1,"name":"Delta","owner":"rene","closed":true}`, created_at = 500),
-		slice_test_slice_asset(75, `{"version":1,"name":"Epsilon","owner":"rene","closed":false}`, created_at = 3000),
-		slice_test_slice_asset(76, `{"version":1,"name":"Zeta","owner":"rene","closed":false}`, created_at = 3000),
-	}
-	for i in 0 ..< len(assets) do slice_test_add_asset(&conv, &assets[i])
-
-	// Movement is a member's change, so the two slices with the newest members stand
-	// above the empty ones, and the empty ones above the slice created first.
-	tasks := [3]pr.Task {
-		{id = 1, status = .Todo, created_at = 10, updated_at = 5000},
-		{id = 2, status = .Todo, created_at = 10, updated_at = 9000},
-		{id = 3, status = .Todo, created_at = 10, updated_at = 9500},
-	}
-	for i in 0 ..< len(tasks) do slice_test_add_task(&conv, &tasks[i])
-	slice_test_member_of(&conv, .Task, 1, 71) // Alpha moved at 5000
-	slice_test_member_of(&conv, .Task, 2, 72) // Beta moved at 9000
-	slice_test_member_of(&conv, .Task, 3, 74) // Delta moved at 9500, but is closed
-
-	slices := make([dynamic]pr.TaskSlice, 0, 8)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{}, 8)
-	defer delete(assigned)
-	page := collect_task_slices(&conv, slice_test_query(true), &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, page.total_count, 6)
-
-	expected := [6]string{"Beta", "Gamma", "Alpha", "Epsilon", "Zeta", "Delta"}
-	for name, i in expected {
-		testing.expect_value(t, string(slices[i].name), name)
-	}
-
-	// The active register drops the closed slice without disturbing the order.
-	open := make([dynamic]pr.TaskSlice, 0, 8)
-	defer delete(open)
-	_ = collect_task_slices(&conv, slice_test_query(), &open, &assigned, context.temp_allocator)
-	testing.expect_value(t, len(open), 5)
-	testing.expect_value(t, string(open[4].name), "Zeta")
-}
-
-// A workspace may carry more slices than one response fits. The cap keeps the front
-// of the order, so what arrives is the most recently created or moved work and not
-// whichever slices the asset map handed out first.
-@(test)
-test_task_slice_listing_keeps_the_front_when_capped :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	count := pr.MAX_TASK_SLICE_COUNT + 1
-	assets := make([]pr.Asset, count)
-	defer delete(assets)
-	for i in 0 ..< count {
-		// One slice is created after every other one, so it is the only one with a
-		// creation time to sort by.
-		created_at: i64 = i == count - 1 ? 1 : 0
-		assets[i] = slice_test_slice_asset(pr.AssetID(i + 1), `{"version":1,"name":"Filler","owner":"rene","closed":false}`, created_at = created_at)
-		slice_test_add_asset(&conv, &assets[i])
-	}
-
-	slices := make([dynamic]pr.TaskSlice, 0, count)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{}, 8)
-	defer delete(assigned)
-	page := collect_task_slices(&conv, slice_test_query(), &slices, &assigned, context.temp_allocator)
-
-	testing.expect_value(t, page.total_count, u32(count))
-	testing.expect_value(t, len(slices), pr.MAX_TASK_SLICE_COUNT)
-	testing.expect(t, page.has_more, "a listing that dropped a slice says so")
-	testing.expect_value(t, slices[0].slice_id, pr.AssetID(count))
 }
 
 @(test)
@@ -898,195 +936,6 @@ test_list_task_slices_request_carries_filters_and_a_cursor :: proc(t: ^testing.T
 	_, owner_err := pr.parseListTaskSlicesRequest(body)
 	testing.expect_value(t, owner_err, pr.ProtocolParseError.InvalidValue)
 }
-
-// A page follows the cursor the previous page ended on, and the cursor carries
-// closure because closed slices sink below the active ones: a boundary that falls
-// between the two sections still lands where the previous page stopped.
-@(test)
-test_task_slice_paging_follows_the_cursor :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	assets := [4]pr.Asset {
-		slice_test_slice_asset(71, `{"version":1,"name":"Alpha","owner":"rene","closed":false}`, created_at = 1000),
-		slice_test_slice_asset(72, `{"version":1,"name":"Beta","owner":"rene","closed":false}`, created_at = 2000),
-		slice_test_slice_asset(73, `{"version":1,"name":"Gamma","owner":"rene","closed":false}`, created_at = 8000),
-		slice_test_slice_asset(74, `{"version":1,"name":"Delta","owner":"rene","closed":true}`, created_at = 500),
-	}
-	for i in 0 ..< len(assets) do slice_test_add_asset(&conv, &assets[i])
-
-	tasks := [3]pr.Task {
-		{id = 1, status = .Todo, created_at = 10, updated_at = 5000},
-		{id = 2, status = .Todo, created_at = 10, updated_at = 9000},
-		{id = 3, status = .Todo, created_at = 10, updated_at = 9500},
-	}
-	for i in 0 ..< len(tasks) do slice_test_add_task(&conv, &tasks[i])
-	slice_test_member_of(&conv, .Task, 1, 71) // Alpha moved at 5000
-	slice_test_member_of(&conv, .Task, 2, 72) // Beta moved at 9000
-	slice_test_member_of(&conv, .Task, 3, 74) // Delta moved at 9500, but is closed
-
-	// The whole listing in pages of two: Beta, Gamma, Alpha, Delta. The closed
-	// slice carries the newest movement of all, so a cursor that forgot closure
-	// would drop it.
-	slices := make([dynamic]pr.TaskSlice, 0, 4)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{}, 4)
-	defer delete(assigned)
-	names := make([dynamic]string, 0, 4)
-	defer delete(names)
-
-	query := Slice_Query {
-		include_closed = true,
-		limit          = 2,
-	}
-	cursor: Slice_Cursor
-	for page_index in 0 ..< 2 {
-		clear(&slices)
-		query.has_cursor = page_index > 0
-		query.cursor_closed = cursor.closed
-		query.cursor_sort_at = cursor.sort_at
-		query.cursor_slice_id = cursor.slice_id
-		page := collect_task_slices(&conv, query, &slices, &assigned, context.temp_allocator)
-		for entry in slices do append(&names, string(entry.name))
-		testing.expect_value(t, page.total_count, u32(4))
-		if page_index == 0 {
-			testing.expect(t, page.has_more, "a page that left slices behind says so")
-		} else {
-			testing.expect(t, !page.has_more, "the last page ends the listing")
-		}
-		cursor = page.next_cursor
-	}
-
-	expected := [4]string{"Beta", "Gamma", "Alpha", "Delta"}
-	testing.expect_value(t, len(names), len(expected))
-	for name, i in expected do testing.expect_value(t, names[i], name)
-
-	// A page that starts where the listing ends is empty, not a repeat.
-	clear(&slices)
-	query.cursor_closed = cursor.closed
-	query.cursor_sort_at = cursor.sort_at
-	query.cursor_slice_id = cursor.slice_id
-	empty := collect_task_slices(&conv, query, &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, len(slices), 0)
-	testing.expect(t, !empty.has_more, "an exhausted listing has no next page")
-}
-
-// The register's filters are the server's: the owner is one exact name, and the
-// name is a substring matched case-insensitively.
-@(test)
-test_task_slice_listing_filters_by_owner_and_name :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	assets := [3]pr.Asset {
-		slice_test_slice_asset(71, `{"version":1,"name":"Shard hardening","owner":"rene","closed":false}`),
-		slice_test_slice_asset(72, `{"version":1,"name":"Websocket send path","owner":"anke","closed":false}`),
-		slice_test_slice_asset(73, `{"version":1,"name":"Shard migration","owner":"","closed":false}`),
-	}
-	for i in 0 ..< len(assets) do slice_test_add_asset(&conv, &assets[i])
-
-	slices := make([dynamic]pr.TaskSlice, 0, 8)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{}, 8)
-	defer delete(assigned)
-
-	// One owner, exactly.
-	page := collect_task_slices(&conv, Slice_Query{has_owner = true, owner = "anke", limit = 10}, &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, page.total_count, u32(1))
-	testing.expect_value(t, len(slices), 1)
-	testing.expect_value(t, string(slices[0].name), "Websocket send path")
-
-	// An empty owner is the slices nobody owns, which is not every slice.
-	clear(&slices)
-	unowned := collect_task_slices(&conv, Slice_Query{has_owner = true, owner = "", limit = 10}, &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, unowned.total_count, u32(1))
-	testing.expect_value(t, string(slices[0].name), "Shard migration")
-
-	// A name filter is a substring, and the reader's case does not matter.
-	clear(&slices)
-	shard := collect_task_slices(&conv, Slice_Query{has_name = true, name = "SHARD", limit = 10}, &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, shard.total_count, u32(2))
-	testing.expect_value(t, len(slices), 2)
-	testing.expect_value(t, string(slices[0].name), "Shard hardening")
-	testing.expect_value(t, string(slices[1].name), "Shard migration")
-
-	// Both filters at once narrow to their intersection.
-	clear(&slices)
-	both := collect_task_slices(
-		&conv,
-		Slice_Query{has_owner = true, owner = "rene", has_name = true, name = "shard", limit = 10},
-		&slices,
-		&assigned,
-		context.temp_allocator,
-	)
-	testing.expect_value(t, both.total_count, u32(1))
-	testing.expect_value(t, string(slices[0].name), "Shard hardening")
-
-	// A filter that matches nothing is an empty page, not an error.
-	clear(&slices)
-	none := collect_task_slices(&conv, Slice_Query{has_name = true, name = "zzz", limit = 10}, &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, none.total_count, u32(0))
-	testing.expect_value(t, len(slices), 0)
-	testing.expect(t, !none.has_more, "a listing with no match has no next page")
-}
-
-// The workspace counters speak about every slice, closed ones included, and only
-// the unfiltered first page folds them: a filtered or continued listing says how
-// much work matches, not how much exists.
-@(test)
-test_task_slice_work_counters_belong_to_the_unfiltered_first_page :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-
-	open := slice_test_slice_asset(71, `{"version":1,"name":"Alpha","owner":"rene","closed":false}`)
-	closed := slice_test_slice_asset(72, `{"version":1,"name":"Beta","owner":"anke","closed":true}`, created_at = 900)
-	slice_test_add_asset(&conv, &open)
-	slice_test_add_asset(&conv, &closed)
-
-	tasks := [3]pr.Task {
-		{id = 1, status = .Todo, created_at = 10, updated_at = 200},
-		{id = 2, status = .Todo, created_at = 10, updated_at = 200},
-		{id = 3, status = .Todo, created_at = 10, updated_at = 200},
-	}
-	for i in 0 ..< len(tasks) do slice_test_add_task(&conv, &tasks[i])
-	slice_test_member_of(&conv, .Task, 1, 71)
-	// Closing a slice does not unassign its work, so the counters still count it.
-	slice_test_member_of(&conv, .Task, 2, 72)
-
-	slices := make([dynamic]pr.TaskSlice, 0, 8)
-	defer delete(slices)
-	assigned := make(map[pr.TaskID]struct{}, 8)
-	defer delete(assigned)
-
-	page := collect_task_slices(&conv, Slice_Query{limit = 10, with_work_counters = true}, &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, page.total_count, u32(1))
-	testing.expect_value(t, page.assigned_tasks, u32(2))
-	testing.expect_value(t, page.unassigned_tasks, u32(1))
-
-	// A closed slice the listing does not draw is not folded either: its members
-	// are the counters' business, not a page's.
-	clear(&slices)
-	clear(&assigned)
-	open_only := collect_task_slices(&conv, Slice_Query{limit = 10}, &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, open_only.total_count, u32(1))
-	testing.expect_value(t, len(assigned), 1)
-	testing.expect(t, pr.TaskID(2) not_in assigned, "a closed slice the page does not draw is not folded")
-
-	// A filtered listing carries no workspace counters at all.
-	clear(&slices)
-	clear(&assigned)
-	filtered := collect_task_slices(&conv, Slice_Query{has_owner = true, owner = "rene", limit = 10}, &slices, &assigned, context.temp_allocator)
-	testing.expect_value(t, filtered.total_count, u32(1))
-	testing.expect_value(t, filtered.assigned_tasks, u32(0))
-	testing.expect_value(t, filtered.unassigned_tasks, u32(0))
-}
-
-// A page is one frame, so the largest page a request may ask for has to fit the
-// payload limit. The bound is arithmetic, not a hope: a slice row is bounded by
-// its name, its owner and its counters.
 @(test)
 test_slice_page_fits_one_frame :: proc(t: ^testing.T) {
 	name := make([]byte, pr.MAX_PROJECT_LENGTH)

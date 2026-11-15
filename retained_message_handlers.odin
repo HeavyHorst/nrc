@@ -741,10 +741,7 @@ process_send_message_v2 :: proc(c: ^NRC_Connection, req: pr.SendMessageV2Request
 			send_error_response(c, .C_SendMessageV2, "retained direct messages are not enabled", req.correlation_id); return
 		}
 		if !dm_metadata_durable(c, req.conv_id) {
-			writer := shard_writer_for_workspace(&td.shard_writers, transmute([]byte)c.workspace_id)
-			if !defer_current_shard_protocol_request(writer) {
-				send_error_response(c, .C_SendMessageV2, "DM metadata not durable; retry", req.correlation_id)
-			}
+			send_error_response(c, .C_SendMessageV2, "DM metadata not durable; retry", req.correlation_id)
 			return
 		}
 	}

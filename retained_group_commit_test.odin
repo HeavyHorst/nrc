@@ -8,6 +8,11 @@ import nbio "nbio/poly"
 import pr "protocol"
 import "storage_io"
 
+@(thread_local)
+group_commit_test_now: time.Time
+
+group_commit_test_clock :: proc "contextless" () -> time.Time {return group_commit_test_now}
+
 @(test)
 test_retained_group_commit_deadline_and_prefix :: proc(t: ^testing.T) {
 	store := Message_Store {
@@ -47,13 +52,6 @@ test_retained_group_commit_deadline_and_prefix :: proc(t: ^testing.T) {
 	store.active_generation = 4
 	store.wal.durable_record_count = 0
 	testing.expect(t, outbox_item_is_durable(&item))
-	writer := Shard_Transaction_Writer{}
-	writer.wal.enabled = true
-	item.durability_writer = &writer
-	item.durability_record = 1
-	testing.expect(t, !outbox_item_is_durable(&item), "both stores must be durable")
-	writer.wal.durable_record_count = 1
-	testing.expect(t, outbox_item_is_durable(&item))
 	store.poisoned = true
 	testing.expect(t, !outbox_item_is_durable(&item), "rotation never bypasses a poisoned store")
 }
@@ -61,20 +59,11 @@ test_retained_group_commit_deadline_and_prefix :: proc(t: ^testing.T) {
 when !NRC_SIMULATION {_ :: log.nil_logger; _ :: nbio.init; _ :: pr.SendMessageV2Request; _ :: storage_io.Context}
 
 when NRC_SIMULATION {
-	// Both persistence paths use the same virtual disk, so process crashes discard
-	// speculative state rather than accidentally syncing it during teardown.
-	retained_dm_simulation_writer :: proc(ctx: ^Sim_Test_Context, workspace: string) -> ^Shard_Transaction_Writer {
-		storage, ok := generated_semantic_virtual_storage_prepare(&ctx.sim.world, "/dm-shard")
-		if !ok do return nil
+	// Membership is the cache installed by a committed SQLite completion. Only
+	// retained-message storage uses the virtual disk in these tests.
+	retained_dm_simulation_store :: proc(ctx: ^Sim_Test_Context, workspace: string) -> ^Message_Store {
+		storage := sim_world_storage_context(&ctx.sim.world)
 		shard := int(shard_for_workspace(transmute([]byte)workspace))
-		registry := &td.shard_writers
-		registry.worker = 0; registry.worker_count = 1
-		for &index in registry.writer_index do index = -1
-		append(&registry.writers, Shard_Transaction_Writer{})
-		writer := &registry.writers[0]
-		if !init_managed_shard_transaction_writer(writer, storage, "/dm-shard", shard, 0, 1) do return nil
-		writer.batch_writes = true
-		registry.writer_index[shard] = 0; registry.mode = .Active
 		if storage_io.make_directory(storage, "/dm-messages") != nil || storage_io.sync_directory(storage, "/") != nil do return nil
 		for &index in td.message_stores.store_index do index = -1
 		append(&td.message_stores.stores, Message_Store{})
@@ -85,34 +74,39 @@ when NRC_SIMULATION {
 			if ctx.conns[index] == nil do return nil
 			on_user_connect(get_connection_workspace(ctx.conns[index]), intern_username(name), true)
 		}
-		return writer
+		return &td.message_stores.stores[0]
+	}
+
+	retained_dm_committed_members :: proc(c: ^NRC_Connection, members: u8) {
+		worker_db_apply_dm_state(
+			get_connection_workspace(c),
+			{id = pr.make_dm_conversation_id("alice", "bob"), user_a = "alice", user_b = "bob", members = members},
+		)
 	}
 
 	@(test)
 	test_retained_dm_membership_crash_and_io_failures :: proc(t: ^testing.T) {
 		// 0: crash before write; 1: crash after write; 2: successful fsync;
-		// 3/4: write EIO/ENOSPC; 5: fsync EIO; 6/7: metadata committed,
-		// body buffered/written but not fsynced. Only case 2 commits the body.
+		// 3/4: write EIO/ENOSPC; 5: fsync EIO. Only case 2 commits the body.
+		// Start/leave/reopen membership is already committed by SQLite; this
+		// matrix tests retained-body recovery, not SQLite crash recovery.
 		for operation in 0 ..< 3 {
-			for boundary in 0 ..< 8 {
-				if operation == 1 && boundary >= 6 do continue // Leave writes no body.
+			for boundary in 0 ..< 6 {
 				ctx: Sim_Test_Context
 				simulation_test_begin(&ctx)
 				defer simulation_test_end(&ctx)
 				testing.expect(t, nbio.init(&td.io) == .NONE)
 				defer nbio.destroy(&td.io)
 				workspace := "dm-crash-failure-matrix"
-				writer := retained_dm_simulation_writer(&ctx, workspace)
-				defer shutdown_shard_writer_registry(&td.shard_writers)
+				store := retained_dm_simulation_store(&ctx, workspace)
 				defer shutdown_message_store_registry(&td.message_stores)
-				if !testing.expect(t, writer != nil) do return
+				if !testing.expect(t, store != nil) do return
 				alice, bob := ctx.conns[0], ctx.conns[1]
 				id := pr.make_dm_conversation_id("alice", "bob")
-				before_members: u8 = 0
+				retained_dm_committed_members(alice, 3)
+				subscribe_to_dm_internal(alice, id)
+				subscribe_to_dm_internal(bob, id)
 				if operation > 0 {
-					process_start_dm(alice, pr.StartDMRequest{username = "bob", correlation_id = 1})
-					testing.expect(t, simulation_test_commit_shards(&ctx.sim))
-					before_members = 3
 					seed := pr.SendMessageV2Request {
 						conv_id      = id,
 						content_type = .PlainText,
@@ -123,17 +117,13 @@ when NRC_SIMULATION {
 					testing.expect(t, simulation_test_commit_messages(&ctx.sim))
 				}
 				if operation == 2 {
-					process_leave_dm(alice, pr.LeaveDMRequest{conv_id = id, correlation_id = 2})
-					testing.expect(t, simulation_test_commit_shards(&ctx.sim))
-					before_members = 2
+					retained_dm_committed_members(alice, 2)
 				}
 				nrc_sim_clear_inboxes(&ctx.sim)
-				if operation == 1 {
-					process_leave_dm(alice, pr.LeaveDMRequest{conv_id = id, correlation_id = 3})
-				} else {
-					process_start_dm(alice, pr.StartDMRequest{username = "bob", correlation_id = 3})
-				}
-				if operation != 1 {
+				expected := operation == 1 ? u8(2) : u8(3)
+				retained_dm_committed_members(alice, expected)
+				sender := operation == 1 ? bob : alice
+				{
 					req := pr.SendMessageV2Request {
 						conv_id        = id,
 						correlation_id = 4,
@@ -143,12 +133,12 @@ when NRC_SIMULATION {
 					req.client_message_id[0] = 1
 					payload := make([]byte, pr.getSizeSendMessageV2Request(req.content))
 					pr.serializeSendMessageV2Request(req, payload)
-					process_protocol_payload(alice, payload)
+					process_protocol_payload(sender, payload)
 					delete(payload)
 				}
-				writer.commit_started = {}
-				_, scheduled := schedule_shard_writer_fsyncs_if_due(&td.shard_writers)
-				testing.expect(t, scheduled)
+				_, write_ok := flush_pending_retained_message_writes(&td.message_stores)
+				testing.expect(t, write_ok)
+				previous_logger := context.logger
 				if boundary == 3 {
 					context.logger = log.nil_logger()
 					testing.expect(t, nrc_sim_run_next_file_write(&ctx.sim, .EIO))
@@ -158,48 +148,36 @@ when NRC_SIMULATION {
 				} else if boundary > 0 {
 					testing.expect(t, nrc_sim_run_next_file_write(&ctx.sim))
 				}
-				membership_committed := boundary == 2 || boundary >= 6
-				if membership_committed {
+				if boundary == 2 || boundary == 5 {
+					store.commit_started = {}
+					testing.expect(t, schedule_retained_message_fsync(store))
+				}
+				if boundary == 2 {
 					testing.expect(t, nrc_sim_run_next_fsync_completion(&ctx.sim))
 				} else if boundary == 5 {
 					context.logger = log.nil_logger()
 					testing.expect(t, nrc_sim_run_next_fsync_completion(&ctx.sim, .EIO))
 				}
-				if boundary == 2 do testing.expect(t, simulation_test_commit_messages(&ctx.sim))
-				if boundary == 7 {
-					testing.expect(t, simulation_test_flush_message_writes(&ctx.sim))
-					td.message_stores.stores[0].commit_started = {}
-					testing.expect(t, schedule_retained_message_fsync(&td.message_stores.stores[0]))
-				}
+				context.logger = previous_logger
 				nrc_sim_run_all_send_completions(&ctx.sim)
-				reply := operation == 1 ? pr.Opcode.S_DMLeft : pr.Opcode.S_DMStarted
-				testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, alice.sock, reply), membership_committed ? 1 : 0)
-				testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, alice.sock, .S_AckSendMessage), boundary == 2 && operation != 1 ? 1 : 0)
-				store := &td.message_stores.stores[0]
-				if !membership_committed {
-					testing.expect_value(t, store.wal.record_count + store.wal.buffered_record_count, operation == 0 ? u64(0) : u64(1))
-				}
-				if boundary >= 3 && boundary <= 5 do testing.expect(t, writer.poisoned)
+				testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, sender.sock, .S_AckSendMessage), boundary == 2 ? 1 : 0)
+				if boundary >= 3 && boundary <= 5 do testing.expect(t, store.poisoned)
 				// No graceful shutdown before the crash: stale writes/fsyncs must not
-				// commit the unacknowledged membership change or release queued replies.
-				generated_semantic_virtual_process_discard(writer)
+				// commit the unacknowledged body or release queued replies.
 				if !testing.expect(t, nrc_sim_process_crash_discard_connections(&ctx.sim, ctx.conns[:2])) do return
 				for conn, index in ctx.conns[:2] {
 					simulation_test_uninstall_client(conn)
 					ctx.conns[index] = nil
 				}
 				crash_message_store_for_test(store)
-				shard_replay_state_destroy()
 				storage := sim_world_storage_context(&ctx.sim.world)
 				shard := int(shard_for_workspace(transmute([]byte)workspace))
-				testing.expect(t, init_managed_shard_transaction_writer(writer, storage, "/dm-shard", shard, 0, 1))
-				if !testing.expect(t, generated_shard_restore_state(writer)) do return
 				testing.expect(t, init_message_store_with_storage(store, storage, "/dm-messages", shard, time.Hour, 0))
 				alice = simulation_test_install_client(&ctx.sim, 0, workspace, "alice", init_send_queue = true)
 				bob = simulation_test_install_client(&ctx.sim, 1, workspace, "bob", init_send_queue = true)
 				ctx.conns[0] = alice; ctx.conns[1] = bob
-				expected := before_members
-				if membership_committed do expected = operation == 1 ? u8(2) : u8(3)
+				// Model reloading the previously committed SQLite membership.
+				retained_dm_committed_members(alice, expected)
 				testing.expect_value(t, validate_dm_access(alice, id), expected & 1 != 0)
 				testing.expect_value(t, validate_dm_access(bob, id), expected & 2 != 0)
 				outsider := NRC_Connection {
@@ -212,13 +190,9 @@ when NRC_SIMULATION {
 					subscribe_to_conversation(bob, id)
 					page, ok := retained_history_simulation_page(bob, {conv_id = id, limit = 10, correlation_id = 5}, false)
 					count := operation == 0 ? 0 : 1
-					if boundary == 2 && operation != 1 do count += 1
+					if boundary == 2 do count += 1
 					if testing.expect(t, ok && len(page.messages) == count) && count > 0 {
-						testing.expect_value(
-							t,
-							string(page.messages[0].content),
-							boundary == 2 && operation != 1 ? "pending private body" : "existing private body",
-						)
+						testing.expect_value(t, string(page.messages[0].content), boundary == 2 ? "pending private body" : "existing private body")
 						if count == 2 do testing.expect_value(t, string(page.messages[1].content), "existing private body")
 					}
 				}
@@ -227,7 +201,7 @@ when NRC_SIMULATION {
 	}
 
 	@(test)
-	test_retained_dm_metadata_fence_and_leave_during_history :: proc(t: ^testing.T) {
+	test_retained_dm_committed_membership_and_leave_during_history :: proc(t: ^testing.T) {
 		for reopen_before_read in ([2]bool{false, true}) {
 			ctx: Sim_Test_Context
 			simulation_test_begin(&ctx)
@@ -235,14 +209,16 @@ when NRC_SIMULATION {
 			testing.expect(t, nbio.init(&td.io) == .NONE)
 			defer nbio.destroy(&td.io)
 			workspace := "retained-dm-fences"
-			writer := retained_dm_simulation_writer(&ctx, workspace)
-			defer shutdown_shard_writer_registry(&td.shard_writers)
+			store := retained_dm_simulation_store(&ctx, workspace)
 			defer shutdown_message_store_registry(&td.message_stores)
-			if !testing.expect(t, writer != nil) do return
+			if !testing.expect(t, store != nil) do return
 			conn, peer := ctx.conns[0], ctx.conns[1]
-			store := &td.message_stores.stores[0]
-			process_start_dm(conn, pr.StartDMRequest{username = "bob", correlation_id = 1})
 			id := pr.make_dm_conversation_id("alice", "bob")
+			testing.expect(t, !dm_metadata_durable(conn, id))
+			retained_dm_committed_members(conn, 3)
+			testing.expect(t, dm_metadata_durable(conn, id))
+			subscribe_to_dm_internal(conn, id)
+			subscribe_to_dm_internal(peer, id)
 			req := pr.SendMessageV2Request {
 				conv_id        = id,
 				correlation_id = 2,
@@ -254,15 +230,9 @@ when NRC_SIMULATION {
 			defer delete(payload)
 			pr.serializeSendMessageV2Request(req, payload)
 			process_protocol_payload(conn, payload)
-			testing.expect_value(t, len(writer.deferred_requests), 1)
-			testing.expect(t, store.wal.record_count + store.wal.buffered_record_count == 0, "no body before durable ACL")
-			writer.commit_started = {}
-			_, ok := schedule_shard_writer_fsyncs_if_due(&td.shard_writers)
-			testing.expect(t, ok && nrc_sim_run_next_file_write(&ctx.sim))
-			testing.expect(t, store.wal.record_count + store.wal.buffered_record_count == 0, "write completion is not durability")
-			testing.expect(t, nrc_sim_run_next_fsync_completion(&ctx.sim))
-			testing.expect_value(t, len(writer.deferred_requests), 0)
 			testing.expect(t, simulation_test_flush_message_writes(&ctx.sim))
+			nrc_sim_run_all_send_completions(&ctx.sim)
+			testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, conn.sock, .S_AckSendMessage), 0)
 			store.commit_started = {}
 			testing.expect(t, schedule_retained_message_fsync(store))
 			testing.expect(t, nrc_sim_run_next_fsync_completion(&ctx.sim))
@@ -271,25 +241,17 @@ when NRC_SIMULATION {
 			nrc_sim_clear_inboxes(&ctx.sim)
 			process_message_history(peer, pr.MessageRangeRequest{conv_id = id, limit = 10, correlation_id = 3}, false)
 			testing.expect(t, peer.retained_io > 0, "history read must still be in flight")
-			process_leave_dm(peer, pr.LeaveDMRequest{conv_id = id, correlation_id = 4})
+			retained_dm_committed_members(conn, 1)
 			if reopen_before_read {
-				process_start_dm(conn, pr.StartDMRequest{username = "bob", correlation_id = 5})
-				testing.expect(t, simulation_test_commit_shards(&ctx.sim))
+				retained_dm_committed_members(conn, 3)
 			}
 			for nrc_sim_run_next_file_read(&ctx.sim) {}
-			writer.commit_started = {}
-			_, ok = schedule_shard_writer_fsyncs_if_due(&td.shard_writers)
-			testing.expect(t, ok)
-			for nrc_sim_run_next_file_write(&ctx.sim) {}
-			for nrc_sim_run_next_fsync_completion(&ctx.sim) {}
 			nrc_sim_run_all_send_completions(&ctx.sim)
 			testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, peer.sock, .S_MessagePage), reopen_before_read ? 1 : 0)
-			testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, peer.sock, .S_DMLeft), 1)
 			testing.expect_value(t, peer.retained_io, 0)
 			testing.expect_value(t, validate_dm_access(peer, id), reopen_before_read)
 			if !reopen_before_read {
-				process_start_dm(conn, pr.StartDMRequest{username = "bob", correlation_id = 5})
-				testing.expect(t, simulation_test_commit_shards(&ctx.sim))
+				retained_dm_committed_members(conn, 3)
 				process_message_history(peer, pr.MessageRangeRequest{conv_id = id, limit = 10, correlation_id = 6}, false)
 				for nrc_sim_run_next_file_read(&ctx.sim) {}
 				nrc_sim_run_all_send_completions(&ctx.sim)
@@ -309,7 +271,7 @@ when NRC_SIMULATION {
 	}
 
 	@(test)
-	test_dual_store_waiter_rechecks_priority_head_after_inflight_pong :: proc(t: ^testing.T) {
+	test_retained_waiter_rechecks_priority_head_after_inflight_pong :: proc(t: ^testing.T) {
 		for message_first in ([2]bool{false, true}) {
 			ctx: Sim_Test_Context
 			simulation_test_begin(&ctx)
@@ -317,9 +279,9 @@ when NRC_SIMULATION {
 			conn := simulation_test_install_client(&ctx.sim, 0, "dual-store-waiter", "alice", init_send_queue = true)
 			ctx.conns[0] = conn
 			if !testing.expect(t, conn != nil) do return
-			writer: Shard_Transaction_Writer
-			writer.wal.enabled = true
-			defer delete(writer.durability_waiters)
+			normal_store: Message_Store
+			normal_store.wal.enabled = true
+			defer delete(normal_store.durability_waiters)
 			store: Message_Store
 			store.wal.enabled = true
 			defer delete(store.durability_waiters)
@@ -333,28 +295,28 @@ when NRC_SIMULATION {
 				if kind != 1 {
 					item.message_store = &store
 					item.message_record = 1
-					if kind == 0 {item.durability_writer = &writer; item.durability_record = 1}
+					if kind == 0 do item.message_store = &normal_store
 				} else {
 					buf[0] = 0x8a // An independent empty Pong overtakes the blocked normal frame.
 				}
 				outbox_enqueue(conn, item, priority = kind != 0)
 			}
 			testing.expect(t, conn.is_sending && conn.outbox_waiting_durability)
-			testing.expect_value(t, len(writer.durability_waiters), 1)
+			testing.expect_value(t, len(normal_store.durability_waiters), 1)
 			testing.expect_value(t, len(store.durability_waiters), 0)
 			if message_first {
 				store.wal.durable_record_count = 1
 				resume_durable_outboxes(&store.durability_waiters)
 			} else {
-				writer.wal.durable_record_count = 1
-				resume_shard_durable_outboxes(&writer)
+				normal_store.wal.durable_record_count = 1
+				resume_durable_outboxes(&normal_store.durability_waiters)
 			}
 			nrc_sim_run_all_send_completions(&ctx.sim)
 			testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, conn.sock), message_first ? 2 : 1)
 			testing.expect(t, conn.outbox_waiting_durability && !conn.is_sending)
 			if message_first {
-				writer.wal.durable_record_count = 1
-				resume_shard_durable_outboxes(&writer)
+				normal_store.wal.durable_record_count = 1
+				resume_durable_outboxes(&normal_store.durability_waiters)
 			} else {
 				store.wal.durable_record_count = 1
 				resume_durable_outboxes(&store.durability_waiters)

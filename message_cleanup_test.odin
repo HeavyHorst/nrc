@@ -45,25 +45,25 @@ test_message_cleanup_queue :: proc(t: ^testing.T) {
 		store.frozen.async_readers = 0
 		frozen := store.frozen
 		server: NRC_Server
-		server.shard_compaction_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
-		defer chan.destroy(server.shard_compaction_jobs)
-		server.shard_compaction_results = make([]^spsc.Queue(Shard_Compaction_Result), 2)
-		for &queue in server.shard_compaction_results do queue, _ = spsc.create(Shard_Compaction_Result, 1)
-		defer {for queue in server.shard_compaction_results do spsc.destroy(queue); delete(server.shard_compaction_results)}
-		td.server = &server; defer {discard_queued_shard_compaction_jobs(&server); td.server = nil}
+		server.storage_bulk_jobs, _ = chan.create_buffered(chan.Chan(Storage_Service_Job), 1, context.allocator)
+		defer chan.destroy(server.storage_bulk_jobs)
+		server.storage_service_results = make([]^spsc.Queue(Storage_Service_Result), 2)
+		for &queue in server.storage_service_results do queue, _ = spsc.create(Storage_Service_Result, 1)
+		defer {for queue in server.storage_service_results do spsc.destroy(queue); delete(server.storage_service_results)}
+		td.server = &server; defer {discard_queued_storage_service_jobs(&server); td.server = nil}
 		previous_worker := td.thread_index; defer {td.thread_index = previous_worker}
 		td.thread_index = 1
-		testing.expect(t, chan.try_send(server.shard_compaction_jobs, Shard_Compaction_Job{}))
+		testing.expect(t, chan.try_send(server.storage_bulk_jobs, Storage_Service_Job{}))
 		destroy_frozen_message_store(&store, true)
 		testing.expect(t, store.frozen == frozen, "queue refusal must preserve the holder for retry")
-		_, received := chan.try_recv(server.shard_compaction_jobs); testing.expect(t, received)
+		_, received := chan.try_recv(server.storage_bulk_jobs); testing.expect(t, received)
 		destroy_frozen_message_store(&store, true)
 		testing.expect(t, store.frozen == nil)
 		path := message_store_path(store.directory, 1, "wal"); defer delete(path)
 		exists, err := storage_io.exists(store.storage, path)
 		testing.expect(t, err == nil && exists, "delete must wait for service")
-		testing.expect(t, service_shard_compaction_job(&server))
-		for queue in server.shard_compaction_results {
+		testing.expect(t, service_storage_job(&server))
+		for queue in server.storage_service_results {
 			_, received = spsc.try_pop(queue)
 			testing.expect(t, !received, "cleanup must not occupy any completion queue")
 		}

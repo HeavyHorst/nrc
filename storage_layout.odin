@@ -19,6 +19,7 @@ FRESH_STORAGE_LAYOUT_GENERATION :: u64(1)
 
 Storage_Layout_Mode :: enum u8 {
 	Sharded_V1 = 2,
+	SQLite_V1  = 3,
 }
 
 Workspace_Hash_Algorithm :: enum u8 {
@@ -38,7 +39,7 @@ valid_storage_layout_worker_count :: proc(worker_count: int) -> bool {
 }
 
 storage_layout_shape_is_coherent :: proc(m: Storage_Layout_Manifest) -> bool {
-	return m.mode == .Sharded_V1 && m.logical_shard_count == LOGICAL_SHARD_COUNT && m.shard_wal_version == SHARD_WAL_VERSION
+	return (m.mode == .Sharded_V1 || m.mode == .SQLite_V1) && m.logical_shard_count == LOGICAL_SHARD_COUNT && m.shard_wal_version == SHARD_WAL_VERSION
 }
 
 encode_storage_layout_manifest :: proc(m: Storage_Layout_Manifest, out: []byte) -> bool {
@@ -162,32 +163,6 @@ data_directory_is_cold :: proc(dir: string) -> bool {
 	return true
 }
 
-bootstrap_sharded_storage_layout :: proc(dir: string) -> bool {
-	generation_dir := sharded_generation_path(dir, FRESH_STORAGE_LAYOUT_GENERATION)
-	defer delete(generation_dir)
-	if os.make_directory(generation_dir) != nil do return false
-	for shard in 0 ..< LOGICAL_SHARD_COUNT {
-		shard_dir := sharded_shard_path(generation_dir, shard)
-		if os.make_directory(shard_dir) != nil {
-			delete(shard_dir)
-			return false
-		}
-		active_path := sharded_active_wal_path(generation_dir, shard)
-		write_ok := os.write_entire_file(active_path, nil) == nil
-		delete(active_path)
-		delete(shard_dir)
-		if !write_ok do return false
-	}
-	manifest := Storage_Layout_Manifest {
-		generation          = FRESH_STORAGE_LAYOUT_GENERATION,
-		mode                = .Sharded_V1,
-		workspace_hash      = .XXH64_Seed_0_Raw,
-		logical_shard_count = LOGICAL_SHARD_COUNT,
-		shard_wal_version   = SHARD_WAL_VERSION,
-	}
-	return install_storage_layout_manifest(dir, manifest)
-}
-
 release_data_directory_lock :: proc(lock: ^Data_Directory_Lock) {
 	if lock.file != nil {
 		_ = linux.flock(linux.Fd(os.fd(lock.file)), {.UN})
@@ -205,36 +180,4 @@ load_storage_layout_manifest :: proc(dir: string) -> (m: Storage_Layout_Manifest
 	if err != nil do return m, true, false
 	m, ok = decode_storage_layout_manifest(data)
 	return m, true, ok
-}
-
-sharded_storage_layout_gate :: proc(dir: string, worker_count: int) -> (lock: Data_Directory_Lock, ok: bool) {
-	if !valid_storage_layout_worker_count(worker_count) do return lock, false
-	lock, ok = acquire_data_directory_lock(dir)
-	if !ok do return
-	m, found, valid := load_storage_layout_manifest(dir)
-	if found {
-		if !valid || !active_sharded_generation_structure_is_valid(dir, m.generation) {
-			release_data_directory_lock(&lock)
-			return lock, false
-		}
-		return lock, true
-	}
-	// No manifest means either a cold install or pre-sharded legacy data that
-	// requires the pinned migration image. Only bootstrap when nothing but the
-	// lock/manifest scaffolding is present, so real or legacy data is never
-	// silently overwritten.
-	if !data_directory_is_cold(dir) {
-		release_data_directory_lock(&lock)
-		return lock, false
-	}
-	if !bootstrap_sharded_storage_layout(dir) {
-		release_data_directory_lock(&lock)
-		return lock, false
-	}
-	m, found, valid = load_storage_layout_manifest(dir)
-	if !found || !valid || !active_sharded_generation_structure_is_valid(dir, m.generation) {
-		release_data_directory_lock(&lock)
-		return lock, false
-	}
-	return lock, true
 }

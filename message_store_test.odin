@@ -41,6 +41,44 @@ test_retained_message :: proc(workspace: string, conversation, marker: u64, acce
 	}
 }
 
+// The real-process activation test exports this fixture into its disposable
+// legacy generation. Ordinary unit runs create and remove their own directory.
+@(test)
+test_retained_activation_fixture :: proc(t: ^testing.T) {
+	workspace := "activation-retained"
+	shard := int(shard_for_workspace(transmute([]byte)workspace))
+	export_root := os.get_env_alloc("NRC_TEST_RETAINED_FIXTURE_ROOT", context.allocator)
+	defer delete(export_root)
+	dir := export_root == "" ? test_wal_path("activation-retained") : sharded_shard_path(export_root, shard)
+	defer if export_root != "" do delete(dir)
+	if export_root == "" {
+		if !testing.expect(t, os.make_directory(dir) == nil) do return
+	}
+	defer if export_root == "" do os.remove_all(dir)
+	store: Message_Store
+	if !testing.expect(t, init_message_store(&store, dir, shard, 24 * time.Hour, 0)) do return
+	defer testing.expect(t, shutdown_message_store(&store))
+	now := nrc_time_unix_nanos()
+	contents := [?]string {
+		"sealed /files/att_00000000000000000000000000000001?filename=sealed.bin",
+		"frozen /files/att_00000000000000000000000000000002?filename=frozen.bin",
+		"active /files/att_00000000000000000000000000000003?filename=active.bin",
+	}
+	for content, i in contents {
+		message := test_retained_message(workspace, 42, u64(i + 1), now)
+		message.content = transmute([]byte)content
+		result, seq := append_or_deduplicate_message(&store, &message)
+		if !testing.expect_value(t, result, Message_Store_Result.Appended) do return
+		testing.expect_value(t, seq, u64(i + 1))
+		if i == 0 && !testing.expect(t, rotate_message_store(&store, now)) do return
+		if i == 1 && !testing.expect(t, roll_message_store(&store, now)) do return
+	}
+	testing.expect_value(t, len(store.segments), 1)
+	testing.expect_value(t, store.segments[0].generation, u64(2))
+	if testing.expect(t, store.frozen != nil) do testing.expect_value(t, store.frozen.active_generation, u64(3))
+	testing.expect_value(t, store.active_generation, u64(5))
+}
+
 crash_message_store_for_test :: proc(store: ^Message_Store) {
 	assert(store.async_readers == 0, "message store crash simulation requires drained async readers")
 	persistence.simulate_wal_crash_for_test(&store.wal)
@@ -2712,7 +2750,7 @@ when NRC_SIMULATION {
 		ctx: Sim_Test_Context
 		simulation_test_begin(&ctx, fail_old_reader ? 246 : 245)
 		defer simulation_test_end(&ctx)
-		ctx.sim.compaction_job_event_submission = true
+		ctx.sim.storage_job_event_submission = true
 		server: NRC_Server
 		td.server = &server
 		testing.expect_value(t, nbio.init(&td.io), linux.Errno.NONE)
@@ -2786,8 +2824,8 @@ when NRC_SIMULATION {
 		process_message_history(old_conn, {conv_id = 42, limit = 10, correlation_id = 71}, true)
 		testing.expect(t, store.async_readers == 1 && store.frozen.async_readers == 1)
 		testing.expect_value(t, nrc_sim_file_read_count(&ctx.sim), 1)
-		testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Job))
-		testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Compaction_Result))
+		testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Storage_Job))
+		testing.expect(t, sim_world_run_runnable_rank(&ctx.sim.world, 0, .Storage_Result))
 		_, ok := flush_pending_retained_message_writes(&td.message_stores)
 		testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Seal))
 		testing.expect(t, ok && store.frozen_published)

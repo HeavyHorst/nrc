@@ -1,6 +1,5 @@
 package main
 
-import "btree"
 import "core:strings"
 import pr "protocol"
 
@@ -48,23 +47,4 @@ validate_reminder_asset :: proc(asset: ^pr.Asset) -> bool {
 	payload_personal, payload_valid := reminder_visibility(payload)
 	if !payload_valid || personal != payload_personal do return false
 	return !personal || (len(asset.owner) > 0 && asset.parent_type == .None && len(asset.attachments) == 0)
-}
-
-entity_is_personal_reminder :: proc(conv: ^Conversation_State, typ: pr.TargetType, id: u64) -> bool {
-	return conv != nil && typ == .Asset && reminder_is_personal(conv.assets[pr.AssetID(id)])
-}
-
-// A persisted dangling parent reference must not turn into a public child of a
-// newly allocated private record, even if it predates parent-existence checks.
-asset_has_children :: proc(conv: ^Conversation_State, id: pr.AssetID) -> bool {
-	if conv == nil do return false
-	it := btree.iter(&conv.asset_parents)
-	defer btree.iter_destroy(&it)
-	pivot := Entity_Reference_Key {
-		kind      = u8(pr.ParentType.Asset),
-		parent_id = u64(id),
-	}
-	if !btree.iter_seek(&it, pivot) do return false
-	key := btree.item(&it)
-	return key.kind == pivot.kind && key.parent_id == pivot.parent_id
 }

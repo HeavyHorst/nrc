@@ -4,7 +4,6 @@ import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:slice"
-import "core:strings"
 import "core:sync/chan"
 import "core:testing"
 import "core:time"
@@ -14,12 +13,10 @@ import tlsf "vendor/tlsf"
 
 Owner_Bench_State :: struct {
 	heap:    ^tlsf.Allocator,
-	message: bool,
 	size:    int,
-	w:       ^Shard_Transaction_Writer,
 	s:       ^Message_Store,
 	server:  ^NRC_Server,
-	queue:   ^spsc.Queue(Shard_Compaction_Result),
+	queue:   ^spsc.Queue(Storage_Service_Result),
 	store:   ^Message_Store,
 	segment: ^Message_Segment_Descriptor,
 	dedup:   bool,
@@ -110,84 +107,57 @@ benchmark_storage_owner_lifecycle :: proc(t: ^testing.T) {
 	defer {td = old^; free(old)}
 	td.backing_allocator = backing
 	server: NRC_Server; td.server = &server
-	server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Shard_Compaction_Job), 1, context.allocator)
+	server.storage_control_jobs, _ = chan.create_buffered(chan.Chan(Storage_Service_Job), 1, context.allocator)
 	defer chan.destroy(server.storage_control_jobs)
-	queue, _ := spsc.create(Shard_Compaction_Result, 2)
+	queue, _ := spsc.create(Storage_Service_Result, 2)
 	defer spsc.destroy(queue)
-	td.shard_writers.writers = make([dynamic]Shard_Transaction_Writer, 1)
-	defer delete(td.shard_writers.writers)
-	td.shard_writers.writer_index[0] = 0
 	td.message_stores.stores = make([dynamic]Message_Store, 1)
 	defer delete(td.message_stores.stores)
 	td.message_stores.store_index[0] = 0
 	for size in ([2]int{8, 4096}) {
-		w := &td.shard_writers.writers[0]
-		w.catalog.segments = make([dynamic]Shard_Segment_Descriptor, size, backing)
-		w.wal.path_allocator = backing
-		w.wal.path, _ = strings.clone("data/shard-000/active-00000001.wal")
-		w.shard_dir = "data/shard-000"
-		defer {destroy_shard_segment_catalog(&w.catalog); delete(w.wal.path, w.wal.path_allocator)}
-		for &segment, i in w.catalog.segments do segment.generation = u64(17 + i * 3)
 		s := &td.message_stores.stores[0]
 		s.directory = "data/shard-000/messages"
 		s.wal.path = "data/shard-000/messages/active-00000001.wal"
 		s.segments = make([dynamic]Message_Segment_Descriptor, size, size + 1, worker_heap_allocator(&heap))
 		defer delete(s.segments)
 		for &segment, i in s.segments do segment.generation = u64(i + 1)
-		for message in ([2]bool{false, true}) {
+		{
 			state := Owner_Bench_State {
-				heap    = &heap,
-				message = message,
-				size    = size,
-				w       = w,
-				s       = s,
-				server  = &server,
-				queue   = queue,
+				heap   = &heap,
+				size   = size,
+				s      = s,
+				server = &server,
+				queue  = queue,
 			}
 			context.user_ptr = &state
 			operation := proc() -> u64 {
 				using state := cast(^Owner_Bench_State)context.user_ptr
 				context.allocator = worker_heap_allocator(heap)
-				if message {
-					if !enqueue_message_lifecycle(s, .Message_Retain) do return 0
-				} else if !enqueue_shard_lifecycle(w, .Shard_Rotate) do return 0
+				if !enqueue_message_lifecycle(s, .Message_Retain) do return 0
 				job, received := chan.try_recv(server.storage_control_jobs); if !received do return 0
 				context.allocator = job.allocator
 				job.lifecycle.ok = true
-				if message {
-					resize(&job.lifecycle.store.segments, size - 1)
-					job.lifecycle.store.total_bytes = 1234567
-				} else do job.lifecycle.writer.catalog.segments[0].generation = 23
-				if !spsc.try_push(queue, Shard_Compaction_Result{allocator = job.allocator, lifecycle = job.lifecycle, shard = 0}) do return 0
+				resize(&job.lifecycle.store.segments, size - 1)
+				job.lifecycle.store.total_bytes = 1234567
+				if !spsc.try_push(queue, Storage_Service_Result{allocator = job.allocator, lifecycle = job.lifecycle, shard = 0}) do return 0
 				result, popped := spsc.try_pop(queue); if !popped do return 0
 				context.allocator = worker_heap_allocator(heap)
-				if !process_shard_compaction_result(result) do return 0
-				checksum := w.catalog.segments[0].generation * 31 + w.catalog.segments[size - 1].generation
-				if message {
-					checksum = s.total_bytes + u64(len(s.segments))
-					// Include descriptor-list restoration in this upper-bound cost.
-					append(&s.segments, Message_Segment_Descriptor{})
-					copy(s.segments[1:], s.segments[:size - 1])
-					s.segments[0] = {
-						generation = 1,
-					}
-					s.total_bytes = 0
-				} else do w.catalog.segments[0].generation = 17
+				if !process_storage_service_result(result) do return 0
+				checksum := s.total_bytes + u64(len(s.segments))
+				// Include descriptor-list restoration in this upper-bound cost.
+				append(&s.segments, Message_Segment_Descriptor{})
+				copy(s.segments[1:], s.segments[:size - 1])
+				s.segments[0] = {
+					generation = 1,
+				}
+				s.total_bytes = 0
 				return checksum
 			}
-			expected := message ? u64(1234567 + size - 1) : u64(23 * 31 + 17 + (size - 1) * 3)
+			expected := u64(1234567 + size - 1)
 			testing.expect_value(t, operation(), expected)
-			testing.expect(t, !w.lifecycle_in_flight && !s.lifecycle_in_flight)
-			testing.expect(t, !worker_heap_contains_for_test(&heap, raw_data(w.catalog.segments)))
-			label := fmt.aprintf("lifecycle message=%v descriptors=%d", message, size); defer delete(label)
-			owner_bench_measure(
-				label,
-				operation,
-				expected,
-				size * (message ? size_of(Message_Segment_Descriptor) : size_of(Shard_Segment_Descriptor)),
-				allocations,
-				&tracker,
-			)
+			testing.expect(t, !s.lifecycle_in_flight)
+			label := fmt.aprintf("retained lifecycle descriptors=%d", size); defer delete(label)
+			owner_bench_measure(label, operation, expected, size * size_of(Message_Segment_Descriptor), allocations, &tracker)
 		}
 	}
 }

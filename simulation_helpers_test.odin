@@ -139,7 +139,7 @@ when NRC_SIMULATION {
 				return "worker retained connection handle does not resolve locally"
 			}
 			if connection_get(conn.sock) == conn do active_count += 1
-			if conn.pending_io != 0 || conn.retained_io != 0 || conn.deferred_shard_requests != 0 do return "connection I/O ownership remains"
+			if conn.pending_io != 0 || conn.retained_io != 0 do return "connection I/O ownership remains"
 			if conn.recv_completion != nil do return "connection receive completion remains"
 			if conn.is_sending ||
 			   conn.send_watchdog_slot != 0 ||
@@ -163,19 +163,6 @@ when NRC_SIMULATION {
 	}
 
 	sim_worker_quiescence_reason :: proc(handles: []Connection_Handle, baseline: Sim_Quiescence_Baseline) -> string {
-		for &writer in td.shard_writers.writers {
-			if writer.poisoned || !writer.wal.enabled do return "writer is poisoned or disabled"
-			if writer.fsync_in_flight do return "writer fsync remains in flight"
-			if writer.compaction != .Idle do return "writer compaction remains active"
-			if len(writer.deferred_requests) != 0 || writer.deferred_request_bytes != 0 do return "writer deferred requests remain queued"
-			if writer.prepared_active_generation != 0 do return "writer active reservation remains prepared"
-			if writer.wal.pending_bytes != 0 ||
-			   writer.wal.durable_record_count != writer.wal.record_count ||
-			   writer.wal.write_offset != 0 ||
-			   writer.wal.buffered_record_count != 0 {
-				return "writer WAL remains nondurable"
-			}
-		}
 		return sim_worker_transport_quiescence_reason(handles, baseline)
 	}
 
@@ -255,45 +242,6 @@ when NRC_SIMULATION {
 		conn.thread_index = -1
 		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "worker retained connection handle does not resolve locally")
 		conn.thread_index = td.thread_index
-
-		td.shard_writers.writers = make([dynamic]Shard_Transaction_Writer, 1)
-		defer {
-			delete(td.shard_writers.writers)
-			td.shard_writers.writers = nil
-		}
-		writer := &td.shard_writers.writers[0]
-		writer.wal.enabled = true
-		writer.fsync_in_flight = true
-		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "writer fsync remains in flight")
-		writer.fsync_in_flight = false
-		writer.compaction = .Building
-		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "writer compaction remains active")
-		writer.compaction = .Idle
-		writer.prepared_active_generation = 7
-		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "writer active reservation remains prepared")
-		writer.prepared_active_generation = 0
-		append(&writer.deferred_requests, Shard_Deferred_Request{})
-		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "writer deferred requests remain queued")
-		delete(writer.deferred_requests)
-		writer.deferred_requests = nil
-		writer.deferred_request_bytes = 1
-		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "writer deferred requests remain queued")
-		writer.deferred_request_bytes = 0
-		writer.wal.pending_bytes = 1
-		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "writer WAL remains nondurable")
-		writer.wal.pending_bytes = 0
-		writer.wal.write_offset = 1
-		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "writer WAL remains nondurable")
-		writer.wal.write_offset = 0
-		writer.wal.buffered_record_count = 1
-		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "writer WAL remains nondurable")
-		writer.wal.buffered_record_count = 0
-		writer.poisoned = true
-		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "writer is poisoned or disabled")
-		writer.poisoned = false
-		writer.wal.enabled = false
-		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "writer is poisoned or disabled")
-		writer.wal.enabled = true
 
 		conn.pending_io = 1
 		testing.expect_value(t, sim_worker_quiescence_reason(handles[:], baseline), "connection I/O ownership remains")
@@ -393,15 +341,6 @@ when NRC_SIMULATION {
 		}
 	}
 
-	simulation_test_commit_shards :: proc(sim: ^Sim_Runtime) -> bool {
-		for &writer in td.shard_writers.writers do writer.commit_started = {}
-		_, ok := schedule_shard_writer_fsyncs_if_due(&td.shard_writers)
-		if !ok do return false
-		for nrc_sim_run_next_file_write(sim) {}
-		for nrc_sim_run_next_fsync_completion(sim) {}
-		return simulation_test_publish_output(sim)
-	}
-
 	// Model the production post-tick boundary, including input pressure and
 	// batched presence updates caused by retained-message publication.
 	simulation_test_message_write_wave :: proc(sim: ^Sim_Runtime) -> bool {
@@ -427,15 +366,15 @@ when NRC_SIMULATION {
 	// Dispatch only the requested lifecycle, leaving fsyncs, reads, immutable
 	// seal builds and unrelated storage work under the caller's control.
 	simulation_test_complete_message_lifecycle :: proc(sim: ^Sim_Runtime, kind: Storage_Lifecycle_Kind) -> bool {
-		for event_kind in ([2]Sim_Event_Domain{.Compaction_Job, .Compaction_Result}) {
+		for event_kind in ([2]Sim_Event_Domain{.Storage_Job, .Storage_Result}) {
 			found := false
 			for event, index in sim.world.events {
 				if event.domain != event_kind do continue
 				plan: ^Storage_Lifecycle
 				#partial switch payload in event.payload {
-				case Sim_Compaction_Job_Event:
+				case Sim_Storage_Job_Event:
 					plan = payload.job.lifecycle
-				case Sim_Compaction_Result_Event:
+				case Sim_Storage_Result_Event:
 					plan = payload.result.lifecycle
 				case:
 					continue

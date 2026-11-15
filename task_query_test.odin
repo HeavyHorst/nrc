@@ -1,977 +1,386 @@
 package main
 
-import "btree"
+import "core:fmt"
+import "core:os"
+import "core:strings"
 import "core:testing"
-import hgl "hegel"
 import pr "protocol"
+import sql "sqlite"
+import ws "websocket"
+import db "workspace_db"
 
-task_query_test_add :: proc(conv: ^Conversation_State, task: ^pr.Task) {
-	state_map_set(&conv.tasks, task.id, task)
-	index_task(conv, task)
+worker_db_test_query_expect :: proc(t: ^testing.T, c: ^NRC_Connection, initial: pr.TaskQueryRequest, fixtures: []pr.Task, order: []int, start := 0) {
+	req := initial
+	position := start
+	for {
+		buffer: [1024]byte
+		n := pr.serializeTaskQueryRequest(req, buffer[:]); assert(n > 0)
+		process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t)
+		if !testing.expect_value(t, send_queue_len(c), 1) do return
+		item := send_queue_pop(c); defer frame_lease_dispose(&item.lease)
+		frame := frame_lease_data(item.lease); _, header, _ := ws.readFrameHeader(frame)
+		selected: [16]pr.Task
+		end := min(position + int(req.limit), len(order))
+		for i in position ..< end do selected[i - position] = fixtures[order[i]]
+		want := pr.TaskQueryPage {
+			success        = true,
+			tasks          = selected[:end - position],
+			total_count    = u32(len(order)),
+			has_more       = end < len(order),
+			correlation_id = req.correlation_id,
+		}
+		if end > position {
+			last := selected[end - position - 1]
+			want.next_cursor_task_id = last.id
+			switch req.sort {
+			case .Priority:
+				want.next_cursor_number = i64(last.priority)
+			case .Status:
+				want.next_cursor_number = i64(last.status)
+			case .Assignee:
+				want.next_cursor_text = last.assignee
+			case .DueAt:
+				want.next_cursor_number = last.due_at
+			case .CreatedAt:
+				want.next_cursor_number = last.created_at
+			case .Title:
+				want.next_cursor_text = last.title
+			case .Color:
+				want.next_cursor_number = i64(last.color)
+			case .Project:
+				want.next_cursor_text = last.project
+			case .WorkOrder:
+				want.next_cursor_number = i64(end)
+			}
+		}
+		encoded: [4096]byte
+		written := pr.serializeTaskQueryPage(want, encoded[:]); assert(written > 0)
+		testing.expect_value(t, string(frame[header:]), string(encoded[:written]))
+		if !want.has_more do break
+		position =
+			end; req.has_cursor = true; req.cursor_number = want.next_cursor_number; req.cursor_text = want.next_cursor_text; req.cursor_task_id = want.next_cursor_task_id
+	}
+}
+
+worker_db_test_task_queries :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstring) {
+	store, rc := db.open(path); if !testing.expect_value(t, rc, sql.OK) do return
+	defer db.close(&store)
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM edges; DELETE FROM assets; DELETE FROM tasks", nil, nil, nil), sql.OK)
+	fixtures := [4]pr.Task {
+		{
+			id = 1,
+			priority = 1,
+			status = .Todo,
+			assignee = task_query_test_bytes("z"),
+			title = task_query_test_bytes("B"),
+			color = .Red,
+			project = task_query_test_bytes("z"),
+			created_at = 30,
+			blocked_by = 2,
+		},
+		{
+			id = 2,
+			priority = 3,
+			status = .Backlog,
+			assignee = task_query_test_bytes("a"),
+			title = task_query_test_bytes("A"),
+			color = .Cyan,
+			project = task_query_test_bytes("a"),
+			due_at = 20,
+			created_at = 10,
+		},
+		{
+			id = 3,
+			priority = 3,
+			status = .Done,
+			assignee = task_query_test_bytes("a"),
+			title = task_query_test_bytes("A"),
+			color = .Cyan,
+			project = task_query_test_bytes("b"),
+			due_at = -1,
+			created_at = 10,
+		},
+		{id = max(u64), priority = 2, status = .InProgress, title = task_query_test_bytes("Z"), due_at = 10, created_at = 20},
+	}
+	for &task in fixtures do testing.expect_value(t, db.put_task(&store, c.workspace_id, &task), sql.OK)
+	testing.expect_value(t, db.put_task(&store, "foreign-query", &fixtures[0]), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	ascending := [8][4]int{{0, 3, 1, 2}, {1, 0, 3, 2}, {3, 1, 2, 0}, {2, 3, 1, 0}, {1, 2, 3, 0}, {1, 2, 0, 3}, {3, 1, 2, 0}, {3, 1, 2, 0}}
+	descending := [8][4]int{{1, 2, 3, 0}, {2, 3, 0, 1}, {0, 1, 2, 3}, {1, 3, 2, 0}, {0, 3, 1, 2}, {3, 0, 1, 2}, {0, 1, 2, 3}, {0, 2, 1, 3}}
+	req := pr.TaskQueryRequest {
+		status_mask    = 15,
+		limit          = 2,
+		color          = 255,
+		correlation_id = 920,
+	}
+	for i in 0 ..< 8 {
+		req.sort = pr.TaskQuerySort(i); req.descending = false
+		worker_db_test_query_expect(t, c, req, fixtures[:], ascending[i][:])
+		req.descending = true
+		worker_db_test_query_expect(t, c, req, fixtures[:], descending[i][:])
+	}
+	req.sort = .Priority; req.descending = false
+	req.color = u8(pr.TaskColor.Cyan); req.status_mask = 7
+	worker_db_test_query_expect(t, c, req, fixtures[:], {1})
+	req.status_mask = 15
+	worker_db_test_query_expect(t, c, req, fixtures[:], {1, 2})
+	req.color = 255
+	req.has_assignee = true; req.assignee = task_query_test_bytes("a"); req.overdue_before = 21
+	worker_db_test_query_expect(t, c, req, fixtures[:], {1}) // Done excluded by overdue.
+	req.overdue_before = 20
+	worker_db_test_query_expect(t, c, req, fixtures[:], nil) // Strict deadline boundary.
+	req.overdue_before = 0; req.assignee = nil
+	worker_db_test_query_expect(t, c, req, fixtures[:], {3}) // Explicit unassigned filter.
+	req.has_assignee = false; req.blocked = 1
+	worker_db_test_query_expect(t, c, req, fixtures[:], {0})
+	req.blocked = 2; req.has_project = true; req.project = task_query_test_bytes("b")
+	worker_db_test_query_expect(t, c, req, fixtures[:], {2})
+	req.has_project = false; req.project = nil; req.blocked = 0; req.sort = .WorkOrder
+	worker_db_test_query_expect(t, c, req, fixtures[:], {1, 3, 0, 2})
+	// A newly-ready high priority child outranks existing roots. Cycles,
+	// missing prerequisites and their descendants precede all Done tasks.
+	work := [10]pr.Task {
+		{id = 1, priority = 1},
+		{id = 2},
+		{id = 3, priority = 3, blocked_by = 1},
+		{id = 4, blocked_by = 1},
+		{id = 5, priority = 2, blocked_by = 999},
+		{id = 6, priority = 3, blocked_by = 5},
+		{id = 7, priority = 1, blocked_by = 8},
+		{id = 8, priority = 1, blocked_by = 7},
+		{id = 9, priority = 3, status = .Done},
+		{id = 10, priority = 2, blocked_by = 9},
+	}
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM tasks", nil, nil, nil), sql.OK)
+	for &task in work do testing.expect_value(t, db.put_task(&store, c.workspace_id, &task), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	worker_db_test_query_expect(t, c, req, work[:], {9, 0, 2, 1, 3, 5, 4, 6, 7, 8})
+	req.status_mask = 7 // Completed prerequisite outside result still satisfies task 10.
+	worker_db_test_query_expect(t, c, req, work[:], {9, 0, 2, 1, 3, 5, 4, 6, 7})
+	req.has_cursor = true; req.cursor_task_id = 1; req.cursor_number = 8
+	worker_db_test_query_expect(t, c, req, work[:], {9, 0, 2, 1, 3, 5, 4, 6, 7}, start = 2)
+	req.cursor_task_id = 999; req.cursor_number = 2
+	worker_db_test_query_expect(t, c, req, work[:], {9, 0, 2, 1, 3, 5, 4, 6, 7}, start = 2)
+	// A late surviving ID wins over a stale early numeric cursor, including
+	// an empty last page. Missing IDs retain clamped numeric fallback semantics.
+	req.cursor_task_id = 8; req.cursor_number = 0
+	worker_db_test_query_expect(t, c, req, work[:], {9, 0, 2, 1, 3, 5, 4, 6, 7}, start = 9)
+	req.cursor_task_id = 999; req.cursor_number = max(i64)
+	worker_db_test_query_expect(t, c, req, work[:], {9, 0, 2, 1, 3, 5, 4, 6, 7}, start = 9)
+	req.cursor_number = -1; req.limit = 1
+	worker_db_test_query_expect(t, c, req, work[:], {9, 0, 2, 1, 3, 5, 4, 6, 7})
+	// Slice selection must preserve both directions, endpoint types, workspace
+	// isolation and external prerequisite checks across WorkOrder pages.
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	assets := [3]pr.Asset {
+		slice_test_slice_asset(77, `{"version":1,"name":"Work"}`),
+		slice_test_slice_asset(78, `{"version":1,"name":"Empty"}`),
+		{asset_id = 79, asset_type = .Note},
+	}
+	for &asset in assets do testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &asset), sql.OK)
+	edges := [?]pr.Edge {
+		{source_type = .Task, source_id = 3, target_type = .Asset, target_id = 77, relation = .MemberOf},
+		{source_type = .Asset, source_id = 77, target_type = .Task, target_id = 10, relation = .MemberOf},
+		{source_type = .Task, source_id = 5, target_type = .Asset, target_id = 77, relation = .MemberOf},
+		{source_type = .Asset, source_id = 77, target_type = .Asset, target_id = 2, relation = .MemberOf},
+		{source_type = .Asset, source_id = 77, target_type = .Task, target_id = 999, relation = .MemberOf},
+		{source_type = .Task, source_id = 4, target_type = .Asset, target_id = 77, relation = .RelatedTo},
+		{source_type = .Task, source_id = 1, target_type = .Asset, target_id = 79, relation = .MemberOf},
+		{source_type = .Task, source_id = 1, target_type = .Asset, target_id = 80, relation = .MemberOf},
+		{source_type = .Task, source_id = 2, target_type = .Asset, target_id = 77, relation = .MemberOf},
+	}
+	for edge, i in edges {
+		key := pr.Asset {
+			asset_id = u64(i + 1),
+		}
+		workspace := i == len(edges) - 1 ? "foreign-query" : c.workspace_id
+		testing.expect_value(
+			t,
+			sqlite_projection_write(
+				&store,
+				"INSERT INTO edges VALUES(?1,?2,?3,?4,?5,?6,?7,0,x'')",
+				workspace,
+				&key,
+				{i64(edge.source_type), edge.source_id, i64(edge.target_type), edge.target_id, i64(edge.relation)},
+			),
+			sql.OK,
+		)
+	}
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	req = pr.TaskQueryRequest {
+		status_mask    = 7,
+		sort           = .WorkOrder,
+		color          = 255,
+		limit          = 2,
+		slice_id       = 77,
+		correlation_id = 921,
+	}
+	worker_db_test_query_expect(t, c, req, work[:], {9, 2, 4}) // Done 9 satisfies 10; excluded Todo 1 does not satisfy 3.
+	req.has_project = true; req.project = task_query_test_bytes("absent")
+	worker_db_test_query_expect(t, c, req, work[:], nil)
+	req.has_project = false; req.project = nil
+	for slice in ([3]u64{78, 79, 80}) {
+		req.slice_id = slice
+		worker_db_test_query_expect(t, c, req, work[:], nil)
+	}
+	req.slice_id = 77
+	// Failed output and rolled-back reads must not publish a cache.
+	buffer: [1024]byte
+	n := pr.serializeTaskQueryRequest(req, buffer[:])
+	request := db.Request {
+		workspace = c.workspace_id,
+		opcode    = .C_QueryTasks,
+		body      = buffer[2:n],
+	}
+	for budget in ([2]int{1, 4096}) {
+		output := db.Command_Output {
+			limit = budget,
+		}; defer db.destroy_command_output(&output)
+		testing.expect_value(t, db.begin(&store), sql.OK)
+		testing.expect_value(t, sqlite_execute_task_command(&store, &request, &output), budget == 1 ? sql.TOOBIG : sql.OK)
+		testing.expect_value(t, output.count, budget == 1 ? 0 : 1)
+		testing.expect_value(t, db.rollback(&store), sql.OK)
+		sqlite_projection_test_assert(t, &store, "SELECT count(*)=0 FROM sqlite_temp_master WHERE name LIKE 'nrc_work%'")
+	}
 }
 
 task_query_test_bytes :: proc(value: string) -> []byte {return transmute([]byte)value}
 
-// Independent full ordering, without the production comparator or adapter.
-task_query_test_less :: proc(a, b: Task_Query_Key, descending: bool) -> bool {
-	if a.due_missing != b.due_missing do return !a.due_missing
-	if a.number != b.number do return descending ? a.number > b.number : a.number < b.number
-	// Compare bytes independently, including nil and nonnil empty slices.
-	for i in 0 ..< min(len(a.text), len(b.text)) {
-		if a.text[i] != b.text[i] do return descending ? a.text[i] > b.text[i] : a.text[i] < b.text[i]
+task_query_cache_expect :: proc(
+	t: ^testing.T,
+	store: ^db.Store,
+	workspace: string,
+	req: pr.TaskQueryRequest,
+	tasks: []pr.Task,
+	total: u32,
+	position: i64,
+	more: bool,
+) {
+	own := sql.get_autocommit(store.db) != 0
+	if own {if !testing.expect_value(t, db.begin(store), sql.OK) do return}
+	defer if own && sql.get_autocommit(store.db) == 0 do db.rollback(store)
+	body: [1024]byte
+	n := pr.serializeTaskQueryRequest(req, body[:]); assert(n > 0)
+	r := db.Request {
+		workspace = workspace,
+		opcode    = .C_QueryTasks,
+		body      = body[2:n],
 	}
-	if len(a.text) != len(b.text) do return descending ? len(a.text) > len(b.text) : len(a.text) < len(b.text)
-	return a.task_id < b.task_id
-}
-
-task_query_test_expect_key :: proc(t: ^testing.T, actual, expected: Task_Query_Key) {
-	testing.expect_value(t, actual.number, expected.number)
-	testing.expect_value(t, actual.due_missing, expected.due_missing)
-	testing.expect_value(t, string(actual.text), string(expected.text))
-	testing.expect_value(t, actual.task_id, expected.task_id)
-}
-
-task_numeric_model_equal :: proc(a, b: Task_Query_Key) -> bool {
-	return a.number == b.number && a.due_missing == b.due_missing && string(a.text) == string(b.text) && a.task_id == b.task_id
-}
-
-task_numeric_model_lower :: proc(model: []Task_Query_Key, key: Task_Query_Key, descending: bool) -> int {
-	i := 0
-	for i < len(model) && task_query_test_less(model[i], key, descending) do i += 1
-	return i
-}
-
-// Both implementations receive the same operation; only the independently
-// ordered slice decides presence, prior values and the resulting state.
-task_numeric_model_mutate :: proc(
-	trees: []btree.BTreeG(Task_Query_Key, Task_Query_Order),
-	hints: []btree.Path_Hint,
-	model: ^[dynamic]Task_Query_Key,
-	key: Task_Query_Key,
-	descending, remove, hinted: bool,
-) -> string {
-	i := task_numeric_model_lower(model^[:], key, descending)
-	present := i < len(model^) && task_numeric_model_equal(model^[i], key)
-	for &tree, n in trees {
-		prior: Task_Query_Key
-		found: bool
-		if remove {
-			if hinted {
-				prior, found = btree.remove_hint(&tree, key, &hints[n])
-			} else {
-				prior, found = btree.remove(&tree, key)
-			}
-		} else {
-			if hinted {
-				prior, found = btree.set_hint(&tree, key, &hints[n])
-			} else {
-				prior, found = btree.set(&tree, key)
-			}
-		}
-		if found != present do return "mutation presence/prior flag"
-		if found && !task_numeric_model_equal(prior, model^[i]) do return "mutation prior value"
+	out := db.Command_Output {
+		limit = 8192,
+	}; defer db.destroy_command_output(&out)
+	if !testing.expect_value(t, sqlite_execute_task_command(store, &r, &out), sql.OK) do return
+	if !testing.expect_value(t, out.count, 1) do return
+	want := pr.TaskQueryPage {
+		success            = true,
+		tasks              = tasks,
+		total_count        = total,
+		has_more           = more,
+		correlation_id     = req.correlation_id,
+		next_cursor_number = position,
 	}
-	if remove {
-		if present {
-			for j in i ..< len(model^) - 1 do model^[j] = model^[j + 1]
-			resize(model, len(model^) - 1)
-		}
-	} else if present {
-		model^[i] = key
-	} else {
-		append(model, key)
-		for j := len(model^) - 1; j > i; j -= 1 do model^[j] = model^[j - 1]
-		model^[i] = key
-	}
-	return ""
-}
-
-task_numeric_model_check :: proc(
-	trees: []btree.BTreeG(Task_Query_Key, Task_Query_Order),
-	model: []Task_Query_Key,
-	probe: Task_Query_Key,
-	descending: bool,
-	page_size: int,
-) -> string {
-	lower := task_numeric_model_lower(model, probe, descending)
-	present := lower < len(model) && task_numeric_model_equal(model[lower], probe)
-	for &tree in trees {
-		if btree.count(&tree) != len(model) do return "count"
-		got, found := btree.get(&tree, probe)
-		if found != present do return "get presence"
-		if found && !task_numeric_model_equal(got, model[lower]) do return "get value"
-		// Iteration alone need not build search caches: search every live key.
-		for key in model {
-			value, exists := btree.get(&tree, key)
-			if !exists || !task_numeric_model_equal(value, key) do return "live get value"
-		}
-		it := btree.iter(&tree)
-		defer btree.iter_destroy(&it)
-		// Full walks independently check count/order in both directions.
-		for reverse in ([?]bool{false, true}) {
-			has := reverse ? btree.iter_last(&it) : btree.iter_first(&it)
-			for j in 0 ..< len(model) {
-				i := reverse ? len(model) - 1 - j : j
-				if !has do return "short full walk"
-				if !task_numeric_model_equal(btree.item(&it), model[i]) do return "full walk order"
-				has = reverse ? btree.iter_prev(&it) : btree.iter_next(&it)
-			}
-			if has do return "long full walk"
-		}
-		// Pages start at lower_bound, including absent/gap/out-of-range probes.
-		for reverse in ([?]bool{false, true}) {
-			i := lower
-			has := btree.iter_seek(&it, probe)
-			if has != (lower < len(model)) do return "seek presence"
-			if has && !task_numeric_model_equal(btree.item(&it), model[lower]) do return "seek value"
-			if reverse {
-				// Reverse page is strictly before the probe (exclusive cursor).
-				i -= 1
-				has = has ? btree.iter_prev(&it) : btree.iter_last(&it)
-			}
-			for _ in 0 ..< page_size {
-				if has != (i >= 0 && i < len(model)) do return "page presence"
-				if !has do break
-				if !task_numeric_model_equal(btree.item(&it), model[i]) do return "page value"
-				i += reverse ? -1 : 1
-				has = reverse ? btree.iter_prev(&it) : btree.iter_next(&it)
-			}
-		}
-	}
-	return ""
+	if len(tasks) > 0 do want.next_cursor_task_id = tasks[len(tasks) - 1].id
+	expected: [8192]byte
+	size := pr.serializeTaskQueryPage(want, expected[:]); assert(size > 0)
+	testing.expect_value(t, string(out.frames[0].payload), string(expected[:size]))
+	if own do testing.expect_value(t, db.commit(store), sql.OK)
 }
 
 @(test)
-test_hegel_task_query_numeric_model :: proc(t: ^testing.T) {
-	if !hgl.can_run() do return
-	result, err := hgl.run(prop_task_query_numeric_model, nil, {test_cases = 144})
-	testing.expectf(t, err == nil, "numeric task model: err=%v interesting=%v", err, result.interesting_test_cases)
-}
-
-prop_task_query_numeric_model :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.Body_Result {
-	config, err := hgl.draw_i64(tc, 0, 11)
-	if err == .Stop_Test do return hgl.abort()
-	if err != nil do return hgl.interesting("draw numeric configuration")
-	degrees := [?]int{2, 3, 32}
-	descending := config % 2 != 0
-	projection: Task_Numeric_Projection = config / 6 == 0 ? .Time : .Enum_Value
-	trees := [2]btree.BTreeG(Task_Query_Key, Task_Query_Order) {
-		btree.create_ordered(
-			Task_Query_Key,
-			Task_Query_Order,
-			{degree = degrees[(config / 2) % 3]},
-			cache = .Numeric,
-			descending = descending,
-			projection = projection,
-		),
-		btree.create_ordered(
-			Task_Query_Key,
-			Task_Query_Order,
-			{degree = degrees[(config / 2) % 3]},
-			cache = .None,
-			descending = descending,
-			projection = projection,
-		),
-	}
-	defer for &tree in trees do btree.destroy(&tree)
-	hints: [2]btree.Path_Hint
-	model := make([dynamic]Task_Query_Key)
-	defer delete(model)
-	generated_text, text_err := hgl.draw_bytes(tc, 0, 24)
-	if text_err == .Stop_Test do return hgl.abort()
-	if text_err != nil do return hgl.interesting("draw numeric text")
-	defer delete(generated_text)
-	texts := [?]string{"", "a", "aa", "\x00", "\xff", string(generated_text)}
-	numbers := [?]i64{min(i64), min(i64) + 1, -129, -128, -127, -1, 0, 1, 126, 127, 128, 129, max(i64) - 1, max(i64)}
-	ids := [?]u64{0, (1 << 54) - 1, 1 << 54, (1 << 54) + 1, max(u64)}
-	pool: [96]Task_Query_Key
-	for &key, i in pool {
-		number, e1 := hgl.draw_i64(tc, min(i64), max(i64))
-		choice, e2 := hgl.draw_i64(tc, 0, 83)
-		if e1 == .Stop_Test || e2 == .Stop_Test do return hgl.abort()
-		if e1 != nil || e2 != nil do return hgl.interesting("draw numeric pool")
-		key = {
-			number      = i < 28 ? numbers[i % len(numbers)] : number,
-			text        = task_query_test_bytes(texts[i < 28 ? i % len(texts) : int(choice) % len(texts)]),
-			due_missing = i < 28 ? i >= 14 : choice % 2 != 0,
-			task_id     = u64(i),
-		}
-		if i < len(ids) {
-			key.task_id = ids[i]
-		} else if choice % 3 == 1 {
-			key.task_id += 1 << 54
-		} else if choice % 3 == 2 {
-			key.task_id = max(u64) - u64(i)
-		}
-		// Further pool keys deliberately collide in the saturated projections.
-		if i >= 28 && choice % 2 == 0 do key.number = numbers[choice % len(numbers)]
-	}
-	// Unique IDs guarantee 96 records: enough to split even degree 32.
-	for j in 0 ..< len(pool) {
-		key := pool[(j * 37) % len(pool)]
-		failure := task_numeric_model_mutate(trees[:], hints[:], &model, key, descending, false, j % 2 == 0)
-		if failure != "" do return hgl.interesting(failure)
-	}
-	for round in 0 ..< 16 {
-		choice, e1 := hgl.draw_i64(tc, 0, 95)
-		burst, e2 := hgl.draw_i64(tc, 1, 8)
-		if e1 == .Stop_Test || e2 == .Stop_Test do return hgl.abort()
-		if e1 != nil || e2 != nil do return hgl.interesting("draw numeric burst")
-		key := pool[choice]
-		failure := task_numeric_model_check(trees[:], model[:], key, descending, int(burst))
-		if failure != "" do return hgl.interesting(failure)
-		for _ in 0 ..< int(burst) {
-			index, e3 := hgl.draw_i64(tc, 0, 95)
-			op, e4 := hgl.draw_i64(tc, 0, 3)
-			if e3 == .Stop_Test || e4 == .Stop_Test do return hgl.abort()
-			if e3 != nil || e4 != nil do return hgl.interesting("draw numeric operation")
-			failure = task_numeric_model_mutate(trees[:], hints[:], &model, pool[index], descending, op >= 2, op % 2 == 0)
-			if failure != "" do return hgl.interesting(failure)
-		}
-		// Guaranteed replacement, successful removal, absent removal and restore,
-		// with reads warming the cache between every operation and both hint modes.
-		for step in 0 ..< 5 {
-			failure = task_numeric_model_check(trees[:], model[:], key, descending, int(burst))
-			if failure != "" do return hgl.interesting(failure)
-			failure = task_numeric_model_mutate(trees[:], hints[:], &model, key, descending, step == 2 || step == 3, (round + step) % 2 == 0)
-			if failure != "" do return hgl.interesting(failure)
-		}
-		// A guaranteed absent ID also supplies a noncanonical seek cursor.
-		key.task_id = 1 << 53
-		failure = task_numeric_model_check(trees[:], model[:], key, descending, int(burst))
-		if failure != "" do return hgl.interesting(failure)
-	}
-	for len(model) > 0 {
-		key := model[len(model) / 2]
-		failure := task_numeric_model_check(trees[:], model[:], key, descending, 7)
-		if failure != "" do return hgl.interesting(failure)
-		failure = task_numeric_model_mutate(trees[:], hints[:], &model, key, descending, true, len(model) % 2 == 0)
-		if failure != "" do return hgl.interesting(failure)
-	}
-	failure := task_numeric_model_check(trees[:], model[:], pool[0], descending, 7)
-	if failure != "" do return hgl.interesting(failure)
-	return hgl.valid()
-}
-
-@(test)
-test_task_query_numeric_cache_full_order_boundaries :: proc(t: ^testing.T) {
-	numbers := [?]i64{min(i64), min(i64) + 1, -129, -128, -127, -1, 0, 1, 126, 127, 128, max(i64) - 1, max(i64)}
-	ids := [?]pr.TaskID{1, (1 << 54) - 1, 1 << 54, (1 << 54) + 1, max(u64)}
-	texts := [?]string{"", "a", "aa", "b"}
-	for projection in ([?]Task_Numeric_Projection{.Time, .Enum_Value}) {
-		for descending in ([?]bool{false, true}) {
-			tree := btree.create_ordered(
-				Task_Query_Key,
-				Task_Query_Order,
-				btree.Options{degree = 4},
-				cache = .Numeric,
-				descending = descending,
-				projection = projection,
-			)
-			defer btree.destroy(&tree)
-			testing.expect_value(t, tree.cache, btree.Cache_Mode.Numeric)
-			testing.expect_value(t, tree.projection, projection)
-			testing.expect_value(t, tree.descending, descending)
-			expected := make([dynamic]Task_Query_Key)
-			defer delete(expected)
-			for missing in ([?]bool{false, true}) {
-				for number in numbers {
-					for text in texts {
-						for id in ids {
-							key := Task_Query_Key {
-								number      = number,
-								text        = task_query_test_bytes(text),
-								task_id     = id,
-								due_missing = missing,
-							}
-							append(&expected, key)
-							// Insertion-sort the independent model.
-							j := len(expected) - 1
-							for j > 0 && task_query_test_less(key, expected[j - 1], descending) {
-								expected[j] = expected[j - 1]
-								j -= 1
-							}
-							expected[j] = key
-						}
-					}
-				}
-			}
-			for i := len(expected) - 1; i >= 0; i -= 1 {_, _ = btree.set(&tree, expected[i])}
-			for pass in 0 ..< 2 {
-				it := btree.iter(&tree)
-				has := btree.iter_first(&it)
-				for key in expected {
-					testing.expect(t, has)
-					if has do task_query_test_expect_key(t, btree.item(&it), key)
-					has = btree.iter_next(&it)
-					got, found := btree.get(&tree, key)
-					testing.expect(t, found)
-					if found do task_query_test_expect_key(t, got, key)
-				}
-				testing.expect(t, !has)
-				for key in expected {
-					for gap in ([?]bool{false, true}) {
-						probe := key
-						if gap do probe.task_id -= 1
-						lower := 0
-						for lower < len(expected) && task_query_test_less(expected[lower], probe, descending) do lower += 1
-						found := btree.iter_seek(&it, probe)
-						testing.expect_value(t, found, lower < len(expected))
-						if found && lower < len(expected) do task_query_test_expect_key(t, btree.item(&it), expected[lower])
-					}
-				}
-				btree.iter_destroy(&it)
-				if pass == 0 {
-					for key, i in expected {
-						if i % 2 != 0 do continue
-						removed, ok := btree.remove(&tree, key)
-						testing.expect(t, ok)
-						if ok do task_query_test_expect_key(t, removed, key)
-						_, present := btree.get(&tree, key)
-						testing.expect(t, !present)
-					}
-					for key, i in expected {if i % 2 == 0 {_, _ = btree.set(&tree, key)}}
-				}
-			}
-		}
-	}
-}
-
-@(test)
-test_task_query_numeric_public_cursors :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	conv.tasks = make(map[pr.TaskID]^pr.Task)
-	defer delete(conv.tasks)
-	init_task_index(&conv)
-	defer destroy_task_index(&conv)
-	tasks := [?]pr.Task {
-		{id = 0, status = .Todo, priority = 126, created_at = min(i64), updated_at = min(i64)},
-		{id = 1, status = .Todo, priority = 126, created_at = min(i64), updated_at = min(i64)},
-		{id = (1 << 54) - 1, status = .Todo, priority = 127, created_at = -1, updated_at = -1},
-		{id = 1 << 54, status = .Todo, priority = 128, created_at = 0, updated_at = 0},
-		{id = (1 << 54) + 1, status = .Todo, priority = 255, created_at = max(i64), updated_at = max(i64)},
-		{id = max(u64), status = .Todo, priority = 255, created_at = max(i64), updated_at = max(i64)},
-	}
-	for &task in tasks do task_query_test_add(&conv, &task)
-	testing.expect_value(t, conv.task_index.cache, btree.Cache_Mode.None)
-	testing.expect_value(t, conv.task_index.projection, btree.No_Projection.None)
-	rows := make([dynamic]pr.Task)
-	defer delete(rows)
-	legacy := pr.ListTasksPagedRequest {
-		status_mask = 15,
-		limit       = 1,
-	}
-	for i := len(tasks) - 1; i >= 0; i -= 1 {
-		clear(&rows)
-		page := collect_task_page(&conv, legacy, &rows)
-		testing.expect_value(t, len(rows), 1)
-		if len(rows) == 1 do testing.expect_value(t, rows[0].id, tasks[i].id)
-		testing.expect_value(t, page.has_more, i != 0)
-		legacy.has_cursor = true
-		legacy.cursor_sort_at = page.next_cursor_sort_at
-		legacy.cursor_task_id = page.next_cursor_task_id
-	}
-	for sort_kind in ([?]pr.TaskQuerySort{.Priority, .CreatedAt}) {
-		for descending in ([?]bool{false, true}) {
-			for number in ([?]i64{min(i64), -129, -128, -127, -1, 0, 126, 127, 128, 255, max(i64)}) {
-				for text in ([?]string{"", "noncanonical"}) {
-					clear(&rows)
-					req := pr.TaskQueryRequest {
-						status_mask    = 15,
-						limit          = 10,
-						color          = 255,
-						sort           = sort_kind,
-						descending     = descending,
-						has_cursor     = true,
-						cursor_number  = number,
-						cursor_text    = task_query_test_bytes(text),
-						cursor_task_id = 1 << 54,
-					}
-					page := collect_task_query_page(&conv, req, &rows)
-					testing.expect_value(t, page.total_count, u32(len(tasks)))
-					cursor := Task_Query_Key {
-						number  = number,
-						text    = req.cursor_text,
-						task_id = req.cursor_task_id,
-					}
-					expected_storage: [len(tasks)]Task_Query_Key
-					count := 0
-					for task in tasks {
-						key := Task_Query_Key {
-							number  = sort_kind == .Priority ? i64(task.priority) : task.created_at,
-							task_id = task.id,
-						}
-						if !task_query_test_less(cursor, key, descending) do continue
-						at := count
-						for at > 0 && task_query_test_less(key, expected_storage[at - 1], descending) {
-							expected_storage[at] = expected_storage[at - 1]
-							at -= 1
-						}
-						expected_storage[at] = key
-						count += 1
-					}
-					testing.expect_value(t, len(rows), count)
-					previous := cursor
-					for row in rows {
-						key := Task_Query_Key {
-							number  = sort_kind == .Priority ? i64(row.priority) : row.created_at,
-							task_id = row.id,
-						}
-						testing.expect(t, task_query_test_less(previous, key, descending))
-						previous = key
-					}
-					// The same noncanonical boundary must also work with small
-					// pages and the canonical cursors returned by the server.
-					expected_rows := expected_storage[:count]
-					req.limit = 1
-					for i in 0 ..< max(1, len(expected_rows)) {
-						clear(&rows)
-						part := collect_task_query_page(&conv, req, &rows)
-						testing.expect_value(t, part.total_count, u32(len(tasks)))
-						testing.expect_value(t, len(rows), len(expected_rows) > 0 ? 1 : 0)
-						testing.expect_value(t, part.has_more, i + 1 < len(expected_rows))
-						if len(rows) == 1 && i < len(expected_rows) {
-							testing.expect_value(t, rows[0].id, expected_rows[i].task_id)
-							testing.expect_value(t, part.next_cursor_number, sort_kind == .Priority ? i64(rows[0].priority) : rows[0].created_at)
-							testing.expect_value(t, part.next_cursor_task_id, rows[0].id)
-							testing.expect_value(t, len(part.next_cursor_text), 0)
-						}
-						req.cursor_number = part.next_cursor_number
-						req.cursor_text = part.next_cursor_text
-						req.cursor_task_id = part.next_cursor_task_id
-					}
-				}
-			}
-		}
-	}
-}
-
-@(test)
-test_task_query_paging_sparse_matches :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	conv.tasks = make(map[pr.TaskID]^pr.Task)
-	defer delete(conv.tasks)
-	init_task_index(&conv)
-	defer destroy_task_index(&conv)
-	// Force internal nodes and long runs of rejected candidates. Duplicate
-	// sort values retain ascending IDs even when the sort is descending.
-	fixture: [137]pr.Task
-	for &task, i in fixture {
-		task = pr.Task {
-			id         = pr.TaskID(i + 1),
-			status     = .Todo,
-			priority   = u8(i / 5),
-			created_at = i64(i / 5),
-			title      = task_query_test_bytes("same"),
-			color      = i % 17 == 3 ? .Red : .Gold,
-		}
-		task_query_test_add(&conv, &task)
-	}
-	rows := make([dynamic]pr.Task)
-	defer delete(rows)
-	for sort_kind in ([?]pr.TaskQuerySort{.Priority, .CreatedAt, .Title}) {
-		for descending in ([?]bool{false, true}) {
-			for filtered in ([?]bool{false, true}) {
-				expected: [len(fixture)]Task_Query_Key
-				count := 0
-				for task, i in fixture {
-					if filtered && i % 17 != 3 do continue
-					key := Task_Query_Key {
-						task_id = task.id,
-					}
-					if sort_kind == .Title {key.text = task.title} else {key.number = i64(i / 5)}
-					at := count
-					for at > 0 && task_query_test_less(key, expected[at - 1], descending) {
-						expected[at] = expected[at - 1]
-						at -= 1
-					}
-					expected[at] = key
-					count += 1
-				}
-				for limit in ([?]u16{1, 7, 8, 9, 50}) {
-					req := pr.TaskQueryRequest {
-						status_mask = 15,
-						color       = filtered ? u8(pr.TaskColor.Red) : 255,
-						sort        = sort_kind,
-						descending  = descending,
-						limit       = limit,
-					}
-					consumed := 0
-					for _ in 0 ..< count + 1 {
-						clear(&rows)
-						page := collect_task_query_page(&conv, req, &rows)
-						wanted := min(int(limit), count - consumed)
-						testing.expect_value(t, len(rows), wanted)
-						testing.expect_value(t, page.total_count, u32(count))
-						if len(rows) != wanted do break
-						for row, i in rows do testing.expect_value(t, row.id, expected[consumed + i].task_id)
-						consumed += len(rows)
-						testing.expect_value(t, page.has_more, consumed < count)
-						if len(rows) == 0 do break
-						last := expected[consumed - 1]
-						testing.expect_value(t, page.next_cursor_number, last.number)
-						testing.expect_value(t, string(page.next_cursor_text), string(last.text))
-						testing.expect_value(t, page.next_cursor_task_id, last.task_id)
-						req.has_cursor = true
-						req.cursor_number = page.next_cursor_number
-						req.cursor_text = page.next_cursor_text
-						req.cursor_task_id = page.next_cursor_task_id
-					}
-					testing.expect_value(t, consumed, count)
-				}
-			}
-		}
-	}
-}
-
-@(test)
-test_task_query_text_order_and_empty_filters :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	conv.tasks = make(map[pr.TaskID]^pr.Task)
-	defer delete(conv.tasks)
-	init_task_index(&conv)
-	defer destroy_task_index(&conv)
-
-	// Explicit byte order, including embedded NUL, non-ASCII bytes, prefixes,
-	// and differences on either side of the runtime's 32-byte SIMD boundary.
-	titles := [?]string {
-		"",
-		"",
-		"\x00",
-		"\x00a",
-		"a",
-		"aa",
-		"a\x7f",
-		"a\x80",
-		"a\xff",
-		"012345678901234567890123456789012a",
-		"012345678901234567890123456789012b",
-		"012345678901234567890123456789012ba",
-		"ä",
-		"日本",
-	}
-	tasks: [len(titles)]pr.Task
-	empty_backing := [1]byte{'x'}
-	for title, i in titles {
-		tasks[i] = pr.Task {
-			id     = pr.TaskID(i + 1),
-			status = .Todo,
-			title  = task_query_test_bytes(title),
-		}
-		if i % 2 == 0 {
-			tasks[i].project = empty_backing[:0]
-			tasks[i].assignee = empty_backing[:0]
-		}
-	}
-	tasks[0].title = nil
-	tasks[1].title = empty_backing[:0]
-	for i := len(tasks) - 1; i >= 0; i -= 1 {task_query_test_add(&conv, &tasks[i])}
-
-	ascending := [?]pr.TaskID{1, 2, 3, 4, 10, 11, 12, 5, 6, 7, 8, 9, 13, 14}
-	descending := [?]pr.TaskID{14, 13, 9, 8, 7, 6, 5, 12, 11, 10, 4, 3, 1, 2}
-	rows := make([dynamic]pr.Task)
-	defer delete(rows)
-	for desc in ([?]bool{false, true}) {
-		for empty in ([?][]byte{nil, empty_backing[:0]}) {
-			req := pr.TaskQueryRequest {
-				status_mask  = 0x0f,
-				limit        = 3,
-				sort         = .Title,
-				descending   = desc,
-				color        = 255,
-				has_project  = true,
-				project      = empty,
-				has_assignee = true,
-				assignee     = empty,
-			}
-			expected := desc ? descending[:] : ascending[:]
-			seen := 0
-			for _ in 0 ..< len(tasks) {
-				clear(&rows)
-				page := collect_task_query_page(&conv, req, &rows)
-				testing.expect_value(t, page.total_count, u32(len(tasks)))
-				for row in rows {
-					if seen < len(expected) do testing.expect_value(t, row.id, expected[seen])
-					seen += 1
-				}
-				if !page.has_more do break
-				req.has_cursor = true
-				req.cursor_text = page.next_cursor_text
-				req.cursor_task_id = page.next_cursor_task_id
-			}
-			testing.expect_value(t, seen, len(expected))
-			// Text cursors with a nonzero numeric field must retain the full
-			// comparator's ordering, even when the text-search cache is warm.
-			for number in ([?]i64{-1, 1}) {
-				clear(&rows)
-				req.has_cursor = true
-				req.cursor_number = number
-				_ = collect_task_query_page(&conv, req, &rows)
-				before_all := desc ? number > 0 : number < 0
-				testing.expect_value(t, len(rows), before_all ? 3 : 0)
-				if before_all && len(rows) > 0 do testing.expect_value(t, rows[0].id, expected[0])
-			}
-		}
-	}
-}
-
-@(test)
-test_task_work_order_scope_and_pages :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	slice_test_state(&conv)
-	defer slice_test_destroy(&conv)
-	tasks := [?]pr.Task {
-		{id = 1, status = .Todo, priority = 10},
-		{id = 2, status = .Todo, priority = 90, blocked_by = 1},
-		{id = 3, status = .Todo, priority = 5},
-		{id = 4, status = .Todo, priority = 100, blocked_by = 99},
-		{id = 5, status = .Todo, priority = 80, blocked_by = 6},
-		{id = 6, status = .Todo, priority = 70, blocked_by = 5},
-		{id = 7, status = .Done, priority = 200},
-		{id = 8, status = .Todo, priority = 20, blocked_by = 7},
-		{id = 9, status = .Note, priority = 250},
-		{id = 10, status = .Todo, priority = 95, blocked_by = 4},
-	}
-	for &task in tasks {state_map_set(&conv.tasks, task.id, &task)}
-	rows := make([dynamic]pr.Task)
-	defer delete(rows)
+test_work_order_cache_current_data_and_rollback :: proc(t: ^testing.T) {
+	dir, err := os.make_directory_temp("", "nrc-work-cache-*", context.allocator)
+	if !testing.expect(t, err == nil) do return
+	defer {os.remove_all(dir); delete(dir)}
+	name := fmt.aprintf("%s/shard.sqlite3", dir); defer delete(name)
+	path := strings.clone_to_cstring(name); defer delete(path)
+	store, rc := db.open(path, create = true); if !testing.expect_value(t, rc, sql.OK) do return
+	defer db.close(&store)
+	other, other_rc := db.open(path); if !testing.expect_value(t, other_rc, sql.OK) do return
+	defer db.close(&other)
+	tasks := [4]pr.Task{{id = 1, priority = 1}, {id = 2, priority = 3, blocked_by = 1}, {id = 3, priority = 2}, {id = 4, status = .Done}}
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	for &task in tasks do testing.expect_value(t, db.put_task(&store, "w", &task), sql.OK)
+	testing.expect_value(t, db.put_task(&store, "other", &tasks[3]), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
 	req := pr.TaskQueryRequest {
-		status_mask = 15,
-		sort        = .WorkOrder,
-		color       = 255,
-		limit       = 2,
-	}
-	expected := [?]pr.TaskID{8, 1, 2, 3, 4, 10, 5, 6, 7}
-	i := 0
-	for {
-		clear(&rows)
-		page := collect_task_query_page(&conv, req, &rows)
-		testing.expect_value(t, page.total_count, u32(len(expected)))
-		for row in rows {testing.expect_value(t, row.id, expected[i]); i += 1}
-		if !page.has_more do break
-		req.has_cursor = true
-		req.cursor_task_id = page.next_cursor_task_id
-		req.cursor_number = page.next_cursor_number
-	}
-	testing.expect_value(t, i, len(expected))
-	// Member 2 cannot be planned before its excluded prerequisite 1. Done
-	// prerequisite 7, however, is satisfied even though it is not a member.
-	asset := slice_test_slice_asset(77, `{"version":1,"name":"Work"}`)
-	slice_test_add_asset(&conv, &asset)
-	for id in ([?]u64{2, 3, 8}) {slice_test_member_of(&conv, .Task, id, 77)}
-	slice_test_member_of(&conv, .Task, 1, 77, .RelatedTo)
-	req = pr.TaskQueryRequest {
-		status_mask = 7,
-		sort        = .WorkOrder,
-		color       = 255,
-		limit       = 100,
-		slice_id    = 77,
-	}
-	clear(&rows)
-	page := collect_task_query_page(&conv, req, &rows)
-	testing.expect_value(t, page.total_count, u32(3))
-	slice_expected := [3]pr.TaskID{8, 3, 2}
-	for row, j in rows {testing.expect_value(t, row.id, slice_expected[j])}
-	// Filter membership is applied before dependency ordering, too.
-	req.slice_id = 0
-	req.blocked = 1
-	clear(&rows)
-	page = collect_task_query_page(&conv, req, &rows)
-	testing.expect_value(t, page.total_count, u32(6))
-	filtered_expected := [6]pr.TaskID{8, 4, 10, 2, 5, 6}
-	for row, j in rows {testing.expect_value(t, row.id, filtered_expected[j])}
-	// A slice with no adjacency entry and a nonexistent slice are empty.
-	empty := slice_test_slice_asset(78, `{"version":1,"name":"Empty"}`)
-	slice_test_add_asset(&conv, &empty)
-	for id in ([?]pr.AssetID{78, 79}) {
-		clear(&rows); req.slice_id = id
-		page = collect_task_query_page(&conv, req, &rows)
-		testing.expect_value(t, page.total_count, u32(0))
-	}
-}
-
-@(test)
-test_task_query_order_filters_cursor_and_indexes :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	conv.tasks = make(map[pr.TaskID]^pr.Task)
-	defer delete(conv.tasks)
-	init_task_index(&conv)
-	defer destroy_task_index(&conv)
-	tasks := [5]pr.Task {
-		{
-			id = 5,
-			status = .Todo,
-			priority = 2,
-			due_at = 0,
-			created_at = 50,
-			title = task_query_test_bytes("z"),
-			assignee = task_query_test_bytes("ann"),
-			project = task_query_test_bytes("Beta"),
-			color = .Red,
-		},
-		{
-			id = 2,
-			status = .Todo,
-			priority = 2,
-			due_at = 20,
-			created_at = 40,
-			title = task_query_test_bytes("a"),
-			assignee = task_query_test_bytes("ann"),
-			project = task_query_test_bytes("Alpha"),
-			color = .Red,
-			blocked_by = 9,
-		},
-		{
-			id = 8,
-			status = .Backlog,
-			priority = 1,
-			due_at = 10,
-			created_at = 30,
-			title = task_query_test_bytes("a"),
-			assignee = task_query_test_bytes("bob"),
-			project = task_query_test_bytes("Alpha"),
-			color = .Gold,
-		},
-		{id = 1, status = .Done, priority = 3, due_at = 5, created_at = 20, title = task_query_test_bytes("m")},
-		{
-			id = 9,
-			status = .Todo,
-			priority = 2,
-			due_at = 20,
-			created_at = 10,
-			title = task_query_test_bytes("x"),
-			assignee = task_query_test_bytes("ann"),
-			project = task_query_test_bytes("Alpha"),
-			color = .Red,
-			blocked_by = 2,
-		},
-	}
-	for &task in tasks do task_query_test_add(&conv, &task)
-	for sort_kind in 0 ..< 8 {
-		for direction in 0 ..< 2 {
-			expected := sort_kind == 0 && direction == 0
-			testing.expect_value(t, conv.task_query_indexes.initialized[sort_kind][direction], expected)
-		}
-	}
-
-	// Expectations are derived from fixture fields, not the query comparator.
-	expected_orders := [8][2][5]pr.TaskID {
-		{{8, 2, 5, 9, 1}, {1, 2, 5, 9, 8}}, // priority
-		{{8, 2, 5, 9, 1}, {1, 2, 5, 9, 8}}, // status
-		{{1, 2, 5, 9, 8}, {8, 2, 5, 9, 1}}, // assignee
-		{{1, 8, 2, 9, 5}, {2, 9, 8, 1, 5}}, // due, missing last
-		{{9, 1, 8, 2, 5}, {5, 2, 8, 1, 9}}, // created
-		{{2, 8, 1, 9, 5}, {5, 9, 1, 2, 8}}, // title
-		{{1, 2, 5, 9, 8}, {8, 2, 5, 9, 1}}, // color
-		{{1, 2, 8, 9, 5}, {5, 2, 8, 9, 1}}, // project
-	}
-	for sort_kind in 0 ..< 8 {
-		for direction in 0 ..< 2 {
-			reference_req := pr.TaskQueryRequest {
-				status_mask = 0x0f,
-				limit       = 2,
-				sort        = pr.TaskQuerySort(sort_kind),
-				descending  = direction == 1,
-				color       = 255,
-			}
-			expected := expected_orders[sort_kind][direction]
-			actual := make([dynamic]pr.TaskID)
-			for {
-				page := make([dynamic]pr.Task)
-				page_result := collect_task_query_page(&conv, reference_req, &page)
-				expected_cache := [8]btree.Cache_Mode{.Numeric, .Numeric, .None, .None, .Numeric, .Text, .Numeric, .None}
-				expected_projection := [8]Task_Numeric_Projection{.Enum_Value, .Enum_Value, .Time, .Time, .Time, .Time, .Enum_Value, .Time}
-				if sort_kind == 0 || sort_kind == 4 {
-					tree := &conv.task_query_indexes.trees[sort_kind][direction].numeric
-					testing.expect_value(t, tree.cache, expected_cache[sort_kind])
-					testing.expect_value(t, tree.projection, expected_projection[sort_kind])
-					testing.expect_value(t, tree.descending, reference_req.descending)
-				} else {
-					tree := &conv.task_query_indexes.trees[sort_kind][direction].general
-					testing.expect_value(t, tree.cache, expected_cache[sort_kind])
-					testing.expect_value(t, tree.projection, expected_projection[sort_kind])
-					testing.expect_value(t, tree.descending, reference_req.descending)
-				}
-				for task in page do append(&actual, task.id)
-				if !page_result.has_more {
-					delete(page)
-					break
-				}
-				reference_req.has_cursor = true
-				reference_req.cursor_number = page_result.next_cursor_number
-				reference_req.cursor_task_id = page_result.next_cursor_task_id
-				delete(reference_req.cursor_text)
-				reference_req.cursor_text = make([]byte, len(page_result.next_cursor_text))
-				copy(reference_req.cursor_text, page_result.next_cursor_text)
-				delete(page)
-			}
-			testing.expect_value(t, len(actual), len(expected))
-			for index in 0 ..< min(len(actual), len(expected)) {
-				testing.expect_value(t, actual[index], expected[index])
-			}
-			delete(reference_req.cursor_text)
-			delete(actual)
-		}
-	}
-
-	out := make([dynamic]pr.Task); defer delete(out)
-	req := pr.TaskQueryRequest {
-		status_mask = 0x0f,
-		limit       = 10,
-		sort        = .Priority,
-		descending  = true,
-		color       = 255,
-	}
-	result := collect_task_query_page(&conv, req, &out)
-	testing.expect_value(t, result.total_count, u32(5))
-	testing.expect(
-		t,
-		len(out) == 5 && out[0].id == 1 && out[1].id == 2 && out[2].id == 5 && out[3].id == 9 && out[4].id == 8,
-		"descending ties must retain task id ascending",
-	)
-
-	clear(&out)
-	req = {
-		status_mask = 0x0f,
-		limit       = 10,
-		sort        = .DueAt,
-		descending  = true,
-		color       = 255,
-	}
-	_ = collect_task_query_page(&conv, req, &out)
-	testing.expect(t, len(out) == 5 && out[0].id == 2 && out[1].id == 9 && out[4].id == 5, "due zero must remain last in descending order")
-
-	clear(&out)
-	req = {
-		status_mask    = 0x02,
+		status_mask    = 15,
+		sort           = .WorkOrder,
+		color          = 255,
 		limit          = 1,
-		sort           = .Title,
-		color          = u8(pr.TaskColor.Red),
-		blocked        = 1,
-		overdue_before = 25,
-		has_assignee   = true,
-		assignee       = task_query_test_bytes("ann"),
-		has_project    = true,
-		project        = task_query_test_bytes("Alpha"),
+		correlation_id = 123,
 	}
-	result = collect_task_query_page(&conv, req, &out)
-	testing.expect(t, result.total_count == 2 && result.has_more && out[0].id == 2, "combined predicates should count before limit")
-	cursor := result
-	owned_cursor := make([]byte, len(cursor.next_cursor_text))
-	defer delete(owned_cursor)
-	copy(owned_cursor, cursor.next_cursor_text)
-	remove_task_from_index(&conv, &tasks[1])
-	delete_key(&conv.tasks, tasks[1].id)
-	clear(&out)
-	req.has_cursor = true
-	req.cursor_text = owned_cursor
-	req.cursor_task_id = cursor.next_cursor_task_id
-	result = collect_task_query_page(&conv, req, &out)
-	testing.expect(t, len(out) == 1 && out[0].id == 9 && result.total_count == 1, "deleted cursor must seek by value")
-
-	old := tasks[4]; tasks[4].project = task_query_test_bytes("Delta"); tasks[4].assignee = task_query_test_bytes("zoe")
-	replace_task_in_index(&conv, &old, &tasks[4])
-	testing.expect_value(t, btree.count(&conv.task_project_indexes["Alpha"].indexes.trees[0][0].numeric), 1)
-	testing.expect_value(t, btree.count(&conv.task_assignee_indexes["ann"].indexes.trees[0][0].numeric), 1)
-	testing.expect_value(t, btree.count(&conv.task_project_indexes["Delta"].indexes.trees[0][0].numeric), 1)
-
-	clear(&out)
-	empty := pr.TaskQueryRequest {
-		status_mask  = 0x0f,
-		limit        = 10,
-		sort         = .Project,
-		color        = 255,
-		has_project  = true,
-		has_assignee = true,
+	task_query_cache_expect(t, &store, "w", req, tasks[2:3], 4, 1, true)
+	req.has_cursor = true; req.cursor_task_id = 3; req.cursor_number = 1
+	task_query_cache_expect(t, &store, "w", req, tasks[0:1], 4, 2, true)
+	req.has_cursor = false; req.cursor_task_id = 0; req.cursor_number = 0
+	// A different workspace/filter/limit/correlation must never reuse the wrong selection.
+	task_query_cache_expect(t, &store, "other", req, tasks[3:4], 1, 1, false)
+	req.status_mask = 8; req.limit = 2; req.correlation_id = 456
+	task_query_cache_expect(t, &store, "w", req, tasks[3:4], 1, 1, false)
+	req.status_mask = 15; req.limit = 1
+	task_query_cache_expect(t, &store, "w", req, tasks[2:3], 4, 1, true)
+	// Own writes invalidate, including a transaction whose cache and writes roll back together.
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	tasks[0].priority = 3
+	testing.expect_value(t, db.put_task(&store, "w", &tasks[0]), sql.OK)
+	task_query_cache_expect(t, &store, "w", req, tasks[0:1], 4, 1, true)
+	testing.expect_value(t, db.rollback(&store), sql.OK)
+	tasks[0].priority = 1
+	task_query_cache_expect(t, &store, "w", req, tasks[2:3], 4, 1, true)
+	// Commit through another connection: a completed prerequisite outside the
+	// selected statuses must release its child and invalidate this connection.
+	req.status_mask = 7
+	task_query_cache_expect(t, &store, "w", req, tasks[2:3], 3, 1, true)
+	testing.expect_value(t, db.begin(&other), sql.OK)
+	tasks[0].status = .Done
+	testing.expect_value(t, db.put_task(&other, "w", &tasks[0]), sql.OK)
+	testing.expect_value(t, db.commit(&other), sql.OK)
+	task_query_cache_expect(t, &store, "w", req, tasks[1:2], 2, 1, true)
+	// Reopen loses only derived state, not the result.
+	testing.expect_value(t, db.close(&store), sql.OK)
+	store, rc = db.open(path); if !testing.expect_value(t, rc, sql.OK) do return
+	task_query_cache_expect(t, &store, "w", req, tasks[1:2], 2, 1, true)
+	// Cached totals change with inserts/deletes, not merely with the first row.
+	extra := pr.Task {
+		id = 5,
 	}
-	empty_result := collect_task_query_page(&conv, empty, &out)
-	testing.expect(t, empty_result.total_count == 1 && len(out) == 1 && out[0].id == 1, "exact empty filters must use indexed empty values")
-
-	// The title order was instantiated above; replacing a task must update it.
-	old = tasks[0]
-	tasks[0].title = task_query_test_bytes("0-first")
-	replace_task_in_index(&conv, &old, &tasks[0])
-	clear(&out)
-	empty = {
-		status_mask = 0x0f,
-		limit       = 10,
-		sort        = .Title,
-		color       = 255,
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, db.put_task(&store, "w", &extra), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	task_query_cache_expect(t, &store, "w", req, tasks[1:2], 3, 1, true)
+	task_query_cache_expect(t, &store, "w", req, tasks[1:2], 3, 1, true)
+	testing.expect_value(t, db.begin(&other), sql.OK)
+	testing.expect_value(t, db.remove_task(&other, "w", 0, extra.id), sql.OK)
+	testing.expect_value(t, db.commit(&other), sql.OK)
+	task_query_cache_expect(t, &store, "w", req, tasks[1:2], 2, 1, true)
+	// Membership changes invalidate even when no task row changed.
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	slice := slice_test_slice_asset(77, `{"version":1,"name":"Cache"}`)
+	testing.expect_value(t, sqlite_put_asset(&store, "w", &slice), sql.OK)
+	edge := pr.Asset {
+		asset_id = 1,
 	}
-	_ = collect_task_query_page(&conv, empty, &out)
-	testing.expect(t, len(out) > 0 && out[0].id == 5, "instantiated lazy order must stay current after mutation")
-}
-
-@(test)
-test_task_query_payload_cursor_accounting_and_legacy_note_total :: proc(t: ^testing.T) {
-	conv: Conversation_State
-	conv.tasks = make(map[pr.TaskID]^pr.Task)
-	defer delete(conv.tasks)
-	init_task_index(&conv)
-	defer destroy_task_index(&conv)
-
-	note := pr.Task {
-		id     = 9000,
-		status = .Note,
-	}
-	task_query_test_add(&conv, &note)
-	legacy_out := make([dynamic]pr.Task)
-	legacy := collect_task_page(&conv, pr.ListTasksPagedRequest{status_mask = 0x10, limit = 10}, &legacy_out)
-	testing.expect_value(t, legacy.total_count, u32(1))
-	delete(legacy_out)
-
-	max_description := make([]byte, pr.MAX_TASK_DESCRIPTION_LENGTH)
-	defer delete(max_description)
-	for &value in max_description do value = 'd'
-	long_title := make([]byte, pr.MAX_TASK_TITLE_LENGTH)
-	defer delete(long_title)
-	for &value in long_title do value = 'y'
-	short_title := task_query_test_bytes("a")
-	fixture := make([dynamic]pr.Task, 0, 1024)
-	defer delete(fixture)
-	base_page_size := pr.getSizeTaskQueryPage(pr.TaskQueryPage{})
-	accumulated := 0
-	probe := pr.Task {
-		id          = 1,
-		status      = .Todo,
-		title       = short_title,
-		description = max_description[:128],
-	}
-	max_task_size := pr.getSizeTask(probe)
-	final_probe := pr.Task {
-		id     = 2,
-		status = .Todo,
-		title  = long_title,
-	}
-	final_base_size := pr.getSizeTask(final_probe)
-	for MAX_PROTOCOL_PAYLOAD_SIZE - base_page_size - accumulated - final_base_size - 1 > pr.MAX_TASK_DESCRIPTION_LENGTH {
-		probe.id = pr.TaskID(len(fixture) + 1)
-		append(&fixture, probe)
-		accumulated += max_task_size
-	}
-	final_description_length := MAX_PROTOCOL_PAYLOAD_SIZE - base_page_size - accumulated - final_base_size - 1
-	testing.expect(t, final_description_length >= 0 && final_description_length <= pr.MAX_TASK_DESCRIPTION_LENGTH, "boundary fixture must fit task limits")
-	final_probe.id = pr.TaskID(len(fixture) + 1)
-	final_probe.description = max_description[:final_description_length]
-	append(&fixture, final_probe)
-	append(&fixture, pr.Task{id = pr.TaskID(len(fixture) + 1), status = .Todo, title = task_query_test_bytes("z")})
-	for &task in fixture do task_query_test_add(&conv, &task)
-
-	out := make([dynamic]pr.Task)
-	defer delete(out)
-	req := pr.TaskQueryRequest {
-		status_mask = 0x0f,
-		limit       = pr.MAX_TASK_PAGE_SIZE,
-		sort        = .Title,
-		color       = 255,
-	}
-	result := collect_task_query_page(&conv, req, &out)
-	page := pr.TaskQueryPage {
-		tasks            = out[:],
-		next_cursor_text = result.next_cursor_text,
-	}
-	testing.expect(t, result.has_more, "boundary fixture should leave another page")
-	testing.expect(t, pr.getSizeTaskQueryPage(page) <= MAX_PROTOCOL_PAYLOAD_SIZE, "cursor text must be included in page payload accounting")
+	testing.expect_value(
+		t,
+		sqlite_projection_write(
+			&store,
+			"INSERT INTO edges VALUES(?1,?2,?3,?4,?5,?6,?7,0,x'')",
+			"w",
+			&edge,
+			{i64(pr.TargetType.Task), u64(3), i64(pr.TargetType.Asset), u64(77), i64(pr.RelationType.MemberOf)},
+		),
+		sql.OK,
+	)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	req.slice_id = 77
+	task_query_cache_expect(t, &store, "w", req, tasks[2:3], 1, 1, false)
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM edges", nil, nil, nil), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	task_query_cache_expect(t, &store, "w", req, nil, 0, 0, false)
+	task_query_cache_expect(t, &store, "w", req, nil, 0, 0, false)
 }
 
 @(test)

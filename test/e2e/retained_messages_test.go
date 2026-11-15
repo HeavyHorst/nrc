@@ -1,13 +1,167 @@
 package e2e
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
+
+func TestRetainedImportActivationAndRestart(t *testing.T) {
+	repo, root := repoRootFromThisFile(t), t.TempDir()
+	sourceWork, targetWork := filepath.Join(root, "source"), filepath.Join(root, "activated")
+	if err := initializeEmptyShardedLayout(sourceWork); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(sourceWork, "data")
+	if err := os.WriteFile(filepath.Join(source, "storage-layout.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(targetWork, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	run := func(cmd *exec.Cmd) {
+		t.Helper()
+		cmd.Env = append(cmd.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", cmd.Args, err, output)
+		}
+	}
+	// Generate all three storage states through the real Odin writer, without
+	// timing a process kill against asynchronous seal completion.
+	fixture := exec.Command(filepath.Join(repo, "test/run_odin_tests.sh"), repo,
+		"-vet", "-define:ODIN_TEST_NAMES=main.test_retained_activation_fixture", "-define:ODIN_TEST_THREADS=1")
+	fixture.Dir = root
+	fixture.Env = append(os.Environ(), "ODIN_BIN="+discoverOdinBinary(),
+		"NRC_TEST_RETAINED_FIXTURE_ROOT="+filepath.Join(source, "sharded-00000000000000000001"))
+	run(fixture)
+	// Compare every file, including retained WALs, indexes and manifests.
+	inventory := func(dir string) map[string][32]byte {
+		t.Helper()
+		result := make(map[string][32]byte)
+		err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(dir, path)
+			result[rel] = sha256.Sum256(body)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	before := inventory(source)
+	builder := filepath.Join(root, "projection-builder")
+	build := exec.Command(discoverOdinBinary(), "build", repo, "-vet", "-define:NRC_SQLITE_PROJECTION_BUILDER=true", "-out:"+builder)
+	build.Dir = root
+	run(build)
+	imported := filepath.Join(root, "imported")
+	tools := filepath.Join(repo, "tools/wal-to-sqlite")
+	run(exec.Command("python3", filepath.Join(tools, "import_wal.py"), "--source", source, "--target", imported, "--projection-builder", builder))
+	importBefore := inventory(imported)
+	target := filepath.Join(targetWork, "data")
+	run(exec.Command("python3", filepath.Join(tools, "activate_import.py"), "--source", source, "--import-dir", imported, "--target", target))
+	after := inventory(target)
+	retainedFiles := 0
+	for name, digest := range before {
+		if strings.Contains(name, "/messages/") {
+			retainedFiles++
+			if after[name] != digest {
+				t.Fatalf("retained file changed during activation: %s", name)
+			}
+		}
+	}
+	if retainedFiles == 0 {
+		t.Fatal("empty retained fixture")
+	}
+	blobs := filepath.Join(root, "blobs")
+	if err := os.Mkdir(blobs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 4; i++ {
+		if err := os.WriteFile(filepath.Join(blobs, fmt.Sprintf("att_%032d", i)), []byte{byte(i)}, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gc := func() {
+		t.Helper()
+		cmd := exec.Command(buildServerBinaryOnce(t), "attachment-gc", "--apply", "--attachments-dir", blobs)
+		cmd.Dir = targetWork
+		run(cmd)
+		for i := 1; i <= 3; i++ {
+			body, err := os.ReadFile(filepath.Join(blobs, fmt.Sprintf("att_%032d", i)))
+			if err != nil || string(body) != string([]byte{byte(i)}) {
+				t.Fatalf("lost retained attachment %d: %v", i, err)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(blobs, "att_00000000000000000000000000000004")); !os.IsNotExist(err) {
+			t.Fatalf("orphan was not quarantined: %v", err)
+		}
+	}
+	gc() // Check frozen references before startup recovery can finish sealing.
+	for restart := 0; restart < 2; restart++ {
+		func() {
+			server := startServerInWorkDirWithEnv(t, targetWork, map[string]string{"NRC_MESSAGE_RETENTION": "24h", "NRC_THREAD_COUNT": "2"})
+			defer server.stop(t)
+			conn, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace("activation-retained"), mustAuthHeader(t, "activation-reader"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			mustSetReadDeadline(t, conn, 20*time.Second)
+			mustExpectServerReady(t, conn)
+			subscribe, err := protocol.EncodeSubscribeConvsV2(100, 42)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := sendProtocolMessage(conn, protocol.C_SubscribeConvsV2, subscribe); err != nil {
+				t.Fatal(err)
+			}
+			mustReadUntilOpcode(t, conn, protocol.S_SubscriptionReady, 16)
+			request, err := protocol.EncodeListMessagesBefore(42, 0, 10, 101)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := sendProtocolMessage(conn, protocol.C_ListMessagesBefore, request); err != nil {
+				t.Fatal(err)
+			}
+			page, err := protocol.DecodeMessagePage(mustReadUntilOpcode(t, conn, protocol.S_MessagePage, 16))
+			if err != nil || len(page.Messages) != 3 {
+				t.Fatalf("restart %d: retained page=%+v error=%v", restart, page, err)
+			}
+			for i, state := range []string{"active", "frozen", "sealed"} {
+				seq := 3 - i
+				message := page.Messages[i]
+				want := fmt.Sprintf("%s /files/att_%032d?filename=%s.bin", state, seq, state)
+				if message.Sequence != uint64(seq) || message.Content != want || message.Username != "alice" {
+					t.Fatalf("restart %d: expected seq=%d body=%q, got %+v", restart, seq, want, message)
+				}
+			}
+			_ = conn.Close()
+			server.stopGracefully(t)
+		}()
+	}
+	gc()
+	if !reflect.DeepEqual(before, inventory(source)) || !reflect.DeepEqual(importBefore, inventory(imported)) {
+		t.Fatal("activation or server modified offline inputs")
+	}
+}
 
 func TestRetainedMessageSurvivesRestartAndDeduplicates(t *testing.T) {
 	workDir := t.TempDir()
@@ -164,10 +318,44 @@ func TestRetainedDMLifecycleAndAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	readHistory := func(c *websocket.Conn) []byte {
+		t.Helper()
+		// Maintenance explicitly rejects this attempt; waiting for its page
+		// would hide that error and eventually time out. Retry only that reply.
+		deadline := time.Now().Add(2 * time.Second)
+		mustSetReadDeadline(t, c, time.Until(deadline))
+		defer mustSetReadDeadline(t, c, 20*time.Second)
+		send(c, protocol.C_ListMessagesBefore, history)
+		for i := 0; i < 128; i++ {
+			msg := mustReadProtocolMessage(t, c)
+			if msg.Opcode == protocol.S_MessagePage {
+				page, err := protocol.DecodeMessagePage(msg.Data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if page.CorrelationID == 4 {
+					return msg.Data
+				}
+			}
+			if msg.Opcode != protocol.S_ErrorResponse {
+				continue
+			}
+			response, err := protocol.DecodeErrorResponse(msg.Data)
+			if err != nil || response.OriginOpcode != protocol.C_ListMessagesBefore || response.CorrelationID != 4 || response.ErrorMessage != "message storage maintenance; retry" {
+				t.Fatalf("unexpected history error: %+v %v", response, err)
+			}
+			if time.Until(deadline) <= 10*time.Millisecond {
+				t.Fatal("history maintenance exceeded retry deadline")
+			}
+			time.Sleep(10 * time.Millisecond)
+			send(c, protocol.C_ListMessagesBefore, history)
+		}
+		t.Fatal("history response budget exhausted")
+		return nil
+	}
 	checkHistory := func(c *websocket.Conn) {
 		t.Helper()
-		send(c, protocol.C_ListMessagesBefore, history)
-		page, err := protocol.DecodeMessagePage(mustReadUntilOpcode(t, c, protocol.S_MessagePage, 32))
+		page, err := protocol.DecodeMessagePage(readHistory(c))
 		if err != nil || len(page.Messages) != 1 || page.Messages[0].Sequence != uint64(ack.AssignedSeq) || page.Messages[0].Content != "private durable body" {
 			t.Fatalf("history: %+v %v", page, err)
 		}
@@ -232,8 +420,7 @@ func TestRetainedDMLifecycleAndAuthorization(t *testing.T) {
 		t.Fatalf("reopened DM: %+v %v", reopened, err)
 	}
 	subscribe(alice, true)
-	send(alice, protocol.C_ListMessagesBefore, history)
-	page, err := protocol.DecodeMessagePage(mustReadUntilOpcode(t, alice, protocol.S_MessagePage, 32))
+	page, err := protocol.DecodeMessagePage(readHistory(alice))
 	if err != nil || len(page.Messages) != 0 {
 		t.Fatalf("disabled retention resurrected DM history: %+v %v", page, err)
 	}

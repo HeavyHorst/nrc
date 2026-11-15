@@ -2,11 +2,11 @@
 // persistence/wal_test.odin - Tests for WAL replay truncation behavior
 //
 // Tests:
-// - W1: Truncation on CRC mismatch
-// - W2: Truncation on hash chain break
+// - W1: Reject CRC mismatch without truncation
+// - W2: Reject hash chain break without truncation
 // - W3: Truncation on incomplete record
-// - W4: Truncation on invalid magic number
-// - W5: Replay with non-zero initial hash
+// - W4: Reject invalid magic without truncation
+// - W5: Reject non-zero initial chain hash without truncation
 // - W13: Short write poisons WAL and replay truncates trailing bytes
 // - W14: Durability contract separates written from fsynced state
 // - W15: Oversized record bypasses write batch buffer safely
@@ -259,37 +259,45 @@ when NRC_SIMULATION {
 when NRC_SIMULATION {
 	@(test)
 	test_virtual_wal_replays_mixed_legacy_xxh32_and_current_xxh64 :: proc(t: ^testing.T) {
-		device: Virtual_WAL_Device
-		virtual_wal_device_init(&device)
-		defer virtual_wal_device_destroy(&device)
+		fs: storage_io.Virtual_FS
+		if !testing.expect(t, storage_io.virtual_fs_init(&fs)) do return
+		defer storage_io.virtual_fs_destroy(&fs)
+		storage := storage_io.virtual_context(&fs)
+		testing.expect(t, storage_io.make_directory(storage, "/virtual") == nil)
+		testing.expect(t, storage_io.sync_directory(storage, "/") == nil)
 
-		path := "virtual/mixed_checksum_formats"
-		file := virtual_wal_open_file(&device, path)
-		testing.expect(t, file != nil, "virtual WAL file should open")
-		if file == nil {
-			return
-		}
+		path := "/virtual/mixed_checksum_formats"
+		file, open_err := storage_io.open(storage, path, {.Write, .Create})
+		if !testing.expect(t, open_err == nil && file != nil) do return
 
 		prev_hash: [32]byte
 		legacy_record, legacy_hash := make_legacy_test_record_buffer(.Create, "legacy-one", &prev_hash)
 		defer delete(legacy_record)
 
-		testing.expect(t, virtual_wal_replace_durable(file, legacy_record), "should seed durable legacy record")
-		testing.expect_value(t, len(virtual_wal_durable_bytes(file)), LEGACY_LOG_HEADER_SIZE + len("legacy-one"))
+		written, write_err := storage_io.write(file, legacy_record)
+		testing.expect(t, write_err == nil && written == len(legacy_record))
+		testing.expect(t, storage_io.sync(file) == nil)
+		testing.expect(t, storage_io.close(file) == nil)
+		testing.expect(t, storage_io.sync_directory(storage, "/virtual") == nil)
+		storage_io.virtual_fs_crash(&fs)
+		storage = storage_io.virtual_context(&fs)
 
 		reset_test_wal_clock()
 		state: WAL_State
-		testing.expect(
+		if !testing.expect(
 			t,
-			init_virtual_wal(&state, file, path, TEST_MAGIC, TEST_VERSION, TEST_THREAD_INDEX, test_wal_time_now),
+			init_wal(&state, storage, path, TEST_MAGIC, TEST_VERSION, TEST_THREAD_INDEX, test_wal_time_now),
 			"virtual WAL should initialize",
-		)
+		) {
+			return
+		}
 		defer shutdown_wal(&state)
 
 		reset_mixed_virtual_apply_state()
-		legacy_replay := replay_virtual_wal(file, TEST_MAGIC, TEST_THREAD_INDEX, mixed_virtual_apply_fn)
+		legacy_replay := inspect_wal_file_with_tail_recovery(storage, path, TEST_MAGIC, TEST_THREAD_INDEX, mixed_virtual_apply_fn)
 		testing.expect(t, legacy_replay.ok, "legacy-only replay should succeed")
 		testing.expect_value(t, legacy_replay.record_count, u64(1))
+		testing.expect_value(t, legacy_replay.file_size, u64(len(legacy_record)))
 		testing.expect(t, mixed_virtual_replay_ok, "legacy replay payload should match")
 		testing.expect_value(t, mixed_virtual_replay_count, 1)
 		testing.expect(t, legacy_replay.last_hash == legacy_hash, "legacy replay should return legacy record hash")
@@ -300,18 +308,32 @@ when NRC_SIMULATION {
 		testing.expect(t, finalize_and_write_record(&state, u8(Test_Op.Update), current_record), "current XXH64 record should append after legacy record")
 		force_fsync(&state)
 
-		durable := virtual_wal_durable_bytes(file)
+		expected_hash := state.last_hash
+		testing.expect_value(t, state.durable_record_count, u64(2))
+		testing.expect(t, shutdown_wal(&state))
+		storage_io.virtual_fs_crash(&fs)
+		storage = storage_io.virtual_context(&fs)
+		reopened, reopen_err := storage_io.open(storage, path, {.Read})
+		if !testing.expect(t, reopen_err == nil && reopened != nil) do return
+		defer storage_io.discard(reopened)
 		expected_len := LEGACY_LOG_HEADER_SIZE + len("legacy-one") + LOG_HEADER_SIZE + len("current-two")
-		testing.expect_value(t, len(durable), expected_len)
+		durable := make([]byte, expected_len)
+		defer delete(durable)
+		read, read_err := storage_io.read_at(reopened, durable, 0)
+		if !testing.expect(t, read_err == nil && read == expected_len) do return
+		testing.expect(t, bytes.equal(durable[:len(legacy_record)], legacy_record))
+		testing.expect(t, bytes.equal(durable[len(legacy_record):], current_record))
+		testing.expect_value(t, durable[7], u8(0))
 		testing.expect_value(t, durable[LEGACY_LOG_HEADER_SIZE + len("legacy-one") + 7], LOG_FLAG_CHECKSUM_XXH64)
 
 		reset_mixed_virtual_apply_state()
-		mixed_replay := replay_virtual_wal(file, TEST_MAGIC, TEST_THREAD_INDEX, mixed_virtual_apply_fn)
+		mixed_replay := inspect_wal_file_with_tail_recovery(storage, path, TEST_MAGIC, TEST_THREAD_INDEX, mixed_virtual_apply_fn)
 		testing.expect(t, mixed_replay.ok, "mixed legacy/current replay should succeed")
 		testing.expect_value(t, mixed_replay.record_count, u64(2))
+		testing.expect_value(t, mixed_replay.file_size, u64(expected_len))
 		testing.expect(t, mixed_virtual_replay_ok, "mixed replay payloads should match in order")
 		testing.expect_value(t, mixed_virtual_replay_count, 2)
-		testing.expect(t, mixed_replay.last_hash == state.last_hash, "mixed replay head should match append state")
+		testing.expect(t, mixed_replay.last_hash == expected_hash, "mixed replay head should match append state")
 	}
 
 }
@@ -358,7 +380,7 @@ test_replay_rejects_crc_mismatch_without_truncation :: proc(t: ^testing.T) {
 
 	// A complete corrupt record is not an interrupted append. Fail without
 	// destroying it so an operator can recover from an intact copy.
-	result := replay_wal(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
+	result := inspect_wal_file_with_tail_recovery(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
 
 	testing.expect(t, !result.ok, "replay should reject complete corruption")
 
@@ -410,7 +432,7 @@ test_replay_rejects_hash_chain_break_without_truncation :: proc(t: ^testing.T) {
 	_ = hash1
 
 	// Replay must reject a complete broken chain without mutating evidence.
-	result := replay_wal(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
+	result := inspect_wal_file_with_tail_recovery(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
 
 	testing.expect(t, !result.ok, "replay should reject a broken hash chain")
 
@@ -463,7 +485,7 @@ test_replay_recovers_bounded_chain_linked_incomplete_record :: proc(t: ^testing.
 
 	// A bounded header linked to the current chain is an interrupted final
 	// append. Complete checksum failures remain non-recoverable corruption.
-	result := replay_wal(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
+	result := inspect_wal_file_with_tail_recovery(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
 
 	testing.expect(t, result.ok, "replay should recover a physically incomplete final append")
 	testing.expect_value(t, result.record_count, u64(2))
@@ -513,7 +535,7 @@ test_replay_rejects_invalid_magic_without_truncation :: proc(t: ^testing.T) {
 	test_write_file(test_path, data)
 
 	// Replay must reject a complete invalid record without mutating evidence.
-	result := replay_wal(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
+	result := inspect_wal_file_with_tail_recovery(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
 
 	testing.expect(t, !result.ok, "replay should reject invalid magic")
 
@@ -525,11 +547,11 @@ test_replay_rejects_invalid_magic_without_truncation :: proc(t: ^testing.T) {
 }
 
 // ============================================================================
-// Test W5 - Replay with non-zero initial hash
+// Test W5 - Reject non-zero initial chain hash without truncation
 // ============================================================================
 
 @(test)
-test_replay_with_initial_hash :: proc(t: ^testing.T) {
+test_inspection_rejects_nonzero_initial_hash_without_truncation :: proc(t: ^testing.T) {
 	test_path := test_wal_path("test_wal_w5_initial_hash.log")
 
 	cleanup_wal_file(test_path)
@@ -542,13 +564,20 @@ test_replay_with_initial_hash :: proc(t: ^testing.T) {
 	initial_hash: [32]byte
 	initial_hash[0] = 0xAB
 
-	hash1, _, ok1 := write_test_record(test_path, .Create, "record one", &initial_hash)
+	_, size1, ok1 := write_test_record(test_path, .Create, "record one", &initial_hash)
 	testing.expect(t, ok1, "should write record with non-zero initial hash")
 
-	result := replay_wal_with_initial_hash(test_path, TEST_MAGIC, TEST_THREAD_INDEX, initial_hash, test_apply_fn)
-	testing.expect(t, result.ok, "replay with initial hash should succeed")
-	testing.expect_value(t, result.record_count, u64(1))
-	testing.expect(t, result.last_hash == hash1, "last hash should match record hash")
+	original, read_ok := test_read_file(test_path)
+	defer delete(original)
+	testing.expect(t, read_ok)
+	result := inspect_wal_file_with_tail_recovery(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
+	testing.expect(t, !result.ok, "each WAL must start with a zero chain hash")
+	testing.expect_value(t, result.record_count, u64(0))
+	unchanged, unchanged_ok := test_read_file(test_path)
+	defer delete(unchanged)
+	testing.expect(t, unchanged_ok)
+	testing.expect_value(t, len(unchanged), size1)
+	testing.expect(t, bytes.equal(unchanged, original), "rejected initial chain must not mutate the WAL")
 }
 
 // ============================================================================
@@ -600,7 +629,7 @@ test_short_write_poisons_wal_and_replay_truncates_trailing_bytes :: proc(t: ^tes
 	testing.expect_value(t, state.record_count, u64(0))
 	testing.expect_value(t, state.durable_record_count, u64(0))
 
-	replay_result := replay_wal(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
+	replay_result := inspect_wal_file_with_tail_recovery(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
 	testing.expect(t, replay_result.ok, "replay after short write should succeed")
 	testing.expect_value(t, replay_result.record_count, u64(1))
 
@@ -876,7 +905,7 @@ test_oversized_record_bypasses_batch_buffer :: proc(t: ^testing.T) {
 	testing.expect(t, state.pending_bytes >= u64(len(record)), "oversized direct write should advance pending bytes")
 
 	force_fsync(&state)
-	replay_result := replay_wal(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
+	replay_result := inspect_wal_file_with_tail_recovery(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
 	testing.expect(t, replay_result.ok, "replay after oversized direct write should succeed")
 	testing.expect_value(t, replay_result.record_count, u64(1))
 }
@@ -922,7 +951,7 @@ test_oversized_record_flushes_staged_batch_first :: proc(t: ^testing.T) {
 	testing.expect_value(t, state.record_count, u64(2))
 
 	force_fsync(&state)
-	replay_result := replay_wal(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
+	replay_result := inspect_wal_file_with_tail_recovery(test_path, TEST_MAGIC, TEST_THREAD_INDEX, test_apply_fn)
 	testing.expect(t, replay_result.ok, "replay after staged-plus-oversized write should succeed")
 	testing.expect_value(t, replay_result.record_count, u64(2))
 }

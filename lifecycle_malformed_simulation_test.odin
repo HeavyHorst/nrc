@@ -1,18 +1,14 @@
 package main
 
 import "core:log"
-import "core:os"
 import "core:testing"
 
-import "btree"
 import hgl "hegel"
 import pr "protocol"
 
 when !NRC_SIMULATION {
-	_ :: btree.count
 	_ :: hgl.run
 	_ :: log.nil_logger
-	_ :: os.remove
 	_ :: pr.Opcode
 }
 
@@ -34,145 +30,6 @@ when NRC_SIMULATION {
 		Graph_Shortest_Path,
 		Graph_Degree,
 		Graph_Common_Neighbors,
-	}
-
-	Malformed_Lifecycle_State :: struct {
-		task_payload:        [2_048]byte,
-		task_payload_len:    int,
-		asset_payload:       [2_048]byte,
-		asset_payload_len:   int,
-		edge_payload:        [256]byte,
-		edge_payload_len:    int,
-		task_count:          int,
-		asset_count:         int,
-		edge_count:          int,
-		adjacency_count:     int,
-		task_index_count:    int,
-		task_btree_count:    int,
-		task_index_key:      Task_Sort_Key,
-		task_index_present:  bool,
-		task_btree_contains: bool,
-		note_index_count:    int,
-		note_btree_count:    int,
-		note_index_key:      Note_Sort_Key,
-		note_index_present:  bool,
-		note_btree_contains: bool,
-		note_projects:       int,
-		note_tags:           int,
-		wal_records:         u64,
-		wal_last_hash:       [32]byte,
-		task_floor:          u64,
-		asset_floor:         u64,
-		edge_floor:          u64,
-		task_seq:            u64,
-		asset_seq:           u64,
-		edge_seq:            u64,
-	}
-
-	malformed_lifecycle_capture_state :: proc(workspace_id: string, conv_id: pr.ConversationID) -> (Malformed_Lifecycle_State, bool) {
-		result: Malformed_Lifecycle_State
-		ws := get_workspace(workspace_id)
-		conv := get_conversation(ws, conv_id)
-		if conv == nil do return result, false
-		task := conv.tasks[1]
-		asset := conv.assets[1]
-		edge := conv.edges[1]
-		if task == nil || asset == nil || edge == nil do return result, false
-		result.task_payload_len = pr.serializeTask(task^, result.task_payload[:])
-		result.asset_payload_len = pr.serializeAsset(asset^, result.asset_payload[:])
-		result.edge_payload_len = pr.serializeEdge(edge^, result.edge_payload[:])
-		if result.task_payload_len <= 0 || result.asset_payload_len <= 0 || result.edge_payload_len <= 0 do return result, false
-		result.task_count = len(conv.tasks)
-		result.asset_count = len(conv.assets)
-		result.edge_count = len(conv.edges)
-		result.adjacency_count = len(conv.edges_by_entity)
-		result.task_index_count = len(conv.task_index_keys)
-		result.task_btree_count = btree.count(&conv.task_index)
-		result.task_index_key, result.task_index_present = conv.task_index_keys[1]
-		if result.task_index_present do result.task_btree_contains = btree.contains(&conv.task_index, result.task_index_key)
-		result.note_index_count = len(conv.note_index_keys)
-		result.note_btree_count = btree.count(&conv.note_index)
-		result.note_index_key, result.note_index_present = conv.note_index_keys[1]
-		if result.note_index_present do result.note_btree_contains = btree.contains(&conv.note_index, result.note_index_key)
-		result.note_projects = len(conv.note_project_assets)
-		result.note_tags = len(conv.note_tag_assets)
-		result.wal_records = td.shard_writers.writers[0].wal.record_count
-		result.wal_last_hash = td.shard_writers.writers[0].wal.last_hash
-		result.task_floor = td.shard_writers.writers[0].floors.task
-		result.asset_floor = td.shard_writers.writers[0].floors.asset
-		result.edge_floor = td.shard_writers.writers[0].floors.edge
-		result.task_seq = td.task_seq
-		result.asset_seq = td.asset_seq
-		result.edge_seq = td.edge_seq
-		project_assets := conv.note_project_assets["baseline"]
-		tag_assets := conv.note_tag_assets["stable"]
-		task_adjacency := conv.edges_by_entity[Edge_Entity_Key{target_type = .Task, target_id = 1}]
-		asset_adjacency := conv.edges_by_entity[Edge_Entity_Key{target_type = .Asset, target_id = 1}]
-		valid :=
-			result.task_count == 1 &&
-			result.asset_count == 1 &&
-			result.edge_count == 1 &&
-			result.adjacency_count == 2 &&
-			len(task_adjacency) == 1 &&
-			task_adjacency[0] == 1 &&
-			len(asset_adjacency) == 1 &&
-			asset_adjacency[0] == 1 &&
-			result.task_index_count == 1 &&
-			result.task_btree_count == 1 &&
-			result.task_index_present &&
-			result.task_btree_contains &&
-			result.note_index_count == 1 &&
-			result.note_btree_count == 1 &&
-			result.note_index_present &&
-			result.note_btree_contains &&
-			result.note_projects == 1 &&
-			note_secondary_index_count(project_assets) == 1 &&
-			note_secondary_index_contains_asset(project_assets, 1) &&
-			result.note_tags == 1 &&
-			note_secondary_index_count(tag_assets) == 1 &&
-			note_secondary_index_contains_asset(tag_assets, 1) &&
-			result.wal_records == 3 &&
-			result.wal_last_hash != ([32]byte{}) &&
-			result.task_floor == 1 &&
-			result.asset_floor == 1 &&
-			result.edge_floor == 1 &&
-			result.task_seq == 1 &&
-			result.asset_seq == 1 &&
-			result.edge_seq == 1
-		return result, valid
-	}
-
-	malformed_lifecycle_states_equal :: proc(a, b: Malformed_Lifecycle_State) -> bool {
-		if a.task_payload_len != b.task_payload_len || a.asset_payload_len != b.asset_payload_len || a.edge_payload_len != b.edge_payload_len do return false
-		for index in 0 ..< a.task_payload_len do if a.task_payload[index] != b.task_payload[index] do return false
-		for index in 0 ..< a.asset_payload_len do if a.asset_payload[index] != b.asset_payload[index] do return false
-		for index in 0 ..< a.edge_payload_len do if a.edge_payload[index] != b.edge_payload[index] do return false
-		return(
-			a.task_count == b.task_count &&
-			a.asset_count == b.asset_count &&
-			a.edge_count == b.edge_count &&
-			a.adjacency_count == b.adjacency_count &&
-			a.task_index_count == b.task_index_count &&
-			a.task_btree_count == b.task_btree_count &&
-			a.task_index_key == b.task_index_key &&
-			a.task_index_present == b.task_index_present &&
-			a.task_btree_contains == b.task_btree_contains &&
-			a.note_index_count == b.note_index_count &&
-			a.note_btree_count == b.note_btree_count &&
-			a.note_index_key == b.note_index_key &&
-			a.note_index_present == b.note_index_present &&
-			a.note_btree_contains == b.note_btree_contains &&
-			a.note_projects == b.note_projects &&
-			a.note_tags == b.note_tags &&
-			a.wal_records == b.wal_records &&
-			a.wal_last_hash == b.wal_last_hash &&
-			a.task_floor == b.task_floor &&
-			a.asset_floor == b.asset_floor &&
-			a.edge_floor == b.edge_floor &&
-			a.task_seq == b.task_seq &&
-			a.asset_seq == b.asset_seq &&
-			a.edge_seq == b.edge_seq \
-		)
 	}
 
 	malformed_lifecycle_serialize_request :: proc(kind: Malformed_Lifecycle_Kind, correlation_id: u32, buf: []byte) -> (pr.Opcode, int) {
@@ -362,48 +219,11 @@ when NRC_SIMULATION {
 		simulation_test_begin(&ctx, 142)
 		defer simulation_test_end(&ctx)
 		workspace_id := "malformed-lifecycle-state"
-		wal_path, writer_ok := task_handler_test_init_sim_writer(workspace_id, "malformed_lifecycle_state.log")
-		defer os.remove(wal_path)
-		if !writer_ok do return "initialize malformed lifecycle WAL", false
-		defer shutdown_shard_writer_registry(&td.shard_writers)
-		td.task_seq = 0
-		td.asset_seq = 0
-		td.edge_seq = 0
-
 		client := simulation_test_install_client(&ctx.sim, 1, workspace_id, "equivalence-user")
 		if client == nil do return "install malformed lifecycle client", false
 		ctx.conns[1] = client
 		conv_id := pr.ConversationID(90)
 		subscribe_to_conversation(client, conv_id)
-		nrc_sim_clear_inboxes(&ctx.sim)
-		process_create_task(
-			client,
-			pr.CreateTaskRequest {
-				conv_id = conv_id,
-				title = transmute([]byte)string("baseline task"),
-				status = .Todo,
-				project = transmute([]byte)string("baseline"),
-			},
-		)
-		asset_payload := transmute([]byte)string("baseline asset")
-		handle_create_asset(
-			client,
-			pr.CreateAssetRequest {
-				conv_id = conv_id,
-				asset_type = .Note,
-				payload_encoding = .Plain,
-				payload_raw_len = u32(len(asset_payload)),
-				preview = transmute([]byte)string(`{"project":"baseline","tags":["stable"]}`),
-				payload = asset_payload,
-			},
-		)
-		handle_create_edge(
-			client,
-			pr.CreateEdgeRequest{conv_id = conv_id, source_type = .Task, source_id = 1, target_type = .Asset, target_id = 1, relation = .References},
-		)
-		before, before_ok := malformed_lifecycle_capture_state(workspace_id, conv_id)
-		if !before_ok do return "create malformed lifecycle baseline", false
-		if !simulation_test_commit_shards(&ctx.sim) do return "commit malformed lifecycle baseline", false
 		nrc_sim_clear_inboxes(&ctx.sim)
 
 		request_buf: [2_048]byte
@@ -431,9 +251,6 @@ when NRC_SIMULATION {
 		if error_parse_err != nil || error_response.origin_opcode != opcode || error_response.correlation_id != 0 {
 			return "malformed lifecycle error response differs", false
 		}
-		after_error, after_error_ok := malformed_lifecycle_capture_state(workspace_id, conv_id)
-		if !after_error_ok || !malformed_lifecycle_states_equal(before, after_error) do return "malformed lifecycle request mutated state", false
-
 		nrc_sim_clear_inboxes(&ctx.sim)
 		ping_buf: [32]byte
 		ping_timestamp := i64(0x1234_0000 + selector)
@@ -452,12 +269,10 @@ when NRC_SIMULATION {
 		if !pong_ok do return "capture post-error pong", false
 		pong, pong_err := pr.parsePongResponseMessage(pong_payload)
 		if pong_err != nil || pong.timestamp != ping_timestamp do return "post-error pong differs", false
-		after_ping, after_ping_ok := malformed_lifecycle_capture_state(workspace_id, conv_id)
-		if !after_ping_ok || !malformed_lifecycle_states_equal(before, after_ping) do return "post-error ping mutated lifecycle state", false
 		return "", true
 	}
 
-	prop_malformed_lifecycle_state_nonmutation :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.Body_Result {
+	prop_malformed_lifecycle_connection_usability :: proc(tc: ^hgl.Test_Case, _: rawptr) -> hgl.Body_Result {
 		kind_value, kind_err := hgl.draw_i64(tc, 0, i64(len(Malformed_Lifecycle_Kind) - 1))
 		if kind_err == .Stop_Test do return hgl.abort()
 		if kind_err != nil do return hgl.interesting("malformed lifecycle kind draw failed")
@@ -485,13 +300,13 @@ when NRC_SIMULATION {
 }
 
 @(test)
-test_hegel_malformed_lifecycle_state_nonmutation_and_connection_usability :: proc(t: ^testing.T) {
+test_hegel_malformed_lifecycle_connection_usability :: proc(t: ^testing.T) {
 	when !NRC_SIMULATION {
 		return
 	} else {
 		if !malformed_lifecycle_mandatory_cases(t) do return
 		if !hgl.can_run() do return
-		result, err := hgl.run(prop_malformed_lifecycle_state_nonmutation, nil, {test_cases = 72})
-		testing.expectf(t, err == nil, "generated malformed lifecycle state property failed: err=%v interesting=%v", err, result.interesting_test_cases)
+		result, err := hgl.run(prop_malformed_lifecycle_connection_usability, nil, {test_cases = 72})
+		testing.expectf(t, err == nil, "generated malformed lifecycle connection property failed: err=%v interesting=%v", err, result.interesting_test_cases)
 	}
 }

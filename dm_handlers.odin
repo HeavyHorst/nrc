@@ -11,6 +11,7 @@
 package main
 
 import "core:net"
+import "core:strings"
 
 import pr "protocol"
 
@@ -191,7 +192,7 @@ notify_dm_partners_status :: proc(ws: ^Workspace_State, username: string, online
 		return
 	}
 
-	for conv_id in dms {
+	for conv_id in dms.ids {
 		conv := get_conversation(ws, conv_id)
 		if conv == nil || conv.dm_participants == nil {
 			continue
@@ -217,17 +218,17 @@ notify_dm_partners_status :: proc(ws: ^Workspace_State, username: string, online
 
 // Add a DM to a user's list (idempotent)
 add_user_dm :: proc(ws: ^Workspace_State, username: string, conv_id: pr.ConversationID) {
-	interned := intern_username(username)
-	if interned not_in ws.user_dms {
-		ws.user_dms[interned] = make([dynamic]pr.ConversationID, 0, 4)
+	if username not_in ws.user_dms {
+		owned := strings.clone(username)
+		ws.user_dms[owned] = {owned, make([dynamic]pr.ConversationID, 0, 4)}
 	}
-	dms := &ws.user_dms[interned]
-	for existing in dms^ {
+	dms := &ws.user_dms[username]
+	for existing in dms.ids {
 		if existing == conv_id {
 			return
 		}
 	}
-	append(dms, conv_id)
+	append(&dms.ids, conv_id)
 }
 
 // Remove a DM from a user's list
@@ -236,15 +237,17 @@ remove_user_dm :: proc(ws: ^Workspace_State, username: string, conv_id: pr.Conve
 	if !ok {
 		return
 	}
-	for i := 0; i < len(dms); i += 1 {
-		if dms[i] == conv_id {
-			ordered_remove(dms, i)
+	for i := 0; i < len(dms.ids); i += 1 {
+		if dms.ids[i] == conv_id {
+			ordered_remove(&dms.ids, i)
 			break
 		}
 	}
-	if len(dms^) == 0 {
-		delete(dms^)
+	if len(dms.ids) == 0 {
+		owned := dms.username
+		delete(dms.ids)
 		delete_key(&ws.user_dms, username)
+		delete(owned)
 	}
 }
 
@@ -254,7 +257,7 @@ is_user_in_dm :: proc(ws: ^Workspace_State, username: string, conv_id: pr.Conver
 	if !ok {
 		return false
 	}
-	for existing in dms {
+	for existing in dms.ids {
 		if existing == conv_id {
 			return true
 		}
@@ -279,6 +282,12 @@ validate_dm_access :: proc(c: ^NRC_Connection, conv_id: pr.ConversationID) -> bo
 	return is_participant && is_user_in_dm(ws, username, conv_id)
 }
 
+// The SQLite completion installs membership only after its transaction commits.
+dm_metadata_durable :: proc(c: ^NRC_Connection, id: pr.ConversationID) -> bool {
+	conv := get_conversation(get_connection_workspace(c), id)
+	return conv != nil && conv.dm_participants != nil && conv.dm_participants.persistent
+}
+
 // Subscribe a user's connection to a DM (internal, bypasses access check)
 subscribe_to_dm_internal :: proc(c: ^NRC_Connection, conv_id: pr.ConversationID) {
 	ws := get_or_create_connection_workspace(c)
@@ -287,182 +296,6 @@ subscribe_to_dm_internal :: proc(c: ^NRC_Connection, conv_id: pr.ConversationID)
 	if conversation_add_subscriber(conv, c) {
 		add_socket_room(c, conv_id)
 	}
-}
-
-// Process C_StartDM request
-process_start_dm :: proc(c: ^NRC_Connection, req: pr.StartDMRequest) {
-	username := get_connection_username(c)
-	target := req.username
-
-	if username == "" {
-		send_dm_error(c, .Not_Authenticated, target, "Not authenticated", req.correlation_id)
-		return
-	}
-
-	if target == username {
-		send_dm_error(c, .Cannot_DM_Self, target, "Cannot start DM with yourself", req.correlation_id)
-		return
-	}
-
-	ws := get_or_create_connection_workspace(c)
-
-	if len(username) + 1 + len(target) > 512 || target == "" {
-		send_dm_error(c, .User_Not_Found, target, "Invalid DM identity", req.correlation_id)
-		return
-	}
-	a, b := username, target
-	if a > b do a, b = b, a
-	conv_id := pr.make_dm_conversation_id(a, b)
-	conv := get_conversation(ws, conv_id)
-	if conv != nil && conv.dm_participants != nil && (conv.dm_participants.user_a != a || conv.dm_participants.user_b != b) {
-		send_dm_error(c, .DM_Not_Found, target, "DM identity conflict", req.correlation_id)
-		return
-	}
-	persistent := conv != nil && conv.dm_participants != nil && conv.dm_participants.persistent
-	if !persistent && !find_user_in_workspace(ws, target) {
-		send_dm_error(c, .User_Not_Found, target, "User not found", req.correlation_id)
-		return
-	}
-
-	already_tracked_target := is_user_in_dm(ws, target, conv_id)
-	if persistent || td.message_stores.enabled {
-		if !persist_dm_state(c.workspace_id, conv_id, a, b, 3) {
-			persistent_mutation_failed("dm", "start", c.workspace_id)
-			return
-		}
-	}
-	conv = get_or_create_conversation(ws, conv_id)
-	if conv.dm_participants == nil {
-		conv.dm_participants = new(DM_Participants)
-		conv.dm_participants.user_a = intern_username(a)
-		conv.dm_participants.user_b = intern_username(b)
-	}
-
-	add_user_dm(ws, username, conv_id)
-	add_user_dm(ws, target, conv_id)
-
-	my_sockets := get_user_sockets(ws, username)
-	defer delete(my_sockets)
-	for sock in my_sockets {
-		if conn := connection_get(sock); conn != nil {
-			subscribe_to_dm_internal(conn, conv_id)
-		}
-	}
-
-	target_sockets := get_user_sockets(ws, target)
-	defer delete(target_sockets)
-	for sock in target_sockets {
-		if conn := connection_get(sock); conn != nil {
-			subscribe_to_dm_internal(conn, conv_id)
-		}
-	}
-
-	target_online := is_user_online(ws, target)
-	target_authenticated := is_user_authenticated(ws, target)
-	self_online := is_user_online(ws, username)
-	self_authenticated := c.authenticated
-
-	for sock in my_sockets {
-		if conn := connection_get(sock); conn != nil {
-			corr := conn.sock == c.sock ? req.correlation_id : u32(0)
-			send_dm_started(conn, conv_id, target, target_authenticated, target_online, true, corr)
-		}
-	}
-
-	if !already_tracked_target {
-		for sock in target_sockets {
-			if conn := connection_get(sock); conn != nil {
-				send_dm_started(conn, conv_id, username, self_authenticated, self_online, false)
-			}
-		}
-	}
-}
-
-// Process C_ListDMs request
-process_list_dms :: proc(c: ^NRC_Connection, req: pr.ListDMsRequest) {
-	username := get_connection_username(c)
-	if username == "" {
-		send_dm_error(c, .Not_Authenticated, "", "Not authenticated", req.correlation_id)
-		return
-	}
-
-	ws := get_or_create_connection_workspace(c)
-	dms, ok := ws.user_dms[username]
-	if !ok {
-		send_dm_list(c, {}, req.correlation_id)
-		return
-	}
-
-	entries := make([dynamic]pr.DMEntry, 0, len(dms))
-	defer delete(entries)
-
-	for conv_id in dms {
-		conv := get_conversation(ws, conv_id)
-		if conv == nil || conv.dm_participants == nil {
-			continue
-		}
-
-		subscribe_to_dm_internal(c, conv_id)
-
-		partner := conv.dm_participants.user_a
-		if partner == username {
-			partner = conv.dm_participants.user_b
-		}
-
-		online := is_user_online(ws, partner)
-		authenticated := is_user_authenticated(ws, partner)
-		last_seen := ws.user_last_seen[partner]
-
-		append(&entries, pr.DMEntry{conv_id = conv_id, username = partner, authenticated = authenticated, online = online, last_seen = last_seen})
-	}
-
-	send_dm_list(c, entries[:], req.correlation_id)
-}
-
-// Process C_LeaveDM request
-process_leave_dm :: proc(c: ^NRC_Connection, req: pr.LeaveDMRequest) {
-	username := get_connection_username(c)
-	if username == "" {
-		send_dm_error(c, .Not_Authenticated, "", "Not authenticated", req.correlation_id)
-		return
-	}
-
-	conv_id := req.conv_id
-	if !pr.is_dm_conversation(conv_id) {
-		send_dm_error(c, .DM_Not_Found, "", "Not a DM conversation", req.correlation_id)
-		return
-	}
-
-	ws := get_or_create_connection_workspace(c)
-
-	if !is_user_in_dm(ws, username, conv_id) {
-		send_dm_error(c, .DM_Not_Found, "", "Not in this DM", req.correlation_id)
-		return
-	}
-
-	conv := get_conversation(ws, conv_id)
-	if conv != nil && conv.dm_participants != nil && conv.dm_participants.persistent {
-		pair := conv.dm_participants
-		members := dm_membership_mask(ws, conv_id, pair)
-		members &= ~(username == pair.user_a ? u8(1) : u8(2))
-		if !persist_dm_state(c.workspace_id, conv_id, pair.user_a, pair.user_b, members) {
-			persistent_mutation_failed("dm", "leave", c.workspace_id)
-			return
-		}
-	}
-	remove_user_dm(ws, username, conv_id)
-
-	my_sockets := get_user_sockets(ws, username)
-	defer delete(my_sockets)
-	for sock in my_sockets {
-		if conn := connection_get(sock); conn != nil {
-			unsubscribe_from_dm_internal(conn, conv_id)
-			corr := conn.sock == c.sock ? req.correlation_id : u32(0)
-			send_dm_left(conn, conv_id, corr)
-		}
-	}
-
-	maybe_cleanup_orphaned_dm(ws, conv_id)
 }
 
 // Unsubscribe from DM (internal)
@@ -484,6 +317,7 @@ unsubscribe_from_dm_internal :: proc(c: ^NRC_Connection, conv_id: pr.Conversatio
 
 	if conversation_remove_subscriber(conv, c.sock) {
 		remove_socket_room(c, conv_id)
+		worker_db_mark_dm(ws, conv_id)
 	}
 }
 

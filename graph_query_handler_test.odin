@@ -1,617 +1,329 @@
 package main
 
-// Production graph handler tests over in-memory conversation state. Each test
-// invokes the handler and decodes the captured WebSocket protocol response.
-
+// Public graph requests run through the dispatcher and SQLite worker.
+import "core:fmt"
+import "core:os"
+import "core:strings"
 import "core:testing"
 
 import pr "protocol"
+import sql "sqlite"
 import ws "websocket"
+import db "workspace_db"
 
-when !NRC_SIMULATION {
-	_ :: pr.Opcode
+worker_db_test_graph_response :: proc(t: ^testing.T, c: ^NRC_Connection, request, expected: []byte) {
+	process_protocol_payload(c, request); worker_db_test_pump(t)
+	if !testing.expect_value(t, send_queue_len(c), 1) do return
+	item := send_queue_pop(c); defer frame_lease_dispose(&item.lease)
+	frame := frame_lease_data(item.lease); _, offset, _ := ws.readFrameHeader(frame)
+	testing.expect_value(t, string(frame[offset:]), string(expected))
 }
 
-@(test)
-test_common_neighbors_payload_boundary_returns_complete_result_or_correlated_error :: proc(t: ^testing.T) {
-	previous := new(Server_Thread)
-	previous^ = td
-	td = {}
-	defer {td = previous^; free(previous)}
-	worker_state_init_core(nil, 0, 8)
-	defer worker_state_destroy_core_for_test()
-	c := connection_test_install_fake(
-		{sock = connection_test_fake_socket(1), state = .Idle, workspace_id = "common-neighbor-boundary", cache_workspace = true, init_send_queue = true},
-	)
-	assert(c != nil)
-	defer connection_test_uninstall(c)
-	c.is_sending = true
-	conv := get_or_create_conversation(c.workspace, pr.WORKSPACE_DATA_ID)
-	for i in 0 ..< 1236 {
-		slice_test_member_of(conv, .Task, u64(1000 + i), 1, .References)
-		slice_test_member_of(conv, .Task, u64(1000 + i), 2, .References)
+worker_db_test_graph_walks :: proc(t: ^testing.T, c: ^NRC_Connection, edges: []pr.Edge, store: ^db.Store) {
+	buffer: [1024]byte; expected: [4096]byte
+	query := pr.GraphQueryRequest {
+		start_type     = .Asset,
+		start_id       = 1,
+		max_depth      = 2,
+		correlation_id = 950,
 	}
-	req := pr.GraphCommonNeighborsRequest {
-		conv_id        = pr.WORKSPACE_DATA_ID,
+	msg := pr.GraphQueryResultMessage {
+		start_type     = .Asset,
+		start_id       = 1,
+		correlation_id = 950,
+		nodes          = {{.Asset, 1, 0}, {.Asset, 2, 1}, {.Task, 10, 1}, {.Task, 20, 1}, {.Task, max(u64), 1}},
+		edges          = edges,
+	}
+	n := pr.serializeGraphQueryRequest(query, buffer[:]); size := pr.serializeGraphQueryResult(msg, expected[:])
+	worker_db_test_graph_response(t, c, buffer[:n], expected[:size])
+	path := pr.GraphShortestPathRequest {
+		from_type      = .Task,
+		from_id        = 20,
+		to_type        = .Task,
+		to_id          = 10,
+		max_depth      = 2,
+		direction      = .Outgoing,
+		correlation_id = 951,
+	}
+	for mode in 0 ..< 4 {
+		want := pr.GraphShortestPathResultMessage {
+			from_type      = path.from_type,
+			from_id        = path.from_id,
+			to_type        = path.to_type,
+			to_id          = path.to_id,
+			correlation_id = 951,
+		}
+		if mode == 0 {want.found = true; want.path_length = 2; want.nodes = {{.Task, 20}, {.Asset, 1}, {.Task, 10}}; want.edges = {edges[3], edges[0]}}
+		if mode == 1 {path.max_depth = 1}
+		if mode == 2 {path.max_depth = 4; path.direction = .Incoming}
+		if mode == 3 {path.to_id = 20; want.to_id = 20; want.found = true; want.nodes = {{.Task, 20}}}
+		n = pr.serializeGraphShortestPathRequest(path, buffer[:]); size = pr.serializeGraphShortestPathResult(want, expected[:])
+		worker_db_test_graph_response(t, c, buffer[:n], expected[:size])
+	}
+	// An independent, bounded edge-list model lives only in test code.
+	rank := pr.GraphRankRequest {
+		anchor_count    = 2,
+		candidate_count = 2,
+		max_depth       = 3,
+		top_n           = 5,
+		correlation_id  = 952,
+	}
+	rank.anchors[0] = {.Asset, 1}; rank.anchors[1] = {.Task, 20}
+	rank.candidates[0] = {.Task, max(u64)}; rank.candidates[1] = {.Asset, 999}
+	for mode in 0 ..< 4 {
+		rank.direction = pr.Direction(mode % 3)
+		if mode == 3 {rank.anchor_count = 1; rank.anchors[0] = {.Asset, 999}}
+		n = pr.serializeGraphRankRequest(rank, buffer[:])
+		size = graph_rank_test_reference(rank, edges, expected[:])
+		worker_db_test_graph_response(t, c, buffer[:n], expected[:size])
+	}
+	rank.anchors[0] = {.Asset, 1}; rank.direction = .Both
+	n = pr.serializeGraphRankRequest(rank, buffer[:])
+	request := db.Request {
+		workspace = c.workspace_id,
+		opcode    = .C_GraphRank,
+		body      = buffer[2:n],
+	}
+	for budget in ([2]int{1, 4096}) {
+		output := db.Command_Output {
+			limit = budget,
+		}; defer db.destroy_command_output(&output)
+		testing.expect_value(t, db.begin(store), sql.OK)
+		testing.expect_value(t, sqlite_execute_task_command(store, &request, &output), budget == 1 ? sql.TOOBIG : sql.OK)
+		testing.expect_value(t, output.count, budget == 1 ? 0 : 1)
+		sqlite_projection_test_assert(t, store, "SELECT count(*)=0 FROM sqlite_temp_master WHERE name IN ('nrc_graph_edges','nrc_rank_arcs')")
+		testing.expect_value(t, db.commit(store), sql.OK)
+	}
+}
+
+worker_db_test_graph_reads :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstring) {
+	store, rc := db.open(path); if !testing.expect_value(t, rc, sql.OK) do return
+	defer db.close(&store)
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM edges", nil, nil, nil), sql.OK)
+	edges := [8]pr.Edge {
+		{source_type = .Asset, source_id = 1, target_type = .Task, target_id = 10, relation = .References},
+		{source_type = .Asset, source_id = 2, target_type = .Task, target_id = 10, relation = .References},
+		{source_type = .Asset, source_id = 1, target_type = .Task, target_id = 10, relation = .RelatedTo},
+		{source_type = .Task, source_id = 20, target_type = .Asset, target_id = 1, relation = .References},
+		{source_type = .Task, source_id = 20, target_type = .Asset, target_id = 2, relation = .References},
+		{source_type = .Asset, source_id = 1, target_type = .Asset, target_id = 2, relation = .References},
+		{source_type = .Asset, source_id = 2, target_type = .Task, target_id = max(u64), relation = .MemberOf},
+		{source_type = .Asset, source_id = 1, target_type = .Task, target_id = max(u64), relation = .MemberOf},
+	}
+	for &edge, i in edges {
+		edge.edge_id = u64(i + 1); edge.created_at = i64(100 + i); edge.created_by = transmute([]byte)string("alice")
+		key := pr.Asset {
+			asset_id = edge.edge_id,
+		}
+		for workspace in ([2]string{c.workspace_id, "foreign-graph"}) {
+			testing.expect_value(
+				t,
+				sqlite_projection_write(
+					&store,
+					"INSERT INTO edges VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+					workspace,
+					&key,
+					{
+						i64(edge.source_type),
+						edge.source_id,
+						i64(edge.target_type),
+						edge.target_id,
+						i64(edge.relation),
+						edge.created_at,
+						string(edge.created_by),
+					},
+				),
+				sql.OK,
+			)
+		}
+	}
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	request_buffer: [64]byte; expected_buffer: [4096]byte
+	degree := pr.GraphDegreeRequest {
+		correlation_id = 940,
+	}
+	all := [5]pr.GraphDegreeEntry{{.Asset, 1, 5}, {.Asset, 2, 4}, {.Task, 10, 3}, {.Task, 20, 2}, {.Task, max(u64), 2}}
+	for mode in 0 ..< 4 {
+		want := pr.GraphDegreeResultMessage {
+			entries        = all[:],
+			correlation_id = degree.correlation_id,
+		}
+		if mode == 1 {degree.top_n = 2; want.entries = all[:2]}
+		if mode == 2 {degree.top_n = 101; degree.type_filter = 2; want.entries = all[2:]}
+		filtered := [3]pr.GraphDegreeEntry{{.Task, max(u64), 2}, {.Asset, 1, 1}, {.Asset, 2, 1}}
+		if mode == 3 {degree.type_filter = 0; degree.relation_mask = 1 << (u16(pr.RelationType.MemberOf) - 1); want.entries = filtered[:]}
+		n := pr.serializeGraphDegreeRequest(degree, request_buffer[:]); written := pr.serializeGraphDegreeResult(want, expected_buffer[:])
+		worker_db_test_graph_response(t, c, request_buffer[:n], expected_buffer[:written])
+	}
+	common := pr.GraphCommonNeighborsRequest {
 		a_type         = .Asset,
 		a_id           = 1,
 		b_type         = .Asset,
 		b_id           = 2,
-		direction      = .Both,
-		correlation_id = 0x12345678,
+		correlation_id = 941,
 	}
-	// Independently derived wire size: 38 header bytes + 1236 * (10 + 2 * 48)
-	// = 131054. Creator lengths 17/18/19 straddle the 131072-byte limit.
-	creator := transmute([]byte)string("1234567890123456789")
-	for creator_length in ([?]int{17, 18, 19, 0}) {
-		conv.edges[1].created_by = creator[:creator_length]
-		handle_common_neighbors(c, req)
-		if !testing.expect_value(t, send_queue_len(c), 1) do return
-		item := send_queue_pop_normal(c)
-		frame := frame_lease_data(item.lease)
-		_, header_size, frame_err := ws.readFrameHeader(frame)
-		testing.expect_value(t, frame_err, nil)
-		payload := frame[header_size:]
-		if creator_length == 19 {
-			response, err := pr.parseErrorResponseMessage(payload)
-			testing.expect_value(t, err, nil)
-			testing.expect_value(t, response.origin_opcode, pr.Opcode.C_GraphCommonNeighbors)
-			testing.expect_value(t, response.correlation_id, req.correlation_id)
-			testing.expect(t, len(response.error_msg) > 0)
+	for mode in 0 ..< 5 {
+		common.direction = pr.Direction(mode % 3); common.relation_mask = 0
+		ids: []int; nodes: []pr.GraphPathNode
+		switch mode {
+		case 0:
+			ids = {0, 1, 2, 3, 4, 6, 7}; nodes = {{.Task, 10}, {.Task, 20}, {.Task, max(u64)}}
+		case 1:
+			ids = {0, 1, 2, 6, 7}; nodes = {{.Task, 10}, {.Task, max(u64)}}
+		case 2:
+			ids = {3, 4}; nodes = {{.Task, 20}}
+		case 3:
+			common.relation_mask = 1 << (u16(pr.RelationType.References) - 1); ids = {0, 1, 3, 4}; nodes = {{.Task, 10}, {.Task, 20}}
+		case 4:
+			common.b_id = 1; ids = {0, 2, 5, 7}; nodes = {{.Asset, 2}, {.Task, 10}, {.Task, max(u64)}}
+		}
+		selected: [8]pr.Edge
+		for index, i in ids do selected[i] = edges[index]
+		want := pr.GraphCommonNeighborsResultMessage {
+			a_type         = common.a_type,
+			a_id           = common.a_id,
+			b_type         = common.b_type,
+			b_id           = common.b_id,
+			nodes          = nodes,
+			edges          = selected[:len(ids)],
+			correlation_id = common.correlation_id,
+		}
+		n := pr.serializeGraphCommonNeighborsRequest(common, request_buffer[:]); written := pr.serializeGraphCommonNeighborsResult(want, expected_buffer[:])
+		worker_db_test_graph_response(t, c, request_buffer[:n], expected_buffer[:written])
+	}
+	// Exact output-budget boundary and scratch-table cleanup on the same connection.
+	n := pr.serializeGraphCommonNeighborsRequest(common, request_buffer[:])
+	request := db.Request {
+		opcode    = .C_GraphCommonNeighbors,
+		workspace = c.workspace_id,
+		body      = request_buffer[2:n],
+	}
+	for budget in ([2]int{279, 280}) {
+		output := db.Command_Output {
+			limit = budget + size_of(db.Command_Frame),
+		}; defer db.destroy_command_output(&output)
+		testing.expect_value(t, db.begin(&store), sql.OK)
+		testing.expect_value(t, sqlite_execute_task_command(&store, &request, &output), budget == 279 ? sql.TOOBIG : sql.OK)
+		testing.expect_value(t, output.count, budget == 279 ? 0 : 1)
+		sqlite_projection_test_assert(t, &store, "SELECT count(*)=0 FROM sqlite_temp_master WHERE name IN ('nrc_neighbors','nrc_common')")
+		testing.expect_value(t, db.rollback(&store), sql.OK)
+	}
+	worker_db_test_graph_walks(t, c, edges[:], &store)
+	// Exercise the u16 degree boundary through the executor and error envelope.
+	insert: ^sql.Statement
+	testing.expect_value(
+		t,
+		sql.prepare_v2(
+			store.db,
+			`INSERT INTO edges
+ SELECT workspace,?1,source_type,source_id,target_type,target_id,relation,created_at,created_by
+ FROM edges WHERE workspace=?2 AND id=x'0000000000000001'`,
+			-1,
+			&insert,
+			nil,
+		),
+		sql.OK,
+	)
+	defer sql.finalize(insert)
+	testing.expect_value(t, sql.bind_bytes(insert, 2, transmute([]byte)c.workspace_id), sql.OK)
+	degree = {
+		top_n          = 1,
+		correlation_id = 942,
+	}
+	n = pr.serializeGraphDegreeRequest(degree, request_buffer[:])
+	next_id: u64 = 100
+	for count in ([2]int{65530, 1}) {
+		testing.expect_value(t, db.begin(&store), sql.OK)
+		for _ in 0 ..< count {
+			testing.expect_value(t, sql.bind_id(insert, 1, next_id), sql.OK)
+			testing.expect_value(t, sql.step(insert), sql.DONE)
+			testing.expect_value(t, sql.reset(insert), sql.OK)
+			next_id += 1
+		}
+		testing.expect_value(t, db.commit(&store), sql.OK)
+		written := 0
+		if count == 65530 {
+			written = pr.serializeGraphDegreeResult({entries = {{.Asset, 1, 65535}}, correlation_id = 942}, expected_buffer[:])
 		} else {
-			nodes := make([]pr.GraphPathNode, 1236)
-			edges := make([]pr.Edge, 2472)
-			response, err := pr.parseGraphCommonNeighborsResult(payload, nodes, edges)
-			testing.expect_value(t, err, nil)
-			testing.expect_value(t, len(payload), 131054 + creator_length)
-			testing.expect_value(t, response.correlation_id, req.correlation_id)
-			testing.expect_value(t, len(response.nodes), 1236)
-			testing.expect_value(t, len(response.edges), 2472)
-			for node, i in response.nodes do testing.expect_value(t, node, pr.GraphPathNode{.Task, u64(1000 + i)})
-			delete(nodes)
-			delete(edges)
+			written = pr.serializeErrorResponse(
+				{
+					origin_opcode = .C_GraphDegree,
+					error_msg = transmute([]byte)string("Graph result exceeds response limit; narrow the query"),
+					correlation_id = 942,
+				},
+				expected_buffer[:],
+			)
 		}
-		frame_lease_dispose(&item.lease)
-		req.correlation_id += 1
+		worker_db_test_graph_response(t, c, request_buffer[:n], expected_buffer[:written])
 	}
 }
 
 @(test)
-test_graph_queued_results_survive_other_queries_and_worker_restart :: proc(t: ^testing.T) {
-	previous := new(Server_Thread)
-	previous^ = td
-	td = {}
-	defer {td = previous^; free(previous)}
-	for _ in 0 ..< 2 {
-		worker_state_init_core(nil, 0, 8)
-		defer worker_state_destroy_core_for_test()
-		c := connection_test_install_fake(
-			{sock = connection_test_fake_socket(1), state = .Idle, workspace_id = "graph-queued-results", cache_workspace = true, init_send_queue = true},
-		)
-		assert(c != nil)
-		defer connection_test_uninstall(c)
-		c.is_sending = true
-		conv := get_or_create_conversation(c.workspace, pr.WORKSPACE_DATA_ID)
-		for i in 0 ..< 32 {
-			slice_test_member_of(conv, .Task, u64(1000 + i), 1, .References)
-			slice_test_member_of(conv, .Task, u64(1000 + i), 2, .References)
+test_sqlite_graph_visit_limits :: proc(t: ^testing.T) {
+	dir, err := os.make_directory_temp("", "nrc-graph-limits-*", context.allocator)
+	if !testing.expect(t, err == nil) do return
+	defer {os.remove_all(dir); delete(dir)}
+	name := fmt.aprintf("%s/shard.sqlite3", dir); defer delete(name)
+	path := strings.clone_to_cstring(name); defer delete(path)
+	store, rc := db.open(path, create = true); if !testing.expect_value(t, rc, sql.OK) do return
+	defer db.close(&store)
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	for i in 0 ..< 2000 {
+		key := pr.Asset {
+			asset_id = u64(i + 1),
 		}
-		handle_graph_query(c, {conv_id = pr.WORKSPACE_DATA_ID, start_type = .Asset, start_id = 1, max_depth = 2, correlation_id = 11})
-		handle_shortest_path(
-			c,
-			{conv_id = pr.WORKSPACE_DATA_ID, from_type = .Asset, from_id = 1, to_type = .Asset, to_id = 2, max_depth = 2, correlation_id = 12},
-		)
-		rank := pr.GraphRankRequest {
-			conv_id      = pr.WORKSPACE_DATA_ID,
-			anchor_count = 2,
-			max_depth    = 2,
-			top_n        = 20,
-		}
-		rank.anchors[0] = {.Asset, 1}
-		rank.anchors[1] = {.Asset, 2}
-		handle_graph_rank(c, rank)
-		// Reuse the same worker scratch for a different, empty workspace.
-		populated := c.workspace
-		c.workspace = get_or_create_workspace("graph-empty-results")
-		_ = get_or_create_conversation(c.workspace, pr.WORKSPACE_DATA_ID)
-		handle_degree_query(c, {conv_id = pr.WORKSPACE_DATA_ID, top_n = 20, correlation_id = 13})
-		c.workspace = populated
-		handle_common_neighbors(
-			c,
-			{conv_id = pr.WORKSPACE_DATA_ID, a_type = .Asset, a_id = 1, b_type = .Asset, b_id = 2, direction = .Outgoing, correlation_id = 14},
-		)
-		if !testing.expect_value(t, send_queue_len(c), 5) do return
-		for index in 0 ..< 5 {
-			item := send_queue_pop_normal(c)
-			frame := frame_lease_data(item.lease)
-			_, header_size, frame_err := ws.readFrameHeader(frame)
-			testing.expect_value(t, frame_err, nil)
-			payload := frame[header_size:]
-			edges: [64]pr.Edge
-			switch index {
-			case 0:
-				nodes: [34]pr.GraphQueryNode
-				response, err := pr.parseGraphQueryResult(payload, nodes[:], edges[:])
-				testing.expect_value(t, err, nil)
-				testing.expect_value(t, response.correlation_id, u32(11))
-				testing.expect_value(t, len(response.nodes), 34)
-				testing.expect_value(t, len(response.edges), 64)
-				testing.expect(t, !response.truncated)
-				for node in response.nodes {
-					expected_depth := u8(1)
-					if node.target_type == .Asset do expected_depth = 0 if node.target_id == 1 else 2
-					testing.expect_value(t, node.depth, expected_depth)
-				}
-			case 1:
-				nodes: [3]pr.GraphPathNode
-				response, err := pr.parseGraphShortestPathResult(payload, nodes[:], edges[:])
-				testing.expect_value(t, err, nil)
-				testing.expect_value(t, response.correlation_id, u32(12))
-				testing.expect(t, response.found)
-				testing.expect_value(t, response.path_length, u8(2))
-				testing.expect_value(t, len(response.nodes), 3)
-				testing.expect_value(t, len(response.edges), 2)
-			case 2:
-				testing.expect_value(t, pr.get_opcode(payload), pr.Opcode.S_GraphRankResult)
-			case 3:
-				response, err := pr.parseGraphDegreeResult(payload, nil)
-				testing.expect_value(t, err, nil)
-				testing.expect_value(t, response.correlation_id, u32(13))
-				testing.expect_value(t, len(response.entries), 0)
-			case 4:
-				response, err := pr.parseGraphCommonNeighborsResult(payload, nil, nil)
-				testing.expect_value(t, err, nil)
-				testing.expect_value(t, response.correlation_id, u32(14))
-				testing.expect_value(t, len(response.nodes), 0)
-				testing.expect_value(t, len(response.edges), 0)
-			}
-			frame_lease_dispose(&item.lease)
-		}
-	}
-}
-
-when NRC_SIMULATION {
-	GRAPH_HANDLER_TEST_CONV_ID :: pr.WORKSPACE_DATA_ID
-
-	Graph_Handler_Test_Context :: struct {
-		sim:  Sim_Test_Context,
-		conn: ^NRC_Connection,
-		conv: ^Conversation_State,
-	}
-
-	graph_handler_test_begin :: proc(ctx: ^Graph_Handler_Test_Context) -> bool {
-		ctx^ = {}
-		simulation_test_begin(&ctx.sim, 130)
-		ctx.conn = simulation_test_install_client(&ctx.sim.sim, 1, "graph-handler-tests", "tester")
-		ctx.sim.conns[1] = ctx.conn
-		if ctx.conn == nil do return false
-		ws := get_connection_workspace(ctx.conn)
-		if ws == nil do return false
-		ctx.conv = get_or_create_conversation(ws, GRAPH_HANDLER_TEST_CONV_ID)
-		return ctx.conv != nil
-	}
-
-	graph_handler_test_end :: proc(ctx: ^Graph_Handler_Test_Context) {
-		simulation_test_end(&ctx.sim)
-		ctx^ = {}
-	}
-
-	graph_handler_test_add_edge :: proc(
-		ctx: ^Graph_Handler_Test_Context,
-		id: pr.EdgeID,
-		source_type: pr.TargetType,
-		source_id: u64,
-		target_type: pr.TargetType,
-		target_id: u64,
-		relation: pr.RelationType,
-	) {
-		edge := new(pr.Edge)
-		edge^ = {
-			edge_id     = id,
-			conv_id     = GRAPH_HANDLER_TEST_CONV_ID,
-			source_type = source_type,
-			source_id   = source_id,
-			target_type = target_type,
-			target_id   = target_id,
-			relation    = relation,
-		}
-		ctx.conv.edges[id] = edge
-
-		source_key := Edge_Entity_Key {
-			target_type = source_type,
-			target_id   = source_id,
-		}
-		target_key := Edge_Entity_Key {
-			target_type = target_type,
-			target_id   = target_id,
-		}
-		if source_key not_in ctx.conv.edges_by_entity {
-			ctx.conv.edges_by_entity[source_key] = make([dynamic]pr.EdgeID, 0, 4)
-		}
-		append(&ctx.conv.edges_by_entity[source_key], id)
-		if target_key not_in ctx.conv.edges_by_entity {
-			ctx.conv.edges_by_entity[target_key] = make([dynamic]pr.EdgeID, 0, 4)
-		}
-		append(&ctx.conv.edges_by_entity[target_key], id)
-	}
-
-	graph_handler_test_add_stale_adjacency :: proc(ctx: ^Graph_Handler_Test_Context, target_type: pr.TargetType, target_id: u64, edge_id: pr.EdgeID) {
-		key := Edge_Entity_Key {
-			target_type = target_type,
-			target_id   = target_id,
-		}
-		if key not_in ctx.conv.edges_by_entity {
-			ctx.conv.edges_by_entity[key] = make([dynamic]pr.EdgeID, 0, 1)
-		}
-		append(&ctx.conv.edges_by_entity[key], edge_id)
-	}
-
-	graph_handler_test_payload :: proc(t: ^testing.T, ctx: ^Graph_Handler_Test_Context, expected: pr.Opcode) -> (payload: []u8, ok: bool) {
-		frame_count := nrc_sim_client_frame_count(&ctx.sim.sim, ctx.conn.sock)
-		testing.expect_value(t, frame_count, 1)
-		if frame_count != 1 do return
-		payload, ok = nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&ctx.sim.sim, ctx.conn.sock, 0))
-		testing.expect(t, ok, "captured graph response should be a complete WebSocket frame")
-		if !ok do return
-		testing.expect_value(t, pr.get_opcode(payload), expected)
-		return
-	}
-
-	graph_query_test_run :: proc(
-		t: ^testing.T,
-		ctx: ^Graph_Handler_Test_Context,
-		req: pr.GraphQueryRequest,
-		nodes: []pr.GraphQueryNode,
-		edges: []pr.Edge,
-	) -> (
-		pr.GraphQueryResultMessage,
-		bool,
-	) {
-		nrc_sim_clear_inboxes(&ctx.sim.sim)
-		handle_graph_query(ctx.conn, req)
-		payload, ok := graph_handler_test_payload(t, ctx, .S_GraphQueryResult)
-		if !ok do return {}, false
-		result, parse_err := pr.parseGraphQueryResult(payload, nodes, edges)
-		testing.expect(t, parse_err == nil, "GraphQueryResult should parse")
-		return result, parse_err == nil
-	}
-
-	shortest_path_test_run :: proc(
-		t: ^testing.T,
-		ctx: ^Graph_Handler_Test_Context,
-		req: pr.GraphShortestPathRequest,
-		nodes: []pr.GraphPathNode,
-		edges: []pr.Edge,
-	) -> (
-		pr.GraphShortestPathResultMessage,
-		bool,
-	) {
-		nrc_sim_clear_inboxes(&ctx.sim.sim)
-		handle_shortest_path(ctx.conn, req)
-		payload, ok := graph_handler_test_payload(t, ctx, .S_GraphShortestPathResult)
-		if !ok do return {}, false
-		result, parse_err := pr.parseGraphShortestPathResult(payload, nodes, edges)
-		testing.expect(t, parse_err == nil, "GraphShortestPathResult should parse")
-		return result, parse_err == nil
-	}
-
-	degree_query_test_run :: proc(
-		t: ^testing.T,
-		ctx: ^Graph_Handler_Test_Context,
-		req: pr.GraphDegreeRequest,
-		entries: []pr.GraphDegreeEntry,
-	) -> (
-		pr.GraphDegreeResultMessage,
-		bool,
-	) {
-		nrc_sim_clear_inboxes(&ctx.sim.sim)
-		handle_degree_query(ctx.conn, req)
-		payload, ok := graph_handler_test_payload(t, ctx, .S_GraphDegreeResult)
-		if !ok do return {}, false
-		result, parse_err := pr.parseGraphDegreeResult(payload, entries)
-		testing.expect(t, parse_err == nil, "GraphDegreeResult should parse")
-		return result, parse_err == nil
-	}
-
-	common_neighbors_test_run :: proc(
-		t: ^testing.T,
-		ctx: ^Graph_Handler_Test_Context,
-		req: pr.GraphCommonNeighborsRequest,
-		nodes: []pr.GraphPathNode,
-		edges: []pr.Edge,
-	) -> (
-		pr.GraphCommonNeighborsResultMessage,
-		bool,
-	) {
-		nrc_sim_clear_inboxes(&ctx.sim.sim)
-		handle_common_neighbors(ctx.conn, req)
-		payload, ok := graph_handler_test_payload(t, ctx, .S_GraphCommonNeighborsResult)
-		if !ok do return {}, false
-		result, parse_err := pr.parseGraphCommonNeighborsResult(payload, nodes, edges)
-		testing.expect(t, parse_err == nil, "GraphCommonNeighborsResult should parse")
-		return result, parse_err == nil
-	}
-}
-
-@(test)
-test_graph_query_handler_depth_direction_relation_cycle_and_ordering :: proc(t: ^testing.T) {
-	when !NRC_SIMULATION {
-		return
-	} else {
-		ctx: Graph_Handler_Test_Context
-		testing.expect(t, graph_handler_test_begin(&ctx), "graph handler fixture should initialize")
-		defer graph_handler_test_end(&ctx)
-		if ctx.conv == nil do return
-
-		// T0 -> T1 -> T2 -> T3 -> T1, plus T1 --References--> Asset:10.
-		graph_handler_test_add_edge(&ctx, 30, .Task, 0, .Task, 1, .Blocks)
-		graph_handler_test_add_edge(&ctx, 20, .Task, 1, .Task, 2, .Blocks)
-		graph_handler_test_add_edge(&ctx, 10, .Task, 2, .Task, 3, .Blocks)
-		graph_handler_test_add_edge(&ctx, 40, .Task, 3, .Task, 1, .Blocks)
-		graph_handler_test_add_edge(&ctx, 50, .Task, 1, .Asset, 10, .References)
-		graph_handler_test_add_stale_adjacency(&ctx, .Task, 1, 999)
-
-		nodes: [16]pr.GraphQueryNode
-		edges: [16]pr.Edge
-		base := pr.GraphQueryRequest {
-			conv_id        = GRAPH_HANDLER_TEST_CONV_ID,
-			start_type     = .Task,
-			start_id       = 1,
-			max_depth      = 2,
-			direction      = .Both,
-			correlation_id = 0x10203040,
-		}
-		result, ok := graph_query_test_run(t, &ctx, base, nodes[:], edges[:])
-		if !ok do return
-		testing.expect(t, !result.truncated, "small cyclic graph should not truncate")
-		testing.expect_value(t, result.correlation_id, base.correlation_id)
-		testing.expect_value(t, len(result.nodes), 5)
-		// Production ordering is depth, then type, then ID.
-		testing.expect_value(t, result.nodes[0], pr.GraphQueryNode{target_type = .Task, target_id = 1, depth = 0})
-		testing.expect_value(t, result.nodes[1], pr.GraphQueryNode{target_type = .Asset, target_id = 10, depth = 1})
-		testing.expect_value(t, result.nodes[2], pr.GraphQueryNode{target_type = .Task, target_id = 0, depth = 1})
-		testing.expect_value(t, result.nodes[3], pr.GraphQueryNode{target_type = .Task, target_id = 2, depth = 1})
-		testing.expect_value(t, result.nodes[4], pr.GraphQueryNode{target_type = .Task, target_id = 3, depth = 1})
-		testing.expect_value(t, len(result.edges), 5)
-		for i in 1 ..< len(result.edges) do testing.expect(t, result.edges[i - 1].edge_id < result.edges[i].edge_id, "graph edges should be ordered by ID")
-
-		depth_two := base
-		depth_two.start_id = 0
-		depth_two.direction = .Outgoing
-		result, ok = graph_query_test_run(t, &ctx, depth_two, nodes[:], edges[:])
-		if !ok do return
-		testing.expect_value(t, len(result.nodes), 4)
-		testing.expect_value(t, result.nodes[0], pr.GraphQueryNode{target_type = .Task, target_id = 0, depth = 0})
-		testing.expect_value(t, result.nodes[1], pr.GraphQueryNode{target_type = .Task, target_id = 1, depth = 1})
-		testing.expect_value(t, result.nodes[2], pr.GraphQueryNode{target_type = .Asset, target_id = 10, depth = 2})
-		testing.expect_value(t, result.nodes[3], pr.GraphQueryNode{target_type = .Task, target_id = 2, depth = 2})
-
-		outgoing := base
-		outgoing.direction = .Outgoing
-		outgoing.max_depth = 1
-		result, ok = graph_query_test_run(t, &ctx, outgoing, nodes[:], edges[:])
-		if !ok do return
-		testing.expect_value(t, len(result.nodes), 3)
-		testing.expect_value(t, result.nodes[1].target_type, pr.TargetType.Asset)
-		testing.expect_value(t, result.nodes[2].target_id, u64(2))
-
-		incoming := base
-		incoming.direction = .Incoming
-		result, ok = graph_query_test_run(t, &ctx, incoming, nodes[:], edges[:])
-		if !ok do return
-		testing.expect_value(t, len(result.nodes), 4)
-		testing.expect_value(t, result.nodes[1].target_id, u64(0))
-
-		blocks_only := base
-		blocks_only.relation_mask = 0b001000
-		result, ok = graph_query_test_run(t, &ctx, blocks_only, nodes[:], edges[:])
-		if !ok do return
-		testing.expect_value(t, len(result.nodes), 4)
-		for node in result.nodes do testing.expect(t, node.target_type == .Task, "relation mask should exclude reference asset")
-	}
-}
-
-@(test)
-test_graph_query_handler_truncates_without_dangling_or_stale_edges :: proc(t: ^testing.T) {
-	when !NRC_SIMULATION {
-		return
-	} else {
-		ctx: Graph_Handler_Test_Context
-		testing.expect(t, graph_handler_test_begin(&ctx), "graph handler fixture should initialize")
-		defer graph_handler_test_end(&ctx)
-		if ctx.conv == nil do return
-
-		for i in u64(2) ..= u64(MAX_RESULT_NODES + 1) {
-			graph_handler_test_add_edge(&ctx, pr.EdgeID(i - 1), .Task, 1, .Task, i, .Blocks)
-		}
-		graph_handler_test_add_stale_adjacency(&ctx, .Task, 1, 9999)
-		nodes: [MAX_RESULT_NODES]pr.GraphQueryNode
-		edges: [MAX_RESULT_NODES]pr.Edge
-		result, ok := graph_query_test_run(
+		testing.expect_value(
 			t,
-			&ctx,
-			pr.GraphQueryRequest{conv_id = GRAPH_HANDLER_TEST_CONV_ID, start_type = .Task, start_id = 1, max_depth = 1, direction = .Both},
-			nodes[:],
-			edges[:],
+			sqlite_projection_write(
+				&store,
+				"INSERT INTO edges VALUES(?1,?2,?3,?4,?5,?6,1,0,x'')",
+				"limits",
+				&key,
+				{i64(pr.TargetType.Asset), u64(1), i64(pr.TargetType.Task), u64(i + 1)},
+			),
+			sql.OK,
 		)
-		if !ok do return
-		testing.expect(t, result.truncated, "node limit should set truncated")
-		testing.expect_value(t, len(result.nodes), MAX_RESULT_NODES)
-		testing.expect_value(t, len(result.edges), MAX_RESULT_NODES - 1)
-		for edge in result.edges {
-			testing.expect(t, edge.edge_id != 9999, "stale adjacency must not produce an edge")
-			testing.expect(t, edge.target_id <= u64(MAX_RESULT_NODES), "truncated response must not contain a dangling endpoint")
-		}
 	}
-}
-
-@(test)
-test_shortest_path_handler_depth_direction_relation_order_and_correlation :: proc(t: ^testing.T) {
-	when !NRC_SIMULATION {
-		return
-	} else {
-		ctx: Graph_Handler_Test_Context
-		testing.expect(t, graph_handler_test_begin(&ctx), "graph handler fixture should initialize")
-		defer graph_handler_test_end(&ctx)
-		if ctx.conv == nil do return
-
-		graph_handler_test_add_edge(&ctx, 20, .Task, 1, .Task, 2, .Blocks)
-		graph_handler_test_add_edge(&ctx, 10, .Task, 2, .Task, 3, .Blocks)
-		graph_handler_test_add_edge(&ctx, 30, .Task, 1, .Task, 3, .References)
-		graph_handler_test_add_stale_adjacency(&ctx, .Task, 1, 999)
-		nodes: [8]pr.GraphPathNode
-		edges: [8]pr.Edge
-		req := pr.GraphShortestPathRequest {
-			conv_id        = GRAPH_HANDLER_TEST_CONV_ID,
-			from_type      = .Task,
-			from_id        = 1,
-			to_type        = .Task,
-			to_id          = 3,
-			relation_mask  = 0b001000,
-			direction      = .Outgoing,
-			max_depth      = 4,
-			correlation_id = 0x50607080,
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	for mode in 0 ..< 4 {
+		buffer: [128]byte; n := 0; opcode := pr.Opcode.C_GraphQuery
+		if mode == 0 {
+			n = pr.serializeGraphQueryRequest({start_type = .Asset, start_id = 1, max_depth = 1, direction = .Outgoing}, buffer[:])
+		} else {
+			opcode = .C_GraphShortestPath
+			n = pr.serializeGraphShortestPathRequest(
+				{from_type = .Asset, from_id = 1, to_type = .Task, to_id = u64(1998 + mode - 1), max_depth = 1, direction = .Outgoing},
+				buffer[:],
+			)
 		}
-		result, ok := shortest_path_test_run(t, &ctx, req, nodes[:], edges[:])
-		if !ok do return
-		testing.expect(t, result.found, "filtered two-hop path should be found")
-		testing.expect_value(t, result.path_length, u8(2))
-		testing.expect_value(t, result.correlation_id, req.correlation_id)
-		testing.expect_value(t, len(result.nodes), 3)
-		testing.expect_value(t, result.nodes[0].target_id, u64(1))
-		testing.expect_value(t, result.nodes[1].target_id, u64(2))
-		testing.expect_value(t, result.nodes[2].target_id, u64(3))
-		testing.expect_value(t, result.edges[0].edge_id, pr.EdgeID(20))
-		testing.expect_value(t, result.edges[1].edge_id, pr.EdgeID(10))
-
-		too_shallow := req
-		too_shallow.max_depth = 1
-		result, ok = shortest_path_test_run(t, &ctx, too_shallow, nodes[:], edges[:])
-		if !ok do return
-		testing.expect(t, !result.found, "path beyond max depth should not be found")
-
-		wrong_direction := req
-		wrong_direction.direction = .Incoming
-		result, ok = shortest_path_test_run(t, &ctx, wrong_direction, nodes[:], edges[:])
-		if !ok do return
-		testing.expect(t, !result.found, "path in the wrong direction should not be found")
-
-		same := req
-		same.to_id = same.from_id
-		result, ok = shortest_path_test_run(t, &ctx, same, nodes[:], edges[:])
-		if !ok do return
-		testing.expect(t, result.found, "same-node path should be found")
-		testing.expect_value(t, result.path_length, u8(0))
-		testing.expect_value(t, len(result.nodes), 1)
-	}
-}
-
-@(test)
-test_degree_handler_filters_orders_truncates_and_ignores_stale_adjacency :: proc(t: ^testing.T) {
-	when !NRC_SIMULATION {
-		return
-	} else {
-		ctx: Graph_Handler_Test_Context
-		testing.expect(t, graph_handler_test_begin(&ctx), "graph handler fixture should initialize")
-		defer graph_handler_test_end(&ctx)
-		if ctx.conv == nil do return
-
-		graph_handler_test_add_edge(&ctx, 1, .Task, 2, .Task, 20, .Blocks)
-		graph_handler_test_add_edge(&ctx, 2, .Task, 2, .Task, 21, .Blocks)
-		graph_handler_test_add_edge(&ctx, 3, .Task, 1, .Task, 10, .Blocks)
-		graph_handler_test_add_edge(&ctx, 4, .Task, 1, .Task, 11, .Blocks)
-		graph_handler_test_add_edge(&ctx, 5, .Task, 1, .Asset, 5, .References)
-		graph_handler_test_add_stale_adjacency(&ctx, .Task, 99, 999)
-		graph_handler_test_add_stale_adjacency(&ctx, .Task, 1, 998)
-
-		entries: [16]pr.GraphDegreeEntry
-		req := pr.GraphDegreeRequest {
-			conv_id        = GRAPH_HANDLER_TEST_CONV_ID,
-			top_n          = 2,
-			type_filter    = 2,
-			relation_mask  = 0b001000,
-			correlation_id = 0x90A0B0C0,
+		request := db.Request {
+			workspace = "limits",
+			opcode    = opcode,
+			body      = buffer[2:n],
 		}
-		result, ok := degree_query_test_run(t, &ctx, req, entries[:])
-		if !ok do return
-		testing.expect_value(t, result.correlation_id, req.correlation_id)
-		testing.expect_value(t, len(result.entries), 2)
-		// Equal degrees use type then ID as deterministic tie breakers.
-		testing.expect_value(t, result.entries[0], pr.GraphDegreeEntry{target_type = .Task, target_id = 1, degree = 2})
-		testing.expect_value(t, result.entries[1], pr.GraphDegreeEntry{target_type = .Task, target_id = 2, degree = 2})
-
-		all_relations := req
-		all_relations.top_n = 100
-		all_relations.relation_mask = 0
-		result, ok = degree_query_test_run(t, &ctx, all_relations, entries[:])
-		if !ok do return
-		testing.expect_value(t, len(result.entries), 6)
-		task_one_found := false
-		for entry in result.entries {
-			testing.expect(t, entry.target_id != 99, "stale-only adjacency must not produce a degree entry")
-			if entry.target_type == .Task && entry.target_id == 1 {
-				task_one_found = true
-				testing.expect_value(t, entry.degree, u16(3))
+		for budget in ([2]int{1, pr.MAX_PROTOCOL_PAYLOAD_SIZE + size_of(db.Command_Frame)}) {
+			output := db.Command_Output {
+				limit = budget,
+			}; defer db.destroy_command_output(&output)
+			testing.expect_value(t, db.begin(&store), sql.OK)
+			testing.expect_value(t, sqlite_execute_task_command(&store, &request, &output), budget == 1 ? sql.TOOBIG : sql.OK)
+			testing.expect_value(t, output.count, budget == 1 ? 0 : 1)
+			sqlite_projection_test_assert(t, &store, "SELECT count(*)=0 FROM sqlite_temp_master WHERE name='nrc_graph_edges'")
+			testing.expect_value(t, db.commit(&store), sql.OK)
+			if budget == 1 || output.count != 1 do continue
+			nodes: [500]pr.GraphQueryNode; path_nodes: [5]pr.GraphPathNode; edges: [500]pr.Edge
+			if mode == 0 {
+				msg, parse_err := pr.parseGraphQueryResult(output.frames[0].payload, nodes[:], edges[:])
+				testing.expect(t, parse_err == nil && msg.truncated)
+				testing.expect_value(t, len(msg.nodes), 500); testing.expect_value(t, len(msg.edges), 499)
+				testing.expect_value(t, msg.nodes[499].target_id, u64(499))
+			} else {
+				msg, parse_err := pr.parseGraphShortestPathResult(output.frames[0].payload, path_nodes[:], edges[:])
+				testing.expect(t, parse_err == nil)
+				testing.expect_value(t, msg.found, mode != 3)
+				if mode != 3 {testing.expect_value(t, msg.path_length, u8(1)); testing.expect_value(t, msg.edges[0].edge_id, u64(1998 + mode - 1))}
 			}
-		}
-		testing.expect(t, task_one_found, "mask-zero result should contain Task:1")
-	}
-}
-
-@(test)
-test_common_neighbors_handler_direction_relation_order_and_correlation :: proc(t: ^testing.T) {
-	when !NRC_SIMULATION {
-		return
-	} else {
-		ctx: Graph_Handler_Test_Context
-		testing.expect(t, graph_handler_test_begin(&ctx), "graph handler fixture should initialize")
-		defer graph_handler_test_end(&ctx)
-		if ctx.conv == nil do return
-
-		// Shared outgoing Block neighbors are Task:3 and Asset:4. Task:5 is
-		// shared only by incoming edges, and Task:6 only by References edges.
-		graph_handler_test_add_edge(&ctx, 40, .Task, 1, .Task, 3, .Blocks)
-		graph_handler_test_add_edge(&ctx, 10, .Task, 2, .Task, 3, .Blocks)
-		graph_handler_test_add_edge(&ctx, 45, .Task, 1, .Task, 3, .References)
-		graph_handler_test_add_edge(&ctx, 30, .Task, 1, .Asset, 4, .Blocks)
-		graph_handler_test_add_edge(&ctx, 20, .Task, 2, .Asset, 4, .Blocks)
-		graph_handler_test_add_edge(&ctx, 50, .Task, 5, .Task, 1, .Blocks)
-		graph_handler_test_add_edge(&ctx, 60, .Task, 5, .Task, 2, .Blocks)
-		graph_handler_test_add_edge(&ctx, 70, .Task, 1, .Task, 6, .References)
-		graph_handler_test_add_edge(&ctx, 80, .Task, 2, .Task, 6, .References)
-		graph_handler_test_add_edge(&ctx, 90, .Task, 1, .Task, 2, .Blocks)
-		graph_handler_test_add_stale_adjacency(&ctx, .Task, 1, 999)
-
-		nodes: [16]pr.GraphPathNode
-		edges: [16]pr.Edge
-		req := pr.GraphCommonNeighborsRequest {
-			conv_id        = GRAPH_HANDLER_TEST_CONV_ID,
-			a_type         = .Task,
-			a_id           = 1,
-			b_type         = .Task,
-			b_id           = 2,
-			relation_mask  = 0b001000,
-			direction      = .Outgoing,
-			correlation_id = 0xD0E0F001,
-		}
-		result, ok := common_neighbors_test_run(t, &ctx, req, nodes[:], edges[:])
-		if !ok do return
-		testing.expect_value(t, result.correlation_id, req.correlation_id)
-		testing.expect_value(t, len(result.nodes), 2)
-		// Production ordering is type then ID.
-		testing.expect_value(t, result.nodes[0], pr.GraphPathNode{target_type = .Asset, target_id = 4})
-		testing.expect_value(t, result.nodes[1], pr.GraphPathNode{target_type = .Task, target_id = 3})
-		testing.expect_value(t, len(result.edges), 4)
-		for i in 1 ..< len(result.edges) do testing.expect(t, result.edges[i - 1].edge_id < result.edges[i].edge_id, "common-neighbor edges should be ordered by ID")
-		for edge in result.edges do testing.expect_value(t, edge.relation, pr.RelationType.Blocks)
-
-		both := req
-		both.direction = .Both
-		result, ok = common_neighbors_test_run(t, &ctx, both, nodes[:], edges[:])
-		if !ok do return
-		testing.expect_value(t, len(result.nodes), 3)
-		for node in result.nodes {
-			testing.expect(t, node.target_id != 1 && node.target_id != 2, "query endpoints must not be common neighbors")
 		}
 	}
 }

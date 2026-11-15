@@ -18,25 +18,15 @@ ROOT = Path(__file__).resolve().parent.parent
 # Exact anchors intentionally fail closed when implementation or diagnostics drift.
 MUTATIONS = [
     dict(name="ack-before-fsync", file="websocket_handler.odin",
-         old="\treturn outbox_item_shard_is_durable(item) && outbox_item_message_is_durable(item)",
+         old="\treturn outbox_item_message_is_durable(item)",
          new="\treturn true",
-         test="test_shard_group_commit_holds_ack_broadcast_and_query_until_snapshot_fsync",
-         failure="expected nrc_sim_client_frame_count(&ctx.sim, c.sock) to be 0, got 1"),
+         test="test_retained_group_commit_ack_history_duplicate_and_failure",
+         failure="expected conn.outbox_waiting_durability && peer.outbox_waiting_durability to be true"),
     dict(name="stale-socket", file="connection.odin",
          old="connection_from_io_context :: proc(ctx: Connection_IO_Context) -> ^NRC_Connection {\n\tconn := connection_get_by_handle(ctx.handle)",
          new="connection_from_io_context :: proc(ctx: Connection_IO_Context) -> ^NRC_Connection {\n\tconn := connection_get(ctx.sock)",
          test="test_io_context_rejects_stale_handle_after_socket_reuse",
          failure="stale context must not resolve to the replacement"),
-    dict(name="checksum-bypass", file="shard_segment_catalog.odin",
-         old="\tif magic != SHARD_SEGMENT_CATALOG_MAGIC || checksum != xxhash.XXH64(data[:checksum_offset]) do return",
-         new="\tif magic != SHARD_SEGMENT_CATALOG_MAGIC do return",
-         test="test_shard_segment_catalog_variable_roundtrip_and_corruption",
-         failure="expected !corrupt_ok to be true"),
-    dict(name="durable-record-omitted", file="shard_runtime_writer.odin",
-         old="\tif ctx.apply && !visit_shard_transaction_mutations(&view, apply_shard_transaction_mutation, &view) do return false",
-         new="\tif ctx.apply && ctx.previous.task != 0 && !visit_shard_transaction_mutations(&view, apply_shard_transaction_mutation, &view) do return false",
-         test="test_hegel_mixed_semantic_history_recovers_exact_durable_prefix",
-         failure="hegel native failure origin: semantic durable-prefix replay failed"),
     dict(name="dm-access-bypass", file="dm_handlers.odin",
          old="\treturn is_participant && is_user_in_dm(ws, username, conv_id)",
          new="\treturn true",
@@ -50,33 +40,6 @@ MUTATIONS = [
              "mutation_broadcast_in_workspace :: proc(msg: pr.NewMessageEvent, sender_sock: net.TCP_Socket, ws: ^Workspace_State) {",
          test="test_simulation_send_sink_captures_message_fanout_with_workspace_isolation",
          failure="expected nrc_sim_client_frame_count(&ctx.sim, conn_c.sock) to be 0, got 1"),
-    # This test contains only generated histories, not the exact swarm fixtures.
-    dict(name="generated-move-order", file="task_handlers.odin",
-         old="\ttask.order_index = req.order_index",
-         new="\ttask.order_index = req.order_index + 1",
-         test="test_hegel_semantic_handler_graph_swarm",
-         failure="hegel native failure origin: handler swarm task state differs from model"),
-    # Requires updating or moving a task, then moving it again: retain its old
-    # index entry while changing the task, without corrupting allocation counts.
-    dict(name="generated-repeat-move-stale-index", file="state_store.odin",
-         old="\tassert(task != nil && task != snapshot)\n"
-             "\tremove_task_from_index(conv, task)\n"
-             "\ttask.status = snapshot.status\n"
-             "\ttask.order_index = snapshot.order_index\n"
-             "\ttask.completed_at = snapshot.completed_at\n"
-             "\ttask.updated_at = snapshot.updated_at\n"
-             "\tindex_task(conv, task)",
-         new="\tassert(task != nil && task != snapshot)\n"
-             "\twas_updated := task.updated_at > task.created_at\n"
-             "\tremove_task_from_index(conv, task)\n"
-             "\tif was_updated do index_task(conv, task)\n"
-             "\ttask.status = snapshot.status\n"
-             "\ttask.order_index = snapshot.order_index\n"
-             "\ttask.completed_at = snapshot.completed_at\n"
-             "\ttask.updated_at = snapshot.updated_at\n"
-             "\tif !was_updated do index_task(conv, task)",
-         test="test_hegel_semantic_handler_graph_swarm",
-         failure="hegel native failure origin: handler swarm task/index/floor state differs from model"),
 ]
 FLAGS = ["-build-mode:test", "-o:speed", "-define:NRC_SIMULATION=true",
          "-define:HEGEL_REQUIRED=true", "-define:ODIN_TEST_THREADS=1",

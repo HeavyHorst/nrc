@@ -6,6 +6,205 @@ import "core:mem/virtual"
 import "core:strconv"
 import "core:testing"
 import pr "protocol"
+import sql "sqlite"
+import ws "websocket"
+import db "workspace_db"
+
+worker_db_test_calendar_page :: proc(t: ^testing.T, c: ^NRC_Connection, initial: pr.CalendarRequest, expected: []pr.CalendarRow) {
+	req := initial
+	position := 0
+	for {
+		buffer: [1024]byte; n := pr.serializeCalendarRequest(req, buffer[:]); assert(n > 0)
+		process_protocol_payload(c, buffer[:n]); worker_db_test_pump(t)
+		if !testing.expect_value(t, send_queue_len(c), 1) do return
+		item := send_queue_pop(c); defer frame_lease_dispose(&item.lease)
+		frame := frame_lease_data(item.lease); _, header, _ := ws.readFrameHeader(frame)
+		end := min(position + int(req.limit), len(expected))
+		encoded: [8192]byte
+		written := pr.serializeCalendarPage(expected[position:end], end < len(expected), req.correlation_id, encoded[:])
+		if !testing.expect_value(t, string(frame[header:]), string(encoded[:written])) do return
+		if end == len(expected) do break
+		req.has_cursor = true; req.cursor = expected[end - 1].key; position = end
+	}
+}
+
+worker_db_test_calendar :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstring) {
+	store, rc := db.open(path); if !testing.expect_value(t, rc, sql.OK) do return
+	defer db.close(&store)
+	arena: virtual.Arena
+	testing.expect(t, virtual.arena_init_growing(&arena) == nil); defer virtual.arena_destroy(&arena)
+	context.temp_allocator = virtual.arena_allocator(&arena)
+	base := appointment_test_at(2026, 10, 19, 10)
+	tasks := [?]pr.Task {
+		calendar_test_task(max(u64), base + 20),
+		calendar_test_task(2, base + 19),
+		calendar_test_task(3, base + 40),
+		calendar_test_task(4, base + 25, .Done),
+		calendar_test_task(5, base + 25, .Note),
+	}
+	assets := [?]pr.Asset {
+		calendar_test_appointment(10, base + 15, base + 25),
+		calendar_test_reminder(11, base + 20, "team", virtual.arena_allocator(&arena)),
+		calendar_test_appointment(12, base + 20, 0),
+		calendar_test_appointment(16, base + 10, base + 20), // Ends at excluded boundary.
+		calendar_test_reminder(13, base + 21, "mine", virtual.arena_allocator(&arena)),
+		calendar_test_reminder(14, base + 22, "other", virtual.arena_allocator(&arena)),
+	}
+	for owner, id in ([2]string{"alice", "bob"}) {
+		assets[4 + id].owner = transmute([]byte)owner
+		assets[4 + id].preview = transmute([]byte)string(`{"visibility":"personal"}`)
+	}
+	series_start := base + 1000
+	exceptions := fmt.tprintf(
+		`[{{"at":"%d","cancelled":true}},{{"at":"%d","cancelled":false,"start_at":"%d","end_at":"","participants":["carol"]}}]`,
+		series_start,
+		series_start + APPOINTMENT_DAY,
+		series_start + APPOINTMENT_DAY + 50,
+	)
+	preview := appointment_test_preview(series_start, "UTC", "daily", "[]", "", exceptions)
+	_, valid_series := parse_appointment_preview(transmute([]byte)preview, context.temp_allocator)
+	testing.expect(t, valid_series, preview)
+	series := pr.Asset {
+		asset_id   = 15,
+		asset_type = .Appointment,
+		owner      = transmute([]byte)string("organizer"),
+		preview    = transmute([]byte)preview,
+	}
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM edges; DELETE FROM assets; DELETE FROM tasks", nil, nil, nil), sql.OK)
+	for &task in tasks do testing.expect_value(t, db.put_task(&store, c.workspace_id, &task), sql.OK)
+	for &asset in assets do testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &asset), sql.OK)
+	testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &series), sql.OK)
+	foreign_task := pr.Task {
+		id     = 1,
+		due_at = base + 20,
+	}
+	testing.expect_value(t, db.put_task(&store, "foreign-calendar", &foreign_task), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	req := pr.CalendarRequest {
+		start          = base + 20,
+		end            = base + 40,
+		limit          = 2,
+		correlation_id = 1201,
+	}
+	want := [5]pr.CalendarRow {
+		{key = {base + 20, 0, max(u64)}, title = task_query_test_bytes("task")},
+		{key = {base + 20, 1, 11}, title = task_query_test_bytes("team")},
+		{
+			key = {base + 20, 2, 10},
+			title = task_query_test_bytes("meeting"),
+			assignee = task_query_test_bytes("alice"),
+			project = task_query_test_bytes("alpha"),
+			actual_start_at = base + 15,
+			end_at = base + 25,
+		},
+		{
+			key = {base + 20, 2, 12},
+			title = task_query_test_bytes("meeting"),
+			assignee = task_query_test_bytes("alice"),
+			project = task_query_test_bytes("alpha"),
+			actual_start_at = base + 20,
+		},
+		{key = {base + 21, 1, 13}, title = task_query_test_bytes("mine")},
+	}
+	worker_db_test_calendar_page(t, c, req, want[:])
+	req.assignee = task_query_test_bytes("alice"); req.project = task_query_test_bytes("alpha")
+	worker_db_test_calendar_page(t, c, req, want[2:4])
+	req.assignee = task_query_test_bytes("absent")
+	worker_db_test_calendar_page(t, c, req, nil)
+	req = pr.CalendarRequest {
+		start          = series_start,
+		end            = series_start + 2 * APPOINTMENT_DAY + 1,
+		limit          = 1,
+		correlation_id = 1202,
+	}
+	occurrences := [2]pr.CalendarRow {
+		{
+			key = {series_start + APPOINTMENT_DAY + 50, 3, 15},
+			title = task_query_test_bytes("Series"),
+			assignee = task_query_test_bytes("alice"),
+			actual_start_at = series_start + APPOINTMENT_DAY + 50,
+			occurrence_at = series_start + APPOINTMENT_DAY,
+		},
+		{
+			key = {series_start + 2 * APPOINTMENT_DAY, 3, 15},
+			title = task_query_test_bytes("Series"),
+			assignee = task_query_test_bytes("alice"),
+			actual_start_at = series_start + 2 * APPOINTMENT_DAY,
+			end_at = series_start + 2 * APPOINTMENT_DAY + 3600000000000,
+			occurrence_at = series_start + 2 * APPOINTMENT_DAY,
+		},
+	}
+	worker_db_test_calendar_page(t, c, req, occurrences[:])
+	req.assignee = task_query_test_bytes("carol")
+	worker_db_test_calendar_page(t, c, req, occurrences[:1])
+	req.assignee = task_query_test_bytes("bob")
+	worker_db_test_calendar_page(t, c, req, occurrences[1:])
+	// Late-discovered appointments must displace point rows in a full top-101.
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "DELETE FROM assets; DELETE FROM tasks", nil, nil, nil), sql.OK)
+	large: [151]pr.CalendarRow
+	large[0] = want[2]
+	testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &assets[0]), sql.OK)
+	for i in 0 ..< 150 {
+		task := pr.Task {
+			id     = u64(i + 1),
+			due_at = base + 30,
+			title  = task_query_test_bytes("task"),
+		}
+		testing.expect_value(t, db.put_task(&store, c.workspace_id, &task), sql.OK)
+		large[i + 1] = {
+			key   = {base + 30, 0, task.id},
+			title = task.title,
+		}
+	}
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	req = pr.CalendarRequest {
+		start          = base + 20,
+		end            = base + 40,
+		limit          = 100,
+		correlation_id = 1203,
+	}
+	worker_db_test_calendar_page(t, c, req, large[:])
+	// Byte budget: exactly one row fits, then none fits, then reuse succeeds.
+	buffer: [1024]byte; n := pr.serializeCalendarRequest(req, buffer[:])
+	request := db.Request {
+		opcode    = .C_QueryCalendar,
+		workspace = c.workspace_id,
+		actor     = "alice",
+		body      = buffer[2:n],
+	}
+	for budget in ([3]int{34 + pr.calendar_row_size(large[0]), 34, 8192}) {
+		output := db.Command_Output {
+			limit = budget + size_of(db.Command_Frame),
+		}; defer db.destroy_command_output(&output)
+		testing.expect_value(t, db.begin(&store), sql.OK)
+		testing.expect_value(t, sqlite_execute_task_command(&store, &request, &output), budget == 34 ? sql.TOOBIG : sql.OK)
+		testing.expect_value(t, db.rollback(&store), sql.OK)
+		if budget == 34 {testing.expect_value(t, output.count, 0)} else if testing.expect_value(t, output.count, 1) {
+			encoded: [8192]byte; count := budget == 8192 ? 100 : 1
+			size := pr.serializeCalendarPage(large[:count], true, req.correlation_id, encoded[:])
+			testing.expect_value(t, string(output.frames[0].payload), string(encoded[:size]))
+		}
+	}
+	for text, mode in ([3]string{"Access denied", "Server too busy", "Failed to query calendar"}) {
+		c.authenticated = mode != 0; td.database.stopping = mode == 1
+		if mode == 2 do testing.expect_value(t, sql.exec(store.db, "ALTER TABLE appointment_metadata RENAME TO unavailable_appointments", nil, nil, nil), sql.OK)
+		process_protocol_payload(c, buffer[:n])
+		c.authenticated = true; td.database.stopping = false
+		worker_db_test_pump(t)
+		if mode == 2 do testing.expect_value(t, sql.exec(store.db, "ALTER TABLE unavailable_appointments RENAME TO appointment_metadata", nil, nil, nil), sql.OK)
+		if !testing.expect_value(t, send_queue_len(c), 1) do continue
+		item := send_queue_pop(c); defer frame_lease_dispose(&item.lease)
+		frame := frame_lease_data(item.lease); _, header, _ := ws.readFrameHeader(frame)
+		encoded: [256]byte
+		size := pr.serializeErrorResponse(
+			{origin_opcode = .C_QueryCalendar, error_msg = transmute([]byte)text, correlation_id = req.correlation_id},
+			encoded[:],
+		)
+		testing.expect_value(t, string(frame[header:]), string(encoded[:size]))
+	}
+}
 
 foreign import calendar_test_zstd "system:zstd"
 foreign calendar_test_zstd {
@@ -154,24 +353,11 @@ test_calendar_token_reader_plain_payload_allocates_nothing :: proc(t: ^testing.T
 	testing.expect_value(t, tracker.total_allocation_count, i64(0))
 }
 
-calendar_test_conversation :: proc() -> ^Conversation_State {
-	conv := new(Conversation_State)
-	conv.tasks = make(map[pr.TaskID]^pr.Task)
-	conv.assets = make(map[pr.AssetID]^pr.Asset)
-	init_task_index(conv)
-	init_note_index(conv)
-	return conv
+calendar_test_task :: proc(id: pr.TaskID, due: i64, status := pr.TaskStatus.Todo) -> pr.Task {
+	return {id = id, due_at = due, status = status, title = transmute([]byte)string("task")}
 }
 
-calendar_test_task :: proc(id: pr.TaskID, due: i64, status := pr.TaskStatus.Todo, assignee := "", project := "") -> ^pr.Task {
-	task := alloc_task(transmute([]byte)string("task"), nil, transmute([]byte)assignee, nil, nil, nil, transmute([]byte)project, nil)
-	task.id = id
-	task.due_at = due
-	task.status = status
-	return task
-}
-
-calendar_test_reminder :: proc(id: pr.AssetID, at: i64, title: string) -> ^pr.Asset {
+calendar_test_reminder :: proc(id: pr.AssetID, at: i64, title: string, allocator: mem.Allocator) -> pr.Asset {
 	storage: [256]byte
 	number: [32]byte
 	at_text := strconv.write_int(number[:], at, 10)
@@ -180,13 +366,13 @@ calendar_test_reminder :: proc(id: pr.AssetID, at: i64, title: string) -> ^pr.As
 	offset += copy(storage[offset:], transmute([]byte)string("\",\"title\":\""))
 	offset += copy(storage[offset:], transmute([]byte)title)
 	offset += copy(storage[offset:], transmute([]byte)string("\"}"))
-	asset := alloc_asset(nil, nil, storage[:offset])
-	asset.asset_id = id
-	asset.asset_type = .Reminder
-	return asset
+	payload := make([]byte, offset, allocator)
+	copy(payload, storage[:offset])
+	return {asset_id = id, asset_type = .Reminder, payload = payload}
 }
 
-calendar_test_appointment :: proc(id: pr.AssetID, start, end: i64, title := "meeting", assignee := "alice", project := "alpha") -> ^pr.Asset {
+// The caller binds temp_allocator to its fixture arena, which owns this preview.
+calendar_test_appointment :: proc(id: pr.AssetID, start, end: i64, title := "meeting", assignee := "alice", project := "alpha") -> pr.Asset {
 	preview := fmt.tprintf(`{{"version":1,"title":"%s","start_at":"%d","end_at":"","assignee":"%s","project":"%s"}}`, title, start, assignee, project)
 	if end != 0 {
 		preview = fmt.tprintf(
@@ -198,156 +384,7 @@ calendar_test_appointment :: proc(id: pr.AssetID, start, end: i64, title := "mee
 			project,
 		)
 	}
-	asset := alloc_asset(nil, transmute([]byte)preview, nil, nil)
-	asset.asset_id = id
-	asset.asset_type = .Appointment
-	asset.payload_encoding = .Plain
-	return asset
-}
-
-calendar_test_collect :: proc(conv: ^Conversation_State, req: pr.CalendarRequest) -> (rows: [dynamic]pr.CalendarRow, more: bool, visited: int) {
-	rows = make([dynamic]pr.CalendarRow, 0, int(req.limit))
-	more, visited = collect_calendar_page(conv, req, &rows, context.temp_allocator)
-	return
-}
-
-@(test)
-test_calendar_half_open_order_cursor_and_range_seek :: proc(t: ^testing.T) {
-	arena: virtual.Arena
-	testing.expect(t, virtual.arena_init_growing(&arena) == nil)
-	defer virtual.arena_destroy(&arena)
-	context.temp_allocator = virtual.arena_allocator(&arena)
-	conv := calendar_test_conversation(); defer destroy_conversation(conv)
-	tasks := [?]^pr.Task {
-		calendar_test_task(90, 99),
-		calendar_test_task(9, 100),
-		calendar_test_task(3, 110),
-		calendar_test_task(8, 110),
-		calendar_test_task(91, 120),
-	}
-	for task in tasks do task_store_put(conv, task)
-	ws := Workspace_State{}
-	asset_store_put(&ws, "", conv, calendar_test_reminder(7, 110, "same instant"))
-	// A large population before and after the range must not be visited.
-	for id in 100 ..< 300 do task_store_put(conv, calendar_test_task(pr.TaskID(id), 1))
-	for id in 300 ..< 500 do task_store_put(conv, calendar_test_task(pr.TaskID(id), 1000))
-
-	rows, more, visited := calendar_test_collect(conv, pr.CalendarRequest{start = 100, end = 120, limit = 100})
-	defer delete(rows)
-	testing.expect(t, !more)
-	testing.expect_value(t, visited, 4)
-	testing.expect_value(t, len(rows), 4)
-	if len(rows) == 4 {
-		testing.expect_value(t, rows[0].key, pr.CalendarKey{100, 0, 9})
-		testing.expect_value(t, rows[1].key, pr.CalendarKey{110, 0, 3})
-		testing.expect_value(t, rows[2].key, pr.CalendarKey{110, 0, 8})
-		testing.expect_value(t, rows[3].key, pr.CalendarKey{110, 1, 7})
-	}
-	page, page_more, _ := calendar_test_collect(conv, pr.CalendarRequest{start = 100, end = 120, limit = 2})
-	defer delete(page)
-	testing.expect(t, page_more)
-	next, next_more, _ := calendar_test_collect(conv, pr.CalendarRequest{start = 100, end = 120, limit = 100, has_cursor = true, cursor = page[1].key})
-	defer delete(next)
-	testing.expect(t, !next_more)
-	testing.expect_value(t, len(next), 2)
-	if len(next) == 2 {
-		testing.expect_value(t, next[0].key, pr.CalendarKey{110, 0, 8})
-		testing.expect_value(t, next[1].key, pr.CalendarKey{110, 1, 7})
-	}
-}
-
-@(test)
-test_calendar_filters_active_dated_tasks_and_reminder_exclusion :: proc(t: ^testing.T) {
-	arena: virtual.Arena
-	testing.expect(t, virtual.arena_init_growing(&arena) == nil)
-	defer virtual.arena_destroy(&arena)
-	context.temp_allocator = virtual.arena_allocator(&arena)
-	conv := calendar_test_conversation(); defer destroy_conversation(conv)
-	ws := Workspace_State{}
-	task_store_put(conv, calendar_test_task(1, 10, .Backlog, "alice", "alpha"))
-	task_store_put(conv, calendar_test_task(2, 11, .Todo, "alice", "beta"))
-	task_store_put(conv, calendar_test_task(3, 12, .InProgress, "bob", "alpha"))
-	task_store_put(conv, calendar_test_task(4, 13, .Done, "alice", "alpha"))
-	task_store_put(conv, calendar_test_task(5, 14, .Note, "alice", "alpha"))
-	task_store_put(conv, calendar_test_task(6, 0, .Todo, "alice", "alpha"))
-	asset_store_put(&ws, "", conv, calendar_test_reminder(20, 15, "reminder"))
-	rows, _, visited := calendar_test_collect(
-		conv,
-		pr.CalendarRequest{start = 1, end = 20, limit = 100, assignee = transmute([]byte)string("alice"), project = transmute([]byte)string("alpha")},
-	)
-	defer delete(rows)
-	testing.expect_value(t, len(rows), 1)
-	testing.expect_value(t, visited, 4) // three active dated tasks plus reminder; filters intersect after range seek
-	if len(rows) == 1 do testing.expect_value(t, rows[0].key.id, u64(1))
-}
-
-@(test)
-test_calendar_mutations_and_lazy_rebuild :: proc(t: ^testing.T) {
-	arena: virtual.Arena
-	testing.expect(t, virtual.arena_init_growing(&arena) == nil)
-	defer virtual.arena_destroy(&arena)
-	context.temp_allocator = virtual.arena_allocator(&arena)
-	conv := calendar_test_conversation(); defer destroy_conversation(conv)
-	ws := Workspace_State{}
-	task_store_put(conv, calendar_test_task(1, 10))
-	asset_store_put(&ws, "", conv, calendar_test_reminder(2, 20, "old"))
-	rows, _, _ := calendar_test_collect(conv, pr.CalendarRequest{start = 1, end = 100, limit = 100})
-	delete(rows)
-	testing.expect(t, conv.calendar_ready)
-	// Replacement must remove old keys and add new keys while materialized.
-	task_store_put(conv, calendar_test_task(1, 30))
-	asset_store_put(&ws, "", conv, calendar_test_reminder(2, 40, "new"))
-	rows, _, _ = calendar_test_collect(conv, pr.CalendarRequest{start = 1, end = 100, limit = 100})
-	testing.expect_value(t, len(rows), 2)
-	if len(rows) == 2 {testing.expect_value(t, rows[0].key.at, i64(30)); testing.expect_value(t, rows[1].key.at, i64(40))}
-	delete(rows)
-	task_store_put(conv, calendar_test_task(1, 30, .Done))
-	asset_store_remove(&ws, conv, 2)
-	rows, _, _ = calendar_test_collect(conv, pr.CalendarRequest{start = 1, end = 100, limit = 100})
-	testing.expect_value(t, len(rows), 0)
-	delete(rows)
-
-	calendar_index_destroy(conv)
-	testing.expect(t, !conv.calendar_ready)
-	task_store_put(conv, calendar_test_task(3, 50)) // no eager tree exists
-	asset_store_put(&ws, "", conv, calendar_test_reminder(4, 60, "rebuilt"))
-	rows, _, _ = calendar_test_collect(conv, pr.CalendarRequest{start = 1, end = 100, limit = 100})
-	defer delete(rows)
-	testing.expect(t, conv.calendar_ready)
-	testing.expect_value(t, len(rows), 2)
-}
-
-@(test)
-test_calendar_appointment_overlap_cursor_filters_and_mutation :: proc(t: ^testing.T) {
-	arena: virtual.Arena
-	testing.expect(t, virtual.arena_init_growing(&arena) == nil)
-	defer virtual.arena_destroy(&arena)
-	context.temp_allocator = virtual.arena_allocator(&arena)
-	conv := calendar_test_conversation(); defer destroy_conversation(conv)
-	ws := Workspace_State{}
-	first := calendar_test_appointment(1, 10, 20)
-	_, first_valid := parse_appointment_preview(first.preview, context.temp_allocator)
-	testing.expect(t, first_valid, string(first.preview))
-	asset_store_put(&ws, "", conv, first) // ends at boundary: excluded
-	asset_store_put(&ws, "", conv, calendar_test_appointment(2, 15, 25)) // overlaps into range
-	asset_store_put(&ws, "", conv, calendar_test_appointment(3, 20, 0)) // point at boundary: included
-	asset_store_put(&ws, "", conv, calendar_test_appointment(4, 30, 40)) // starts at end: excluded
-	rows, more, _ := calendar_test_collect(
-		conv,
-		pr.CalendarRequest{start = 20, end = 30, limit = 1, assignee = transmute([]byte)string("alice"), project = transmute([]byte)string("alpha")},
-	)
-	testing.expect(t, more); testing.expect_value(t, len(rows), 1)
-	testing.expect_value(t, rows[0].key, pr.CalendarKey{20, 2, 2})
-	testing.expect_value(t, rows[0].actual_start_at, i64(15)); testing.expect_value(t, rows[0].end_at, i64(25))
-	cursor := rows[0].key; delete(rows)
-	rows, more, _ = calendar_test_collect(conv, pr.CalendarRequest{start = 20, end = 30, limit = 10, has_cursor = true, cursor = cursor})
-	testing.expect(t, !more); testing.expect_value(t, len(rows), 1)
-	if len(rows) == 1 do testing.expect_value(t, rows[0].key.id, u64(3))
-	delete(rows)
-	asset_store_put(&ws, "", conv, calendar_test_appointment(2, 50, 60))
-	rows, _, _ = calendar_test_collect(conv, pr.CalendarRequest{start = 20, end = 30, limit = 10})
-	testing.expect_value(t, len(rows), 1)
-	delete(rows)
+	return {asset_id = id, asset_type = .Appointment, preview = transmute([]byte)preview, payload_encoding = .Plain}
 }
 
 @(test)
@@ -359,80 +396,4 @@ test_appointment_record_validation :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, !validate_appointment_asset(.Appointment, .Zstd, 0, valid, nil))
 	testing.expect(t, !validate_appointment_asset(.Appointment, .Plain, 1, valid, transmute([]byte)string("x")))
-}
-
-@(test)
-test_calendar_appointment_bucket_boundaries_and_rebuild :: proc(t: ^testing.T) {
-	arena: virtual.Arena
-	testing.expect(t, virtual.arena_init_growing(&arena) == nil)
-	defer virtual.arena_destroy(&arena)
-	context.temp_allocator = virtual.arena_allocator(&arena)
-	conv := calendar_test_conversation(); defer destroy_conversation(conv)
-	ws := Workspace_State{}
-	// Exercise every small power-of-two bucket boundary with points and ranges.
-	for start: i64 = 1; start < 80; start += 1 {
-		for duration: i64 = 0; duration < 12; duration += 1 {
-			id := pr.AssetID(start * 12 + duration)
-			asset_store_put(&ws, "", conv, calendar_test_appointment(id, start, duration == 0 ? 0 : start + duration))
-		}
-	}
-	for query_start: i64 = 1; query_start < 90; query_start += 7 {
-		query_end := query_start + 5
-		expected := make(map[u64]bool)
-		for start: i64 = 1; start < 80; start += 1 {
-			for duration: i64 = 0; duration < 12; duration += 1 {
-				if start < query_end && (duration == 0 ? start >= query_start : start + duration > query_start) {
-					expected[u64(start * 12 + duration)] = true
-				}
-			}
-		}
-		req := pr.CalendarRequest {
-			start = query_start,
-			end   = query_end,
-			limit = 7,
-		}
-		for page in 0 ..< 200 {
-			rows, more, _ := calendar_test_collect(conv, req)
-			for row in rows {
-				testing.expect(t, row.key.id in expected, "no duplicate or non-overlapping appointment")
-				delete_key(&expected, row.key.id)
-				if req.has_cursor do testing.expect(t, row.key.at > req.cursor.at || row.key.at == req.cursor.at && row.key.id > req.cursor.id)
-				req.cursor = row.key; req.has_cursor = true
-			}
-			delete(rows)
-			if !more do break
-			testing.expect(t, page < 199, "cursor must terminate")
-		}
-		testing.expect_value(t, len(expected), 0)
-		delete(expected)
-	}
-	asset_store_put(&ws, "", conv, calendar_test_appointment(9999, 1, max(i64)))
-	calendar_index_destroy(conv)
-	rows, _, _ := calendar_test_collect(conv, pr.CalendarRequest{start = max(i64) - 2, end = max(i64), limit = 100})
-	testing.expect_value(t, len(rows), 1)
-	if len(rows) == 1 do testing.expect_value(t, rows[0].key.id, u64(9999))
-	delete(rows)
-	asset_store_remove(&ws, conv, 9999)
-	rows, _, _ = calendar_test_collect(conv, pr.CalendarRequest{start = max(i64) - 2, end = max(i64), limit = 100})
-	testing.expect_value(t, len(rows), 0)
-	delete(rows)
-}
-
-@(test)
-test_calendar_appointment_seeks_past_unrelated_dates :: proc(t: ^testing.T) {
-	arena: virtual.Arena
-	testing.expect(t, virtual.arena_init_growing(&arena) == nil)
-	defer virtual.arena_destroy(&arena)
-	context.temp_allocator = virtual.arena_allocator(&arena)
-	conv := calendar_test_conversation(); defer destroy_conversation(conv)
-	ws := Workspace_State{}
-	for i: i64 = 1; i <= 1000; i += 1 {
-		asset_store_put(&ws, "", conv, calendar_test_appointment(pr.AssetID(i), i * 1000, i * 1000 + 10))
-	}
-	rows, more, visited := calendar_test_collect(conv, pr.CalendarRequest{start = 500005, end = 500006, limit = 100})
-	defer delete(rows)
-	testing.expect(t, !more)
-	testing.expect_value(t, len(rows), 1)
-	if len(rows) == 1 do testing.expect_value(t, rows[0].key.id, u64(500))
-	testing.expect(t, visited < 10, "must skip both historical and future appointments")
 }

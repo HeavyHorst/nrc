@@ -25,6 +25,20 @@ run env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test -p 'test_
 run "$odin_tests" . "${odin_common[@]}" "${odin_hegel[@]}"
 run "$odin_tests" . "${odin_common[@]}" -define:NRC_SIMULATION=true "${odin_hegel[@]}"
 
+# Frozen offline importer against the current schema and real Odin parsers.
+# The builder is an explicit-file tool; these tests use synthetic sources only.
+(
+	builder_dir="$(mktemp -d)"
+	trap 'rm -rf "$builder_dir"' EXIT
+	run cmp workspace_db/schema.sql tools/wal-to-sqlite/schema.sql
+	run cmp workspace_db/slice_summaries.sql tools/wal-to-sqlite/slice_summaries.sql
+	run cmp workspace_db/slice_incremental.sql tools/wal-to-sqlite/slice_incremental.sql
+	run cmp workspace_db/slice_pagination.sql tools/wal-to-sqlite/slice_pagination.sql
+	run "$odin_bin" build . -vet -o:speed -define:NRC_SQLITE_PROJECTION_BUILDER=true -out:"$builder_dir/projection-builder"
+	run env NRC_TEST_PROJECTION_BUILDER="$builder_dir/projection-builder" PYTHONDONTWRITEBYTECODE=1 \
+		python3 -W error::ResourceWarning -m unittest discover -s tools/wal-to-sqlite -v
+)
+
 # Odin subpackages containing tests. Persistence has simulation-specific coverage.
 run "$odin_tests" websocket/ "${odin_common[@]}" "${odin_hegel[@]}"
 run "$odin_tests" protocol/ "${odin_common[@]}" "${odin_hegel[@]}"
@@ -32,6 +46,8 @@ run "$odin_tests" persistence/ "${odin_common[@]}"
 run "$odin_tests" persistence/ "${odin_common[@]}" -define:NRC_SIMULATION=true
 run "$odin_tests" storage_io/ "${odin_common[@]}"
 run "$odin_tests" storage_io/ "${odin_common[@]}" -define:NRC_SIMULATION=true
+run "$odin_tests" sqlite/ "${odin_common[@]}"
+run "$odin_tests" workspace_db/ "${odin_common[@]}"
 run "$odin_tests" btree/ "${odin_common[@]}" "${odin_hegel[@]}"
 run "$odin_tests" work_order/ "${odin_common[@]}"
 run "$odin_tests" vendor/tlsf/ "${odin_common[@]}"

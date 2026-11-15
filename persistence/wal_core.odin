@@ -137,11 +137,6 @@ simulate_wal_crash_for_test :: proc(state: ^WAL_State) {
 	if state.file != nil {
 		storage_io.discard(state.file)
 	}
-	when NRC_SIMULATION {
-		if state.virtual_file != nil {
-			virtual_wal_crash((^Virtual_WAL_File)(state.virtual_file))
-		}
-	}
 
 	state.file = nil
 	state.enabled = false
@@ -168,45 +163,22 @@ set_recovered_wal_state :: proc(state: ^WAL_State, last_hash: [32]byte, record_c
 }
 
 sync_wal_target :: proc(state: ^WAL_State) -> bool {
-	when NRC_SIMULATION {
-		if state.virtual_file != nil {
-			virtual_wal_sync((^Virtual_WAL_File)(state.virtual_file))
-			return true
-		} else if state.file != nil {
-			if wal_sync_fault_state.armed {
-				wal_sync_fault_state.armed = false
-				wal_sync_fault_state.triggered = true
-				state.write_failures += 1
-				state.enabled = false
-				log.errorf("[T%d] WAL fsync failed: %v", state.thread_index, os.Platform_Error(posix.Errno.EIO))
-				return false
-			}
-			if sync_err := storage_io.sync(state.file); sync_err != nil {
-				state.write_failures += 1
-				state.enabled = false
-				log.errorf("[T%d] WAL fsync failed: %v", state.thread_index, sync_err)
-				return false
-			}
-			return true
+	if state.file != nil {
+		if wal_sync_fault_state.armed {
+			wal_sync_fault_state.armed = false
+			wal_sync_fault_state.triggered = true
+			state.write_failures += 1
+			state.enabled = false
+			log.errorf("[T%d] WAL fsync failed: %v", state.thread_index, os.Platform_Error(posix.Errno.EIO))
+			return false
 		}
-	} else {
-		if state.file != nil {
-			if wal_sync_fault_state.armed {
-				wal_sync_fault_state.armed = false
-				wal_sync_fault_state.triggered = true
-				state.write_failures += 1
-				state.enabled = false
-				log.errorf("[T%d] WAL fsync failed: %v", state.thread_index, os.Platform_Error(posix.Errno.EIO))
-				return false
-			}
-			if sync_err := storage_io.sync(state.file); sync_err != nil {
-				state.write_failures += 1
-				state.enabled = false
-				log.errorf("[T%d] WAL fsync failed: %v", state.thread_index, sync_err)
-				return false
-			}
-			return true
+		if sync_err := storage_io.sync(state.file); sync_err != nil {
+			state.write_failures += 1
+			state.enabled = false
+			log.errorf("[T%d] WAL fsync failed: %v", state.thread_index, sync_err)
+			return false
 		}
+		return true
 	}
 	state.enabled = false
 	return false
@@ -295,30 +267,6 @@ poison_wal_after_ambiguous_write :: proc(state: ^WAL_State, written: int, attemp
 }
 
 write_record_direct :: proc(state: ^WAL_State, buf: []byte, sync_if_due: bool) -> bool {
-	when NRC_SIMULATION {
-		if state.virtual_file != nil {
-			virtual_file := (^Virtual_WAL_File)(state.virtual_file)
-			write_start := state.get_time()
-			record_size := len(buf)
-			if !virtual_wal_write(virtual_file, buf) {
-				poison_wal_after_ambiguous_write(state, 0, record_size, nil)
-				return false
-			}
-			write_elapsed := time.diff(write_start, state.get_time())
-
-			state.total_write_latency_ns += u64(time.duration_nanoseconds(write_elapsed))
-			state.write_count += 1
-			state.pending_bytes += u64(record_size)
-			state.file_size_bytes += u64(record_size)
-			state.write_failures = 0
-
-			compute_chain_hash(&state.sha_state, buf, state.last_hash[:])
-			state.record_count += 1
-
-			return maybe_fsync(state) if sync_if_due else true
-		}
-	}
-
 	if state.file == nil {
 		state.enabled = false
 		return false
@@ -566,32 +514,6 @@ flush_write_batch_internal :: proc(state: ^WAL_State, sync_if_due: bool) -> bool
 	if state.write_offset == 0 {
 		return true
 	}
-	when NRC_SIMULATION {
-		if state.virtual_file != nil {
-			virtual_file := (^Virtual_WAL_File)(state.virtual_file)
-			write_start := state.get_time()
-			batch_bytes := state.write_offset
-			batch_records := state.buffered_record_count
-			batch_last_hash := state.buffered_last_hash
-
-			if !virtual_wal_write(virtual_file, state.write_buffer[:state.write_offset]) {
-				poison_wal_after_ambiguous_write(state, 0, batch_bytes, nil)
-				return false
-			}
-
-			write_elapsed := time.diff(write_start, state.get_time())
-			state.total_write_latency_ns += u64(time.duration_nanoseconds(write_elapsed))
-			state.write_count += 1
-			state.pending_bytes += u64(batch_bytes)
-			state.file_size_bytes += u64(batch_bytes)
-			state.write_failures = 0
-			state.last_hash = batch_last_hash
-			state.record_count += batch_records
-			reset_buffered_write_state(state)
-
-			return maybe_fsync(state) if sync_if_due else true
-		}
-	}
 	if state.file == nil {
 		state.enabled = false
 		return false
@@ -806,53 +728,18 @@ FILE_SIZE_CACHE_TTL :: time.Second
 // get_file_size returns exact accepted bytes, including records still staged in
 // the write batch. Rotation decisions therefore do not depend on stat cache age.
 get_file_size :: proc(state: ^WAL_State) -> u64 {
-	when NRC_SIMULATION {
-		if state.enabled && state.virtual_file != nil {
-			virtual_file := (^Virtual_WAL_File)(state.virtual_file)
-			return u64(len(virtual_file.stable) + len(virtual_file.pending))
-		}
-	}
 	if !state.enabled || state.file == nil do return 0
 	return state.file_size_bytes + u64(state.write_offset)
 }
 
 // ============================================================================
-// Read Path (Replay)
+// Read Path (Inspection)
 // ============================================================================
 
-// Apply_Record_Proc is the callback type for replay_wal
+// Apply_Record_Proc visits each validated record during inspection.
 // Parameters: op (u8), version (u16), payload ([]byte)
 // Returns: true to continue replay, false to stop
 Apply_Record_Proc :: #type proc(op: u8, version: u16, payload: []byte) -> bool
-Apply_Record_Sized_Proc :: #type proc(op: u8, version: u16, payload: []byte, record_size: int) -> bool
-
-// replay_wal replays a WAL file and calls apply_fn for each valid record.
-// Chain verification starts from the zero hash.
-replay_wal :: proc(path: string, magic: u32, thread_index: int, apply_fn: Apply_Record_Proc) -> Replay_Result {
-	return replay_wal_with_initial_hash(path, magic, thread_index, [32]byte{}, apply_fn)
-}
-
-// replay_wal_data replays a WAL byte slice and calls apply_fn for each valid record.
-// This is used by deterministic simulation tests where the WAL lives on a virtual
-// in-memory block device instead of an OS file.
-replay_wal_data :: proc(data: []byte, magic: u32, thread_index: int, apply_fn: Apply_Record_Proc) -> Replay_Result {
-	return replay_wal_data_with_initial_hash(data, magic, thread_index, [32]byte{}, apply_fn)
-}
-
-replay_wal_data_with_initial_hash :: proc(
-	data: []byte,
-	magic: u32,
-	thread_index: int,
-	initial_prev_hash: [32]byte,
-	apply_fn: Apply_Record_Proc,
-) -> Replay_Result {
-	start_time := time.now()
-	parsed := parse_wal_data(data, magic, thread_index, initial_prev_hash, apply_fn)
-
-	elapsed := time.diff(start_time, time.now())
-	log.infof("[T%d] Replayed %d records from virtual WAL in %v (chain verified)", thread_index, parsed.result.record_count, elapsed)
-	return parsed.result
-}
 
 Parsed_WAL_Data :: struct {
 	result:           Replay_Result,
@@ -864,25 +751,13 @@ Parsed_WAL_Data :: struct {
 
 WAL_Read_Source_Proc :: proc(data: rawptr, offset, length: int) -> ([]byte, bool)
 
-Memory_WAL_Read_Source :: struct {
-	data: []byte,
-}
-
-memory_wal_read_source :: proc(data: rawptr, offset, length: int) -> ([]byte, bool) {
-	source := (^Memory_WAL_Read_Source)(data)
-	if source == nil || offset < 0 || length < 0 || offset > len(source.data) - length do return nil, false
-	return source.data[offset:offset + length], true
-}
-
 parse_wal_source :: proc(
 	source_data: rawptr,
 	read_source: WAL_Read_Source_Proc,
 	data_length: int,
 	magic: u32,
 	thread_index: int,
-	initial_prev_hash: [32]byte,
 	apply_fn: Apply_Record_Proc,
-	apply_sized_fn: Apply_Record_Sized_Proc = nil,
 ) -> Parsed_WAL_Data {
 	parsed := Parsed_WAL_Data{}
 
@@ -893,7 +768,7 @@ parse_wal_source :: proc(
 
 	offset := 0
 	record_count := 0
-	expected_prev_hash := initial_prev_hash
+	expected_prev_hash: [32]byte
 	crc32_state: xxhash.XXH32_state
 	crc64_state: xxhash.XXH64_state
 	sha_state: sha2.Context_256
@@ -964,7 +839,7 @@ parse_wal_source :: proc(
 		}
 
 		payload := record_data[header_size:][:length]
-		applied := apply_sized_fn != nil ? apply_sized_fn(op, version, payload, record_size) : apply_fn(op, version, payload)
+		applied := apply_fn(op, version, payload)
 		if !applied {
 			parsed.stopped_by_apply = true
 			break
@@ -986,11 +861,6 @@ parse_wal_source :: proc(
 	parsed.result.last_hash = expected_prev_hash
 	parsed.result.ok = true
 	return parsed
-}
-
-parse_wal_data :: proc(data: []byte, magic: u32, thread_index: int, initial_prev_hash: [32]byte, apply_fn: Apply_Record_Proc) -> Parsed_WAL_Data {
-	source := Memory_WAL_Read_Source{data}
-	return parse_wal_source(&source, memory_wal_read_source, len(data), magic, thread_index, initial_prev_hash, apply_fn)
 }
 
 Storage_WAL_Read_Source :: struct {
@@ -1147,9 +1017,7 @@ parse_wal_file_direct :: proc(
 	path: string,
 	magic: u32,
 	thread_index: int,
-	initial_prev_hash: [32]byte,
 	apply_fn: Apply_Record_Proc,
-	apply_sized_fn: Apply_Record_Sized_Proc = nil,
 ) -> (
 	parsed: Parsed_WAL_Data,
 	file_size: int,
@@ -1158,7 +1026,7 @@ parse_wal_file_direct :: proc(
 	source, direct_file_size, open_ok := open_direct_wal_read_source(path, thread_index)
 	if !open_ok do return
 	defer close_direct_wal_read_source(&source)
-	parsed = parse_wal_source(&source, direct_wal_read_source, direct_file_size, magic, thread_index, initial_prev_hash, apply_fn, apply_sized_fn)
+	parsed = parse_wal_source(&source, direct_wal_read_source, direct_file_size, magic, thread_index, apply_fn)
 	return parsed, direct_file_size, parsed.result.ok
 }
 
@@ -1167,16 +1035,14 @@ parse_wal_file_with_storage :: proc(
 	path: string,
 	magic: u32,
 	thread_index: int,
-	initial_prev_hash: [32]byte,
 	apply_fn: Apply_Record_Proc,
-	apply_sized_fn: Apply_Record_Sized_Proc = nil,
 ) -> (
 	parsed: Parsed_WAL_Data,
 	file_size: int,
 	ok: bool,
 ) {
 	if storage_io.context_is_host(storage) {
-		return parse_wal_file_direct(path, magic, thread_index, initial_prev_hash, apply_fn, apply_sized_fn)
+		return parse_wal_file_direct(path, magic, thread_index, apply_fn)
 	}
 	file, open_err := storage_io.open(storage, path, {.Read})
 	if open_err != nil do return
@@ -1189,7 +1055,7 @@ parse_wal_file_with_storage :: proc(
 		buffer = make([dynamic]byte),
 	}
 	defer delete(source.buffer)
-	parsed = parse_wal_source(&source, storage_wal_read_source, file_size, magic, thread_index, initial_prev_hash, apply_fn, apply_sized_fn)
+	parsed = parse_wal_source(&source, storage_wal_read_source, file_size, magic, thread_index, apply_fn)
 	return parsed, file_size, parsed.result.ok
 }
 
@@ -1214,25 +1080,7 @@ inspect_wal_file_strict_with_storage :: proc(
 ) -> (
 	inspection: Strict_WAL_Inspection,
 ) {
-	parsed, file_size, read_ok := parse_wal_file_with_storage(storage, path, magic, thread_index, [32]byte{}, apply_fn)
-	inspection.file_size = u64(file_size)
-	if !read_ok || parsed.invalid_tail || parsed.stopped_by_apply || parsed.offset != file_size do return
-	inspection.record_count = parsed.result.record_count
-	inspection.last_hash = parsed.result.last_hash
-	inspection.ok = true
-	return
-}
-
-inspect_wal_file_strict_sized :: proc(
-	storage: storage_io.Context,
-	path: string,
-	magic: u32,
-	thread_index: int,
-	apply_fn: Apply_Record_Sized_Proc,
-) -> (
-	inspection: Strict_WAL_Inspection,
-) {
-	parsed, file_size, read_ok := parse_wal_file_with_storage(storage, path, magic, thread_index, [32]byte{}, nil, apply_fn)
+	parsed, file_size, read_ok := parse_wal_file_with_storage(storage, path, magic, thread_index, apply_fn)
 	inspection.file_size = u64(file_size)
 	if !read_ok || parsed.invalid_tail || parsed.stopped_by_apply || parsed.offset != file_size do return
 	inspection.record_count = parsed.result.record_count
@@ -1262,7 +1110,7 @@ inspect_wal_file_with_tail_recovery_with_storage :: proc(
 ) -> (
 	inspection: Strict_WAL_Inspection,
 ) {
-	parsed, file_size, read_ok := parse_wal_file_with_storage(storage, path, magic, thread_index, [32]byte{}, apply_fn)
+	parsed, file_size, read_ok := parse_wal_file_with_storage(storage, path, magic, thread_index, apply_fn)
 	if !read_ok || parsed.stopped_by_apply || parsed.invalid_tail && !parsed.recoverable_tail do return
 	if parsed.recoverable_tail {
 		if !truncate_wal_at(storage, path, parsed.offset, thread_index) do return
@@ -1274,32 +1122,6 @@ inspect_wal_file_with_tail_recovery_with_storage :: proc(
 	inspection.last_hash = parsed.result.last_hash
 	inspection.ok = true
 	return
-}
-
-// audit_wal_file_strict is the boolean compatibility wrapper for strict inspection.
-audit_wal_file_strict :: proc(path: string, magic: u32, thread_index: int, apply_fn: Apply_Record_Proc) -> bool {
-	return inspect_wal_file_strict(path, magic, thread_index, apply_fn).ok
-}
-
-// replay_wal_with_initial_hash replays a WAL file and verifies that the first record links
-// to initial_prev_hash. This is used for chained replay across split log files.
-replay_wal_with_initial_hash :: proc(path: string, magic: u32, thread_index: int, initial_prev_hash: [32]byte, apply_fn: Apply_Record_Proc) -> Replay_Result {
-	result := Replay_Result{}
-	start_time := time.now()
-
-	parsed, _, read_ok := parse_wal_file_direct(path, magic, thread_index, initial_prev_hash, apply_fn)
-	if !read_ok do return result
-	if parsed.invalid_tail {
-		if !parsed.recoverable_tail || !truncate_wal_at(path, parsed.offset, thread_index) {
-			return result
-		}
-	}
-
-	result = parsed.result
-
-	elapsed := time.diff(start_time, time.now())
-	log.infof("[T%d] Replayed %d records from WAL in %v (chain verified)", thread_index, result.record_count, elapsed)
-	return result
 }
 
 // truncate_wal_at truncates the WAL file at the given offset
@@ -1337,34 +1159,4 @@ truncate_wal_at_with_storage :: proc(storage: storage_io.Context, path: string, 
 		log.infof("[T%d] Truncated WAL at offset %d", thread_index, offset)
 	}
 	return true
-}
-
-// ============================================================================
-// Payload Helpers (for building payloads)
-// ============================================================================
-
-// write_workspace_prefix writes a length-prefixed workspace ID to a buffer
-// Returns the number of bytes written
-write_workspace_prefix :: proc(buf: []byte, workspace_id: string) -> int {
-	endian.put_u16(buf[0:], .Big, u16(len(workspace_id)))
-	copy(buf[2:], workspace_id)
-	return 2 + len(workspace_id)
-}
-
-// parse_workspace_prefix parses a length-prefixed workspace ID from payload
-// Returns the workspace_id string and offset after it, or empty string and 0 on error
-parse_workspace_prefix :: proc(payload: []byte) -> (workspace_id: string, offset: int, ok: bool) {
-	if len(payload) < 2 {
-		return "", 0, false
-	}
-	ws_len, _ := endian.get_u16(payload[0:], .Big)
-	offset = 2
-
-	if len(payload) < offset + int(ws_len) {
-		return "", 0, false
-	}
-	workspace_id = string(payload[offset:][:ws_len])
-	offset += int(ws_len)
-
-	return workspace_id, offset, true
 }

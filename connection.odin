@@ -934,17 +934,14 @@ Send_Completion_Observer :: struct {
 
 // Queue item for pending sends
 Send_Item :: struct {
-	lease:                 Frame_Lease,
-	handle:                Connection_Handle,
-	action:                Send_Completion_Action,
-	observer:              Send_Completion_Observer,
-	io_pinned:             bool, // This submitted send owns one connection pending_io reference
-	durability_writer:     ^Shard_Transaction_Writer,
-	durability_generation: u64,
-	durability_record:     u64,
-	message_store:         ^Message_Store,
-	message_generation:    u64,
-	message_record:        u64,
+	lease:              Frame_Lease,
+	handle:             Connection_Handle,
+	action:             Send_Completion_Action,
+	observer:           Send_Completion_Observer,
+	io_pinned:          bool, // This submitted send owns one connection pending_io reference
+	message_store:      ^Message_Store,
+	message_generation: u64,
+	message_record:     u64,
 }
 
 // Connection-owned transport storage for exactly one incomplete WebSocket wire
@@ -976,7 +973,6 @@ NRC_Connection :: struct #align (64) {
 	user_type:                 pr.User_Type, // 1 byte - user classification (user/bot/system)
 	pending_io:                u32,
 	retained_io:               u8, // bounded retained-history/dedup operations
-	deferred_shard_requests:   u16, // application payloads awaiting ordered shard replay
 	// The sole outstanding provided-buffer receive. Close cancels this handle so
 	// a transient ENOBUFS completion cannot resubmit work against a closing FD.
 	recv_completion:           ^nbio.Completion,
@@ -1026,6 +1022,7 @@ NRC_Connection :: struct #align (64) {
 	ticket_read_cursors:       map[pr.AssetID]pr.AssetID,
 	ticket_read_snapshot:      u32,
 	ticket_read_upload:        u32,
+	ticket_read_generation:    u64,
 
 	// ============ COLD PATH ============
 	handle:                    Connection_Handle,
@@ -1267,5 +1264,6 @@ cleanup_connection_subscriptions :: proc(c: ^NRC_Connection) {
 		}
 
 		conversation_remove_subscriber(conv, c.sock)
+		worker_db_mark_dm(ws, conv_id)
 	}
 }

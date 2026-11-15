@@ -13,6 +13,7 @@ import "core:time"
 
 import "clock"
 import "persistence"
+import sql "sqlite"
 import "storage_io"
 
 foreign import attachment_gc_libc "system:c"
@@ -180,68 +181,9 @@ attachment_gc_mark_retained_messages :: proc(shard_dir: string, shard: int, live
 	return persistence.inspect_wal_file_strict(active_path, MESSAGE_WAL_MAGIC, shard, attachment_gc_message_scan_record).ok
 }
 
-attachment_gc_mark_live_references :: proc(workspaces: map[string]^Workspace_State, live: ^map[string]struct{}) -> bool {
-	for _, ws in workspaces {
-		for _, conv in ws.conversations {
-			for _, task in conv.tasks {
-				for attachment in task.attachments {
-					file_id := string(attachment.file_id)
-					if !attachment_gc_mark_file_id(file_id, live) do return false
-				}
-			}
-			for _, asset in conv.assets {
-				for attachment in asset.attachments {
-					file_id := string(attachment.file_id)
-					if !attachment_gc_mark_file_id(file_id, live) do return false
-				}
-			}
-		}
-	}
-	return true
-}
-
 attachment_gc_destroy_live_references :: proc(live: ^map[string]struct{}) {
 	for file_id in live^ do delete(file_id)
 	delete(live^)
-}
-
-attachment_gc_replay_live_references :: proc(data_dir: string, generation: u64, live: ^map[string]struct{}) -> bool {
-	shard_replay_state_init()
-	defer shard_replay_state_destroy()
-	generation_dir := sharded_generation_path(data_dir, generation)
-	defer delete(generation_dir)
-	for shard in 0 ..< LOGICAL_SHARD_COUNT {
-		shard_dir := sharded_shard_path(generation_dir, shard)
-		manifest, found, loaded := load_shard_compaction_manifest(shard_dir)
-		if !loaded {
-			delete(shard_dir)
-			return false
-		}
-		if found && manifest.shard != shard {
-			delete(shard_dir)
-			return false
-		}
-		if !found {
-			// A fresh shard has the pre-manifest active.wal generation zero. Keep
-			// dry-run genuinely read-only instead of calling ensure_* here.
-			manifest = {
-				shard               = shard,
-				manifest_generation = 1,
-				active_generation   = 0,
-			}
-			if !shard_compaction_manifest_files_are_valid(shard_dir, manifest) {
-				delete(shard_dir)
-				return false
-			}
-		}
-		_, replayed := replay_shard_compaction_sequence(shard_dir, manifest, true, false)
-		if !replayed || !attachment_gc_mark_retained_messages(shard_dir, shard, live) {
-			delete(shard_dir)
-			return false
-		}
-		delete(shard_dir)
-	}
-	return attachment_gc_mark_live_references(td.workspaces, live)
 }
 
 attachment_gc_storage_lock :: proc(attachments_dir: string) -> (lock: ^os.File, ok: bool) {
@@ -631,11 +573,48 @@ attachment_gc_sweep :: proc(
 	return stats, true
 }
 
+attachment_gc_sqlite_live_references :: proc(data_dir: string, generation: u64, live: ^map[string]struct{}) -> bool {
+	if !sqlite_generation_valid(data_dir, generation) do return false
+	root := sharded_generation_path(data_dir, generation); defer delete(root)
+	for shard in 0 ..< LOGICAL_SHARD_COUNT {
+		path := sqlite_shard_path(data_dir, generation, shard); defer delete(path)
+		cpath := strings.clone_to_cstring(path); defer delete(cpath)
+		database: ^sql.Database
+		rc := sql.open_v2(cpath, &database, sql.OPEN_READONLY | sql.OPEN_NOMUTEX, nil)
+		defer if database != nil do sql.close(database)
+		if rc != sql.OK do return false
+		if sql.exec(database, "BEGIN", nil, nil, nil) != sql.OK do return false
+		checks := [?]cstring {
+			"SELECT application_id=0x4e524351 FROM pragma_application_id",
+			"SELECT user_version=4 FROM pragma_user_version",
+			"SELECT integrity_check='ok' FROM pragma_integrity_check",
+			"SELECT NOT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+		}
+		for query in checks {
+			s: ^sql.Statement
+			if sql.prepare_v2(database, query, -1, &s, nil) != sql.OK do return false
+			defer sql.finalize(s)
+			if sql.step(s) != sql.ROW || sql.column_int64(s, 0) != 1 || sql.step(s) != sql.DONE do return false
+		}
+		s: ^sql.Statement
+		if sql.prepare_v2(database, "SELECT file_id FROM task_attachments UNION ALL SELECT file_id FROM asset_attachments", -1, &s, nil) != sql.OK do return false
+		defer sql.finalize(s)
+		for {
+			rc = sql.step(s)
+			if rc == sql.DONE do break
+			if rc != sql.ROW || !attachment_gc_mark_file_id(string(sql.column_bytes_view(s, 0)), live) do return false
+		}
+		leaf := sharded_shard_path(root, shard); defer delete(leaf)
+		if !attachment_gc_mark_retained_messages(leaf, shard, live) do return false
+	}
+	return true
+}
+
 run_attachment_gc :: proc(options: Attachment_GC_Options) -> bool {
 	live := make(map[string]struct{})
 	defer attachment_gc_destroy_live_references(&live)
-	if !attachment_gc_replay_live_references(persistence.DATA_DIR, runtime_storage_layout.generation, &live) {
-		log.error("Attachment GC refused to modify files because canonical shard replay failed")
+	if !attachment_gc_sqlite_live_references(persistence.DATA_DIR, runtime_storage_layout.generation, &live) {
+		log.error("Attachment GC refused to modify files because SQLite/retained reference validation failed")
 		return false
 	}
 	now_ns := time.to_unix_nanoseconds(clock.now())

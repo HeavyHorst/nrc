@@ -17,13 +17,7 @@ const backendPort = Number(process.env.NRC_TEST_BACKEND_PORT || 8080);
 const httpPort = Number(process.env.NRC_TEST_HTTP_PORT || 8091);
 if (!binary || !path.isAbsolute(binary)) throw new Error("NRC_TEST_SERVER must name an absolute server binary path");
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nrc-customers-"));
-const generation = path.join(dir, "data/sharded-00000000000000000001");
-for (let shard = 0; shard < 256; shard++) {
-  const shardDir = path.join(generation, `shard_${String(shard).padStart(3, "0")}`);
-  fs.mkdirSync(shardDir, { recursive: true });
-  fs.writeFileSync(path.join(shardDir, "active.wal"), "");
-}
-fs.writeFileSync(path.join(dir, "data/storage-layout.manifest"), Buffer.from("TlJDTAABAAAAAAAAAAAAAQIBAAAAAAAAAAABAAABAACsNnTeRP92XA==", "base64"));
+fs.mkdirSync(path.join(dir, "data"));
 const secret = crypto.randomBytes(32).toString("hex");
 const backend = spawn(binary, [], { cwd: dir, env: { ...process.env, NRC_PORT: String(backendPort), NRC_JWT_SECRET: secret, NRC_THREAD_COUNT: "1", NRC_DISABLE_CPU_AFFINITY: "1", NRC_LOG_LEVEL: "error" }, stdio: "inherit" });
 function token(username = 'customer-preview') {

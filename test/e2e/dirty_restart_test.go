@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -176,7 +175,7 @@ func TestDirtyRestartRecoversKernelAcceptedTaskAssetEdgeState(t *testing.T) {
 	}
 }
 
-func TestDirtyRestartTruncatesTrailingShardWALGarbage(t *testing.T) {
+func TestDirtyRestartIgnoresIncompleteSQLiteWALTail(t *testing.T) {
 	serverWorkDir := t.TempDir()
 	workspace := fmt.Sprintf("e2e-dirty-tail-%d", time.Now().UnixNano())
 	server := startServerInWorkDir(t, serverWorkDir)
@@ -209,7 +208,7 @@ func TestDirtyRestartTruncatesTrailingShardWALGarbage(t *testing.T) {
 	server.killAndWait(t)
 
 	shard := xxhash.Sum64String(workspace) % 256
-	walPath := filepath.Join(serverWorkDir, "data", "sharded-00000000000000000001", fmt.Sprintf("shard_%03d", shard), "active.wal")
+	walPath := filepath.Join(serverWorkDir, "data", "sharded-00000000000000000001", fmt.Sprintf("shard_%03d", shard), "workspace.sqlite3-wal")
 	validInfo, err := os.Stat(walPath)
 	if err != nil {
 		t.Fatalf("failed to stat owning shard WAL %q: %v", walPath, err)
@@ -245,14 +244,6 @@ func TestDirtyRestartTruncatesTrailingShardWALGarbage(t *testing.T) {
 	mustSetReadDeadline(t, recoveredConn, 5*time.Second)
 	mustExpectServerReady(t, recoveredConn)
 
-	recoveredInfo, err := os.Stat(walPath)
-	if err != nil {
-		t.Fatalf("failed to stat recovered shard WAL: %v", err)
-	}
-	if recoveredInfo.Size() != validInfo.Size() {
-		t.Fatalf("recovery did not truncate exactly to durable prefix: got=%d want=%d", recoveredInfo.Size(), validInfo.Size())
-	}
-
 	if err := sendProtocolMessage(recoveredConn, protocol.C_GetTasks, protocol.EncodeGetTasks(roomID)); err != nil {
 		t.Fatalf("failed to list tasks after trailing WAL recovery: %v", err)
 	}
@@ -267,173 +258,6 @@ func TestDirtyRestartTruncatesTrailingShardWALGarbage(t *testing.T) {
 		}
 	}
 	t.Fatalf("durable task %d missing after trailing WAL recovery", created.Task.ID)
-}
-
-func TestCompactionCrashBoundariesRecoverExactStateAndContinueWriting(t *testing.T) {
-	for _, stage := range []string{"rotation", "checkpoint", "manifest"} {
-		t.Run(stage, func(t *testing.T) {
-			serverWorkDir := t.TempDir()
-			workspace := fmt.Sprintf("e2e-compaction-%s-%d", stage, time.Now().UnixNano())
-			server := startServerInWorkDirWithEnv(t, serverWorkDir, map[string]string{
-				"NRC_TEST_COMPACTION_PAUSE_STAGE": stage,
-			})
-			servers := []*serverProcess{server}
-			t.Cleanup(func() { cleanupFaultTestServers(t, servers) })
-
-			conn, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, "e2e-compaction-writer"))
-			if err != nil {
-				t.Fatalf("failed to connect before %s crash: %v", stage, err)
-			}
-			mustSetReadDeadline(t, conn, 10*time.Second)
-			mustExpectServerReady(t, conn)
-
-			const roomID int64 = protocol.WorkspaceDataConvID
-			if err := sendProtocolMessage(conn, protocol.C_CreateTask, protocol.EncodeTaskCreate(roomID, "compaction survivor", "initial", 1)); err != nil {
-				t.Fatalf("failed to create survivor before %s crash: %v", stage, err)
-			}
-			createdPayload := mustReadUntilOpcode(t, conn, protocol.S_TaskCreated, 12)
-			created, err := protocol.DecodeTaskCreated(createdPayload)
-			if err != nil {
-				t.Fatalf("failed to decode survivor before %s crash: %v", stage, err)
-			}
-
-			if err := sendProtocolMessage(conn, protocol.C_CreateTask, protocol.EncodeTaskCreate(roomID, "compaction tombstone", "delete me", 1)); err != nil {
-				t.Fatalf("failed to create tombstone before %s crash: %v", stage, err)
-			}
-			deletedPayload := mustReadUntilOpcode(t, conn, protocol.S_TaskCreated, 12)
-			deleted, err := protocol.DecodeTaskCreated(deletedPayload)
-			if err != nil {
-				t.Fatalf("failed to decode tombstone before %s crash: %v", stage, err)
-			}
-			if err := sendProtocolMessage(conn, protocol.C_DeleteTask, protocol.EncodeTaskDelete(roomID, int64(deleted.Task.ID))); err != nil {
-				t.Fatalf("failed to delete tombstone before %s crash: %v", stage, err)
-			}
-			_ = mustReadUntilOpcode(t, conn, protocol.S_TaskDeleted, 12)
-
-			markerPath := filepath.Join(serverWorkDir, ".nrc-compaction-fault-stage")
-			shard := xxhash.Sum64String(workspace) % 256
-			activeWALPath := filepath.Join(serverWorkDir, "data", "sharded-00000000000000000001", fmt.Sprintf("shard_%03d", shard), "active.wal")
-			expectedTitle := "compaction survivor"
-			expectedDescription := "initial"
-			pendingTitle := ""
-			pendingDescription := ""
-			thresholdReached := false
-			for update := 1; update <= 40; update++ {
-				candidateTitle := fmt.Sprintf("compaction survivor %02d", update)
-				candidateDescription := fmt.Sprintf("%02d:%s", update, strings.Repeat("x", 1900))
-				pendingTitle = candidateTitle
-				pendingDescription = candidateDescription
-				if err := sendProtocolMessage(conn, protocol.C_UpdateTask, protocol.EncodeTaskUpdate(roomID, int64(created.Task.ID), candidateTitle, candidateDescription, int32(protocol.TaskStatusInProgress), 2, 0)); err != nil {
-					t.Fatalf("failed to send churn update %d before %s crash: %v", update, stage, err)
-				}
-				_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-				updatedPayload, readErr := readUntilOpcode(conn, protocol.S_TaskUpdated, 12)
-				if readErr != nil {
-					if waitForCompactionFaultMarker(markerPath, stage, 100*time.Millisecond) {
-						thresholdReached = true
-						break
-					}
-					t.Fatalf("failed to read churn update %d before %s crash: %v", update, stage, readErr)
-				}
-				updated, err := protocol.DecodeTaskUpdated(updatedPayload)
-				if err != nil || updated.Task.Title != candidateTitle {
-					t.Fatalf("invalid churn update %d before %s crash: response=%+v err=%v", update, stage, updated, err)
-				}
-				expectedTitle = candidateTitle
-				expectedDescription = candidateDescription
-				pendingTitle = ""
-				pendingDescription = ""
-				if stage != "rotation" {
-					// Let the scheduler durably roll the first batch before writing
-					// the second batch that makes the new active WAL eligible to roll.
-					if update == 20 {
-						time.Sleep(2 * time.Second)
-					}
-					continue
-				}
-				activeInfo, statErr := os.Stat(activeWALPath)
-				if statErr != nil {
-					t.Fatalf("failed to stat active WAL before %s crash: %v", stage, statErr)
-				}
-				if activeInfo.Size() >= 8192 {
-					thresholdReached = true
-					break
-				}
-			}
-			if stage != "rotation" {
-				thresholdReached = true
-			}
-			if !thresholdReached {
-				t.Fatalf("active WAL did not reach compaction threshold before %s crash", stage)
-			}
-			if !waitForCompactionFaultMarker(markerPath, stage, 10*time.Second) {
-				t.Fatalf("server did not reach compaction %s boundary", stage)
-			}
-
-			_ = conn.Close()
-			server.killAndWait(t)
-
-			server = startServerInWorkDir(t, serverWorkDir)
-			servers = append(servers, server)
-			recoveredConn, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, "e2e-compaction-reader"))
-			if err != nil {
-				t.Fatalf("failed to connect after %s crash: %v", stage, err)
-			}
-			defer recoveredConn.Close()
-			mustSetReadDeadline(t, recoveredConn, 10*time.Second)
-			mustExpectServerReady(t, recoveredConn)
-
-			if err := sendProtocolMessage(recoveredConn, protocol.C_GetTasks, protocol.EncodeGetTasks(roomID)); err != nil {
-				t.Fatalf("failed to list tasks after %s crash: %v", stage, err)
-			}
-			listPayload := mustReadUntilOpcode(t, recoveredConn, protocol.S_TaskListResponse, 12)
-			list, err := protocol.DecodeTaskListResponse(listPayload)
-			if err != nil {
-				t.Fatalf("failed to decode tasks after %s crash: %v", stage, err)
-			}
-			stateMatchesAcknowledged := len(list.Tasks) == 1 &&
-				list.Tasks[0].ID == created.Task.ID &&
-				list.Tasks[0].Title == expectedTitle &&
-				list.Tasks[0].Description == expectedDescription &&
-				list.Tasks[0].Status == protocol.TaskStatusInProgress
-			stateMatchesPending := len(list.Tasks) == 1 &&
-				pendingTitle != "" &&
-				list.Tasks[0].ID == created.Task.ID &&
-				list.Tasks[0].Title == pendingTitle &&
-				list.Tasks[0].Description == pendingDescription &&
-				list.Tasks[0].Status == protocol.TaskStatusInProgress
-			if !stateMatchesAcknowledged && !stateMatchesPending {
-				if len(list.Tasks) == 1 {
-					t.Fatalf("state after %s crash is not an allowed durable prefix: got_id=%d got_title=%q got_description=%q got_status=%d want_id=%d acknowledged_title=%q pending_title=%q\nrestart logs:\n%s", stage, list.Tasks[0].ID, list.Tasks[0].Title, list.Tasks[0].Description, list.Tasks[0].Status, created.Task.ID, expectedTitle, pendingTitle, server.logs.String())
-				}
-				t.Fatalf("state after %s crash is not exact: got_count=%d want_id=%d want_title=%q\nrestart logs:\n%s", stage, len(list.Tasks), created.Task.ID, expectedTitle, server.logs.String())
-			}
-			expectedTitle = list.Tasks[0].Title
-			expectedDescription = list.Tasks[0].Description
-
-			continuedTitle := expectedTitle + " continued"
-			if err := sendProtocolMessage(recoveredConn, protocol.C_UpdateTask, protocol.EncodeTaskUpdate(roomID, int64(created.Task.ID), continuedTitle, "write after recovery", int32(protocol.TaskStatusDone), 3, 0)); err != nil {
-				t.Fatalf("failed continued write after %s crash: %v", stage, err)
-			}
-			continuedPayload := mustReadUntilOpcode(t, recoveredConn, protocol.S_TaskUpdated, 12)
-			continued, err := protocol.DecodeTaskUpdated(continuedPayload)
-			if err != nil || continued.Task.Title != continuedTitle {
-				t.Fatalf("continued write after %s crash failed: response=%+v err=%v", stage, continued, err)
-			}
-		})
-	}
-}
-
-func waitForCompactionFaultMarker(path, stage string, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(path)
-		if err == nil {
-			return string(data) == stage
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	return false
 }
 
 func readUntilOpcode(conn *websocket.Conn, wantOpcode uint16, maxReads int) ([]byte, error) {

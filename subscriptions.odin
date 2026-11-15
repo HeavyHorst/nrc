@@ -264,6 +264,7 @@ unsubscribe_from_conversation :: proc(c: ^NRC_Connection, conv_id: pr.Conversati
 	username := get_socket_username(workspace_id, c.sock)
 
 	conversation_remove_subscriber(conv, c.sock)
+	worker_db_mark_dm(ws, conv_id)
 	when ODIN_DEBUG do debug_log("[T%d] Socket %v unsubscribed from workspace '%s' conv_id %v", td.thread_index, c.sock, workspace_id, conv_id)
 
 	// Update connection's room membership

@@ -5,17 +5,70 @@ package main
 import "core:fmt"
 import "core:log"
 import "core:os"
+import "core:strings"
 import "core:testing"
 import "core:time"
 
-import "persistence"
 import pr "protocol"
+import sql "sqlite"
+import db "workspace_db"
 
 ATTACHMENT_GC_TEST_TASK_ID :: "att_00000000000000000000000000000001"
 ATTACHMENT_GC_TEST_ASSET_ID :: "att_00000000000000000000000000000002"
 ATTACHMENT_GC_TEST_ORPHAN_ID :: "att_00000000000000000000000000000003"
 ATTACHMENT_GC_TEST_OTHER_ID :: "att_00000000000000000000000000000004"
 ATTACHMENT_GC_TEST_MESSAGE_ID :: "att_00000000000000000000000000000005"
+
+@(test)
+test_attachment_gc_sqlite_references_and_fail_closed :: proc(t: ^testing.T) {
+	dir := storage_layout_test_setup("sqlite-gc")
+	defer os.remove_all(dir)
+	lock, ok := sqlite_storage_layout_gate(dir, 1)
+	if !testing.expect(t, ok) do return
+	defer release_data_directory_lock(&lock)
+	shard := int(shard_for_workspace(transmute([]byte)string("gc")))
+	path := sqlite_shard_path(dir, 1, shard); defer delete(path)
+	cpath := strings.clone_to_cstring(path); defer delete(cpath)
+	store, rc := db.open(cpath)
+	if !testing.expect_value(t, rc, sql.OK) do return
+	defer db.close(&store)
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	attachments := [2]pr.Attachment {
+		{file_id = transmute([]byte)string(ATTACHMENT_GC_TEST_TASK_ID)},
+		{file_id = transmute([]byte)string(ATTACHMENT_GC_TEST_ASSET_ID)},
+	}
+	task := pr.Task {
+		id          = 1,
+		title       = transmute([]byte)string("GC"),
+		attachments = attachments[:1],
+	}
+	asset := pr.Asset {
+		asset_id    = 1,
+		asset_type  = .Note,
+		attachments = attachments[:],
+	}
+	testing.expect_value(t, db.put_task(&store, "gc", &task), sql.OK)
+	testing.expect_value(t, sqlite_put_asset(&store, "gc", &asset), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	// Keep the writer open so the reader must see committed WAL records too.
+	root := sharded_generation_path(dir, 1); defer delete(root)
+	leaf := sharded_shard_path(root, shard); defer delete(leaf)
+	messages: Message_Store
+	if !testing.expect(t, init_message_store(&messages, leaf, shard, 24 * time.Hour, 0)) do return
+	message := test_retained_message("gc", 9, 1, nrc_time_unix_nanos())
+	message.content = transmute([]byte)string("/files/" + ATTACHMENT_GC_TEST_MESSAGE_ID + "?inline=true")
+	message.fingerprint = message_fingerprint(&message)
+	result, _ := append_or_deduplicate_message(&messages, &message)
+	testing.expect_value(t, result, Message_Store_Result.Appended)
+	testing.expect(t, shutdown_message_store(&messages))
+	live := make(map[string]struct{}); defer attachment_gc_destroy_live_references(&live)
+	testing.expect(t, attachment_gc_sqlite_live_references(dir, 1, &live))
+	testing.expect_value(t, len(live), 3)
+	for id in ([3]string{ATTACHMENT_GC_TEST_TASK_ID, ATTACHMENT_GC_TEST_ASSET_ID, ATTACHMENT_GC_TEST_MESSAGE_ID}) do testing.expect(t, id in live)
+	bad := sqlite_shard_path(dir, 1, 255); defer delete(bad)
+	testing.expect(t, os.write_entire_file(bad, transmute([]byte)string("broken")) == nil)
+	testing.expect(t, !attachment_gc_sqlite_live_references(dir, 1, &live), "later shard corruption must abort the entire mark phase")
+}
 
 attachment_gc_test_directory :: proc(name: string) -> string {
 	mode := "prod"
@@ -43,37 +96,6 @@ test_attachment_gc_file_id_validation_is_exact :: proc(t: ^testing.T) {
 	testing.expect(t, !attachment_file_id_is_valid("att_0000000000000000000000000000000"))
 	testing.expect(t, !attachment_file_id_is_valid("att_0000000000000000000000000000000G"))
 	testing.expect(t, !attachment_file_id_is_valid("../att_00000000000000000000000000000001"))
-}
-
-@(test)
-test_attachment_gc_marks_task_and_asset_references_with_shared_ids_deduplicated :: proc(t: ^testing.T) {
-	shard_replay_state_init()
-	defer shard_replay_state_destroy()
-	ws := get_or_create_workspace("attachment-gc-mark")
-	conv := get_or_create_conversation(ws, 1)
-	task_attachments := [2]pr.Attachment {
-		{file_id = transmute([]byte)string(ATTACHMENT_GC_TEST_TASK_ID)},
-		{file_id = transmute([]byte)string(ATTACHMENT_GC_TEST_ASSET_ID)},
-	}
-	task := alloc_task(transmute([]byte)string("task"), nil, nil, nil, nil, nil, nil, task_attachments[:])
-	testing.expect(t, task != nil)
-	if task == nil do return
-	task.id = 1
-	conv.tasks[task.id] = task
-	asset_attachments := [1]pr.Attachment{{file_id = transmute([]byte)string(ATTACHMENT_GC_TEST_TASK_ID)}}
-	asset := alloc_asset(nil, nil, nil, asset_attachments[:])
-	testing.expect(t, asset != nil)
-	if asset == nil do return
-	asset.asset_id = 1
-	conv.assets[asset.asset_id] = asset
-
-	live := make(map[string]struct{})
-	defer attachment_gc_destroy_live_references(&live)
-	testing.expect(t, attachment_gc_mark_live_references(td.workspaces, &live))
-	testing.expect_value(t, len(live), 2)
-	_, task_live := live[ATTACHMENT_GC_TEST_TASK_ID]
-	_, asset_live := live[ATTACHMENT_GC_TEST_ASSET_ID]
-	testing.expect(t, task_live && asset_live)
 }
 
 @(test)
@@ -311,46 +333,6 @@ test_attachment_gc_database_barrier_failure_precedes_attachment_mutation :: proc
 }
 
 @(test)
-test_attachment_gc_replays_all_shards_before_marking :: proc(t: ^testing.T) {
-	data_dir := attachment_gc_test_directory("replay")
-	_ = os.remove_all(data_dir)
-	testing.expect(t, os.make_directory(data_dir) == nil)
-	if !os.exists(data_dir) do return
-	defer os.remove_all(data_dir)
-	created := storage_layout_test_create_generation(data_dir, 2)
-	testing.expect(t, created)
-	if !created do return
-	workspace := "attachment-gc-replay-workspace"
-	shard := int(shard_for_workspace(transmute([]byte)workspace))
-	generation_dir := sharded_generation_path(data_dir, 2)
-	defer delete(generation_dir)
-	shard_dir := sharded_shard_path(generation_dir, shard)
-	defer delete(shard_dir)
-	writer: Shard_Transaction_Writer
-	initialized := init_managed_shard_transaction_writer(&writer, shard_dir, shard, shard, LOGICAL_SHARD_COUNT)
-	testing.expect(t, initialized)
-	if !initialized do return
-	attachment := [1]pr.Attachment{{file_id = transmute([]byte)string(ATTACHMENT_GC_TEST_TASK_ID)}}
-	task := pr.Task {
-		id          = 1,
-		conv_id     = 7,
-		title       = transmute([]byte)string("persisted"),
-		attachments = attachment[:],
-	}
-	appended := shard_segment_test_append_task(&writer, workspace, .Create, &task)
-	testing.expect(t, appended)
-	if !appended {shutdown_shard_transaction_writer(&writer); return}
-	persistence.force_fsync(&writer.wal)
-	testing.expect(t, shutdown_shard_transaction_writer(&writer))
-
-	live := make(map[string]struct{})
-	defer attachment_gc_destroy_live_references(&live)
-	testing.expect(t, attachment_gc_replay_live_references(data_dir, 2, &live))
-	_, found := live[ATTACHMENT_GC_TEST_TASK_ID]
-	testing.expect(t, found)
-}
-
-@(test)
 test_attachment_gc_replays_retained_message_file_references :: proc(t: ^testing.T) {
 	data_dir := attachment_gc_test_directory("retained-message-replay")
 	_ = os.remove_all(data_dir)
@@ -376,7 +358,7 @@ test_attachment_gc_replays_retained_message_file_references :: proc(t: ^testing.
 
 	live := make(map[string]struct{})
 	defer attachment_gc_destroy_live_references(&live)
-	testing.expect(t, attachment_gc_replay_live_references(data_dir, 2, &live))
+	testing.expect(t, attachment_gc_mark_retained_messages(shard_dir, shard, &live))
 	_, found := live[ATTACHMENT_GC_TEST_MESSAGE_ID]
 	testing.expect(t, found)
 
@@ -391,5 +373,5 @@ test_attachment_gc_replays_retained_message_file_references :: proc(t: ^testing.
 	testing.expect(t, os.write_entire_file(active_path, wal) == nil)
 	failed_live := make(map[string]struct{})
 	defer attachment_gc_destroy_live_references(&failed_live)
-	testing.expect(t, !attachment_gc_replay_live_references(data_dir, 2, &failed_live))
+	testing.expect(t, !attachment_gc_mark_retained_messages(shard_dir, shard, &failed_live))
 }

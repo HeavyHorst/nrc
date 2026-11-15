@@ -119,8 +119,9 @@ func startServerProcess(binPath, workDir string) (*serverProcess, error) {
 }
 
 func startServerProcessWithEnv(binPath, workDir string, extraEnv map[string]string) (*serverProcess, error) {
-	if err := initializeEmptyShardedLayout(workDir); err != nil {
-		return nil, fmt.Errorf("failed to initialize sharded test layout: %w", err)
+	// Exercise the server's SQLite bootstrap rather than pre-seeding legacy WALs.
+	if err := os.MkdirAll(filepath.Join(workDir, "data"), 0o755); err != nil {
+		return nil, fmt.Errorf("failed to initialize test data directory: %w", err)
 	}
 
 	cmd := exec.Command(binPath)
@@ -192,7 +193,7 @@ func buildServerBinaryOnce(t *testing.T) string {
 		}
 
 		serverBuildPath = filepath.Join(buildDir, "nrc-server-e2e")
-		buildCmd := exec.Command(odinBin, "build", ".", "-o:speed", "-define:NRC_SHARD_COMPACTION_SIZE_THRESHOLD=8192", "-define:NRC_MESSAGE_SEGMENT_BYTES=128", "-out:"+serverBuildPath)
+		buildCmd := exec.Command(odinBin, "build", ".", "-o:speed", "-define:NRC_MESSAGE_SEGMENT_BYTES=128", "-out:"+serverBuildPath)
 		buildCmd.Dir = repoRoot
 		buildOutput, err := buildCmd.CombinedOutput()
 		serverBuildLogs = string(buildOutput)

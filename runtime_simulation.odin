@@ -44,8 +44,8 @@ when NRC_SIMULATION {
 		Receive,
 		Close,
 		Fsync,
-		Compaction_Job,
-		Compaction_Result,
+		Storage_Job,
+		Storage_Result,
 		Driver_Action,
 		Process_Crash,
 		File_Read,
@@ -72,12 +72,12 @@ when NRC_SIMULATION {
 		callback:   Sim_Timer_Callback,
 	}
 
-	Sim_Compaction_Job_Event :: struct {
-		job: Shard_Compaction_Job,
+	Sim_Storage_Job_Event :: struct {
+		job: Storage_Service_Job,
 	}
 
-	Sim_Compaction_Result_Event :: struct {
-		result: Shard_Compaction_Result,
+	Sim_Storage_Result_Event :: struct {
+		result: Storage_Service_Result,
 	}
 
 	Sim_Process_Crash_Event :: struct {}
@@ -101,8 +101,8 @@ when NRC_SIMULATION {
 		Sim_Receive_Event,
 		Sim_Close_Event,
 		Sim_Fsync_Completion,
-		Sim_Compaction_Job_Event,
-		Sim_Compaction_Result_Event,
+		Sim_Storage_Job_Event,
+		Sim_Storage_Result_Event,
 		Sim_Driver_Action_Event,
 		Sim_Process_Crash_Event,
 		Sim_File_Read_Completion,
@@ -226,12 +226,12 @@ when NRC_SIMULATION {
 		case Sim_Fsync_Completion:
 			snapshot := value.snapshot
 			storage_io.destroy_sync_snapshot(&snapshot)
-		case Sim_Compaction_Job_Event:
+		case Sim_Storage_Job_Event:
 			job := value.job
-			destroy_shard_compaction_job(&job)
-		case Sim_Compaction_Result_Event:
+			destroy_storage_service_job(&job)
+		case Sim_Storage_Result_Event:
 			result := value.result
-			destroy_shard_compaction_result(&result, false)
+			destroy_storage_service_result(&result)
 		case Sim_Driver_Action_Event:
 		case Sim_Process_Crash_Event:
 		case Sim_File_Read_Completion:
@@ -367,12 +367,6 @@ when NRC_SIMULATION {
 					candidate.after_event_id = event.after_event_id
 				}
 			}
-			#partial switch payload in event.payload {
-			case Sim_Compaction_Job_Event:
-				if payload.job.active_reservation_generation != 0 {
-					remove_shard_active_reservation(payload.job.storage, payload.job.shard_dir, payload.job.active_reservation_generation)
-				}
-			}
 			sim_world_discard_event(world, event)
 			ordered_remove(&world.events, index)
 			return true
@@ -380,42 +374,34 @@ when NRC_SIMULATION {
 		return false
 	}
 
-	sim_world_enqueue_compaction_result :: proc(world: ^Sim_World, result: Shard_Compaction_Result) -> u64 {
+	sim_world_enqueue_storage_result :: proc(world: ^Sim_World, result: Storage_Service_Result) -> u64 {
 		if world == nil do return 0
 		return sim_world_enqueue_event(
 			world,
 			world.now,
 			{kind = .Worker, id = u64(result.owner_worker)},
-			.Compaction_Result,
-			Sim_Event_Payload(Sim_Compaction_Result_Event{result = result}),
+			.Storage_Result,
+			Sim_Event_Payload(Sim_Storage_Result_Event{result = result}),
 		)
 	}
 
-	sim_world_take_compaction_result_for_test :: proc(world: ^Sim_World, ordinal: int = 0) -> (Shard_Compaction_Result, bool) {
-		index := sim_world_domain_event_index(world, .Compaction_Result, ordinal)
+	sim_world_take_storage_result_for_test :: proc(world: ^Sim_World, ordinal: int = 0) -> (Storage_Service_Result, bool) {
+		index := sim_world_domain_event_index(world, .Storage_Result, ordinal)
 		if index < 0 do return {}, false
-		payload, ok := world.events[index].payload.(Sim_Compaction_Result_Event)
+		payload, ok := world.events[index].payload.(Sim_Storage_Result_Event)
 		if !ok do return {}, false
 		ordered_remove(&world.events, index)
 		return payload.result, true
 	}
 
-	sim_run_shard_compaction_job :: proc(job: Shard_Compaction_Job) -> Shard_Compaction_Result {
-		// Production compaction runs on its own thread and therefore owns separate
-		// replay TLS. Preserve the owner worker's live semantic state while the
-		// deterministic kernel executes the background job on this thread.
-		owner_workspaces := td.workspaces
-		owner_workspace_intern := td.workspace_intern
+	sim_run_storage_service_job :: proc(job: Storage_Service_Job) -> Storage_Service_Result {
+		// Retained sealing runs on a service thread with independent scan TLS.
 		owner_message_scan := message_scan_context
-		td.workspaces = nil
-		td.workspace_intern = {}
 		message_scan_context = {}
 		defer {
-			td.workspaces = owner_workspaces
-			td.workspace_intern = owner_workspace_intern
 			message_scan_context = owner_message_scan
 		}
-		return run_shard_compaction_job(job)
+		return run_storage_service_job(job)
 	}
 
 	sim_world_event_dependency_pending :: proc(world: ^Sim_World, event: Sim_Event) -> bool {
@@ -482,7 +468,7 @@ when NRC_SIMULATION {
 		switch domain {
 		case .Timer, .Send, .Shutdown_Send, .Receive, .Close, .Fsync, .File_Read, .File_Write:
 			return true
-		case .Compaction_Job, .Compaction_Result, .Driver_Action, .Process_Crash, .Input_Turn:
+		case .Storage_Job, .Storage_Result, .Driver_Action, .Process_Crash, .Input_Turn:
 			return false
 		}
 		return false
@@ -513,15 +499,15 @@ when NRC_SIMULATION {
 			if err == .NONE && storage_io.commit_sync_snapshot(&snapshot) != nil do err = .EIO
 			payload.callback(payload.user, err)
 			storage_io.destroy_sync_snapshot(&snapshot)
-		case Sim_Compaction_Job_Event:
-			result := sim_run_shard_compaction_job(payload.job)
+		case Sim_Storage_Job_Event:
+			result := sim_run_storage_service_job(payload.job)
 			if result.message_remove_generation != 0 {
-				destroy_shard_compaction_result(&result, true)
+				destroy_storage_service_result(&result)
 			} else {
-				_ = sim_world_enqueue_compaction_result(world, result)
+				_ = sim_world_enqueue_storage_result(world, result)
 			}
-		case Sim_Compaction_Result_Event:
-			_ = process_shard_compaction_result(payload.result)
+		case Sim_Storage_Result_Event:
+			_ = process_storage_service_result(payload.result)
 		case Sim_Driver_Action_Event:
 			payload.callback(payload.user)
 		case Sim_Process_Crash_Event:
@@ -711,14 +697,14 @@ when NRC_SIMULATION {
 	}
 
 	Sim_Runtime :: struct {
-		clients:                         map[net.TCP_Socket]^Sim_Client,
-		world:                           Sim_World,
-		timer_completions:               [dynamic]^nbio.Completion,
-		next_queued_send_error:          net.Network_Error,
-		next_writev_error:               net.Network_Error,
-		next_queued_send_partial:        int,
-		next_writev_partial:             int,
-		compaction_job_event_submission: bool,
+		clients:                      map[net.TCP_Socket]^Sim_Client,
+		world:                        Sim_World,
+		timer_completions:            [dynamic]^nbio.Completion,
+		next_queued_send_error:       net.Network_Error,
+		next_writev_error:            net.Network_Error,
+		next_queued_send_partial:     int,
+		next_writev_partial:          int,
+		storage_job_event_submission: bool,
 	}
 
 	Sim_File_Write_Completion :: struct {

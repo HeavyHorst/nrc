@@ -1,6 +1,7 @@
 package main
 
 import "core:mem"
+import "core:strings"
 import "core:sys/linux"
 import "core:testing"
 import tlsf "vendor/tlsf"
@@ -74,19 +75,11 @@ test_worker_heap_shares_buffer_storage_but_keeps_cross_thread_pools_on_backing :
 	defer worker_state_destroy_core_for_test()
 	ws := get_or_create_workspace("worker-heap-ownership")
 	conv := get_or_create_conversation(ws, pr.WORKSPACE_DATA_ID)
-	task := alloc_task(transmute([]byte)string("task"), transmute([]byte)string("description"), nil, nil, nil, nil, nil, nil)
-	task.id = 17
-	task.status = .Todo
-	task_store_put(conv, task)
-	asset := alloc_asset(nil, nil, transmute([]byte)string("payload"))
-	asset.asset_id = 23
-	asset.asset_type = .Document
-	asset_store_put(ws, "worker-heap-ownership", conv, asset)
-	pointers := []rawptr{ws, conv, task, asset, raw_data(intern_username("worker-user"))}
+	conv.agenda = strings.clone("agenda")
+	pointers := []rawptr{ws, conv, raw_data(conv.agenda), raw_data(intern_username("worker-user"))}
 	for p in pointers {
 		testing.expect(t, worker_heap_contains_for_test(&heap, p))
 	}
-	testing.expect_value(t, conv.task_index.allocator, context.allocator)
 	batch := alloc_batch_state(3)
 	testing.expect(t, !worker_heap_contains_for_test(&heap, batch))
 	free_batch_state(batch)
@@ -115,8 +108,7 @@ test_worker_heap_shares_buffer_storage_but_keeps_cross_thread_pools_on_backing :
 		byte_pool.release(td.spool, buf[:1])
 	}
 	for value, i in b do testing.expect_value(t, value, byte((i * 7 + 19) % 251))
-	testing.expect_value(t, string(task.title), "task")
-	testing.expect_value(t, string(asset.payload), "payload")
+	testing.expect_value(t, conv.agenda, "agenda")
 	byte_pool.release(td.spool, a[:3])
 	byte_pool.release(td.spool, b)
 	testing.expect_value(t, td.spool.used, u64(0))
@@ -125,8 +117,7 @@ test_worker_heap_shares_buffer_storage_but_keeps_cross_thread_pools_on_backing :
 	iface := byte_pool.allocator(td.spool)
 	_, reset_err := iface.procedure(iface.data, .Free_All, 0, 0, nil, 0)
 	testing.expect_value(t, reset_err, mem.Allocator_Error.Mode_Not_Implemented)
-	testing.expect_value(t, task.id, u64(17))
-	testing.expect_value(t, asset.asset_id, u64(23))
+	testing.expect_value(t, conv.agenda, "agenda")
 }
 
 Worker_Heap_Rejecting_Backing :: struct {

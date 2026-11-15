@@ -1,9 +1,47 @@
 package main
 
+import "core:log"
 import "core:strings"
 import "core:sync/chan"
 import "persistence"
 import "storage_io"
+
+Message_Seal_Job :: struct {
+	message_source_generation: u64, // Immutable retained WAL; zero when deleting.
+	message_remove_generation: u64, // Obsolete source excluded by durable manifest.
+}
+
+Message_Seal_Result :: struct {
+	message_source_generation: u64,
+	message_remove_generation: u64,
+	message_sealed_bytes:      u64,
+}
+
+run_message_seal_job :: proc(job: Storage_Service_Job) -> Storage_Service_Result {
+	result := Storage_Service_Result {
+		allocator                 = context.allocator,
+		owner_worker              = job.owner_worker,
+		shard                     = job.shard,
+		message_source_generation = job.message_source_generation,
+		message_remove_generation = job.message_remove_generation,
+	}
+	if job.message_remove_generation != 0 {
+		path := message_store_path(job.shard_dir, job.message_remove_generation, "wal"); defer delete(path)
+		removed := storage_io.remove(job.storage, path) == nil
+		synced := storage_io.sync_directory(job.storage, job.shard_dir) == nil
+		if !removed || !synced do log.warnf("Obsolete message WAL cleanup failed: generation=%d shard=%d", job.message_remove_generation, job.shard)
+		result.ok = removed && synced
+		return result
+	}
+	// Only immutable job inputs, never the worker's live store or indexes.
+	build_store := Message_Store {
+		directory = job.shard_dir,
+		storage   = job.storage,
+		shard     = job.shard,
+	}
+	result.message_sealed_bytes, result.ok = cluster_message_segment_wal(&build_store, job.message_source_generation, job.message_source_generation + 1)
+	return result
+}
 
 // Refusal keeps the frozen holder for maintenance to retry. No worker memory
 // crosses the queue, and shutdown may safely leave the unreferenced file behind.
@@ -11,7 +49,7 @@ enqueue_message_source_delete :: proc(store: ^Message_Store, generation: u64) ->
 	context.allocator = worker_backing_allocator()
 	directory, err := strings.clone(store.directory)
 	if err != nil do return false
-	job := Shard_Compaction_Job {
+	job := Storage_Service_Job {
 		allocator                 = context.allocator,
 		message_remove_generation = generation,
 		owner_worker              = td.thread_index,
@@ -20,20 +58,20 @@ enqueue_message_source_delete :: proc(store: ^Message_Store, generation: u64) ->
 		shard_dir                 = directory,
 	}
 	when NRC_SIMULATION {
-		if nrc_sim_runtime != nil && nrc_sim_runtime.compaction_job_event_submission {
+		if nrc_sim_runtime != nil && nrc_sim_runtime.storage_job_event_submission {
 			return(
 				sim_world_enqueue_event(
 					&nrc_sim_runtime.world,
 					nrc_sim_runtime.world.now,
 					{kind = .Storage, id = u64(store.shard)},
-					.Compaction_Job,
-					Sim_Event_Payload(Sim_Compaction_Job_Event{job = job}),
+					.Storage_Job,
+					Sim_Event_Payload(Sim_Storage_Job_Event{job = job}),
 				) !=
 				0 \
 			)
 		}
 	}
-	if chan.try_send(td.server.shard_compaction_jobs, job) do return true
+	if chan.try_send(td.server.storage_bulk_jobs, job) do return true
 	delete(directory)
 	return false
 }
@@ -169,10 +207,10 @@ recover_frozen_message_seal :: proc(store: ^Message_Store) -> bool {
 
 message_seal_service_available :: proc() -> bool {
 	when NRC_SIMULATION {
-		if nrc_sim_runtime != nil && nrc_sim_runtime.compaction_job_event_submission do return true
+		if nrc_sim_runtime != nil && nrc_sim_runtime.storage_job_event_submission do return true
 	}
 	// Standalone stores/tests without a service retain direct rotation.
-	return td.server != nil && td.server.shard_compaction_jobs.impl != nil
+	return td.server != nil && td.server.storage_bulk_jobs.impl != nil
 }
 
 cancel_message_seals :: proc(registry: ^Message_Store_Registry) {
@@ -213,7 +251,7 @@ enqueue_message_seal :: proc(store: ^Message_Store, now_ns: i64) -> bool {
 	context.allocator = worker_backing_allocator()
 	directory, err := strings.clone(store.directory)
 	if err != nil {store.poisoned = true; return false}
-	job := Shard_Compaction_Job {
+	job := Storage_Service_Job {
 		allocator                 = context.allocator,
 		message_source_generation = store.frozen.active_generation,
 		owner_worker              = td.thread_index,
@@ -228,15 +266,15 @@ enqueue_message_seal :: proc(store: ^Message_Store, now_ns: i64) -> bool {
 				&nrc_sim_runtime.world,
 				nrc_sim_runtime.world.now,
 				{kind = .Storage, id = u64(store.shard)},
-				.Compaction_Job,
-				Sim_Event_Payload(Sim_Compaction_Job_Event{job = job}),
+				.Storage_Job,
+				Sim_Event_Payload(Sim_Storage_Job_Event{job = job}),
 			)
 			// Rejected events consume their payload, including the directory.
 			if id == 0 do return true
 			submitted = true
 		}
 	}
-	if !submitted && !chan.try_send(td.server.shard_compaction_jobs, job) {
+	if !submitted && !chan.try_send(td.server.storage_bulk_jobs, job) {
 		delete(directory)
 		return true
 	}
@@ -244,7 +282,7 @@ enqueue_message_seal :: proc(store: ^Message_Store, now_ns: i64) -> bool {
 	return true
 }
 
-process_message_seal_result :: proc(result: Shard_Compaction_Result) -> bool {
+process_message_seal_result :: proc(result: Storage_Service_Result) -> bool {
 	// Results own no live store memory or file handles. Ignore duplicates and
 	// stale identities without deleting files a newer manifest may reference.
 	if result.owner_worker != td.thread_index || result.shard < 0 || result.shard >= LOGICAL_SHARD_COUNT do return true

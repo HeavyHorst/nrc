@@ -12,6 +12,7 @@ import "core:bytes"
 import "core:encoding/endian"
 import "core:fmt"
 import "core:log"
+import "core:mem"
 import "core:net"
 import "core:os"
 import "core:strings"
@@ -25,112 +26,18 @@ import hgl "hegel"
 import nbio "nbio/poly"
 import pr "protocol"
 import ws "websocket"
+import db "workspace_db"
 
 when !NRC_SIMULATION {
 	_ :: bytes.equal
 	_ :: endian.put_u16
+	_ :: mem.Megabyte
+	_ :: os.make_directory_temp
+	_ :: db.start_executor
 }
 
 @(test)
-test_deferred_protocol_mutation_replays_after_fsync_without_early_visibility :: proc(t: ^testing.T) {
-	worker_state_init_core(nil, 118)
-	defer worker_state_destroy_core_for_test()
-	td.asset_seq = 0
-
-	data_dir := storage_layout_test_setup("deferred-protocol-replay")
-	defer os.remove_all(data_dir)
-	testing.expect(t, storage_layout_test_create_generation(data_dir, 1))
-	workspace := "deferred-protocol-replay"
-	workspace_bytes := transmute([]byte)workspace
-	shard := int(shard_for_workspace(workspace_bytes))
-	generation_dir := sharded_generation_path(data_dir, 1)
-	defer delete(generation_dir)
-	testing.expect(t, init_shard_writer_registry(&td.shard_writers, generation_dir, shard, LOGICAL_SHARD_COUNT))
-	defer shutdown_shard_writer_registry(&td.shard_writers)
-	writer := shard_writer_for_workspace(&td.shard_writers, workspace_bytes)
-	testing.expect(t, writer != nil)
-	if writer == nil do return
-
-	c := connection_test_install_fake(
-		Fake_Connection_Options {
-			sock = connection_test_fake_socket(118),
-			state = .Idle,
-			workspace_id = workspace,
-			verified_username = "deferred-user",
-			authenticated = true,
-			cache_workspace = true,
-			init_send_queue = true,
-		},
-	)
-	testing.expect(t, c != nil)
-	if c == nil do return
-	defer connection_test_uninstall(c)
-	c.is_sending = true
-
-	req := pr.CreateAssetRequest {
-		conv_id          = pr.WORKSPACE_DATA_ID,
-		asset_type       = .Document,
-		payload_encoding = .Plain,
-		payload_raw_len  = 4,
-		payload          = transmute([]byte)string("body"),
-		correlation_id   = 91,
-	}
-	payload := make([]byte, pr.getSizeCreateAssetRequest(req))
-	defer delete(payload)
-	payload_len := pr.serializeCreateAssetRequest(req, payload)
-	testing.expect_value(t, payload_len, len(payload))
-	update_req := pr.UpdateAssetRequest {
-		conv_id          = req.conv_id,
-		asset_id         = 1,
-		payload_encoding = .Plain,
-		payload_raw_len  = 7,
-		payload          = transmute([]byte)string("updated"),
-		correlation_id   = 92,
-	}
-	update_payload := make([]byte, pr.getSizeUpdateAssetRequest(update_req))
-	defer delete(update_payload)
-	update_len := pr.serializeUpdateAssetRequest(update_req, update_payload)
-	testing.expect_value(t, update_len, len(update_payload))
-
-	writer.wal.file_size_bytes = SHARD_WAL_SEGMENT_MAX_BYTES
-	writer.fsync_in_flight = true
-	persistent_mutation_failure_seen = false
-	process_protocol_payload(c, payload)
-	// The dependent update fits physically, but must queue behind the deferred
-	// create instead of observing pre-create state or acknowledging first.
-	writer.wal.file_size_bytes = 0
-	process_protocol_payload(c, update_payload)
-
-	conv := get_conversation(get_workspace(workspace), req.conv_id)
-	testing.expect(t, conv != nil)
-	if conv != nil do testing.expect_value(t, len(conv.assets), 0)
-	testing.expect_value(t, writer.wal.record_count, u64(0))
-	testing.expect_value(t, len(writer.deferred_requests), 2)
-	testing.expect_value(t, c.pending_io, 2)
-	testing.expect_value(t, c.deferred_shard_requests, u16(2))
-	testing.expect_value(t, send_queue_len(c), 0)
-	testing.expect(t, !persistent_mutation_failure_seen)
-
-	// Model successful completion before invoking the production replay drain.
-	// Keeping this test's WAL physically small avoids testing rotation mechanics
-	// a second time; the append test covers the full-WAL defer decision itself.
-	writer.fsync_in_flight = false
-	writer.wal.file_size_bytes = 0
-	drain_shard_deferred_requests(writer)
-
-	testing.expect_value(t, len(writer.deferred_requests), 0)
-	testing.expect_value(t, c.pending_io, 0)
-	testing.expect_value(t, c.deferred_shard_requests, u16(0))
-	testing.expect_value(t, writer.wal.record_count, u64(0))
-	testing.expect_value(t, writer.wal.buffered_record_count, u64(2))
-	testing.expect_value(t, send_queue_len(c), 2)
-	conv = get_conversation(get_workspace(workspace), req.conv_id)
-	testing.expect(t, conv != nil && len(conv.assets) == 1, "replay should create exactly one asset before applying its dependent update")
-	if conv != nil && conv.assets[1] != nil do testing.expect(t, string(conv.assets[1].payload) == "updated", "dependent update must run after deferred create")
-}
-
-@(test)
-test_http_upgrade_sharded_routing_matches_writer_owner :: proc(t: ^testing.T) {
+test_http_upgrade_sharded_routing_matches_worker_owner :: proc(t: ^testing.T) {
 	for i in 0 ..< 100 {
 		workspace := fmt.tprintf("sharded-route-%d", i)
 		shard := int(shard_for_workspace(transmute([]byte)workspace))
@@ -605,6 +512,33 @@ test_valid_websocket_protocol_dispatch :: proc(t: ^testing.T) {
 		simulation_test_begin(&ctx, 120)
 		defer simulation_test_end(&ctx)
 
+		directory, dir_err := os.make_directory_temp("", "nrc-dispatch-sqlite-", context.allocator)
+		if !testing.expect(t, dir_err == nil) do return
+		defer {os.remove_all(directory); delete(directory)}
+		name := fmt.aprintf("%s/shard.db", directory); defer delete(name)
+		path := strings.clone_to_cstring(name); defer delete(path)
+		paths: [LOGICAL_SHARD_COUNT]cstring
+		paths[shard_for_workspace(transmute([]byte)string("websocket_dispatch"))] = path
+		executor, start_err := db.start_executor(
+			paths[:],
+			1,
+			8,
+			mem.Megabyte,
+			4096,
+			context.allocator,
+			create_databases = true,
+			command_handler = sqlite_execute_task_command,
+		)
+		if !testing.expect_value(t, start_err, .None) do return
+		defer db.destroy_executor(executor)
+		worker_db_attach(&executor.ports[0])
+		defer {
+			worker_db_begin_shutdown()
+			for len(td.database.pending) > 0 do _ = worker_db_drain()
+			db.join_executor(executor)
+			worker_db_detach()
+		}
+
 		conn := simulation_test_install_client(&ctx.sim, 0, "websocket_dispatch", "dispatcher")
 		testing.expect(t, conn != nil, "dispatch client should install")
 		if conn == nil do return
@@ -636,6 +570,11 @@ test_valid_websocket_protocol_dispatch :: proc(t: ^testing.T) {
 			testing.expectf(t, !closed, "case %d (%s) should keep connection open", case_index, test_case.name)
 			testing.expectf(t, processed == len(frame), "case %d (%s) should consume its frame", case_index, test_case.name)
 			delete(frame)
+			for attempt := 0; len(td.database.pending) > 0 && attempt < 5000; attempt += 1 {
+				_ = worker_db_drain()
+				if len(td.database.pending) > 0 do time.sleep(time.Millisecond)
+			}
+			testing.expect_value(t, len(td.database.pending), 0)
 			nrc_sim_run_all_send_completions(&ctx.sim)
 
 			testing.expectf(

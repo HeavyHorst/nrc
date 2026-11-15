@@ -1355,6 +1355,8 @@ test_simulation_dm_lifecycle_and_message_fanout_uses_protocol_parsers :: proc(t:
 		ctx: Sim_Test_Context
 		simulation_test_begin(&ctx)
 		defer simulation_test_end(&ctx)
+		database := dm_test_database()
+		defer dm_test_database_destroy(&database)
 
 		workspace_id := "dm_workspace"
 		alice := simulation_test_install_client(&ctx.sim, 1, workspace_id, "alice")
@@ -1376,7 +1378,7 @@ test_simulation_dm_lifecycle_and_message_fanout_uses_protocol_parsers :: proc(t:
 		conv_id := pr.make_dm_conversation_id("alice", "bob")
 
 		nrc_sim_clear_inboxes(&ctx.sim)
-		process_start_dm(alice, pr.StartDMRequest{username = "bob", correlation_id = 11})
+		dm_test_start(&database, alice, pr.StartDMRequest{username = "bob", correlation_id = 11})
 
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, alice.sock), 1)
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, bob.sock), 1)
@@ -1402,7 +1404,7 @@ test_simulation_dm_lifecycle_and_message_fanout_uses_protocol_parsers :: proc(t:
 		testing.expect_value(t, bob_started.correlation_id, u32(0))
 
 		nrc_sim_clear_inboxes(&ctx.sim)
-		process_list_dms(alice, pr.ListDMsRequest{correlation_id = 12})
+		dm_test_list(&database, alice, pr.ListDMsRequest{correlation_id = 12})
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, alice.sock), 1)
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, bob.sock), 0)
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, carol.sock), 0)
@@ -1446,7 +1448,7 @@ test_simulation_dm_lifecycle_and_message_fanout_uses_protocol_parsers :: proc(t:
 		testing.expect(t, string(message.content) == content_string, "DM message content should match")
 
 		nrc_sim_clear_inboxes(&ctx.sim)
-		process_leave_dm(bob, pr.LeaveDMRequest{conv_id = conv_id, correlation_id = 13})
+		dm_test_leave(&database, bob, pr.LeaveDMRequest{conv_id = conv_id, correlation_id = 13})
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, alice.sock), 0)
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, bob.sock), 1)
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, carol.sock), 0)
@@ -1483,6 +1485,8 @@ test_simulation_dm_presence_multi_connection_status_edges :: proc(t: ^testing.T)
 		ctx: Sim_Test_Context
 		simulation_test_begin(&ctx)
 		defer simulation_test_end(&ctx)
+		database := dm_test_database()
+		defer dm_test_database_destroy(&database)
 
 		workspace_id := "dm_presence_workspace"
 		alice_desktop := simulation_test_install_client(&ctx.sim, 1, workspace_id, "alice")
@@ -1504,7 +1508,7 @@ test_simulation_dm_presence_multi_connection_status_edges :: proc(t: ^testing.T)
 		conv_id := pr.make_dm_conversation_id("alice", "bob")
 
 		nrc_sim_clear_inboxes(&ctx.sim)
-		process_start_dm(alice_desktop, pr.StartDMRequest{username = "bob", correlation_id = 31})
+		dm_test_start(&database, alice_desktop, pr.StartDMRequest{username = "bob", correlation_id = 31})
 		nrc_sim_run_all_send_completions(&ctx.sim)
 
 		testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, alice_desktop.sock), 1)
@@ -1736,6 +1740,8 @@ test_simulation_dm_presence_graceful_close_cleans_up_immediately :: proc(t: ^tes
 		ctx: Sim_Test_Context
 		simulation_test_begin(&ctx)
 		defer simulation_test_end(&ctx)
+		database := dm_test_database()
+		defer dm_test_database_destroy(&database)
 
 		workspace_id := "dm_graceful_close_workspace"
 		alice := simulation_test_install_client(&ctx.sim, 1, workspace_id, "alice")
@@ -1753,7 +1759,7 @@ test_simulation_dm_presence_graceful_close_cleans_up_immediately :: proc(t: ^tes
 		on_user_connect(ws_state, intern_username("bob"), true)
 
 		conv_id := pr.make_dm_conversation_id("alice", "bob")
-		process_start_dm(alice, pr.StartDMRequest{username = "bob", correlation_id = 41})
+		dm_test_start(&database, alice, pr.StartDMRequest{username = "bob", correlation_id = 41})
 
 		nrc_sim_clear_inboxes(&ctx.sim)
 		send_websocket_close_frame_and_close(alice, 1000, "Idle timeout")
@@ -1823,6 +1829,8 @@ test_simulation_idle_timeout_graceful_close_cleans_up_dm_presence :: proc(t: ^te
 		ctx: Sim_Test_Context
 		simulation_test_begin(&ctx)
 		defer simulation_test_end(&ctx)
+		database := dm_test_database()
+		defer dm_test_database_destroy(&database)
 
 		workspace_id := "dm_idle_timeout_workspace"
 		alice := simulation_test_install_client(&ctx.sim, 1, workspace_id, "alice")
@@ -1840,7 +1848,7 @@ test_simulation_idle_timeout_graceful_close_cleans_up_dm_presence :: proc(t: ^te
 		on_user_connect(ws_state, intern_username("bob"), true)
 
 		conv_id := pr.make_dm_conversation_id("alice", "bob")
-		process_start_dm(alice, pr.StartDMRequest{username = "bob", correlation_id = 42})
+		dm_test_start(&database, alice, pr.StartDMRequest{username = "bob", correlation_id = 42})
 
 		nrc_sim_clear_inboxes(&ctx.sim)
 		alice.state = .New

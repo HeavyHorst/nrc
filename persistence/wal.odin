@@ -1,5 +1,4 @@
-// Generic hash-chained WAL append, replay, and checkpoint-building types.
-// Shard-level checkpoint compaction is owned by the main package.
+// Hash-chained WAL append, inspection, and sealed-file building for retained messages.
 //
 // WAL state is tracked in three explicit stages:
 //
@@ -95,10 +94,6 @@ WAL_Metadata :: struct {
 	crc32_state:            xxhash.XXH32_state,
 	crc64_state:            xxhash.XXH64_state,
 	sha_state:              sha2.Context_256,
-
-	// Simulation-only append target. Always rawptr so production builds do not need
-	// the simulation file type; production code leaves this nil.
-	virtual_file:           rawptr,
 }
 
 // The large append buffer never needs to cross a drained lifecycle boundary.

@@ -57,19 +57,13 @@ intern_workspace_id :: proc(workspace_id: string) -> string {
 }
 
 // Intern a username string to avoid duplicate allocations and use-after-free bugs.
-// All username map keys (user_dms, user_connection_count,
+// Presence map keys (user_connection_count,
 // user_authenticated_connection_count, user_last_seen)
 // should use interned strings so they survive connection cleanup.
 // Returns an interned string owned by the thread-local intern pool.
 intern_username :: proc(username: string) -> string {
 	interned, err := strings.intern_get(&td.workspace_intern, username)
 	if err != nil do panic("failed to intern username")
-	return interned
-}
-
-intern_room_mapping_name :: proc(room_name: string) -> string {
-	interned, err := strings.intern_get(&td.workspace_intern, room_name)
-	if err != nil do panic("failed to intern room mapping name")
 	return interned
 }
 
@@ -82,8 +76,7 @@ get_or_create_workspace :: proc(workspace_id: string) -> ^Workspace_State {
 	}
 	ws := new(Workspace_State)
 	ws.conversations = make(map[pr.ConversationID]^Conversation_State, 64)
-	ws.room_mappings = make(map[string]Room_Mapping_State, 64)
-	ws.user_dms = make(map[string][dynamic]pr.ConversationID, 64)
+	ws.user_dms = make(map[string]User_DMs, 64)
 	ws.user_connection_head = make(map[string]Connection_Handle, 256)
 	ws.user_connection_next = make(map[Connection_Handle]Connection_Handle)
 	ws.user_connection_count = make(map[string]int, 256)
@@ -133,12 +126,6 @@ get_or_create_conversation :: proc(ws: ^Workspace_State, conv_id: pr.Conversatio
 	}
 	conv := new(Conversation_State)
 	init_subscriber_index(conv)
-	conv.tasks = make(map[pr.TaskID]^pr.Task, 128)
-	init_task_index(conv)
-	conv.assets = make(map[pr.AssetID]^pr.Asset, 128)
-	init_note_index(conv)
-	conv.edges = make(map[pr.EdgeID]^pr.Edge, 64)
-	conv.edges_by_entity = make(map[Edge_Entity_Key][dynamic]pr.EdgeID, 64)
 	state_map_set(&ws.conversations, conv_id, conv)
 	return conv
 }
@@ -282,12 +269,6 @@ worker_tick_timeout :: #force_inline proc() -> time.Duration {
 	if worker_fast_tick_budget > 0 {
 		timeout = WORKER_TICK_ACTIVE_TIMEOUT
 	}
-	for &writer in td.shard_writers.writers {
-		if writer.commit_pending && !writer.fsync_in_flight {
-			remaining := SHARD_COMMIT_WINDOW - time.diff(writer.commit_started, writer.wal.get_time())
-			timeout = min(timeout, max(time.Duration(0), remaining))
-		}
-	}
 	for &store in td.message_stores.stores {
 		if store.commit_pending && !store.fsync_in_flight && store.wal.pending_bytes > 0 {
 			remaining := RETAINED_COMMIT_WINDOW - time.diff(store.commit_started, store.wal.get_time())
@@ -341,6 +322,7 @@ worker_state_init_real_io :: proc() -> bool {
 
 	if err := nbio.pbuf_ring_init(&td.io, allocator = worker_backing_allocator()); err != linux.Errno.NONE {
 		log.errorf("[T%d] Failed to initialize buffer ring: %v", td.thread_index, err)
+		nbio.destroy(&td.io)
 		return false
 	}
 
@@ -348,7 +330,8 @@ worker_state_init_real_io :: proc() -> bool {
 }
 
 worker_state_init_real_persistence :: proc() -> bool {
-	if !init_active_sharded_worker_persistence(persistence.DATA_DIR, runtime_storage_layout.generation, td.thread_index, thread_count) do return false
+	if runtime_storage_layout.mode != .SQLite_V1 do return false
+	worker_db_attach(server_database_port(td.server, td.thread_index))
 	generation_dir := sharded_generation_path(persistence.DATA_DIR, runtime_storage_layout.generation)
 	defer delete(generation_dir)
 	return init_message_store_registry(&td.message_stores, generation_dir, td.thread_index, thread_count)
@@ -365,6 +348,7 @@ worker_state_start_real_timers :: proc() {
 worker_finish_callback_wave :: proc() -> (did_work, ok: bool) {
 	ok = true
 	if !td.collect_presence_updates do begin_presence_batch_wave()
+	if worker_db_drain() do did_work = true
 	if drain_deferred_input() do did_work = true
 	defer {td.input_budget_active = false}
 	message_writes, message_writes_ok := flush_pending_retained_message_writes(&td.message_stores)
@@ -380,6 +364,7 @@ worker_finish_callback_wave :: proc() -> (did_work, ok: bool) {
 	// Publication can itself reject slow peers. Keep their departures batched
 	// until both retained-message fanout and deferred outbox pumping are done.
 	if finish_presence_batch_wave() do did_work = true
+	if worker_db_evict_idle_dms() do did_work = true
 	when !NRC_SIMULATION {
 		if did_work {
 			if submit_err := nbio.submit_all_pending(&td.io); submit_err != .NONE {
@@ -398,24 +383,17 @@ worker_finish_callback_wave :: proc() -> (did_work, ok: bool) {
 
 // Run the ordered userspace phases that precede one non-blocking I/O tick.
 // Later phases may consume state published by earlier phases in the same turn;
-// in particular, preemptive WAL rotation can make compaction work immediately
-// eligible for issuance.
+// retained storage completions are adopted after maintenance.
 worker_run_pre_tick :: proc() -> (did_work: bool) {
 	did_work = process_pending_connections()
-	did_sync, sync_ok := schedule_shard_writer_fsyncs_if_due(&td.shard_writers)
-	if !sync_ok {
-		log.errorf("[T%d] Shard WAL durability sync failed; shutting down", td.thread_index)
-		server_shutdown_after_storage_error(td.server)
-	}
-	if did_sync do did_work = true
+	if worker_db_drain() do did_work = true
 	message_work, message_ok := maintain_message_store_registry(&td.message_stores)
 	if !message_ok {
 		log.errorf("[T%d] Message store maintenance failed; shutting down", td.thread_index)
 		server_shutdown_after_storage_error(td.server)
 	}
 	if message_work do did_work = true
-	if process_shard_compaction_results() do did_work = true
-	if schedule_shard_compaction_work() do did_work = true
+	if process_storage_service_results() do did_work = true
 	return
 }
 
@@ -434,8 +412,6 @@ worker_thread :: proc(worker_data: Worker_Thread_Data) {
 	// Context assignments are lexical: install in the complete worker scope.
 	context.allocator = worker_heap_allocator(&heap)
 	defer jwt_validation_scratch_destroy()
-	defer graph_scratch_destroy()
-	defer history_scratch_destroy()
 	worker_state_init_core(worker_data.server, worker_data.thread_index)
 
 	// Pin only to CPUs permitted by the process affinity/cgroup. If a CPU is
@@ -448,11 +424,15 @@ worker_thread :: proc(worker_data: Worker_Thread_Data) {
 
 	if !worker_state_init_real_io() {
 		_ = chan.send(td.server.worker_startup, false)
+		worker_state_destroy_core_for_test()
 		return
 	}
+	defer nbio.destroy(&td.io)
 
 	if !worker_state_init_real_persistence() {
 		_ = chan.send(td.server.worker_startup, false)
+		worker_db_begin_shutdown()
+		worker_state_destroy_core_for_test()
 		return
 	}
 	worker_state_start_real_timers()
@@ -469,7 +449,7 @@ worker_thread :: proc(worker_data: Worker_Thread_Data) {
 		did_work := worker_run_pre_tick()
 
 		tick_stats_before := nbio.get_stats(&td.io)
-		errno2 := nbio.tick(&td.io, worker_tick_timeout(), td.my_pending_queue.wake_fd, yield_after_callbacks = true, callback_limit = WORKER_CALLBACK_BUDGET)
+		errno2 := worker_wait_io(worker_tick_timeout())
 		if errno2 != linux.Errno.NONE {
 			log.errorf("[T%d] nbio tick error: %v", td.thread_index, errno2)
 			time.sleep(100 * time.Millisecond)
@@ -497,14 +477,6 @@ run_worker_maintenance :: proc() {
 	check_idle_connections(now)
 	if td.next_send_watchdog_at != {} && time.diff(td.next_send_watchdog_at, now) >= 0 {
 		check_stalled_sends(now)
-	}
-	// Refresh all owned shards independently of request traffic and the
-	// one-shard-per-turn compaction cursor. The helper only queues due probes;
-	// stale or failed samples still fail closed on the write path.
-	if td.server != nil && td.shard_writers.mode == .Active {
-		for &writer in td.shard_writers.writers {
-			if writer.managed && writer.batch_writes do _ = refresh_shard_writer_storage_space(&writer)
-		}
 	}
 }
 
@@ -535,11 +507,10 @@ start_worker_maintenance_timer :: proc() {
 // NOTE: Only use in tests. The OS cleans up when the program ends anyway.
 cleanup_workspaces :: proc() {
 	for _, ws in td.workspaces {
-		for event in ws.history do delete(event)
-		delete(ws.history)
 		// Clean up user_dms map (dynamic arrays inside)
 		for _, dms in ws.user_dms {
-			delete(dms)
+			delete(dms.ids)
+			delete(dms.username)
 		}
 		delete(ws.user_dms)
 
@@ -549,7 +520,6 @@ cleanup_workspaces :: proc() {
 		delete(ws.user_connection_count)
 		delete(ws.user_authenticated_connection_count)
 		delete(ws.user_last_seen)
-		delete(ws.room_mappings)
 
 		for _, conv in ws.conversations do destroy_conversation(conv)
 		delete(ws.conversations)
@@ -563,25 +533,21 @@ destroy_conversation :: proc(conv: ^Conversation_State) {
 	for flush_presence_batch(conv) {}
 	destroy_subscriber_index(conv)
 	if conv.agenda != "" do delete(conv.agenda)
-	for _, task in conv.tasks do free_task(task)
-	delete(conv.tasks)
-	destroy_task_index(conv)
-	for _, asset in conv.assets do free_asset(asset)
-	delete(conv.assets)
-	destroy_note_index(conv)
-	for _, edge in conv.edges do free_edge(edge)
-	delete(conv.edges)
-	for _, edge_list in conv.edges_by_entity do delete(edge_list)
-	delete(conv.edges_by_entity)
-	// Participant strings are interned, not owned by the conversation.
-	if conv.dm_participants != nil do free(conv.dm_participants)
+	destroy_dm_participants(conv.dm_participants)
 	free(conv)
+}
+
+destroy_dm_participants :: proc(pair: ^DM_Participants) {
+	if pair == nil do return
+	if pair.owned_names {delete(pair.user_a); delete(pair.user_b)}
+	free(pair)
 }
 
 // worker_state_destroy_core_for_test releases state created by worker_state_init_core
 // without touching real IO or persistence. Tests and the deterministic simulator can
 // use this to boot handler/runtime state without starting nbio.
 worker_state_destroy_core_for_test :: proc() {
+	worker_db_detach()
 	discard_deferred_input()
 	assert(td.shared_fanout_depth == 0, "test teardown with active shared fanout")
 	assert(!td.draining_presence_updates, "test teardown while draining deferred presence")
@@ -615,8 +581,6 @@ worker_state_destroy_core_for_test :: proc() {
 	strings.intern_destroy(&td.workspace_intern)
 	destroy_batch_state_pool()
 	connection_storage_destroy()
-	graph_scratch_destroy()
-	history_scratch_destroy()
 
 	if td.spool != nil {
 		byte_pool.destroy_buffer_pool(td.spool)
@@ -629,11 +593,9 @@ worker_state_destroy_core_for_test :: proc() {
 _server_thread_shutdown :: proc(s: ^NRC_Server, loc := #caller_location) {
 	log.infof("[T%d] Shutting down worker thread...", td.thread_index)
 	td.state = .Closing
+	worker_db_begin_shutdown()
 	discard_deferred_input()
 	discard_deferred_outbox_pumps()
-	// Cap-deferred requests can pin connections without an fsync in flight.
-	// Release them before waiting for retained connections to retire.
-	for &writer in td.shard_writers.writers do discard_shard_deferred_requests(&writer)
 	cancel_message_seals(&td.message_stores)
 
 	// We shutdown the process/server
@@ -646,6 +608,7 @@ _server_thread_shutdown :: proc(s: ^NRC_Server, loc := #caller_location) {
 	log.infof("[T%d] Starting connection cleanup loop, connection_count=%d", td.thread_index, td.connection_count)
 
 	for i := 0;; i += 1 {
+		_ = worker_db_drain()
 		// Collect sockets to close (avoid modifying list during iteration)
 		sockets_to_close := make([dynamic]net.TCP_Socket, 0, 64)
 		defer delete(sockets_to_close)
@@ -672,12 +635,12 @@ _server_thread_shutdown :: proc(s: ^NRC_Server, loc := #caller_location) {
 		}
 
 		when ODIN_DEBUG do debug_log("[T%d] Shutdown iteration %d: %d connections remaining", td.thread_index, i, td.connection_count)
-		if td.connection_count == 0 && td.retained_connection_count == 0 && nbio.num_waiting(&td.io) == 0 {
+		if td.connection_count == 0 && td.retained_connection_count == 0 && nbio.num_waiting(&td.io) == 0 && len(td.database.pending) == 0 {
 			break
 		}
 
 		when ODIN_DEBUG do debug_log("[T%d] Calling nbio.tick for shutdown", td.thread_index)
-		err := nbio.tick(&td.io, 1 * time.Millisecond)
+		err := nbio.tick(&td.io, 1 * time.Millisecond, extra_wake_fd = worker_db_wake_fd())
 		when ODIN_DEBUG do debug_log("[T%d] nbio.tick returned", td.thread_index)
 		fmt.assertf(err == linux.Errno.NONE, "IO tick error during shutdown: %v")
 		_, message_writes_ok := flush_pending_retained_message_writes(&td.message_stores)
@@ -685,6 +648,7 @@ _server_thread_shutdown :: proc(s: ^NRC_Server, loc := #caller_location) {
 	}
 
 	log.infof("[T%d] All connections closed.", td.thread_index)
+	worker_db_detach()
 	log.infof("[T%d] Timers cancelled, starting drain...", td.thread_index)
 
 	// Drain remaining I/O (closes, cancelled timers, etc.) before destroying io_uring
@@ -719,10 +683,6 @@ _server_thread_shutdown :: proc(s: ^NRC_Server, loc := #caller_location) {
 		server_shutdown_after_storage_error(td.server)
 	}
 
-	if !shutdown_shard_writer_registry(&td.shard_writers) {
-		log.errorf("[T%d] Final shard WAL durability sync failed during shutdown", td.thread_index)
-		server_shutdown_after_storage_error(td.server)
-	}
 	// Destroying the sealed-WAL cache queues closes for its adopted read handles.
 	// Retire them before the worker allocator and io_uring are destroyed.
 	for nbio.num_waiting(&td.io) > 0 {
