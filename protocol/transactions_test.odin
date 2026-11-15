@@ -4,6 +4,26 @@ import "core:encoding/endian"
 import "core:testing"
 
 @(test)
+test_transaction_patch_enum_boundaries :: proc(t: ^testing.T) {
+	buffer: [64]byte
+	for field in ([2]u16{TRANSACTION_TASK_PATCH_STATUS, TRANSACTION_TASK_PATCH_COLOR}) {
+		upper := field == TRANSACTION_TASK_PATCH_STATUS ? u8(max(TaskStatus)) : u8(max(TaskColor))
+		for value in ([3]u8{0, upper, upper + 1}) {
+			patch := TransactionTaskPatch {
+				task    = {.Existing, .Task, 1},
+				present = field,
+				status  = TaskStatus(value),
+				color   = TaskColor(value),
+			}
+			n := serializeTransactionTaskPatch(patch, buffer[:])
+			testing.expect(t, n > 0)
+			_, err := parseTransactionTaskPatch(buffer[:n])
+			testing.expect_value(t, err, value <= upper ? ProtocolParseError.None : .InvalidValue)
+		}
+	}
+}
+
+@(test)
 test_transaction_envelope_round_trip :: proc(t: ^testing.T) {
 	body_a := []byte{1, 2, 3}
 	body_b := []byte{4, 5}

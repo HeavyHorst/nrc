@@ -161,6 +161,8 @@ parseTransactionTaskPatch :: proc(data: []byte) -> (r: TransactionTaskPatch, err
 	   0 {r.external_ref, err = transaction_read_bytes(data, &o, MAX_EXTERNAL_REF_LENGTH); if err != nil do return}
 	if r.present & TRANSACTION_TASK_PATCH_PROJECT != 0 {r.project, err = transaction_read_bytes(data, &o, MAX_PROJECT_LENGTH); if err != nil do return}
 	if o != len(data) do return r, .ContentLengthMismatch
+	if r.present & TRANSACTION_TASK_PATCH_STATUS != 0 && (r.status < min(TaskStatus) || r.status > max(TaskStatus)) do return r, .InvalidValue
+	if r.present & TRANSACTION_TASK_PATCH_COLOR != 0 && (r.color < min(TaskColor) || r.color > max(TaskColor)) do return r, .InvalidValue
 	return r, nil
 }
 
