@@ -168,7 +168,8 @@ try {
   await page.getByRole("button", { name: "RETRY", exact: true }).waitFor();
   assert.equal(await page.locator("#customersPager [role=status]").textContent(), "CUSTOMER PAGE UNAVAILABLE");
   assert.equal(await page.locator("#customersState").textContent(), "CUSTOMER QUERY FAILED");
-  assert.equal(await page.locator("#customersList").textContent(), "", "failure must not claim an empty register");
+  // The independent contact-review section and register header can remain.
+  assert.equal(await page.locator("#customersList > .customer-empty").count(), 0, "failure must not claim an empty register");
   assert.equal(await page.evaluate(() => customerRequests.length), 1);
 
   if (process.env.NRC_PAGER_SCREENSHOTS) {

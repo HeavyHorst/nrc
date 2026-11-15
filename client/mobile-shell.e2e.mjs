@@ -245,8 +245,12 @@ try {
     await page.evaluate(() => { logOutput.scrollTop = logOutput.scrollHeight; NRCChat.markRead(); });
     assert.ok(await page.locator("#chatNewMessages").isHidden());
   }
-  // Use the real Sullivan context picker and history path, with only its backend mocked.
-  await page.route("**/ask/ready", route => route.fulfill({ json: { ai_username: "sullivan-test" } }));
+  // Sullivan uses workspace scope even when opened from different chat rooms.
+  const readyContexts = [];
+  await page.route("**/ask/ready", route => {
+    readyContexts.push(route.request().postDataJSON().context_conv_id);
+    return route.fulfill({ json: { ai_username: "sullivan-test" } });
+  });
   await page.evaluate(() => {
     const aiDM = DM_CONV_FLAG | 999n;
     activeDMs.set(aiDM, { username: "sullivan-test", online: true });
@@ -256,12 +260,14 @@ try {
   await page.evaluate(() => NRCAI.openSullivanWithContext(2n, { focused: false }));
   assert.equal(await draft.inputValue(), "");
   await draft.fill("Workspace AI draft");
-  assert.equal(await page.locator("#askContextChip").inputValue(), "0");
-  assert.equal(await page.locator("#askContextChip").isDisabled(), true);
+  assert.equal(await page.evaluate(() => String(NRCAI.getContextConvId())), "0");
+  assert.deepEqual(readyContexts, ["0"]);
   await page.locator('[data-mobile-view="chat"]').tap();
   assert.equal(await draft.inputValue(), "Chat-only draft");
   await page.evaluate(() => NRCAI.openSullivanWithContext(8n, { focused: false }));
   assert.equal(await draft.inputValue(), "Workspace AI draft", "chat room does not partition AI workspace drafts");
+  assert.equal(await page.evaluate(() => String(NRCAI.getContextConvId())), "0");
+  assert.deepEqual(readyContexts, ["0", "0"]);
   await page.locator('[data-mobile-view="kanban"]').tap();
   const taskRow = page.locator('#taskListBody tr[data-task-id="42"]');
   await page.evaluate(() => document.getElementById("taskListBody").virtualList.ensure(0));

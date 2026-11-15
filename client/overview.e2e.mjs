@@ -179,7 +179,19 @@ try {
   assert.equal(await page.evaluate(() => window.NRCViewManager.getActiveView()), "kanban");
   assert.equal(await page.locator("#filterStatus").inputValue(), "2");
   await page.evaluate(() => window.NRCViewManager.setActiveView("chat"));
-  assert.equal(await page.locator("#inspector").isVisible(), true, "Overview does not hide the inspector after leaving");
+  assert.equal(await page.locator("#inspector").isVisible(), false, "empty entity-only inspector stays hidden");
+  await page.evaluate(async () => {
+    roomTasks.set(0n, new Map([[469n, { id: 469n, convId: 0n, title: "Inspector return fixture",
+      description: "", status: 1, priority: 128, color: 0, createdAt: 1n, updatedAt: 1n, attachments: [] }]]));
+    NRCLinksUI.loadLinks = async () => {};
+    await NRCInspector.openEntity({ type: "task", roomId: 0n, id: 469n });
+  });
+  await page.locator("#inspector").waitFor({ state: "visible" });
+  await page.evaluate(() => NRCViewManager.setActiveView("overview"));
+  assert.equal(await page.locator("#inspector").isVisible(), false, "Overview hides an opened record too");
+  await page.evaluate(() => NRCViewManager.setActiveView("chat"));
+  assert.equal(await page.locator("#inspector").isVisible(), true, "opened record returns after leaving Overview");
+  assert.equal(await page.evaluate(() => currentDetailTask.id.toString()), "469");
   // Let the Tasks view's debounced metadata refresh finish before measuring
   // Overview's own requests (it is not a request made by Overview).
   await page.waitForTimeout(250);

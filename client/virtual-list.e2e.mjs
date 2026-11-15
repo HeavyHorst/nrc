@@ -145,9 +145,11 @@ try {
     handleCommentChanged({ convId: 0n, parentType: 1, parentId: 2n, owner: myNickname }, "updated");
   });
   assert.equal(await page.evaluate(() => nativeSource.isConnected && nativeList === document.getElementById("taskListBody").virtualList && taskListDirty), true);
-  await page.evaluate(() => document.getElementById("taskListBody").virtualList.ensure(810));
+  await page.evaluate(() => document.getElementById("taskListBody").virtualList.ensure(800));
   await settle();
   const nativeTarget = await page.locator('#taskListBody [data-virtual-index="800"] .col-id').boundingBox();
+  assert.ok(nativeTarget && nativeTarget.y + 5 >= scrollBox.y && nativeTarget.y + 5 < scrollBox.y + scrollBox.height,
+    "native drop target must be visible, not merely mounted in overscan");
   await page.mouse.move(nativeTarget.x + 10, nativeTarget.y + 5, { steps: 5 });
   await page.mouse.up();
   await settle();
