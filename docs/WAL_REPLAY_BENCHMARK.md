@@ -1,5 +1,9 @@
 # WAL replay benchmark
 
+Historical benchmark: the SQLite runtime no longer replays workspace records into
+RAM. The benchmark and runner described below were removed with that path.
+To reproduce these measurements, use the pre-cutover revision recorded below.
+
 `wal_replay_benchmark.odin` measures the production
 `init_active_sharded_worker_persistence` path. It uses real files and pins each
 worker to a CPU. `benchmark/wal_replay.py` runs ten separate processes for each

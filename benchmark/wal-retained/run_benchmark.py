@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run WAL, retained-message, task, and asset write sweeps with perf profiles."""
+"""Run WAL and retained-message write sweeps with perf profiles."""
 
 import argparse
 import json
@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKLOADS = ("wal", "retained", "task", "asset")
+WORKLOADS = ("wal", "retained")
 RETAINED_BATCH_RECORDS = 16
 RESULT_RE = re.compile(r"(WAL|RETAINED|TASK|ASSET)_WRITE_RESULT (?P<fields>.+)")
 FIELD_RE = re.compile(r"(\w+)=([0-9.]+)")
@@ -40,7 +40,6 @@ def run(command, *, env=None, capture=True):
 def build_binaries(build_dir):
     wal = build_dir / "wal-write-benchmark"
     retained = build_dir / "retained-write-benchmark"
-    entity = build_dir / "entity-write-benchmark"
     common = [
         "-o:speed",
         "-keep-executable",
@@ -56,17 +55,12 @@ def build_binaries(build_dir):
         "odin", "test", ".", *common, f"-out:{retained}",
         "-define:ODIN_TEST_NAMES=main.benchmark_message_store_write_throughput",
     ])
-    run([
-        "odin", "test", ".", *common, f"-out:{entity}",
-        "-define:ODIN_TEST_NAMES=main.benchmark_entity_write_throughput",
-    ])
-    return {"wal": wal, "retained": retained, "task": entity, "asset": entity}
+    return {"wal": wal, "retained": retained}
 
 
 def record_count(workload, size, target_mib):
-    # Fixed record overheads for these benchmark fixtures, including the outer
-    # WAL header and, for task/asset writes, the shard transaction envelope.
-    overhead = {"wal": 52, "retained": 164, "task": 250, "asset": 183}[workload]
+    # Fixed record overheads for these fixtures, including the outer WAL header.
+    overhead = {"wal": 52, "retained": 164}[workload]
     target_bytes = target_mib * 1024 * 1024
     records = max(1, target_bytes // (size + overhead))
     # Keep the retained workload in one active segment. At very small payloads,
@@ -90,13 +84,6 @@ def benchmark_environment(workload, size, records):
             "NRC_MESSAGE_BENCH_CONTENT_BYTES": str(size),
             "NRC_MESSAGE_BENCH_RECORDS": str(records),
             "NRC_MESSAGE_WRITE_BATCH_RECORDS": str(RETAINED_BATCH_RECORDS),
-        })
-    else:
-        env.update({
-            "BENCH_ENTITY_WRITE": "1",
-            "NRC_ENTITY_BENCH_KIND": workload,
-            "NRC_ENTITY_BENCH_PAYLOAD_BYTES": str(size),
-            "NRC_ENTITY_BENCH_RECORDS": str(records),
         })
     return env
 

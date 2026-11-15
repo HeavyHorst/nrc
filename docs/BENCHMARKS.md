@@ -2,6 +2,11 @@
 
 This document lists the benchmarks currently in this repository, what they measure, and how to run them.
 
+Workspace WAL compaction and its benchmark entry points were removed during the
+SQLite transition. Compaction commands and measurements below are historical;
+they are not runnable against the current source. Retained-message sealing,
+expiry and the retained-only storage-owner benchmark remain available.
+
 ## Benchmark Types
 
 1. Test-runner benchmarks (`@(test)`): executed via `odin test ...` and usually gated by environment variables.
@@ -18,6 +23,116 @@ This document lists the benchmarks currently in this repository, what they measu
 6. Microbenchmarks use `time.Benchmark_Options`, keep setup and teardown outside the timed callback, populate the true operation and processed-byte counts, and validate an observable checksum after timing.
 7. Disk, network, and concurrent workloads use explicit stopwatches because their multi-phase boundaries do not fit a single microbenchmark callback. Their output must state warm/cold cache and durability semantics.
 8. Allocation counts are separate runs with explicit tracking allocators. Do not compare allocator-instrumented timing with normal timing.
+
+## SQLite graph queries and WorkOrder
+
+`benchmark_sqlite_graph_queries` measures the complete SQLite command: begin,
+query, temporary-table creation/population/removal, serialization, commit and
+response checksum/free. It excludes fixture creation, executor queues, eventfd
+wakeups and network I/O. Each process warms each query, calibrates to about 0.6s,
+then reports rounds and elapsed nanoseconds. Result-shape checks run outside
+timing; response checksums must remain stable across timed rounds.
+
+The fixture has 100, 1,000 or 10,000 tasks in a dependency chain and graph chain,
+plus two asset hubs pointing to the first min(N,499) and first 50 tasks. This
+produces 249, 1,548 or 10,548 edges. BFS queries the first hub to depth 2;
+shortest path walks task 1 to task 5; degree returns 50 entries; common-neighbor
+search returns 50 nodes/100 edges; ranking uses both hubs, depth 2, top 50;
+WorkOrder returns its first 50 tasks. At larger sizes BFS and ranking reach
+their node caps. Their flat timings do not describe unrestricted whole-graph
+traversal. WorkOrder still rebuilds the full order for every page.
+
+Measured 2026-11-12 on runner hx90: Ryzen 9 5900HX (8 cores/16 threads),
+performance governor, Linux 7.2.15, Odin dev-2026-10-nightly:84bc3fc,
+SQLite 3.54.0. Source: local uncommitted SQLite migration over
+`dfb1700ed62e28f2440627f5ba693223fa73ec31`. Optimized build, one test thread,
+allocation tracking off, no concurrent build/test workload. Database and SQLite
+temp directories were on Btrfs `/dev/mapper/root`, with WAL/FULL, mmap disabled,
+1 MiB suggested main page cache and `temp_store=FILE`. Caches were warm; this is
+not a cold-disk, fsync-latency, hard-RSS-limit or concurrent-load measurement.
+SQLite may keep small temporary tables in its cache without spilling to disk.
+
+Milliseconds per complete request, median (min–max) across ten independent
+processes. These are ranges of process averages, not request p95/p99:
+
+| Query | 100 tasks | 1,000 tasks | 10,000 tasks |
+|---|---:|---:|---:|
+| BFS | 1.904 (1.886–1.932) | 9.156 (9.014–9.320) | 9.238 (9.141–9.377) |
+| Shortest path | 0.197 (0.192–0.203) | 0.223 (0.219–0.230) | 0.190 (0.188–0.197) |
+| Degree | 0.176 (0.174–0.185) | 0.882 (0.870–0.911) | 6.016 (5.960–6.239) |
+| Common neighbors | 0.383 (0.380–0.389) | 0.675 (0.667–0.687) | 0.637 (0.630–0.643) |
+| Rank | 5.570 (5.503–5.652) | 6.708 (6.603–6.763) | 6.827 (6.737–6.872) |
+| WorkOrder | 1.854 (1.835–1.892) | 8.434 (8.334–8.579) | 78.782 (77.534–79.918) |
+
+WorkOrder is the largest measured executor stall. The timings include all temp
+table work but do not isolate it from traversal, sorting or statement execution.
+An initial ten-process tmpfs run gave similar warm-cache results; the table above
+uses only the Btrfs run. Raw logs are local under `.amp/in/sqlite-cutover/graph-bench-btrfs-*.log`.
+
+```sh
+HEGEL_LIBHEGEL_PATH=$(./test/fetch_libhegel.sh) odin build . -build-mode:test \
+  -o:speed -out:/tmp/nrc-sqlite-graph-bench \
+  -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false \
+  -define:ODIN_TEST_NAMES=benchmark_sqlite_graph_queries
+# Set this to an existing disposable directory on the filesystem to measure.
+export BENCH_SQLITE_DIR=/path/to/disposable-directory
+export SQLITE_TMPDIR="$BENCH_SQLITE_DIR"
+for sample in $(seq 1 10); do
+  BENCH_SQLITE_GRAPH=1 /tmp/nrc-sqlite-graph-bench
+done
+```
+
+### Small slices in a large workspace
+
+`benchmark_sqlite_slice_workorder` measures the first WorkOrder page (limit 50)
+for overlapping slices containing 10, 50 and 200 tasks, within workspaces of
+1,000, 10,000 and 100,000 tasks. Members are at the high-ID end of the workspace,
+with a dependency chain rooted inside each slice. Priorities vary; membership
+edges alternate direction. The fixture also contains N−1 unrelated References
+edges, for N+259 edges overall. Tasks have empty text and no attachments.
+The complete serialized response is checked against the known task sequence,
+total, cursor and pagination flag before timing; timed checksums must match.
+
+Same machine, date, build flags, storage settings and timing boundary as above.
+Ten independent processes, warm caches, no ANALYZE. Milliseconds per request,
+median (min–max of process averages). Before the slice-first query change:
+
+| Workspace tasks | Slice: 10 tasks | Slice: 50 tasks | Slice: 200 tasks |
+|---|---:|---:|---:|
+| 1,000 | 1.534 (1.520–1.659) | 2.498 (2.461–2.625) | 3.356 (3.302–3.409) |
+| 10,000 | 10.451 (10.352–11.165) | 11.463 (11.371–12.239) | 12.297 (12.230–13.208) |
+| 100,000 | 114.894 (112.835–119.033) | 116.113 (113.798–118.721) | 117.370 (114.320–121.534) |
+
+The old WorkOrder population plan started with `tasks_column_order` over the
+workspace/status range, then ran correlated membership seeks per candidate
+task. Only matching members entered the temporary WorkOrder table, but finding
+them still examined unrelated tasks.
+
+After changing the query to start at slice endpoints, the same unmodified
+benchmark in ten new independent processes measured:
+
+| Workspace tasks | Slice: 10 tasks | Slice: 50 tasks | Slice: 200 tasks |
+|---|---:|---:|---:|
+| 1,000 | 0.704 (0.691–0.736) | 1.727 (1.710–1.761) | 2.716 (2.678–2.805) |
+| 10,000 | 0.718 (0.700–0.726) | 1.784 (1.756–1.808) | 2.808 (2.731–2.853) |
+| 100,000 | 0.719 (0.709–0.729) | 1.788 (1.762–1.805) | 2.823 (2.780–2.849) |
+
+The new plan seeks both membership directions through `edges_source` and
+`edges_target`, unions the member IDs, then fetches tasks by primary key
+`(workspace,id)`. CROSS JOIN keeps members outermost without ANALYZE. SQLite
+uses temporary B-trees for the member union; these contain slice candidates,
+not all workspace tasks. WorkOrder's temporary priority queue is unchanged.
+At 100,000 tasks, the measured improvement is about 160×, 65× and 42× for
+10-, 50- and 200-task slices respectively. This fixture does not establish
+worst-case latency for slices with many non-task members or other incident edges.
+These measurements include but do not isolate temporary-table costs; they do
+not measure concurrent executor latency. No schema or index changes were needed.
+
+Reproduce with the command above, substituting
+`-define:ODIN_TEST_NAMES=benchmark_sqlite_slice_workorder` and
+`BENCH_SQLITE_SLICE=1`. Raw logs are local at
+`.amp/in/sqlite-cutover/slice-bench-{1..10}.log` (before) and
+`.amp/in/sqlite-cutover/slice-opt-bench-{1..10}.log` (after); the pilot is excluded.
 
 ## Ticket Attention collection
 
@@ -323,6 +438,10 @@ environment/hashes and the rejected pilot are stored separately in
 `.amp/in/artifacts/storage-responsiveness-benchmarks.json`.
 
 ## WAL Replay CPU Scaling
+
+This section describes the historical pre-SQLite runtime. Its workspace replay
+benchmark and runner are no longer part of the current source tree; reproduce
+results using the revision recorded in the linked report.
 
 [`WAL_REPLAY_BENCHMARK.md`](WAL_REPLAY_BENCHMARK.md) describes the task-only,
 asset-only and 50/50 mixed replay workloads and measured worker scaling.
@@ -1610,12 +1729,12 @@ power-loss behavior, OOM handling, endless-reader liveness or production-scale
 resource behavior. The real OS-thread channel test and server benchmarks add
 evidence beyond simulation but do not eliminate those limitations.
 
-### WAL, Retained-Message, Task, and Asset Write Size Sweep
+### WAL and retained-message write size sweep
 
 1. Runner: `benchmark/wal-retained/run_benchmark.py`.
 2. Run: `python3 benchmark/wal-retained/run_benchmark.py --output /tmp/wal-retained-results`.
-3. Measures raw hash-chained WAL writes, production 16-record retained-message batches, task creates, and asset creates at 64 B, 256 B, 1 KiB, 4 KiB, and 16 KiB payloads. Both MiB/s and operations per second are reported.
-4. Task and asset workloads include their production mutation builder, validation, shard transaction envelope, hash chain, and one transaction flush per operation. Their threshold fsync is serialized by this single-writer benchmark; the server submits it asynchronously.
+3. Measures raw hash-chained WAL writes and production 16-record retained-message batches at 64 B, 256 B, 1 KiB, 4 KiB, and 16 KiB payloads. Both MiB/s and operations per second are reported.
+4. The old task/asset WAL workloads were removed with the SQLite cutover. The renderer still accepts historical results containing those workloads; they do not measure SQLite writes.
 5. Defaults to ten independent process runs per size and up to 128 MiB written per sample. Retained-message samples are capped at 100,000 records to remain within one active segment. The runner reports median plus IQR/min/max in `results.json` and the generated static portal.
 6. Captures `perf` user-space CPU-clock profiles for the smallest and largest payloads. This software event is used because Amp orbs do not expose hardware PMU counters.
 7. The timed interval includes production threshold-triggered fsyncs but excludes initialization and shutdown's final fsync. New files are used for each sample; the OS page cache is not dropped.

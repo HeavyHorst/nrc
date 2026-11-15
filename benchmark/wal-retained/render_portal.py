@@ -61,7 +61,9 @@ def chart(title, subtitle, summaries, metric, formatter):
     for size in sorted({row["size_bytes"] for row in summaries}):
         bars = []
         for workload in WORKLOADS:
-            row = next(item for item in summaries if item["size_bytes"] == size and item["workload"] == workload)
+            row = next((item for item in summaries if item["size_bytes"] == size and item["workload"] == workload), None)
+            if row is None:
+                continue
             value = row[metric]["median"]
             width = value / maximum * 100
             spread = f"IQR {formatter(row[metric]['q1'])}–{formatter(row[metric]['q3'])}"
@@ -181,11 +183,12 @@ def main():
             key=lambda row: row["mib_per_s"]["median"],
         )
         for workload in WORKLOADS
+        if any(row["workload"] == workload for row in summaries)
     }
 
     table_rows = []
     for size in data["sizes_bytes"]:
-        for workload in WORKLOADS:
+        for workload in fastest:
             row = next(item for item in summaries if item["size_bytes"] == size and item["workload"] == workload)
             table_rows.append(
                 f'<tr><td>{size_label(size)}</td><td>{LABELS[workload]}</td><td>{row["record_bytes"]:,}</td>'
@@ -193,6 +196,11 @@ def main():
                 f'<td>{row["write_calls_per_sample"]:,.0f}</td><td>{row["fsyncs_per_sample"]:,.0f}</td></tr>'
             )
 
+    legacy_cards = "".join(
+        f'<div class="card"><span>Peak {workload} bandwidth</span><b>{fastest[workload]["mib_per_s"]["median"]:,.0f} MiB/s</b><small>{size_label(fastest[workload]["size_bytes"])} {label}</small></div>'
+        for workload, label in (("task", "description"), ("asset", "payload"))
+        if workload in fastest
+    )
     document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>NRC-300 / Storage Write Capacity</title>
@@ -204,14 +212,13 @@ def main():
 <section class="panel wide"><h2>Capacity at a glance</h2><div class="cards">
 <div class="card"><span>Peak raw WAL bandwidth</span><b>{fastest['wal']['mib_per_s']['median']:,.0f} MiB/s</b><small>{size_label(fastest['wal']['size_bytes'])} payload</small></div>
 <div class="card"><span>Peak retained bandwidth</span><b>{fastest['retained']['mib_per_s']['median']:,.0f} MiB/s</b><small>{size_label(fastest['retained']['size_bytes'])} content · {data['retained_batch_records']}-record batches</small></div>
-<div class="card"><span>Peak task bandwidth</span><b>{fastest['task']['mib_per_s']['median']:,.0f} MiB/s</b><small>{size_label(fastest['task']['size_bytes'])} description</small></div>
-<div class="card"><span>Peak asset bandwidth</span><b>{fastest['asset']['mib_per_s']['median']:,.0f} MiB/s</b><small>{size_label(fastest['asset']['size_bytes'])} payload</small></div>
+{legacy_cards}
 </div></section>
 {chart('Write bandwidth', 'Median MiB/s of complete WAL record bytes; error labels show process-level IQR.', summaries, 'mib_per_s', lambda value: f'{value:,.0f} MiB/s')}
 {chart('Operation / record rate', 'Median completed writes per second. Payload size changes the byte work per operation.', summaries, 'messages_per_s', lambda value: f'{rate(value)}/s')}
 {hash_sections(hash_data)}
 <section class="panel wide"><h2>perf · exclusive user-space CPU hotspots</h2><p>Software <code>cpu-clock:u</code> sampling at 999 Hz; hardware PMU counters are not exposed by this orb. Percentages are self time, so callees appear separately. Profiles cover the smallest and largest payloads.</p><div class="profiles">{perf_panels(data['profiles'])}</div></section>
-<section class="panel wide"><h2>Complete median results</h2><table><thead><tr><th>Payload</th><th>Path</th><th>WAL bytes / record</th><th>MiB/s</th><th>Operations/s</th><th>write() calls</th><th>Timed fsyncs</th></tr></thead><tbody>{''.join(table_rows)}</tbody></table></section>
+<section class="panel wide"><h2>Complete median results</h2><p>Task and asset workloads, when present, are historical workspace-WAL measurements. The current runner measures raw WAL and retained messages only; it does not measure SQLite writes.</p><table><thead><tr><th>Payload</th><th>Path</th><th>WAL bytes / record</th><th>MiB/s</th><th>Operations/s</th><th>write() calls</th><th>Timed fsyncs</th></tr></thead><tbody>{''.join(table_rows)}</tbody></table></section>
 <section class="panel wide"><h2>Method and interpretation</h2><p>Commit <code>{data['commit']}</code>; dirty source: <code>{data['worktree_dirty']}</code>. {data['cpu_model']} · {data['logical_cpus']} logical CPUs visible · <code>{data['odin_version']}</code>. Each raw-WAL, task, and asset sample writes approximately {data['target_mib_per_sample']} MiB. Retained samples write up to that target and are capped at {data['retained_record_cap']:,} messages to stay within one active segment. Every sample uses a new file and an optimized one-test-thread build. Values are the median and IQR of {data['runs']} separate processes. Cache state: {data['cache_state']}. Durability: {data['durability']}; the results table shows how many threshold fsyncs occurred. Raw WAL uses 128 KiB batches. Retained messages use the production staging, fingerprint, dedup, active-index, payload-cache, and {data['retained_batch_records']}-record flush path. Task and asset creates use the production mutation builder, shard transaction envelope, validation, hash chain, and one transaction flush per operation. Task/asset threshold fsync is serialized by this single-writer benchmark; the server submits it asynchronously. Initialization and final shutdown fsync are outside the timer. These are orb-local capacity results—not dedicated-hardware regression thresholds.</p></section>
 </main><footer>nrc · WAL / MESSAGE / TASK / ASSET</footer></body></html>"""
     args.output.mkdir(parents=True, exist_ok=True)
