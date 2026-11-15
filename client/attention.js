@@ -103,9 +103,9 @@ window.NRCAttention = (() => {
       getNickname: nickname,
       isReady: ready,
       nextId: () => (typeof getRpcCorrelationId === "function" ? getRpcCorrelationId() : 0),
-      send: (buffer) => {
+      send: (buffer, correlationId) => {
         // The production sender owns the transport counters.
-        if (typeof sendPacket === "function") { sendPacket(buffer); return; }
+        if (typeof sendPacket === "function") { sendPacket(buffer, correlationId); return; }
         if (typeof ws !== "undefined" && ws?.readyState === WebSocket.OPEN) ws.send(buffer);
       },
       // Counts must not seed the task register's cache or trigger its renders.

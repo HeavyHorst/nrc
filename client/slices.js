@@ -499,8 +499,7 @@
       state.loadingMore = true;
       state.pageError = "";
     }
-    ws.send(encodeListRequest(correlationId, cursor, state.filters, state.includeClosed));
-    localPacketsOut++;
+    sendPacket(encodeListRequest(correlationId, cursor, state.filters, state.includeClosed), correlationId);
     render();
     return settled;
   }
@@ -597,8 +596,7 @@
         resolve(null);
       }, REQUEST_TIMEOUT_MS);
       headlessReads.set(correlationId, read);
-      ws.send(encodeListRequest(correlationId, cursor, filters, filters.includeClosed === true));
-      localPacketsOut++;
+      sendPacket(encodeListRequest(correlationId, cursor, filters, filters.includeClosed === true), correlationId);
     });
   }
 

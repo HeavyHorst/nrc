@@ -118,6 +118,7 @@ function makeHarness({ now = null } = {}) {
   vm.runInContext(`
     var currentRoomId = 7n, currentWorkspaceId = "workspace-1", myNickname = "tester";
     var ws = { readyState: 1, send: (buffer) => __sent.push(buffer) };
+    function sendPacket(buffer) { ws.send(buffer); localPacketsOut++; }
     var serverReady = true, localPacketsOut = 0, clientRequestIdCounter = 0;
     var Opcode = { C_GetTask: 26 }, WebSocket = { OPEN: 1 };
     function getRpcCorrelationId() { return ++clientRequestIdCounter; }

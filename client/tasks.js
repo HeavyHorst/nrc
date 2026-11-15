@@ -1553,8 +1553,7 @@ function sendCreateTask(
     });
   }
 
-  ws.send(buffer);
-  localPacketsOut++;
+  sendPacket(buffer, correlationId);
   return correlationId;
 }
 
@@ -1846,8 +1845,7 @@ function sendUpdateTask(
     });
   }
 
-  ws.send(buffer);
-  localPacketsOut++;
+  sendPacket(buffer, correlationId);
   return correlationId;
 }
 
@@ -1869,8 +1867,7 @@ function sendDeleteTask(convId, taskId) {
   // Track this delete to skip self-notification
   pendingTaskDeletes.add(BigInt(taskId));
 
-  ws.send(buffer);
-  localPacketsOut++;
+  sendPacket(buffer, correlationId);
 }
 
 // A move asks the server for the end of the target column instead of naming a
@@ -1903,8 +1900,7 @@ function sendMoveTask(convId, taskId, status, requestOptions = null) {
     });
   }
 
-  ws.send(buffer);
-  localPacketsOut++;
+  sendPacket(buffer, correlationId);
   return correlationId;
 }
 
@@ -1922,8 +1918,7 @@ function sendGetTasks(convId) {
   view.setBigUint64(2, BigInt(convId), false);
   view.setUint32(10, correlationId, false);
 
-  ws.send(buffer);
-  localPacketsOut++;
+  sendPacket(buffer, correlationId);
 }
 
 const ACTIVE_TASK_MASK = 0x07;
@@ -1962,8 +1957,7 @@ function sendListTasksPaged(convId, statusMask, limit = TASK_PAGE_SIZE, cursorSo
   }
   view.setUint32(offset, correlationId, false);
   pendingTaskRpcs.set(correlationId, { ...requestOptions, convId: BigInt(convId), statusMask, firstPage: !hasCursor });
-  ws.send(buffer);
-  localPacketsOut++;
+  sendPacket(buffer, correlationId);
   return correlationId;
 }
 
@@ -1978,8 +1972,7 @@ function sendGetTask(convId, taskId, requestOptions = null) {
   view.setBigUint64(10, BigInt(taskId), false);
   view.setUint32(18, correlationId, false);
   pendingTaskRpcs.set(correlationId, { ...requestOptions, convId: BigInt(convId), taskId: BigInt(taskId) });
-  ws.send(buffer);
-  localPacketsOut++;
+  sendPacket(buffer, correlationId);
   return correlationId;
 }
 
@@ -1994,7 +1987,7 @@ function sendListTaskDependents(taskId, afterTaskId, options) {
   view.setBigUint64(20, afterTaskId, false);
   view.setUint32(28, correlationId, false);
   pendingTaskRpcs.set(correlationId, { ...options, dependents: true, taskId, afterTaskId });
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
   return correlationId;
 }
 
@@ -2100,8 +2093,7 @@ async function requestTasksByIds(convId, ids) {
       kind: "ids", records: [],
       onSuccess: records => settle(records), onError: error => settle([], error),
     });
-    ws.send(buffer);
-    localPacketsOut++;
+    sendPacket(buffer, correlationId);
   }
   const results = await Promise.allSettled(unique.map(id => reads.get(id)));
   for (const result of results) if (result.status === "rejected") throw result.reason;

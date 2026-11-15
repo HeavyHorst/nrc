@@ -25,7 +25,7 @@ window.NRCAppointmentNotify = (() => {
   function requestPage(cursor = null) {
     const id = getRpcCorrelationId();
     pending = { id, cursor, timeout: setTimeout(disconnect, 15000) };
-    sendPacket(window.NRCCalendar.encodeRequest(scan.range, scan.person, "", cursor, id));
+    sendPacket(window.NRCCalendar.encodeRequest(scan.range, scan.person, "", cursor, id), id);
   }
   function refresh() {
     if (!enabled() || pending) return;

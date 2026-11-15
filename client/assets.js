@@ -502,7 +502,7 @@ function sendCreateAsset(
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -597,7 +597,7 @@ function sendUpdateAsset(
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -629,7 +629,7 @@ function sendDeleteAsset(convId, assetId, requestOptions = null) {
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -671,7 +671,7 @@ function sendGetAsset(convId, assetId, requestOptions = null) {
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -736,7 +736,7 @@ async function requestAssetsByIds(convId, ids, { fullContent = false, force = fa
       records: [], snapshotStartVersion: assetMutationSequence,
       onSuccess: records => settle(records), onError: error => settle([], error),
     });
-    sendPacket(buffer);
+    sendPacket(buffer, correlationId);
   }
   const results = await Promise.allSettled(unique.map(id => reads.get(id)));
   for (const result of results) if (result.status === "rejected") throw result.reason;
@@ -823,7 +823,7 @@ function sendListAssets(convId, assetType = null, fullContent = false, requestOp
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -899,7 +899,7 @@ function sendListAssetsPaged(
     snapshotStartVersion: opts?.snapshotStartVersion,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -1008,7 +1008,7 @@ function requestPersonList(opcode, { isCancelled } = {}) {
       onSuccess: values => { clearTimeout(timer); resolve(values); },
       onError: detail => { clearTimeout(timer); reject(new Error(detail.message || "Person list failed")); },
     });
-    sendPacket(buffer);
+    sendPacket(buffer, correlationId);
   });
 }
 
@@ -1037,7 +1037,7 @@ function sendTicketPage(query, { isCancelled } = {}) {
       snapshotStartVersion: assetMutationSequence, isCancelled,
       onSuccess: resolve, onError: detail => reject(new Error(detail.message || "Ticket query failed")),
     });
-    sendPacket(buffer);
+    sendPacket(buffer, correlationId);
   });
 }
 
@@ -1080,7 +1080,7 @@ function requestCustomerPage(convId, options = {}) {
       isCancelled: options.isCancelled,
       onSuccess: resolve, onError: detail => reject(new Error(detail.message || "Customer search failed")),
     });
-    sendPacket(buffer);
+    sendPacket(buffer, correlationId);
   });
 }
 
@@ -1177,7 +1177,7 @@ function sendListAssetsPagedByProject(
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -1253,7 +1253,7 @@ function sendListAssetsPagedByTag(
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -1289,7 +1289,7 @@ function sendListNoteProjects(convId, requestOptions = null) {
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -1325,7 +1325,7 @@ function sendListNoteTags(convId, requestOptions = null) {
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }

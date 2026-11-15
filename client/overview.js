@@ -17,7 +17,7 @@ window.NRCOverview = (() => {
       view.setUint16(0, Opcode.C_GetWorkspaceOverview);
       view.setBigUint64(2, 0n); // Canonical workspace data scope.
       view.setUint32(10, id);
-      sendPacket(view.buffer);
+      sendPacket(view.buffer, id);
     });
   }
   function handlePage(view) {

@@ -244,7 +244,7 @@ function sendCreateEdge(convId, sourceType, sourceId, targetType, targetId, rela
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -274,7 +274,7 @@ function sendDeleteEdge(convId, edgeId, requestOptions = null) {
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -320,7 +320,7 @@ function sendListEdges(convId, targetType, targetId, requestOptions = null) {
   });
 
   console.log("[NRCEdges] Sending C_ListEdges packet");
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -350,7 +350,7 @@ function sendListAllEdges(convId, requestOptions = null) {
     snapshotStartVersion: edgeMutationSequence,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -373,7 +373,7 @@ function sendListAllEdgesPaged(convId, limit = 100, afterEdgeId = 0n, requestOpt
     context: opts?.context,
     snapshotStartVersion: opts?.snapshotStartVersion,
   });
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
   return correlationId;
 }
 
@@ -454,7 +454,7 @@ function requestEdgePage(convId, targetType, targetId, options = {}) {
         for (const listener of edgeChangeListeners) listener(detail, detail.hasMore ? "list_page" : "list");
       },
     });
-    sendPacket(buffer);
+    sendPacket(buffer, correlationId);
   });
 }
 
@@ -509,7 +509,7 @@ function sendGraphQuery(convId, startType, startId, maxDepth, relationMask, dire
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -566,7 +566,7 @@ function sendShortestPath(convId, fromType, fromId, toType, toId, relationMask, 
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -608,7 +608,7 @@ function sendDegreeQuery(convId, topN, typeFilter, relationMask, requestOptions 
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }
@@ -659,7 +659,7 @@ function sendCommonNeighbors(convId, aType, aId, bType, bId, relationMask, direc
     context: opts?.context,
   });
 
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
 
   return correlationId;
 }

@@ -58,6 +58,7 @@ function loadSlices(overrides = {}) {
     TaskViewState: { grouping: "slices" },
     serverReady: true,
     ws: { readyState: 1, send: (buffer) => sent.push(buffer) },
+    sendPacket: buffer => sent.push(buffer),
     WebSocket: { OPEN: 1 },
     localPacketsOut: 0,
     TextEncoder,

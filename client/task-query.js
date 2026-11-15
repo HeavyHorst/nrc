@@ -49,7 +49,7 @@
         }, 15000);
         pageRequests.set(correlationId, { resolve, reject, timer });
         options.send(encodeTaskQuery({ statusMask: 15, assignee: null, project: null, color: 255,
-          blocked: null, overdueBefore: 0n, ...query }, cursor, correlationId));
+          blocked: null, overdueBefore: 0n, ...query }, cursor, correlationId), correlationId);
       });
     }
     const notify = () => options.onChange?.();
@@ -83,7 +83,7 @@
         options.onMetadataError?.();
       }, 15000);
       projectRequest = { roomId, correlationId, values: [], timer };
-      options.send(buffer);
+      options.send(buffer, correlationId);
     }
     function loadMore() {
       if (pending || !options.isReady() || !state.query || (state.mode === "results" && !state.hasMore)) return;
@@ -95,7 +95,7 @@
       }, 15000);
       pending = { correlationId, target, timer };
       state.mode = "loading";
-      options.send(encodeTaskQuery(state.query, state.cursor, correlationId));
+      options.send(encodeTaskQuery(state.query, state.cursor, correlationId), correlationId);
       notify();
     }
     function update({ force = false } = {}) {
@@ -179,7 +179,7 @@
       view.setUint16(0, 57, false); view.setBigUint64(2, 0n, false); view.setUint32(10, correlationId, false);
       const timer = setTimeout(() => { assigneeRequest = null; options.onMetadataError?.(); }, 15000);
       assigneeRequest = { correlationId, values: [], timer };
-      options.send(buffer);
+      options.send(buffer, correlationId);
     }
     function handleAssignees(view) {
       const page = window.NRCFrames.decodeStringList(view);
@@ -218,7 +218,7 @@
     getNickname: () => myNickname,
     isReady: () => typeof serverReady !== "undefined" && serverReady && ws?.readyState === WebSocket.OPEN,
     nextId: () => getRpcCorrelationId(),
-    send: (buffer) => { ws.send(buffer); localPacketsOut++; },
+    send: (buffer, id) => sendPacket(buffer, id),
     cacheTasks: (roomId, tasks, { scopedPage = false } = {}) => {
       if (!roomTasks.has(roomId)) roomTasks.set(roomId, new Map());
       for (const task of tasks) roomTasks.get(roomId).set(task.id, task);

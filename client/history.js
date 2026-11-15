@@ -70,7 +70,7 @@ window.NRCHistory = (() => {
     view.setBigUint64(19, BigInt(pending.cursor)); view.setUint16(27, pending.limit); view.setUint32(29, correlation);
     mode = "loading"; render();
     timer = setTimeout(() => { pending = null; mode = "error"; render(); }, 15000);
-    sendPacket(view.buffer);
+    sendPacket(view.buffer, correlation);
   }
   function handlePage(view) {
     const decoded = window.NRCFrames.decodeHistoryPage(view);

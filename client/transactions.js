@@ -146,7 +146,7 @@ function sendCreateLinkedAsset(convId, assetType, preview, payload, companyId, o
     onError: requestOptions?.onError,
     context: requestOptions?.context,
   });
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
   return correlationId;
 }
 
@@ -184,7 +184,7 @@ function sendCreateSliceTask(title, description, sliceId, options = {}) {
   offset = writeTransactionReference(view, offset, TransactionReference.Existing, slice);
   view.setUint16(offset, 7); // MemberOf
   pendingTransactionRpc.set(correlationId, { kind: "slice_task", ...options });
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
   return correlationId;
 }
 
@@ -230,7 +230,7 @@ function sendAssetMetadataPatch(asset, preview, payload, options = {}) {
     new Uint8Array(buffer, offset, payloadLength).set(payloadBytes);
   }
   pendingTransactionRpc.set(correlationId, { kind: "asset_patch", onSuccess: options.onSuccess, onError: options.onError });
-  sendPacket(buffer);
+  sendPacket(buffer, correlationId);
   return correlationId;
 }
 

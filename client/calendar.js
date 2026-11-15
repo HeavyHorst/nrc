@@ -40,7 +40,7 @@ window.NRCCalendar = (() => {
     if (query) return query;
     query = window.createTaskQueryController({
       getNickname: () => myNickname, isReady: ready,
-      nextId: () => getRpcCorrelationId(), send: buffer => sendPacket(buffer),
+      nextId: () => getRpcCorrelationId(), send: (buffer, id) => sendPacket(buffer, id),
       onProjects: () => complete("projects"),
       onMetadataError: () => { state.status = "error"; render(); },
     });
@@ -88,7 +88,7 @@ window.NRCCalendar = (() => {
     const id = getRpcCorrelationId();
     if (pending) clearTimeout(pending.timeout);
     pending = { id, cursor, timeout: setTimeout(() => { pending = null; state.status = "error"; render(); }, 15000) };
-    sendPacket(encodeRequest(visibleRange(), state.person === "me" ? myNickname : state.person, state.project, cursor, id));
+    sendPacket(encodeRequest(visibleRange(), state.person === "me" ? myNickname : state.person, state.project, cursor, id), id);
   }
   function handlePage(view) {
     if (!pending || view.getUint32(view.byteLength - 4) !== pending.id) return;

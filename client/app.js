@@ -1455,6 +1455,7 @@ async function connectWebSocket() {
   };
 
   ws.onclose = (event) => {
+    dbRetries.clear();
     updateConnectionStatus(false);
     serverReady = false; // Reset server ready flag
     window.NRCCalendar?.disconnect();
@@ -1544,8 +1545,16 @@ async function connectWebSocket() {
   };
 }
 
-function sendPacket(data) {
+const dbRetries = window.NRCDBRetry.create({
+  getSocket: () => ws,
+  send: data => sendPacket(data),
+  dispatch: data => handleBinaryMessage(data),
+  decode: view => window.NRCFrames.decodeServerFrame(view),
+});
+
+function sendPacket(data, correlationId = 0) {
   if (ws && ws.readyState === WebSocket.OPEN) {
+    if (correlationId) dbRetries.track(data, correlationId);
     ws.send(data);
     localPacketsOut++;
 
@@ -1830,6 +1839,7 @@ function handleBinaryMessage(arrayBuffer) {
   const opcode = dataView.getUint16(0, false); // Big Endian
 
   try {
+    if (dbRetries.receive(dataView)) return;
     switch (opcode) {
       case Opcode.S_ServerReady:
         logSystem("RECEIVED SERVER READY SIGNAL", "protocol", "DEBUG");
@@ -2456,7 +2466,7 @@ function sendStartDM(targetUsername, options = {}) {
   new Uint8Array(buf, 4).set(usernameBytes);
   view.setUint32(4 + usernameBytes.length, correlationId, false);
 
-  sendPacket(buf);
+  sendPacket(buf, correlationId);
   return true;
 }
 
@@ -2472,7 +2482,7 @@ function requestDMList() {
   const view = new DataView(buf);
   view.setUint16(0, Opcode.C_ListDMs, false);
   view.setUint32(2, correlationId, false);
-  sendPacket(buf);
+  sendPacket(buf, correlationId);
 }
 
 function sendLeaveDM(convId) {
@@ -2493,7 +2503,7 @@ function sendLeaveDM(convId) {
   view.setUint16(0, Opcode.C_LeaveDM, false);
   view.setBigUint64(2, convIdBig, false);
   view.setUint32(10, correlationId, false);
-  sendPacket(buf);
+  sendPacket(buf, correlationId);
 }
 
 function parseDMStarted(dataView) {
