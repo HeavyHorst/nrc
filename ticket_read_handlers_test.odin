@@ -312,8 +312,18 @@ test_ticket_priority_follow_up_validation :: proc(t: ^testing.T) {
 		`,"follow_up_at":""`,
 		`,"follow_up_at":"1"`,
 		`,"follow_up_at":"9223372036854775807"`,
+		`,"category":""`,
+		`,"category":"bug"`,
+		`,"category":"support"`,
+		`,"category":"feature"`,
+		`,"category":"unclear"`,
 	}
 	invalid := [?]string {
+		`,"category":null`,
+		`,"category":1`,
+		`,"category":"Bug"`,
+		`,"category":"other"`,
+		`,"category":"bug","category":"support"`,
 		`,"priority":""`,
 		`,"priority":null`,
 		`,"priority":1`,

@@ -220,6 +220,7 @@ Ticket_Preview :: struct {
 	requester_name: string `json:"requester_name"`,
 	priority:       string `json:"priority"`,
 	follow_up_at:   string `json:"follow_up_at"`,
+	category:       string `json:"category"`,
 }
 
 Ticket_Entry_Preview :: struct {
@@ -238,7 +239,7 @@ parse_ticket_preview :: proc(data: []byte, allocator: mem.Allocator, strict := f
 	}
 	f, object, valid := json_metadata_fields(
 		data,
-		[?]string{"version", "title", "company_id", "contact_id", "requester", "requester_name", "status", "assignee", "priority", "follow_up_at"},
+		[?]string{"version", "title", "company_id", "contact_id", "requester", "requester_name", "status", "assignee", "priority", "follow_up_at", "category"},
 		allocator,
 	)
 	if !valid || !object || f[0].kind != .Integer || f[0].text != "1" do return
@@ -258,6 +259,11 @@ parse_ticket_preview :: proc(data: []byte, allocator: mem.Allocator, strict := f
 		if f[9].kind != .String do return
 		m.follow_up_at = json_metadata_string(f[9], allocator)
 		if _, valid_time := ticket_follow_up_time(m.follow_up_at); !valid_time do return
+	}
+	if f[10].kind != .Invalid {
+		if f[10].kind != .String do return
+		m.category = json_metadata_string(f[10], allocator)
+		if m.category != "" && m.category != "bug" && m.category != "support" && m.category != "feature" && m.category != "unclear" do return
 	}
 	if len(strings.trim_space(m.title)) == 0 do return
 	for id in ([?]string{m.company_id, m.contact_id}) {
