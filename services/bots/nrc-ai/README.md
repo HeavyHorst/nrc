@@ -34,6 +34,18 @@ Missing required provider credentials prevent startup. If the paste LLM initiali
 but the Ask engine fails, paste remains available and Ask returns HTTP 503.
 Health alone does not prove that your provider can complete requests.
 
+## Automatic ticket categories
+
+Set `NRC_TICKET_CLASSIFICATION_WORKSPACES` to a comma-separated list of workspace names to classify newly created tickets with OpenAI Decisions (`gpt-6-luna`). Sullivan keeps those workspace connections open even without an active chat. Portal, email, CLI and staff-created tickets use the same creation events. Run one AI instance with classification enabled per workspace to avoid duplicate API requests.
+
+Use `NRC_TICKET_OPENAI_API_KEY`, or reuse `LLM_API_KEY` when `LLM_PROVIDER=openai` and `LLM_BASE_URL` is empty. Other provider credentials are never forwarded to OpenAI. The chat model remains unchanged. Both settings are read from the AI service's environment; the Compose service already loads `.env`.
+
+Only the title and original body go to OpenAI, without attachments, follow-up replies or internal notes. Categories are `bug`, `support`, `feature` and `unclear`. Missing or empty `category` means unclassified; an explicit `unclear` is a manual selection and is not replaced. Customers can choose a category when creating a ticket, and staff can change it in the ticket inspector.
+
+The worker reads the ticket again before classification and writes only its preview with an atomic version check. Any edit during classification discards the result, preserving manual choices, content and attachments. API failures, refusals and conflicts leave the ticket unchanged and never block creation.
+
+This is best-effort live classification, not a durable job queue: each workspace has one worker and a 128-ID queue, a 15-second HTTP timeout and no automatic retries. Events missed while Sullivan is disconnected, queue overflow and failed requests remain unclassified. Enabling or restarting Sullivan does not classify historical tickets. Logs identify unsuccessful tickets without including their contents or provider response bodies. An empty workspace list disables classification.
+
 ## Voice prototype
 
 Set `NRC_VOICE_OPENAI_API_KEY` on the AI service to enable GPT-Live. The OpenAI

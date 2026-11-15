@@ -95,7 +95,7 @@ type ticketAction struct {
 	Operation       string                   `json:"operation"`
 	TicketID        string                   `json:"ticket_id,omitempty"`
 	ExpectedVersion string                   `json:"expected_updated_at,omitempty"`
-	Metadata        map[string]string        `json:"metadata,omitempty" jsonschema:"Ticket patch: title, company_id, contact_id, requester, requester_name, status, assignee; priority is low|normal|high|urgent (absent defaults normal); follow_up_at is a canonical positive Unix milliseconds string or empty to clear. Staff scheduling is private."`
+	Metadata        map[string]string        `json:"metadata,omitempty" jsonschema:"Ticket patch: title, company_id, contact_id, requester, requester_name, status, assignee; category is bug|support|feature|unclear or empty for unclassified. Leave category unset on creation unless the user selected it; background classification handles it. priority is low|normal|high|urgent (absent defaults normal); follow_up_at is a canonical positive Unix milliseconds string or empty to clear. Staff scheduling is private."`
 	Content         string                   `json:"content,omitempty"`
 	Kind            string                   `json:"kind,omitempty"`
 	Recipient       string                   `json:"recipient,omitempty"`
@@ -232,6 +232,10 @@ func validateTicketAction(a *ticketAction) error {
 	}
 	for k, v := range a.Metadata {
 		switch k {
+		case "category":
+			if !protocol.ValidTicketCategory(v) {
+				return fmt.Errorf("invalid ticket category")
+			}
 		case "priority":
 			if !protocol.ValidTicketPriority(v) {
 				return fmt.Errorf("invalid ticket priority")

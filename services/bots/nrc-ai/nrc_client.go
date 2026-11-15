@@ -20,15 +20,16 @@ var errWorkspaceDataScope = fmt.Errorf("durable data requires conv_id=0 (workspa
 const graphRankProtocolVersion = 5
 
 type NRCClient struct {
-	conn      *websocket.Conn
-	connMu    sync.RWMutex
-	connected atomic.Bool
-	serverURL string
-	workspace string
-	nickname  string
-	botSecret string
-	filesURL  string
-	cancel    context.CancelFunc
+	conn             *websocket.Conn
+	connMu           sync.RWMutex
+	connected        atomic.Bool
+	serverURL        string
+	workspace        string
+	nickname         string
+	botSecret        string
+	filesURL         string
+	cancel           context.CancelFunc
+	ticketClassifier *ticketClassifier
 
 	writeMu         sync.Mutex
 	mu              sync.Mutex
@@ -202,6 +203,9 @@ func NewNRCClient(cfg Config, workspace string) *NRCClient {
 		pendingNoteProjects: make(map[uint32][]chan noteProjectsResult),
 		pendingNoteTags:     make(map[uint32][]chan noteTagsResult),
 	}
+	if ticketClassificationEnabled(cfg, workspace) {
+		c.ticketClassifier = &ticketClassifier{key: cfg.TicketAPIKey, http: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, queue: make(chan uint64, 128)}
+	}
 	c.lastAccess.Store(time.Now().Unix())
 	return c
 }
@@ -248,6 +252,9 @@ func closeReadyChannel(ch chan struct{}) {
 }
 
 func (c *NRCClient) Run(ctx context.Context) {
+	if c.ticketClassifier != nil {
+		go c.classifyTickets(ctx)
+	}
 	backoff := 1 * time.Second
 	const maxBackoff = 30 * time.Second
 
@@ -674,6 +681,13 @@ func (c *NRCClient) handleAssetCreated(payload []byte) {
 		return
 	}
 	c.settleAssetWrite(resp.CorrelationID, resp.Asset, nil)
+	if c.ticketClassifier != nil && resp.Asset.ConvID == 0 && resp.Asset.AssetType == protocol.AssetTypeTicket {
+		select {
+		case c.ticketClassifier.queue <- resp.Asset.AssetID:
+		default:
+			slog.Warn("ticket classification queue full", "workspace", c.workspace, "asset_id", resp.Asset.AssetID)
+		}
+	}
 	slog.Debug("asset created", "conv_id", resp.Asset.ConvID, "asset_id", resp.Asset.AssetID, "asset_type", resp.Asset.AssetType)
 }
 
@@ -796,6 +810,11 @@ func (c *NRCClient) handleServerReady(message []byte) {
 		"authenticated", ready.IsAuthenticated,
 	)
 	c.protocolVersion.Store(ready.ProtocolVersion)
+	if c.ticketClassifier != nil {
+		if err := c.SubscribeConversation(protocol.WorkspaceDataConvID); err != nil {
+			slog.Warn("ticket classification subscription failed", "workspace", c.workspace)
+		}
+	}
 	c.closeReady()
 }
 

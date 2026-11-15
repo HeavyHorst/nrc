@@ -29,6 +29,8 @@ type Config struct {
 	LLMAPIKey          string
 	LLMBaseURL         string
 	LLMServiceTier     string
+	TicketWorkspaces   string
+	TicketAPIKey       string
 	SearchURL          string
 	FilesURL           string
 	SourcebotURL       string
@@ -94,6 +96,12 @@ func loadConfig() Config {
 		cfg.MemorySummaryModel = "gpt-6.1-sol"
 	}
 	cfg.MemorySummaryModel = envOrDefault("NRC_MEMORY_SUMMARY_MODEL", cfg.MemorySummaryModel)
+	cfg.TicketWorkspaces = os.Getenv("NRC_TICKET_CLASSIFICATION_WORKSPACES")
+	cfg.TicketAPIKey = os.Getenv("NRC_TICKET_OPENAI_API_KEY")
+	// Never forward another provider's credentials or a custom endpoint key.
+	if cfg.TicketAPIKey == "" && strings.EqualFold(cfg.LLMProvider, "openai") && cfg.LLMBaseURL == "" {
+		cfg.TicketAPIKey = cfg.LLMAPIKey
+	}
 	cfg.KnowledgeGapSlices, err = parseKnowledgeGapSlices(os.Getenv("NRC_KNOWLEDGE_GAP_SLICES"))
 	if err != nil {
 		slog.Error("invalid knowledge-gap configuration", "error", err)
@@ -151,6 +159,15 @@ func NewWorkspaceManager(ctx context.Context, cfg Config) *WorkspaceManager {
 		ctx:     ctx,
 	}
 	go wm.cleanupLoop()
+	if strings.TrimSpace(cfg.TicketWorkspaces) != "" && cfg.TicketAPIKey == "" {
+		slog.Warn("ticket classification disabled: no OpenAI API key configured")
+	}
+	for _, workspace := range strings.Split(cfg.TicketWorkspaces, ",") {
+		workspace = strings.TrimSpace(workspace)
+		if ticketClassificationEnabled(cfg, workspace) {
+			wm.getOrStartClientLocked(workspace)
+		}
+	}
 	return wm
 }
 
@@ -175,6 +192,9 @@ func (wm *WorkspaceManager) evictIdle() {
 	wm.mu.Lock()
 	var toEvict []string
 	for ws, client := range wm.clients {
+		if client.ticketClassifier != nil {
+			continue // Always listen, even when nobody has opened Sullivan chat.
+		}
 		if now-client.lastAccess.Load() > cutoff {
 			toEvict = append(toEvict, ws)
 		}
@@ -204,6 +224,11 @@ func (wm *WorkspaceManager) GetOrCreateClient(workspace string) (*NRCClient, err
 		}
 		if !errors.Is(err, errClientReadyTimeout) {
 			return nil, err
+		}
+		if client.ticketClassifier != nil {
+			// This connection also serves background work. Its reconnect loop
+			// must outlive an interactive request's readiness deadline.
+			return nil, fmt.Errorf("workspace %s: %w", workspace, err)
 		}
 
 		slog.Warn("NRC client ready timeout, forcing reconnect", "workspace", workspace, "attempt", attempt, "max_attempts", clientReadyMaxAttempts)
