@@ -114,6 +114,7 @@ func TestOpcodeValues(t *testing.T) {
 
 func TestProtocolLimitsMatchOdin(t *testing.T) {
 	goLimits := map[string]int{
+		"MAX_PROTOCOL_PAYLOAD_SIZE":          MaxProtocolPayloadSize,
 		"MAX_ALLOWED_CONTENT_LENGTH":         MaxAllowedContentLength,
 		"MAX_TOKEN_LENGTH":                   MaxTokenLength,
 		"MAX_USER_ID_LENGTH":                 MaxUserIDLength,

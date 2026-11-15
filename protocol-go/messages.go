@@ -102,6 +102,7 @@ type StatsResponse struct {
 	WALDetails         []StatsWALDetail
 	ShardSweepVersion  uint8
 	ShardSweep         *StatsShardSweep
+	Database           *DatabaseStats
 }
 
 // PongResponse represents a decoded lightweight S_Pong payload.
@@ -587,7 +588,7 @@ func DecodeStatsResponse(data []byte) (*StatsResponse, error) {
 	if buf.Len() < statsShardSweepExtensionSize {
 		return nil, fmt.Errorf("stats shard sweep extension truncated: need %d bytes, got %d", statsShardSweepExtensionSize, buf.Len())
 	}
-	if buf.Len() > statsShardSweepExtensionSize {
+	if buf.Len() > statsShardSweepExtensionSize && buf.Len() != statsShardSweepExtensionSize+databaseStatsSize && buf.Len() != statsShardSweepExtensionSize+databaseStatsV1Size {
 		return nil, fmt.Errorf("unexpected trailing bytes after stats shard sweep extension: %d", buf.Len()-statsShardSweepExtensionSize)
 	}
 	if err := binary.Read(buf, binary.BigEndian, &stats.ShardSweepVersion); err != nil {
@@ -617,6 +618,34 @@ func DecodeStatsResponse(data []byte) (*StatsResponse, error) {
 	for _, field := range fields {
 		if err := binary.Read(buf, binary.BigEndian, field.value); err != nil {
 			return nil, fmt.Errorf("failed to read shard_sweep_%s: %w", field.name, err)
+		}
+	}
+	if buf.Len() != 0 {
+		version, err := buf.ReadByte()
+		if err != nil || (version != 1 && version != 2) {
+			return nil, fmt.Errorf("unsupported database stats version %d", version)
+		}
+		stats.Database = &DatabaseStats{}
+		expected := databaseStatsV1Size - 1
+		if version == 2 {
+			expected = databaseStatsSize - 1
+		}
+		if buf.Len() != expected {
+			return nil, fmt.Errorf("invalid database stats v%d length: %d", version, buf.Len())
+		}
+		if version == 2 {
+			if err := binary.Read(buf, binary.BigEndian, &stats.Database.Generation); err != nil {
+				return nil, err
+			}
+			if err := binary.Read(buf, binary.BigEndian, &stats.Database.Sequence); err != nil {
+				return nil, err
+			}
+		}
+		if err := binary.Read(buf, binary.BigEndian, &stats.Database.Counters); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(buf, binary.BigEndian, &stats.Database.Histograms); err != nil {
+			return nil, err
 		}
 	}
 

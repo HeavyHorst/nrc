@@ -934,7 +934,7 @@ parseStatsResponse :: proc(data: []byte) -> (StatsResponse, ProtocolParseError) 
 	}
 
 	if offset == len(data) do return result, nil
-	if len(data) - offset != _PONG_SHARD_SWEEP_SIZE do return result, .ContentLengthMismatch
+	if len(data) - offset != _PONG_SHARD_SWEEP_SIZE && len(data) - offset != _PONG_SHARD_SWEEP_SIZE + DB_STATS_SIZE && len(data) - offset != _PONG_SHARD_SWEEP_SIZE + DB_STATS_V1_SIZE do return result, .ContentLengthMismatch
 	result.shard_sweep_version = data[offset]
 	offset += 1
 	if result.shard_sweep_version != PONG_SHARD_SWEEP_VERSION do return result, .ContentLengthMismatch
@@ -949,7 +949,14 @@ parseStatsResponse :: proc(data: []byte) -> (StatsResponse, ProtocolParseError) 
 	result.shard_sweep.copy_read_bytes_total, _ = endian.get_u64(data[offset:], .Big); offset += 8
 	result.shard_sweep.replay_read_bytes_total, _ = endian.get_u64(data[offset:], .Big); offset += 8
 	result.shard_sweep.metadata_fallbacks_total, _ = endian.get_u64(data[offset:], .Big); offset += 8
-	result.shard_sweep.metadata_written_bytes_total, _ = endian.get_u64(data[offset:], .Big)
+	result.shard_sweep.metadata_written_bytes_total, _ = endian.get_u64(data[offset:], .Big); offset += 8
+	if offset < len(data) {
+		database, err := parseDatabaseStats(data[offset:])
+		if err != nil do return result, err
+		result.database = database
+		result.database_stats = true
+		result.database_version = data[offset]
+	}
 
 	return result, nil
 }

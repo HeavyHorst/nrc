@@ -420,7 +420,9 @@ parseUnsubscribeConvsRequest :: proc(data: []byte) -> (UnsubscribeConvsRequest, 
 // ============================================================================
 
 StatsRequest :: struct {
-	timestamp: i64,
+	timestamp:        i64,
+	database_stats:   bool,
+	database_version: u8,
 }
 
 PONG_WAL_DETAIL_SLOT_COUNT :: 3
@@ -504,6 +506,9 @@ StatsResponse :: struct {
 	wal_details:          [PONG_WAL_DETAIL_SLOT_COUNT]PongWALDetail,
 	shard_sweep_version:  u8,
 	shard_sweep:          ShardSweepStats,
+	database_stats:       bool,
+	database_version:     u8,
+	database:             DatabaseStats,
 }
 
 _STATS_REQUEST_SIZE :: size_of(i64)
@@ -515,8 +520,13 @@ parseStatsRequest :: proc(data: []byte) -> (StatsRequest, ProtocolParseError) {
 		log.debugf("StatsRequest payload too short. Need %v, got %v", _STATS_REQUEST_SIZE, len(data))
 		return result, .TooShort
 	}
-	if len(data) != _STATS_REQUEST_SIZE {
+	if len(data) != _STATS_REQUEST_SIZE && len(data) != _STATS_REQUEST_SIZE + 1 {
 		return result, .ContentLengthMismatch
+	}
+	if len(data) == _STATS_REQUEST_SIZE + 1 {
+		if data[8] != 1 && data[8] != DB_STATS_VERSION do return result, .ContentLengthMismatch
+		result.database_stats = true
+		result.database_version = data[8]
 	}
 
 	timestamp, _ := endian.get_u64(data[0:], .Big)
@@ -552,7 +562,10 @@ getSizeStatsResponse :: proc(msg: StatsResponse) -> int {
 
 	if details_count > 0 {
 		total_size += _PONG_WAL_DETAIL_HEADER_SIZE + details_count * _PONG_WAL_DETAIL_SIZE
-		if msg.shard_sweep_version > 0 do total_size += _PONG_SHARD_SWEEP_SIZE
+		if msg.shard_sweep_version > 0 {
+			total_size += _PONG_SHARD_SWEEP_SIZE
+			if msg.database_stats do total_size += database_stats_size(msg.database_version)
+		}
 	}
 
 	return total_size
@@ -689,6 +702,7 @@ serializeStatsResponse :: proc(msg: StatsResponse, buf: []byte) -> int {
 			endian.put_u64(payload[offset:], .Big, msg.shard_sweep.replay_read_bytes_total); offset += 8
 			endian.put_u64(payload[offset:], .Big, msg.shard_sweep.metadata_fallbacks_total); offset += 8
 			endian.put_u64(payload[offset:], .Big, msg.shard_sweep.metadata_written_bytes_total); offset += 8
+			if msg.database_stats do serializeDatabaseStats(msg.database, payload[offset:offset + database_stats_size(msg.database_version)], msg.database_version)
 		}
 	}
 
@@ -707,7 +721,7 @@ parseStatsResponseMessage :: proc(data: []byte) -> (result: StatsResponse, err: 
 	reported_count := int(data[_STATS_RESPONSE_BASE_SIZE + 1])
 	expected_size := _STATS_RESPONSE_BASE_SIZE + _PONG_WAL_DETAIL_HEADER_SIZE + reported_count * _PONG_WAL_DETAIL_SIZE
 	if len(data) < expected_size do return result, .TooShort
-	if len(data) != expected_size && len(data) != expected_size + _PONG_SHARD_SWEEP_SIZE do return result, .ContentLengthMismatch
+	if len(data) != expected_size && len(data) != expected_size + _PONG_SHARD_SWEEP_SIZE && len(data) != expected_size + _PONG_SHARD_SWEEP_SIZE + DB_STATS_SIZE && len(data) != expected_size + _PONG_SHARD_SWEEP_SIZE + DB_STATS_V1_SIZE do return result, .ContentLengthMismatch
 
 	return parseStatsResponse(data[2:])
 }

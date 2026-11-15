@@ -1044,6 +1044,7 @@ Each limit names the constant that enforces it in `protocol/`.
 
 ### Content and identity
 
+- **Protocol payload**: 131072 bytes max, including the opcode and excluding the WebSocket frame header (`MAX_PROTOCOL_PAYLOAD_SIZE`)
 - **Message content**: 51200 bytes max (`MAX_ALLOWED_CONTENT_LENGTH`)
 - **Nickname**: 32 bytes max (`MAX_NICKNAME_LENGTH`)
 - **Username**: 255 bytes max (`MAX_USERNAME_LENGTH`)

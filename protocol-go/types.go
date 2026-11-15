@@ -6,6 +6,10 @@ import (
 	"fmt"
 )
 
+// MaxProtocolPayloadSize includes the opcode but excludes the WebSocket frame header.
+// It mirrors MAX_PROTOCOL_PAYLOAD_SIZE in protocol/types.odin.
+const MaxProtocolPayloadSize = 131072
+
 // Message represents a protocol message with a uint16 opcode.
 type Message struct {
 	Opcode uint16

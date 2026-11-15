@@ -3,6 +3,10 @@ package protocol
 ConversationID :: u64
 MessageSeq :: u64
 
+// Excludes the WebSocket frame header. Shared by admission and DB mutations
+// that must validate response representability before committing.
+MAX_PROTOCOL_PAYLOAD_SIZE :: 131072
+
 // Reserved scope for workspace-owned tasks, assets and graph data. It is not a
 // chat conversation. The existing conv_id wire field carries this scope so the
 // entity codecs and durable record format remain unchanged.

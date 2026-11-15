@@ -380,6 +380,47 @@ test_serialize_and_parse_stats_response_with_wal_details :: proc(t: ^testing.T) 
 	testing.expect_value(t, parsed.shard_sweep.runs_total, u64(11))
 	testing.expect_value(t, parsed.shard_sweep.replay_read_bytes_total, u64(5))
 	testing.expect_value(t, parsed.shard_sweep.metadata_written_bytes_total, u64(7))
+	testing.expect(t, !parsed.database_stats)
+	stats.database_stats = true
+	stats.database.generation = {0xfedcba9876543210, 37}
+	stats.database.sequence = 0x123456789abcdef0
+	stats.database.counters[.Group_Jobs] = 37
+	stats.database.histograms[7].buckets[13] = 19
+	stats.database.histograms[7].sum_ns = 123456789
+	extended := make([]byte, getSizeStatsResponse(stats)); defer delete(extended)
+	testing.expect_value(t, serializeStatsResponse(stats, extended), len(extended))
+	with_db, db_err := parseStatsResponseMessage(extended)
+	testing.expect(t, db_err == nil && with_db.database_stats)
+	testing.expect_value(t, with_db.database_version, DB_STATS_VERSION)
+	testing.expect_value(t, with_db.database.generation, stats.database.generation)
+	testing.expect_value(t, with_db.database.sequence, stats.database.sequence)
+	testing.expect_value(t, with_db.database.counters[.Group_Jobs], u64(37))
+	testing.expect_value(t, with_db.database.histograms[7].buckets[13], u64(19))
+	testing.expect_value(t, with_db.database.histograms[7].sum_ns, u64(123456789))
+	_, truncated := parseStatsResponseMessage(extended[:len(extended) - 1])
+	testing.expect(t, truncated != nil)
+	extended[len(extended) - DB_STATS_SIZE] = 3
+	_, bad_version := parseStatsResponseMessage(extended)
+	testing.expect(t, bad_version != nil)
+	request := [9]byte {
+		8 = 1,
+	}
+	opted_in, req_err := parseStatsRequest(request[:])
+	testing.expect(t, req_err == nil && opted_in.database_stats)
+	testing.expect_value(t, opted_in.database_version, u8(1))
+	request[8] = DB_STATS_VERSION
+	new_req, new_err := parseStatsRequest(request[:])
+	testing.expect(t, new_err == nil && new_req.database_version == DB_STATS_VERSION)
+	request[8] = 3
+	_, req_err = parseStatsRequest(request[:])
+	testing.expect(t, req_err != nil)
+	stats.database_version = 1
+	v1 := make([]byte, getSizeStatsResponse(stats)); defer delete(v1)
+	testing.expect_value(t, serializeStatsResponse(stats, v1), len(v1))
+	old_db, old_err := parseStatsResponseMessage(v1)
+	testing.expect(t, old_err == nil && old_db.database_version == 1)
+	testing.expect_value(t, old_db.database.sequence, u64(0))
+	testing.expect_value(t, old_db.database.counters[.Group_Jobs], u64(37))
 }
 
 @(test)
