@@ -31,6 +31,7 @@ const viewPageTitles = {
   customers: "CUSTOMERS",
   newsletter: "NEWSLETTER",
   tickets: "TICKETS",
+  monitoring: "MONITORING",
 };
 
 function getActiveView() {
@@ -100,6 +101,9 @@ function setActiveView(view) {
   if (newsletterPanel) newsletterPanel.style.display = "none";
   if (ticketsPanel) ticketsPanel.style.display = "none";
   document.getElementById("ticketsBtn")?.classList?.toggle("active", view === "tickets");
+  const monitoringPanel = document.getElementById("monitoringPanel");
+  if (monitoringPanel) monitoringPanel.style.display = view === "monitoring" ? "flex" : "none";
+  document.getElementById("monitoringBtn")?.classList?.toggle("active", view === "monitoring");
   if (attentionPanel) attentionPanel.style.display = "none";
   if (calendarPanel) calendarPanel.style.display = "none";
   if (searchPanel) searchPanel.style.display = "none";
@@ -132,6 +136,7 @@ function setActiveView(view) {
   window.NRCCalendar?.onViewChanged?.(view);
   window.NRCOverview?.onViewChanged(view);
   window.NRCHistory?.onViewChanged(view);
+  window.NRCMonitoring?.onViewChanged(view);
 
   switch (view) {
     case "newsletter":

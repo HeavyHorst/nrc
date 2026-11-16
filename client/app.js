@@ -107,6 +107,10 @@ const Opcode = {
   C_ListSliceOwners: 65,
   C_ListTicketAssignees: 66,
   C_ListCalendarPeople: 67,
+  C_QueryMonitorStatus: 73,
+  C_ActOnIncident: 70,
+  S_MonitorStatusPage: 179,
+  S_IncidentActionApplied: 176,
   // Tasks/Kanban (Server -> Client)
   S_TaskCreated: 130,
   S_TaskUpdated: 131,
@@ -1414,6 +1418,7 @@ async function connectWebSocket() {
     window.NRCCalendar?.disconnect();
     window.NRCOverview?.disconnect();
     window.NRCHistory?.disconnect();
+    window.NRCMonitoring?.disconnect();
     window.NRCSlices?.disconnect();
     window.NRCAppointmentNotify?.disconnect();
     logSystem("CONNECTED; WAITING FOR SERVER READY", "websocket");
@@ -1461,6 +1466,7 @@ async function connectWebSocket() {
     window.NRCCalendar?.disconnect();
     window.NRCOverview?.disconnect();
     window.NRCHistory?.disconnect();
+    window.NRCMonitoring?.disconnect();
     window.NRCSlices?.disconnect();
     window.NRCAppointmentNotify?.disconnect();
     window.NRCRecordActivity?.disconnect();
@@ -1621,6 +1627,7 @@ async function initializeSession() {
   window.NRCCalendar?.refresh();
   window.NRCOverview?.refresh();
   window.NRCHistory?.refresh();
+  window.NRCMonitoring?.refresh();
 }
 
 // --- Reconnection Logic ---
@@ -1940,6 +1947,10 @@ function handleBinaryMessage(arrayBuffer) {
         break;
       case Opcode.S_WorkspaceOverview:
         window.NRCOverview?.handlePage(dataView);
+        break;
+      case Opcode.S_MonitorStatusPage:
+      case Opcode.S_IncidentActionApplied:
+        window.NRCMonitoring?.handlePage(dataView);
         break;
       case Opcode.S_HistoryPage:
         window.NRCHistory?.handlePage(dataView);
@@ -2286,6 +2297,7 @@ function parseErrorResponse(dataView) {
   const errorMsg = error.errorMsg;
   const correlationId = error.correlationId;
 
+  if (window.NRCMonitoring?.handleError(error)) return;
   const opcodeName = Object.entries(Opcode).find(([, v]) => v === originOpcode)?.[0] || `opcode ${originOpcode}`;
   console.error(`[S_ErrorResponse] ${opcodeName}: ${errorMsg} (corr=${correlationId})`);
 
@@ -7208,6 +7220,7 @@ window.addEventListener("hashchange", handleShareHashChange);
   window.NRCAttention?.init?.(); // Attention register
   window.NRCOverview?.init();
   window.NRCHistory?.init();
+  window.NRCMonitoring?.init();
   window.NRCCalendar?.init();
   window.NRCWorkspaceSearch?.init();
   window.NRCReminderNotify?.init?.(); // Reminder deadline timer and NOTIFY switch

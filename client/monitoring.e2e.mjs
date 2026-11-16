@@ -1,0 +1,530 @@
+import assert from 'node:assert/strict';
+import { chromium } from 'playwright';
+import { fileURLToPath } from 'node:url';
+import { installMonitoringFixture } from './monitoring-fixture.mjs';
+
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2, serviceWorkers: 'block' });
+const errors = [];
+page.on('pageerror', e => errors.push(e.message));
+try {
+  await page.routeWebSocket('**/*', socket => socket.onMessage(() => {}));
+  await page.route('http://nrc.test/**', async route => {
+    try { await route.fulfill({ path: fileURLToPath(new URL(`.${new URL(route.request().url()).pathname === '/' ? '/index.html' : new URL(route.request().url()).pathname}`, import.meta.url)) }); }
+    catch { await route.fulfill({ status: 404, body: 'Not found' }); }
+  });
+  await page.goto('http://nrc.test');
+  await page.waitForFunction(() => window.NRCMonitoring && window.NRCTickets);
+  await page.evaluate(installMonitoringFixture);
+  await page.click('#monitoringBtn');
+  await page.waitForSelector('[data-monitor="12"]');
+  assert.match(await page.locator('#monitorSummary').textContent(), /1 \/ 1 LOADED MONITORS.*1 INSTANCES.*1 FIRING.*MORE MONITORS AVAILABLE/);
+  assert.equal(await page.locator('#monitorIncidentsTab').evaluate(e => e.getBoundingClientRect().right <= e.parentElement.getBoundingClientRect().right), true, 'Both tabs fit their group');
+  const trail = page.locator('[data-history-monitor="12"][data-history-part="trail"]');
+  const metrics = page.locator('[data-history-monitor="12"][data-history-part="metrics"]');
+  await page.waitForSelector('[data-history-monitor="12"] .monitor-history-bar');
+  // 41.25 healthy instance-hours / 41.5 known; coverage 41.5 / (48 - 2 paused).
+  assert.match(await metrics.textContent(), /99.39%.*COVERAGE 90.21%.*2 observed identities/);
+  assert.equal(await trail.locator('.monitor-history-bar').count(), 24);
+  assert.equal(await trail.locator('[data-state="healthy"]').count(), 19);
+  assert.equal(await trail.locator('[data-state="unknown"]').count(), 3);
+  assert.equal(await trail.locator('[data-state="paused"]').count(), 1);
+  assert.match(await trail.locator('[data-state="failing"]').getAttribute('aria-label'), /87.5%.*coverage 100%/);
+  assert.match(await trail.textContent(), /ROLLUPS PENDING/);
+  const healthyColors = await page.evaluate(() => {
+    const colors = THEMES.map(theme => {
+      setTheme(theme, false);
+      return getComputedStyle(document.querySelector('#monitorList [data-state="healthy"]')).backgroundColor;
+    });
+    setTheme('lupine', false);
+    return colors;
+  });
+  for (const color of healthyColors) assert.ok(['rgb(0, 166, 81)', 'rgb(64, 200, 112)'].includes(color), `Healthy must stay green: ${color}`);
+  // A revision change halfway through hour 12 excludes the earlier half-hour.
+  await page.evaluate(() => {
+    const from = Math.floor(Date.now() / 3600000) * 3600000 - 86400000;
+    monitorFixture.statusRevision = String(BigInt(from + 12.5 * 3600000) * 1000000n);
+    monitorFixture.registerRows = [
+      { hour: 12, identity: 'a', old: true, healthy: 1800 },
+      { hour: 12, identity: 'a', healthy: 900, failing: 900 },
+      { hour: 13, identity: 'a', healthy: 3600 },
+    ];
+  });
+  await page.click('#monitorRefresh');
+  await page.waitForSelector('[data-history-monitor="12"] .monitor-history-bar');
+  assert.match(await metrics.textContent(), /83.33%.*COVERAGE 6.25%.*1 observed identities/);
+  assert.match(await trail.locator('.monitor-history-bar').nth(12).getAttribute('aria-label'), /50%.*coverage 50%/);
+  for (const [data, coverage] of [
+    [[{ hour: 0, identity: 'early', healthy: 3600 }, { hour: 23, identity: 'late', healthy: 1800, paused: 1800 }], '3.15%'],
+    [[{ hour: 0, identity: 'a', healthy: 3600 }, { hour: 0, identity: 'b', paused: 3600 }], '2.12%'],
+  ]) {
+    await page.evaluate(data => { monitorFixture.statusRevision = ''; monitorFixture.registerRows = data; }, data);
+    await page.click('#monitorRefresh');
+    await page.waitForSelector('[data-history-monitor="12"] .monitor-history-bar');
+    assert.match(await metrics.textContent(), /100%.*2 observed identities/);
+    assert.ok((await metrics.textContent()).includes(`COVERAGE ${coverage}`));
+  }
+  assert.equal(await trail.locator('.monitor-history-bar').first().getAttribute('data-state'), 'healthy');
+  assert.match(await trail.locator('.monitor-history-bar').first().getAttribute('aria-label'), /coverage 100%/);
+  // A completed rollup becomes visible only after refresh, without filling gaps.
+  await page.evaluate(() => { monitorFixture.registerRows = []; });
+  await page.click('#monitorRefresh');
+  await page.waitForFunction(() => document.querySelector('[data-history-part="metrics"]').textContent.includes('NO HISTORY'));
+  await page.evaluate(() => { monitorFixture.registerRows = [{ hour: 23, identity: 'a', healthy: 3600 }]; monitorFixture.pendingRollups = '0'; });
+  assert.match(await metrics.textContent(), /NO HISTORY/);
+  await page.click('#monitorRefresh');
+  await page.waitForSelector('[data-history-monitor="12"] [data-state="healthy"]');
+  assert.match(await metrics.textContent(), /100%.*COVERAGE 4.16%/);
+  assert.doesNotMatch(await trail.textContent(), /ROLLUPS PENDING/);
+  await page.evaluate(() => { delete monitorFixture.registerRows; delete monitorFixture.pendingRollups; });
+  for (const [mode, expected] of [['empty', /UNKNOWN.*COVERAGE UNKNOWN.*NO HISTORY/], ['paused', /UNKNOWN.*COVERAGE UNKNOWN.*2 observed identities/], ['limit', /UNAVAILABLE/]]) {
+    await page.evaluate(mode => { monitorFixture.registerMode = mode; }, mode);
+    await page.click('#monitorRefresh');
+    await page.waitForFunction(() => !document.querySelector('[data-history-part="trail"]').textContent.includes('Reading history'));
+    assert.match(await metrics.textContent(), expected);
+    assert.match(await page.locator('#monitorList').textContent(), /FIRING/);
+    assert.equal(await trail.locator('[data-state="healthy"]').count(), 0);
+    if (mode === 'paused') assert.equal(await trail.locator('[data-state="paused"]').count(), 24);
+  }
+  // A delayed response from the previous refresh cannot replace the newer history.
+  await page.evaluate(() => { monitorFixture.registerMode = ''; monitorFixture.deferRegister = true; });
+  await page.click('#monitorRefresh');
+  await page.waitForFunction(() => monitorFixture.pendingRegister.length === 1);
+  await page.evaluate(() => { monitorFixture.registerMode = 'empty'; });
+  await page.click('#monitorRefresh');
+  assert.equal(await page.evaluate(() => monitorFixture.pendingRegister.length), 1);
+  await page.evaluate(() => { monitorFixture.pendingRegister.shift()(); });
+  await page.waitForFunction(() => monitorFixture.pendingRegister.length === 1);
+  await page.evaluate(() => { monitorFixture.pendingRegister.shift()(); });
+  await page.waitForFunction(() => document.querySelector('[data-history-part="metrics"]').textContent.includes('NO HISTORY'));
+  assert.match(await metrics.textContent(), /NO HISTORY/);
+  await page.click('#monitorRefresh');
+  await page.waitForFunction(() => monitorFixture.pendingRegister.length === 1);
+  await page.evaluate(async () => { currentWorkspaceId = 'other'; monitorFixture.pendingRegister.shift()(); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); });
+  assert.equal(await trail.locator('.monitor-history-bar').count(), 0);
+  assert.equal(await metrics.textContent(), '—');
+  await page.evaluate(() => { currentWorkspaceId = 'fixture'; });
+  // Switching tabs also invalidates held results, including fixtures ignoring abort.
+  await page.click('#monitorRefresh');
+  await page.waitForFunction(() => monitorFixture.pendingRegister.length === 1);
+  await page.click('#monitorIncidentsTab');
+  await page.evaluate(async () => { monitorFixture.pendingRegister.shift()(); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); });
+  assert.equal(await page.locator('[data-history-monitor]').count(), 0);
+  assert.equal(await page.locator('#monitorHistoryLegend').isVisible(), false);
+  await page.evaluate(() => { monitorFixture.deferRegister = false; monitorFixture.registerMode = ''; });
+  await page.click('#monitorStatusTab');
+  await page.waitForSelector('[data-monitor="12"]');
+  await page.click('#monitorMore');
+  await page.waitForSelector('[data-monitor="13"]');
+  assert.equal(await page.locator('#monitorList tbody tr').count(), 2);
+  await page.waitForFunction(() => document.querySelector('[data-history-monitor="13"][data-history-part="metrics"]').textContent.includes('NO HISTORY'));
+  assert.match(await page.locator('#monitorSummary').textContent(), /2 \/ 2 LOADED MONITORS.*3 INSTANCES.*1 FIRING/);
+  await page.fill('#monitorSearch', 'BACKUP');
+  assert.deepEqual(await page.locator('#monitorList [data-monitor]').evaluateAll(nodes => nodes.map(n => n.dataset.monitor)), ['13']);
+  assert.match(await page.locator('#monitorSummary').textContent(), /1 \/ 2 LOADED MONITORS.*2 INSTANCES.*0 FIRING/);
+  await page.fill('#monitorSearch', '#12');
+  assert.equal(await page.locator('#monitorList [data-monitor="12"]').count(), 1);
+  await page.fill('#monitorSearch', '');
+  for (const [state, ids] of [['problems', ['12']], ['healthy', ['13']], ['paused', []], ['all', ['12', '13']]]) {
+    await page.selectOption('#monitorStateFilter', state);
+    assert.deepEqual(await page.locator('#monitorList [data-monitor]').evaluateAll(nodes => nodes.map(n => n.dataset.monitor)), ids);
+  }
+  // Boundaries 23/24 and 47/48 distinguish hourly input from 24-hour display buckets.
+  await page.evaluate(() => { monitorFixture.registerRows = [
+    { hour: 23, identity: 'a', healthy: 3600 }, { hour: 24, identity: 'a', failing: 3600 },
+    { hour: 47, identity: 'a', healthy: 1800, paused: 1800 }, { hour: 48, identity: 'a', healthy: 3600 },
+  ]; });
+  for (const [days, coverage] of [[7, '2.08%'], [30, '0.48%']]) {
+    await page.click(`[data-monitor-days="${days}"]`);
+    await page.waitForFunction(days => document.querySelectorAll('[data-history-monitor="12"] .monitor-history-bar').length === days, days);
+    assert.match(await metrics.textContent(), /71.42%/);
+    assert.ok((await metrics.textContent()).includes(`COVERAGE ${coverage}`));
+    assert.equal(await trail.locator('.monitor-history-bar').nth(0).getAttribute('data-state'), 'unknown');
+    assert.equal(await trail.locator('.monitor-history-bar').nth(1).getAttribute('data-state'), 'failing');
+    assert.equal(await trail.locator('.monitor-history-bar').nth(2).getAttribute('data-state'), 'unknown');
+    const url = await page.evaluate(() => monitorFixture.historyRequests.findLast(u => u.includes('/12/')));
+    const q = new URL(url).searchParams;
+    assert.equal(Date.parse(q.get('to')) - Date.parse(q.get('from')), days * 86400000);
+  }
+  await page.evaluate(() => { delete monitorFixture.registerRows; });
+  await page.evaluate(() => { monitorFixture.deferRegister = true; });
+  await page.click('[data-monitor-days="7"]');
+  await page.waitForFunction(() => monitorFixture.pendingRegister.length === 1);
+  await page.click('[data-monitor-days="30"]');
+  assert.equal(await page.evaluate(() => monitorFixture.pendingRegister.length), 1);
+  await page.evaluate(() => { monitorFixture.deferRegister = false; monitorFixture.pendingRegister.shift()(); });
+  await page.waitForFunction(() => document.querySelectorAll('[data-history-monitor="12"] .monitor-history-bar').length === 30);
+  assert.equal(await trail.locator('.monitor-history-bar').count(), 30, 'Old period must not replace the current history');
+  await page.click('[data-monitor-days="1"]');
+  await page.waitForSelector('[data-history-monitor="12"] .monitor-history-bar');
+  await page.waitForFunction(() => document.querySelector('[data-history-monitor="13"][data-history-part="metrics"]').textContent.includes('NO HISTORY'));
+  await page.evaluate(() => { monitorFixture.secondState = 'paused'; });
+  await page.click('#monitorRefresh');
+  await page.click('#monitorMore');
+  await page.waitForSelector('[data-monitor="13"]');
+  await page.selectOption('#monitorStateFilter', 'paused');
+  assert.deepEqual(await page.locator('#monitorList [data-monitor]').evaluateAll(nodes => nodes.map(n => n.dataset.monitor)), ['13']);
+  assert.match(await page.locator('#monitorSummary').textContent(), /1 \/ 2 LOADED MONITORS.*2 INSTANCES.*0 FIRING/);
+  await page.selectOption('#monitorStateFilter', 'all');
+  await page.waitForFunction(() => document.querySelector('[data-history-monitor="13"][data-history-part="metrics"]').textContent.includes('NO HISTORY'));
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => {
+    const list = document.getElementById('monitorRegisterScroll');
+    const cards = [...document.querySelectorAll('#monitorList tbody tr')];
+    return list.scrollWidth <= list.clientWidth && cards.every(card => {
+      const bars = card.querySelector('.monitor-history-bars').getBoundingClientRect();
+      const bounds = card.getBoundingClientRect();
+      return bars.left >= bounds.left && bars.right <= bounds.right;
+    });
+  }), true);
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  assert.deepEqual(await page.evaluate(() => ['table', 'thead tr', 'tbody', 'tbody tr', 'td'].map(s => getComputedStyle(document.querySelector(`#monitorList ${s}`)).display)), ['table', 'table-row', 'table-row-group', 'table-row', 'table-cell'], 'Task-register responsive rules must not leak into monitoring');
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  // A held register read plus a held selection must leave the latest selection usable.
+  await page.evaluate(() => { Object.assign(monitorFixture, { enforceAdmission: true, deferRegister: true, deferHistoryKind: 'runs', instancePages: true }); });
+  await page.click('#monitorRefresh');
+  await page.waitForFunction(() => monitorFixture.pendingRegister.length === 1);
+  await page.click('[data-monitor="12"]');
+  await page.waitForSelector('[data-instance="0"]');
+  assert.equal(await page.locator('#monitorInstances').isVisible(), true, 'One row with more pages is not a single instance');
+  assert.equal(await page.locator('#monitorSelection').textContent(), '');
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  assert.equal(await page.locator('#monitorList thead').isVisible(), false, 'Narrow register beside Inspector must use cards even on desktop');
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.click('#monitorInstanceMore');
+  await page.waitForSelector('[data-instance="1"]');
+  await page.click('[data-instance="0"]');
+  await page.waitForFunction(() => monitorFixture.pendingHistory.length === 1);
+  await page.click('[data-monitor-days="7"]');
+  await page.click('[data-monitor-days="30"]');
+  assert.equal(await page.evaluate(() => monitorFixture.pendingRegister.length), 1, 'Replacement register reads wait for the occupied slot');
+  await page.click('[data-instance="1"]');
+  await page.click('[data-instance="0"]');
+  await page.click('[data-instance="1"]');
+  assert.equal(await page.evaluate(() => monitorFixture.rejectedHistory), 0);
+  await page.evaluate(() => { monitorFixture.deferHistoryKind = ''; monitorFixture.pendingHistory.shift()(); });
+  await page.waitForFunction(() => document.getElementById('monitorUptime')?.textContent.includes('CURRENT REVISION ONLY'));
+  assert.equal(await page.locator('[data-instance="1"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('#monitorSelection h3').count(), 0, 'Selected identity is not duplicated below a visible list');
+  assert.equal(await page.evaluate(() => monitorFixture.admittedHistory.filter(url => url.includes('/runs?')).length), 2);
+  assert.equal(await page.evaluate(() => monitorFixture.maxActiveHistory), 2);
+  assert.equal(await page.evaluate(() => monitorFixture.rejectedHistory), 0);
+  await page.evaluate(() => { monitorFixture.deferRegister = false; monitorFixture.pendingRegister.shift()(); });
+  await page.waitForFunction(() => monitorFixture.activeHistory === 0);
+  assert.equal(await page.evaluate(() => monitorFixture.rejectedHistory), 0);
+  assert.equal(await trail.locator('.monitor-history-bar').count(), 30, 'Only the latest queued period renders');
+  await page.click('[data-monitor="12"]');
+  await page.waitForSelector('[data-instance="0"]');
+  await page.click('[data-instance="0"]');
+  await page.waitForFunction(() => document.getElementById('monitorUptime')?.textContent.includes('CURRENT REVISION ONLY'));
+  assert.match(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION.*503.*true/s);
+  assert.match(await page.locator('#monitorUptime').textContent(), /66.66%.*1.04%/);
+  assert.equal(await page.locator('.monitor-meter[data-kind="uptime"]').evaluate(e => e.style.getPropertyValue('--fill')), '66.66%');
+  assert.equal(await page.locator('.monitor-meter[data-kind="coverage"]').evaluate(e => e.style.getPropertyValue('--fill')), '1.04%');
+  assert.equal(await page.locator('.monitor-streak[data-state="fail"] .is-filled').count(), 5);
+  assert.equal(await page.locator('.monitor-streak[data-state="pass"] .is-filled').count(), 0);
+  assert.equal(await page.locator('.monitor-meter[data-kind="coverage"] > span').evaluate(e => getComputedStyle(e).backgroundColor), await page.locator('.monitor-footer').evaluate(e => getComputedStyle(e).color));
+  assert.deepEqual(await page.locator('.monitor-conditions th').allTextContents(), ['CONDITION', 'OBSERVED', 'RESULT']);
+  assert.equal(await page.locator('[data-instance="0"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('.monitor-record details').count(), 0);
+  assert.equal(await page.locator('#monitorHistoryDetails table').isVisible(), true);
+  assert.deepEqual(await page.locator('#monitorHistoryDetails th').allTextContents(), ['TIME', 'VALUE']);
+  assert.doesNotMatch(await page.locator('#monitorHistoryDetails').textContent(), /confirmed|SEQ|buckets|ACCEPTANCE/);
+  assert.match(await page.locator('#monitorHistoryDetails').textContent(), /PROCESS HISTORY DROPS: 2/);
+  assert.equal(await page.locator('.monitor-record').textContent().then(t => (t.match(/ROLLUPS PENDING/g) || []).length), 1);
+  await page.evaluate(() => { monitorFixture.drops = '0'; monitorFixture.rollups = '0'; });
+  await page.click('[data-instance="0"]');
+  await page.waitForFunction(() => document.getElementById('monitorUptime')?.textContent.includes('CURRENT REVISION ONLY'));
+  assert.doesNotMatch(await page.locator('.monitor-record').textContent(), /HISTORY DROPS|ROLLUPS PENDING/);
+  // Replacing the instance snapshot must invalidate both rendered and pending history.
+  await page.evaluate(() => { monitorFixture.statusSequence = '18'; });
+  await page.check('#monitorRetired');
+  await page.waitForFunction(() => document.getElementById('monitorInstanceStatus').textContent.includes('LOADED'));
+  assert.doesNotMatch(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION/);
+  assert.equal(await page.locator('#monitorSelection').textContent(), '');
+  await page.evaluate(() => { monitorFixture.statusSequence = '17'; monitorFixture.deferHistoryKind = 'samples'; });
+  await page.uncheck('#monitorRetired');
+  await page.click('[data-instance="0"]');
+  await page.waitForFunction(() => monitorFixture.pendingHistory.length === 1);
+  await page.evaluate(() => { monitorFixture.statusSequence = '18'; });
+  await page.check('#monitorRetired');
+  await page.waitForFunction(() => document.getElementById('monitorInstanceStatus').textContent.includes('LOADED'));
+  await page.evaluate(async () => {
+    monitorFixture.deferHistoryKind = '';
+    monitorFixture.pendingHistory.shift()();
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  assert.doesNotMatch(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION|503|Reading history/);
+
+  // A filter reset cannot continue the old cursor, even through a queued click.
+  await page.evaluate(() => { monitorFixture.instancePages = true; });
+  await page.uncheck('#monitorRetired');
+  await page.waitForSelector('#monitorInstanceMore:not([hidden])');
+  await page.evaluate(() => { monitorFixture.deferInstances = true; });
+  await page.check('#monitorRetired');
+  await page.waitForFunction(() => monitorFixture.pendingStatus.length === 1);
+  assert.equal(await page.locator('#monitorInstanceMore').isDisabled(), true);
+  await page.evaluate(() => { document.getElementById('monitorInstanceMore').onclick(); });
+  assert.equal(await page.evaluate(() => monitorFixture.pendingStatus.length), 1);
+  assert.equal(await page.locator('#monitorInstances [data-instance]').count(), 0);
+  await page.evaluate(() => { monitorFixture.pendingStatus.shift()(); });
+  await page.waitForFunction(() => document.getElementById('monitorInstances').textContent.includes('included-first'));
+  await page.click('#monitorInstanceMore');
+  await page.waitForFunction(() => monitorFixture.pendingStatus.length === 1);
+  assert.deepEqual(await page.evaluate(() => { const r = monitorFixture.requests.at(-1); return [r.cursor, r.retired]; }), ['41', true]);
+  // Deliver the replacement first, then a late continuation from the old filter.
+  await page.uncheck('#monitorRetired');
+  await page.waitForFunction(() => monitorFixture.pendingStatus.length === 2);
+  await page.evaluate(() => { monitorFixture.pendingStatus.pop()(); });
+  await page.waitForFunction(() => document.getElementById('monitorInstances').textContent.includes('active-first'));
+  await page.evaluate(async () => {
+    monitorFixture.pendingStatus.shift()();
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  assert.doesNotMatch(await page.locator('#monitorInstances').textContent(), /included-/);
+  assert.equal(await page.locator('#monitorInstances [data-instance]').count(), 1);
+  await page.evaluate(() => { monitorFixture.deferInstances = false; });
+  await page.click('#monitorInstanceMore');
+  await page.waitForFunction(() => document.getElementById('monitorInstances').textContent.includes('active-next'));
+  assert.equal(await page.locator('#monitorInstances [data-instance]').count(), 2);
+  await page.evaluate(() => { monitorFixture.statusSequence = '17'; });
+  await page.check('#monitorRetired');
+  await page.evaluate(() => { monitorFixture.old = true; });
+  await page.click('[data-instance="0"]');
+  await page.waitForFunction(() => document.getElementById('monitorHistory').textContent.includes('HISTORICAL / NOT CURRENT'));
+  assert.match(await page.locator('#monitorHistory').textContent(), /definition revision unavailable/);
+  for (const mismatch of [{ unknown: true, sequence: '17' }, { unknown: false, sequence: '16' }]) {
+    await page.evaluate(value => Object.assign(monitorFixture, { old: false }, value), mismatch);
+    await page.click('[data-instance="0"]');
+    await page.waitForFunction(() => document.getElementById('monitorHistory').textContent.includes('HISTORICAL / NOT CURRENT'));
+    assert.doesNotMatch(await page.locator('#monitorHistory').textContent(), /definition revision unavailable/);
+    if (mismatch.unknown) {
+      assert.match(await page.locator('#monitorHistory').textContent(), /NOT CONFIRMED/);
+      assert.match(await page.locator('#monitorHistoryDetails').textContent(), /NOT CONFIRMED · UNKNOWN/);
+    }
+  }
+  await page.evaluate(() => { monitorFixture.instancePages = false; monitorFixture.sequence = '17'; monitorFixture.identity = JSON.stringify({ host: 'cluster01c', mountpoint: '/var/lib/mysql', label: '<img src=x onerror=alert(1)>' }); });
+  await page.uncheck('#monitorRetired');
+  await page.waitForFunction(() => document.getElementById('monitorHistory').textContent.includes('MATCHES CURRENT EVALUATION'));
+  assert.equal(await page.locator('#monitorInstances').isVisible(), false, 'A complete single-instance result opens automatically');
+  assert.match(await page.locator('#monitorSelection').textContent(), /host cluster01c.*mountpoint \/var\/lib\/mysql.*<img/s);
+  assert.equal(await page.locator('#monitorSelection img').count(), 0);
+  assert.equal(await page.locator('#monitorHistoryDetails table').isVisible(), true);
+  assert.equal(await page.locator('#monitorSelection [data-state="firing"]').count(), 1);
+  assert.equal(await page.locator('#monitorHistory').textContent().then(t => t.includes('cluster01c')), false);
+  const previousViewport = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.click('[data-monitor="12"]');
+  await page.waitForSelector('#monitorHistoryDetails table');
+  const revision = page.locator('.monitor-record > section:last-child dd').last();
+  await revision.scrollIntoViewIfNeeded();
+  const revisionBox = await revision.boundingBox();
+  assert.ok(revisionBox.y >= 0 && revisionBox.y + revisionBox.height <= 844, 'Technical details remain reachable by scrolling on narrow screens');
+  await page.setViewportSize(previousViewport);
+  // Partial streaks and missing/paused history must not look complete or healthy.
+  await page.evaluate(() => { Object.assign(monitorFixture, { failures: 2, recoveries: 3, uptimeRows: [] }); });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => document.getElementById('monitorUptime')?.textContent.includes('CURRENT REVISION ONLY'));
+  assert.equal(await page.locator('.monitor-streak[data-state="fail"] .is-filled').count(), 2);
+  assert.equal(await page.locator('.monitor-streak[data-state="pass"] .is-filled').count(), 3);
+  assert.match(await page.locator('.monitor-meter[data-kind="uptime"]').getAttribute('aria-label'), /UNKNOWN/);
+  assert.equal(await page.locator('.monitor-meter[data-kind="uptime"]').getAttribute('data-known'), 'false');
+  assert.equal(await page.locator('.monitor-meter[data-kind="coverage"]').evaluate(e => e.style.getPropertyValue('--fill')), '0%');
+  await page.evaluate(() => {
+    monitorFixture.config.failures = 100;
+    monitorFixture.failures = 25;
+    monitorFixture.uptimeRows = [{ healthy_ns: '0', failing_ns: '0', unknown_ns: '0', paused_ns: '86400000000000' }];
+  });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => document.getElementById('monitorUptime')?.textContent.includes('CURRENT REVISION ONLY'));
+  assert.match(await page.locator('.monitor-streak[data-state="fail"]').textContent(), /25\/100/);
+  assert.equal(await page.locator('.monitor-streak-track > i').evaluate(e => e.style.width), '25%');
+  assert.match(await page.locator('.monitor-meter[data-kind="coverage"]').getAttribute('aria-label'), /UNKNOWN/);
+  await page.evaluate(() => { monitorFixture.config.failures = 5; Object.assign(monitorFixture, { failures: 5, recoveries: 0, uptimeRows: undefined }); });
+  // An automatic read must not repopulate a replacement snapshot with no instances.
+  await page.evaluate(() => { monitorFixture.deferHistoryKind = 'samples'; });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => monitorFixture.pendingHistory.length === 1);
+  await page.evaluate(() => { monitorFixture.empty = true; });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => document.getElementById('monitorInstanceStatus').textContent.includes('0 LOADED'));
+  await page.evaluate(async () => { monitorFixture.pendingHistory.shift()(); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); });
+  assert.equal(await page.locator('#monitorSelection').textContent(), '');
+  assert.equal(await page.locator('#monitorHistoryDetails').textContent(), '');
+  assert.equal(await page.locator('#monitorUptime').isVisible(), false);
+  await page.evaluate(() => { monitorFixture.empty = false; monitorFixture.deferHistoryKind = ''; });
+  // Automatic refresh must keep both a stale result warning and history visible.
+  await page.evaluate(() => { monitorFixture.old = true; });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => document.getElementById('monitorHistory').textContent.includes('HISTORICAL / NOT CURRENT'));
+  assert.equal(await page.locator('#monitorHistory').isVisible(), true);
+  assert.equal(await page.locator('#monitorHistoryDetails table').isVisible(), true);
+  await page.evaluate(() => { monitorFixture.fail = true; });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => document.getElementById('monitorHistory').textContent.includes('HTTP 503'));
+  await page.click('#monitorSelection [data-incident="51"]');
+  await page.waitForSelector('#incidentAck');
+  await page.click('#incidentAck');
+  await page.waitForFunction(() => document.getElementById('incidentAck')?.disabled);
+  assert.match(await page.locator('.monitor-record').textContent(), /FIRING.*rene/s);
+  await page.fill('[name="assignee"]', 'oncall');
+  await page.locator('#incidentAssignment button').click();
+  await page.waitForFunction(() => document.querySelector('[name=assignee]')?.value === 'oncall' && monitorFixture.actions.length === 2);
+  assert.deepEqual(await page.evaluate(() => monitorFixture.actions), [{ action: 0, assignee: '' }, { action: 1, assignee: 'oncall' }]);
+  // Victoria uses the selected NRC snapshot, never HTTP diagnostics or History availability.
+  for (const kind of ['victoriametrics', 'victorialogs']) {
+    await page.evaluate(kind => {
+      Object.assign(monitorFixture.definition, { kind, query: 'fixture query', trigger: { op: '<', value: 10 }, recovery: { op: '>', value: 15 } });
+      delete monitorFixture.definition.conditions;
+      delete monitorFixture.definition.url;
+      Object.assign(monitorFixture, { value: 18.4, recoveries: 3, failures: 0, fail: true, old: false });
+    }, kind);
+    await page.click('[data-monitor="12"]');
+    await page.waitForFunction(() => document.getElementById('monitorHistoryDetails')?.textContent.includes('HTTP 503'));
+    assert.deepEqual(await page.locator('#monitorHistory td').allTextContents(), ['18.4', '< 10', '> 15']);
+    assert.equal(await page.locator('#monitorSelection [data-state="firing"]').count(), 1);
+    assert.match(await page.locator('#monitorSelection').textContent(), /RECOVER 3\/5/);
+    assert.deepEqual(await page.locator('.monitor-value-scale').evaluate(svg => [...svg.querySelectorAll('[data-scale]')].map(g => g.dataset.scale === 'value' ? +g.querySelector('circle').getAttribute('cx') : +g.querySelector('.monitor-scale-marker').getAttribute('d').match(/^M([^,]+)/)[1])), [448, 112, 312], 'Same numeric axis even when History is unavailable; recovery-range value does not change FIRING');
+    await page.evaluate(() => {
+      monitorFixture.fail = false;
+      monitorFixture.sampleRows = [
+        { ago: 600, value: 25 }, { ago: 540, value: 20 },
+        { ago: 480, value: 18, acceptance: 'unknown' }, { ago: 420, value: 16 },
+        { ago: 360, value: null }, { ago: 300, value: 14 },
+        { ago: 180, value: 12 }, { ago: 150, value: 9999, revision: '1' },
+        { ago: 120, value: 11 }, { ago: 60, value: 7 },
+      ].reverse(); // Rendering must order observations, not rely on arrival order.
+    });
+    await page.click('#monitorDetailRefresh');
+    await page.waitForFunction(() => document.getElementById('monitorUptime')?.textContent.includes('CURRENT REVISION ONLY'));
+    assert.deepEqual(await page.locator('#monitorHistory td').allTextContents(), ['18.4', '< 10', '> 15']);
+    assert.doesNotMatch(await page.locator('#monitorHistory').textContent(), /No per-condition|503|PASS/);
+    const chart = page.locator('#monitorHistoryDetails .monitor-timeseries');
+    assert.equal(await page.locator('#monitorHistoryDetails table').count(), 0);
+    assert.equal(await chart.locator('circle').count(), 7);
+    assert.equal(await chart.locator('rect').count(), 1);
+    assert.match(await chart.locator('rect title').textContent(), /18 · NOT CONFIRMED: unknown/);
+    assert.doesNotMatch(await chart.textContent(), /9999/);
+    assert.equal((await chart.locator('.monitor-chart-trace').getAttribute('d')).match(/L/g).length, 2, 'Only adjacent confirmed values connect, never across missing values, revisions or time gaps');
+    const geometry = await chart.evaluate(e => ({
+      firstX: +e.querySelector('circle').getAttribute('cx'), lastX: +e.querySelector('circle:last-child').getAttribute('cx'),
+      triggerY: +e.querySelector('line[data-threshold="trigger"]').getAttribute('y1'), recoveryY: +e.querySelector('line[data-threshold="recovery"]').getAttribute('y1'),
+      firstY: +e.querySelector('circle').getAttribute('cy'), lastY: +e.querySelector('circle:last-child').getAttribute('cy'),
+    }));
+    assert.ok(Math.abs(geometry.firstX - (64 + 400 * 50 / 60)) < 0.001, 'A late-starting series must not stretch across the whole hour');
+    assert.ok(Math.abs(geometry.lastX - geometry.firstX - 60) < 0.001);
+    assert.ok(geometry.firstY < geometry.recoveryY && geometry.recoveryY < geometry.triggerY && geometry.triggerY < geometry.lastY, 'Values and thresholds use the same numeric scale');
+    const svg = chart.locator('svg'), readout = chart.locator('.monitor-chart-readout');
+    await svg.scrollIntoViewIfNeeded();
+    assert.equal(await chart.locator('circle').first().evaluate(e => getComputedStyle(e).opacity), '0', 'Connected points do not form a permanent dot cloud');
+    assert.equal(await chart.locator('circle').nth(2).evaluate(e => getComputedStyle(e).opacity), '1', 'Isolated values remain visible');
+    const position = async x => svg.evaluate((e, x) => { const p = new DOMPoint(x, 80).matrixTransform(e.getScreenCTM()); return { x: p.x, y: p.y }; }, x);
+    const first = await position(64 + 400 * 50 / 60);
+    await page.mouse.move(first.x, first.y);
+    assert.match(await readout.textContent(), / · 25$/);
+    assert.equal(await chart.locator('circle').first().evaluate(e => getComputedStyle(e).opacity), '1');
+    await page.mouse.move(0, 0);
+    assert.equal(await readout.textContent(), 'Hover or tap for values');
+    await svg.press('Home');
+    await svg.press('ArrowRight');
+    assert.match(await readout.textContent(), / · 20$/);
+    await svg.press('End');
+    assert.match(await readout.textContent(), / · 7$/);
+    await svg.press('Escape');
+    // Chromium touch input, not a synthetic DOM click: tapping pins and tapping again clears.
+    const touch = await page.context().newCDPSession(page);
+    await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+    const unknown = await position(64 + 400 * 52 / 60);
+    for (const expected of [/18 · NOT CONFIRMED: unknown/, /Hover or tap for values/]) {
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [unknown] });
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      assert.match(await readout.textContent(), expected);
+    }
+    await touch.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await touch.detach();
+    await page.evaluate(() => { monitorFixture.sampleRows = Array.from({ length: 32 }, (_, i) => ({ ago: (i + 1) * 60, value: 0 })); });
+    await page.click('#monitorDetailRefresh');
+    await page.waitForFunction(() => document.querySelectorAll('#monitorHistoryDetails circle').length === 32);
+    assert.doesNotMatch(await chart.innerHTML(), /NaN|Infinity/);
+    await page.evaluate(() => { monitorFixture.sampleRows = [{ ago: 60, value: 123, revision: '1' }]; });
+    await page.click('#monitorDetailRefresh');
+    await page.waitForFunction(() => document.getElementById('monitorHistoryDetails')?.textContent.includes('No numeric samples for the current revision'));
+    assert.equal(await chart.count(), 0, 'Previous-revision samples must not be compared to new thresholds');
+    await page.evaluate(() => { monitorFixture.statusRevision = '1'; monitorFixture.value = null; delete monitorFixture.definition.recovery; monitorFixture.sampleRows = [{ ago: 60, value: -3 }]; });
+    await page.click('#monitorDetailRefresh');
+    await page.waitForFunction(() => document.getElementById('monitorHistory')?.textContent.includes('CONFIGURATION CHANGED'));
+    assert.deepEqual(await page.locator('#monitorHistory td').allTextContents(), ['—', '< 10', 'When trigger no longer matches']);
+    assert.equal(await page.locator('.monitor-value-scale').count(), 0);
+    await page.waitForSelector('#monitorHistoryDetails circle');
+    assert.equal(await chart.locator('line').count(), 1, 'An absent recovery threshold must not invent a zero line');
+    assert.match(await chart.locator('circle title').textContent(), / · -3$/);
+    assert.equal(await chart.locator('.monitor-chart-trace').getAttribute('d'), '', 'A single point remains a point, not a fabricated history');
+    await page.evaluate(() => { delete monitorFixture.statusRevision; });
+  }
+  for (const scenario of [
+    { value: -5, trigger: 0, recovery: 10, expected: [112, 224, 448] },
+    { value: 0, trigger: 0, recovery: 0, expected: [280, 280, 280] },
+    { value: 3, trigger: 0, expected: [448, 112] },
+    { value: null, trigger: 0, expected: [] },
+    { value: 3, trigger: 0, revision: '1', expected: [] },
+  ]) {
+    await page.evaluate(s => {
+      monitorFixture.value = s.value; monitorFixture.statusRevision = s.revision;
+      monitorFixture.definition.trigger = { op: '>', value: s.trigger };
+      if (s.recovery !== undefined) monitorFixture.definition.recovery = { op: '<', value: s.recovery };
+      else delete monitorFixture.definition.recovery;
+    }, scenario);
+    await page.click('#monitorDetailRefresh');
+    await page.waitForSelector('#monitorHistory table');
+    const positions = await page.locator('#monitorHistory').evaluate(host => [...host.querySelectorAll('[data-scale]')].map(g => g.dataset.scale === 'value' ? +g.querySelector('circle').getAttribute('cx') : +g.querySelector('.monitor-scale-marker').getAttribute('d').match(/^M([^,]+)/)[1]));
+    assert.deepEqual(positions, scenario.expected);
+  }
+  for (const key of ['trigger', 'recovery']) {
+    await page.evaluate(key => {
+      monitorFixture.value = 10; delete monitorFixture.statusRevision;
+      monitorFixture.sampleRows = [{ ago: 120, value: 8 }, { ago: 60, value: 10 }];
+      monitorFixture.rawDefinition = JSON.stringify({ ...monitorFixture.definition, trigger: { op: '>', value: 12 }, recovery: { op: '<', value: 9 }, [key]: { op: key === 'trigger' ? '>' : '<', value: 'OVERFLOW' } }).replace('"OVERFLOW"', key === 'trigger' ? '99e308' : '-99e308');
+    }, key);
+    await page.click('#monitorDetailRefresh');
+    await page.waitForSelector('.monitor-timeseries svg');
+    assert.equal(await page.locator('.monitor-value-scale').count(), 0);
+    assert.match(await page.locator('#monitorHistory').textContent(), /Scale unavailable: threshold outside browser numeric range/);
+    assert.match(await page.locator('.monitor-chart-legend').textContent(), /outside browser numeric range; not plotted/);
+    assert.equal(await page.locator('.monitor-timeseries svg line').count(), 1);
+    assert.doesNotMatch(await page.locator('.monitor-timeseries svg').innerHTML(), /NaN|Infinity/);
+    assert.equal(await page.locator('.monitor-chart-points [data-point]').count(), 2);
+  }
+  await page.evaluate(() => {
+    delete monitorFixture.rawDefinition;
+    monitorFixture.instancePages = true;
+    monitorFixture.instanceLabels = [JSON.stringify({ instance: '<cluster01c>', mountpoint: '/var/lib/mysql/tenant-with-a-long-name/replication-data/archive', namespace: 'production' }), 'legacy identity'];
+  });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForSelector('[data-instance="0"]');
+  await page.click('#monitorInstanceMore');
+  await page.waitForSelector('[data-instance="1"]');
+  assert.deepEqual(await page.locator('[data-instance="0"] small').allTextContents(), ['mountpoint', 'namespace']);
+  assert.match(await page.locator('[data-instance="0"]').textContent(), /<cluster01c>.*\/var\/lib\/mysql.*production/);
+  assert.equal(await page.locator('[data-instance="0"] cluster01c').count(), 0, 'Identity values remain escaped');
+  assert.equal(await page.locator('[data-instance="1"]').textContent(), 'legacy identity');
+  assert.doesNotMatch(await page.locator('#monitorInstances').textContent(), /FAIL |RECOVER /);
+  assert.equal(await page.locator('#monitorInstances [data-incident]').first().textContent(), '#51');
+  await page.click('[data-instance="0"]');
+  assert.equal(await page.locator('[data-instance="0"]').getAttribute('aria-pressed'), 'true');
+  assert.match(await page.locator('#monitorSelection').textContent(), /FAIL.*RECOVER/s, 'Streaks remain in selected details');
+  assert.doesNotMatch(await page.locator('#monitorSelection').textContent(), /cluster01c|mountpoint|namespace/);
+  await page.click('[data-instance="1"]');
+  assert.equal(await page.locator('[data-instance="0"]').getAttribute('aria-pressed'), 'false');
+  assert.equal(await page.locator('[data-instance="1"]').getAttribute('aria-pressed'), 'true');
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390, 'Long identities wrap without overflowing the narrow Inspector');
+  assert.match(await page.locator('[data-instance="0"]').textContent(), /replication-data\/archive/);
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.locator('#monitorInstances [data-incident]').first().click();
+  await page.waitForSelector('#incidentAck');
+  await page.evaluate(() => { NRCMonitoring.disconnect(); });
+  assert.match(await page.locator('#inspectorEntityHost').textContent(), /Offline/);
+  assert.equal(await page.locator('#incidentAck').count(), 0);
+  assert.deepEqual(errors, []);
+  console.log('PASS: hourly history, weighted uptime/coverage, gaps/pauses, stale history races, narrow layout, status pagination, diagnostics, history failure, ACK/assignment, disconnect');
+} finally { await browser.close(); }

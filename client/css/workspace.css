@@ -270,6 +270,10 @@ body {
         --sidebar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='none' stroke='black' stroke-width='2' d='M3 6h26v7a3 3 0 0 0 0 6v7H3v-7a3 3 0 0 0 0-6zM21 6v4m0 4v4m0 4v4'/%3E%3C/svg%3E");
     }
 
+    & #monitoringBtn {
+        --sidebar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='none' stroke='black' stroke-width='2' stroke-linejoin='round' d='M3 4h26v19H3zM16 23v5M9 28h14M6 14h5l3-6 4 11 3-5h5'/%3E%3C/svg%3E");
+    }
+
     & #newsletterBtn {
         --sidebar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='none' stroke='black' stroke-width='2' d='M3 6h26v20H3zM3 7l13 10L29 7'/%3E%3C/svg%3E");
     }

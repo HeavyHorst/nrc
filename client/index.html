@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20261013fold1">
     <link rel="icon" type="image/png" href="favicon.png?v=20261013fold1">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=20261013fold1">
-    <link rel="stylesheet" href="css/main.css?v=20261116ticketfilters1">
+    <link rel="stylesheet" href="css/main.css?v=20261117monitor22">
     <link rel="stylesheet" href="css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="css/voice.css?v=20261105voice12">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -59,6 +59,7 @@
                             <div id="workspaceViewsLabel" class="sidebar-section-label">WORKSPACE</div>
                             <button id="overviewBtn" class="btn nav-tab sidebar-nav-item" type="button">OVERVIEW</button>
                             <button id="historyBtn" class="btn nav-tab sidebar-nav-item" type="button">HISTORY</button>
+                            <button id="monitoringBtn" class="btn nav-tab sidebar-nav-item" type="button">MONITORING</button>
                             <button id="attentionBtn" class="btn nav-tab sidebar-nav-item" title="Toggle Attention" type="button">ATTENTION<span id="attentionViewCount" class="sidebar-unread-count" hidden></span></button>
                         </div>
                         <div class="sidebar-nav" role="group" aria-labelledby="workViewsLabel">
@@ -113,6 +114,32 @@
                             <div class="workspace-search-footer"><span id="workspaceSearchLimit">RELEVANCE ORDER · SEMANTIC + TEXT</span><span>↑/↓ NAV · ENTER OPEN</span></div>
                         </section>
                         <section id="newsletterPanel" class="nl-panel" style="display:none" aria-label="Newsletter-Arbeitsbereich" lang="de"></section>
+                        <section id="monitoringPanel" class="customers-panel" style="display:none" aria-label="Monitoring workspace">
+                            <header class="panel-header header-register filter-register">
+                                <div class="header-register-identity-row"><span class="header-register-title">MONITORING / WORKSPACE</span><span id="monitorStatus" class="header-register-state" role="status">NOT LOADED</span></div>
+                                <div class="header-register-control-row">
+                                    <div class="header-filter-cell"><span class="filter-label">SHOW</span><div class="tab-group" role="group" aria-label="Monitoring view"><button id="monitorStatusTab" class="btn nav-tab active" aria-pressed="true">STATUS</button><button id="monitorIncidentsTab" class="btn nav-tab" aria-pressed="false">INCIDENTS</button></div></div>
+                                    <button id="monitorRefresh" class="btn header-operation header-register-control">REFRESH</button>
+                                </div>
+                            </header>
+                            <div class="monitor-filters">
+                                <label class="header-filter-cell"><span class="filter-label">SEARCH</span><input id="monitorSearch" class="filter-input" type="search" placeholder="NAME / ID" aria-label="Search loaded monitoring records"></label>
+                                <div id="monitorStatusFilters" class="monitor-filters">
+                                    <label class="header-filter-cell"><span class="filter-label">STATE</span><select id="monitorStateFilter" class="filter-select" aria-label="Monitor state"><option value="all">ALL</option><option value="problems">PROBLEMS</option><option value="healthy">HEALTHY</option><option value="paused">PAUSED</option></select></label>
+                                    <div class="header-filter-cell"><span class="filter-label">HISTORY</span><div id="monitorPeriods" class="tab-group" role="group" aria-label="History period"><button class="btn nav-tab active" data-monitor-days="1" aria-pressed="true">24H</button><button class="btn nav-tab" data-monitor-days="7" aria-pressed="false">7D</button><button class="btn nav-tab" data-monitor-days="30" aria-pressed="false">30D</button></div></div>
+                                </div>
+                            </div>
+                            <p id="monitorSummary" class="overview-note" role="status"></p>
+                            <p class="overview-note">FILTERS AND COUNTS: LOADED RECORDS ONLY · PROBLEMS FIRST · STABLE ID ORDER · RULES VIA CLI</p>
+                            <div id="monitorRegisterScroll" tabindex="0" aria-label="Monitor register">
+                                <div id="monitorList" class="task-list-view"></div>
+                                <div id="monitorHistoryLegend" class="overview-note">
+                                    <div class="monitor-history-legend"><span><i class="monitor-history-bar" data-state="healthy" aria-hidden="true"></i>HEALTHY</span><span><i class="monitor-history-bar" data-state="failing" aria-hidden="true"></i>ANY FAILURE</span><span><i class="monitor-history-bar" data-state="unknown" aria-hidden="true"></i>UNKNOWN / PARTIAL</span><span><i class="monitor-history-bar" data-state="paused" aria-hidden="true"></i>PAUSED</span></div>
+                                    <p><span id="monitorBucketSize">1 BAR = 1 COMPLETED HOUR</span> · LOCAL TIME · CURRENT REVISION ONLY<br>Uptime / condition satisfaction is weighted by observed instance time, not whole-service availability. Coverage includes missing hours for those identities; paused time is excluded. Unobserved identities are not counted.</p>
+                                </div>
+                            </div>
+                            <div class="customer-page"><button id="monitorMore" class="btn" hidden>MORE MONITORS</button></div>
+                        </section>
                         <section id="ticketsPanel" class="customers-panel" style="display:none" aria-label="Internal tickets workspace">
                             <div class="panel-header header-register filter-register">
                                 <div class="header-register-identity-row"><span class="header-register-title">TICKETS</span><span id="ticketsStatus" class="header-register-state" role="status">NOT LOADED</span></div>
@@ -692,8 +719,8 @@
     <script src="edges.js?v=20261114overload1"></script>
     <script src="files.js?v=20261022cancel1"></script>
     <script src="links-ui.js?v=20261018ticketregister1"></script>
-    <script src="inspector.js?v=20261105voice12"></script>
-    <script src="view-manager.js?v=20261017history5"></script>
+    <script src="inspector.js?v=20261116monitor1"></script>
+    <script src="view-manager.js?v=20261116monitor1"></script>
     <script src="list-navigation.js?v=20260805b"></script>
     <script src="virtual-list.js?v=20260908a"></script>
     <script src="loading-indicator.js?v=20261013loading1"></script>
@@ -723,7 +750,8 @@
     <script src="voice.js?v=20261108memory8"></script>
     <script src="retained-messages.js?v=20261023protocol2"></script>
     <script src="chat.js?v=20261020composer1"></script>
-    <script src="app.js?v=20261116namedlinks1"></script>
+    <script src="monitoring.js?v=20261116monitor21"></script>
+    <script src="app.js?v=20261117monitor22"></script>
     <section id="callPanel" class="call-panel" aria-label="Video call" hidden>
         <header class="panel-header"><div><span id="callPeer">VIDEO INVITATION</span><button id="callDismiss" class="btn btn--danger task-detail-close" type="button" aria-label="Hide panel" title="Hide · reopen from Conferences">×</button></div></header>
         <p id="callInvitationPeer" class="call-invitation-peer"></p>

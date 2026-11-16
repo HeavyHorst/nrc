@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261116ticketfilters1";
+const CACHE_NAME = "nrc-terminal-20261117monitor22";
 
 const APP_SHELL = [
   "./",
@@ -11,9 +11,9 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261116ticketfilters1",
+  "./css/main.css?v=20261117monitor22",
   "./css/foundation.css?v=20261116ticketcategory3",
-  "./css/workspace.css?v=20261023attachment1",
+  "./css/workspace.css?v=20261116monitor5",
   "./css/entities.css?v=20261108memory9",
   "./css/ledger.css?v=20261030citation1",
   "./css/mobile-tasks.css?v=20261019registers1",
@@ -33,8 +33,8 @@ const APP_SHELL = [
   "./edges.js?v=20261114overload1",
   "./files.js?v=20261022cancel1",
   "./links-ui.js?v=20261018ticketregister1",
-  "./inspector.js?v=20261105voice12",
-  "./view-manager.js?v=20261017history5",
+  "./inspector.js?v=20261116monitor1",
+  "./view-manager.js?v=20261116monitor1",
   "./list-navigation.js?v=20260805b",
   "./virtual-list.js?v=20260908a",
   "./loading-indicator.js?v=20261013loading1",
@@ -64,7 +64,8 @@ const APP_SHELL = [
   "./voice.js?v=20261108memory8",
   "./retained-messages.js?v=20261023protocol2",
   "./chat.js?v=20261020composer1",
-  "./app.js?v=20261116namedlinks1",
+  "./app.js?v=20261117monitor22",
+  "./monitoring.js?v=20261116monitor21",
   "./calls.js?v=20261022cancel1",
   "./newsletter.js?v=20261022cancel1",
   "./customers.js?v=20261116pickers1",

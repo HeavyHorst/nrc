@@ -1,9 +1,145 @@
 @import url("foundation.css?v=20261116ticketcategory3");
-@import url("workspace.css?v=20261023attachment1");
+@import url("workspace.css?v=20261116monitor5");
 @import url("entities.css?v=20261108memory9");
 @import url("ledger.css?v=20261030citation1");
 @import url("mobile-tasks.css?v=20261019registers1");
 @import url("mobile.css?v=20261102gap1");
+
+/* Monitoring composes the existing register and universal Inspector. */
+#monitoringPanel, .monitor-record { font-size: var(--font-base); }
+#monitoringPanel [hidden], .monitor-record [hidden] { display: none !important; }
+#monitorRegisterScroll { flex: 1; min-height: 0; overflow: auto; container: monitor-register / inline-size; }
+.monitor-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; min-width: 0; }
+#monitoringPanel > .monitor-filters { padding: 0.5rem; border-bottom: 1px solid var(--text-dim); }
+.monitor-filters .header-filter-cell { min-width: 0; }
+#monitoringPanel .header-filter-cell:has(> .tab-group), .monitor-filters .header-filter-cell:has(> .tab-group) { min-width: max-content; flex: 0 0 auto; }
+.monitor-filters input { width: 12rem; max-width: 100%; }
+#monitorSummary { font-weight: 600; }
+#monitorList { overflow: visible; }
+.monitor-table.task-table { display: table; min-width: 0; width: 100%; table-layout: fixed; }
+.monitor-table thead { display: table-header-group; }
+.monitor-table.task-table tbody { display: table-row-group; }
+.monitor-table.task-table thead tr, .monitor-table.task-table tbody tr { display: table-row; padding: 0; }
+.monitor-table.task-table tbody tr > td { display: table-cell; width: auto !important; }
+.monitor-table th, .monitor-table tbody tr { cursor: default; }
+.monitor-table th, .monitor-table td { white-space: normal; overflow-wrap: anywhere; padding: 0.625rem; vertical-align: top; }
+.monitor-table .task-row-open { white-space: normal; overflow-wrap: anywhere; }
+.monitor-table .customer-meta { display: block; margin-top: 0.25rem; }
+.monitor-history-bars { display: grid; grid-template-columns: repeat(var(--monitor-bars, 24), minmax(0, 1fr)); gap: 2px; min-width: 0; }
+.monitor-history-bar { display: inline-block; height: 1.25rem; background: var(--text-dim); }
+.monitor-history-bar[data-state="healthy"] { background: var(--status-done); }
+.monitor-history-bar[data-state="failing"] { background: var(--accent-danger); }
+.monitor-history-bar[data-state="unknown"] { background: repeating-linear-gradient(135deg, var(--text-dim) 0 2px, var(--surface-panel) 2px 4px); }
+.monitor-history-bar[data-state="paused"] { background: var(--surface-panel); border: 1px solid var(--text-dim); box-sizing: border-box; }
+.monitor-history-legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.monitor-history-legend > span { display: inline-flex; align-items: center; gap: 0.375rem; }
+.monitor-history-legend .monitor-history-bar { width: 0.75rem; height: 0.75rem; }
+.monitor-state { font: 600 var(--font-xs)/1.5 var(--font-mono); }
+.monitor-state:is([data-state="firing"], [data-state="fail"], [data-state="failing"]) { color: var(--accent-danger); }
+.monitor-state:is([data-state="error"], [data-state="no_data"], [data-state="unavailable"]) { color: var(--accent-highlight); }
+.monitor-record { padding: 1rem; overflow: auto; }
+.monitor-record.customer-record { min-height: 0; overflow: auto; }
+.monitor-record h2 { margin: 0.5rem 0; font: 600 var(--font-lg)/1.4 var(--font-sans); }
+.monitor-rule { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-xs); }
+.monitor-record .task-detail-input { width: 100%; }
+.monitor-record p { line-height: 1.5; overflow-wrap: anywhere; }
+.monitor-inspector .customer-section { margin-top: 1.25rem; }
+.monitor-inspector .customer-section > .panel-header { background: transparent; border: 0; min-height: 0; padding: 0.375rem 0; font: 600 var(--font-base)/1.4 var(--font-mono); }
+.monitor-inspector #monitorHistoryDetails .panel-header { font-size: var(--font-xs); }
+.monitor-subheading { margin: 0.75rem 0 0; font: 600 var(--font-xs)/1.4 var(--font-mono); }
+.monitor-footer { margin-top: 1.5rem; color: var(--text-dim); }
+.monitor-streaks, .monitor-streak, .monitor-streak-graphic { display: flex; align-items: center; flex-wrap: wrap; gap: 0.375rem; }
+.monitor-streaks { gap: 0.5rem 1.5rem; font: 500 var(--font-xs)/1.4 var(--font-mono); }
+.monitor-streak-graphic { color: var(--accent-danger); }
+.monitor-streak[data-state="pass"] .monitor-streak-graphic { color: var(--status-done); }
+.monitor-streak-step { width: 0.625rem; height: 0.625rem; border: 1px solid var(--text-dim); }
+.monitor-streak-step.is-filled { background: currentColor; border-color: currentColor; }
+.monitor-streak-track { width: 5rem; height: 0.625rem; border: 1px solid var(--text-dim); }
+.monitor-streak-track > i { display: block; height: 100%; background: currentColor; }
+.monitor-meter { height: 0.5rem; margin-top: 0.375rem; background: repeating-linear-gradient(135deg, var(--text-dim) 0 1px, var(--surface-content) 1px 4px); }
+.monitor-meter > span { display: block; height: 100%; width: var(--fill); background: var(--text-dim); }
+.monitor-meter[data-kind="uptime"][data-known="true"] { background: var(--accent-danger); }
+.monitor-meter[data-kind="uptime"] > span { background: var(--status-done); }
+.monitor-value-scale { display: block; width: 100%; max-width: 36rem; height: auto; margin: 0.5rem 0; font: 12px var(--font-mono); }
+.monitor-value-scale text { fill: var(--text-dim); }
+.monitor-scale-track { fill: none; stroke: var(--text-dim); stroke-width: 0.5; }
+.monitor-value-scale circle { fill: var(--surface-content); stroke: var(--text-primary); stroke-width: 1.5; }
+.monitor-scale-marker { fill: none; stroke: currentColor; stroke-width: 2; }
+.monitor-value-scale [data-scale="trigger"] { color: var(--accent-danger); }
+.monitor-value-scale [data-scale="recovery"] { color: var(--status-done); }
+.monitor-timeseries svg { display: block; width: 100%; height: auto; font: 12px var(--font-mono); cursor: crosshair; touch-action: pan-y; }
+.monitor-timeseries text { fill: var(--text-dim); }
+.monitor-chart-axis { fill: none; stroke: var(--text-dim); stroke-width: 0.5; }
+.monitor-chart-trace { fill: none; stroke: var(--text-primary); stroke-width: 1; }
+.monitor-chart-points { pointer-events: none; }
+.monitor-chart-points circle { fill: var(--surface-content); stroke: var(--text-primary); stroke-width: 1; opacity: 0; }
+.monitor-chart-points circle:is(.monitor-chart-endpoint, .is-active) { opacity: 1; }
+.monitor-chart-points circle.is-active { r: 5px; stroke-width: 1.5; }
+.monitor-chart-points rect { fill: var(--surface-content); stroke: var(--text-primary); stroke-width: 1; }
+.monitor-chart-points rect.is-active { stroke-width: 2; }
+.monitor-chart-guide { fill: none; stroke: var(--text-dim); stroke-width: 0.5; stroke-dasharray: 2 4; pointer-events: none; }
+.monitor-chart-readout { min-height: 3em; font: var(--font-xs)/1.5 var(--font-mono); color: var(--text-dim); }
+.monitor-timeseries svg:focus-visible { outline: 1px solid var(--text-dim); outline-offset: 2px; }
+.monitor-timeseries [data-threshold="trigger"] { color: var(--accent-danger); }
+.monitor-timeseries [data-threshold="recovery"] { color: var(--status-done); }
+.monitor-timeseries line { stroke: currentColor; stroke-width: 1; stroke-dasharray: 5 4; }
+.monitor-timeseries line[data-threshold="recovery"] { stroke-dasharray: 2 4; }
+.monitor-chart-legend { display: flex; flex-wrap: wrap; gap: 0.375rem 1rem; font: var(--font-xs)/1.5 var(--font-mono); }
+.monitor-inspector #monitorSelection .task-row-open { display: inline; width: auto; }
+.monitor-inspector #monitorSelection > p > .monitor-state { font: 700 var(--font-lg)/1.4 var(--font-mono); }
+.monitor-inspector p { margin: 0.375rem 0; }
+#monitorSelection .customer-meta { display: block; }
+.monitor-inspector.customer-record .customer-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0.5rem 0; gap: 0.5rem; }
+.monitor-thresholds { margin: 0.75rem 0; font: 500 var(--font-xs)/1.4 var(--font-mono); }
+.monitor-thresholds > div { display: grid; grid-template-columns: 6rem minmax(0, 1fr); padding: 0.125rem 0; }
+.monitor-thresholds dt { color: var(--text-dim); }
+.monitor-thresholds dd { margin: 0; overflow-wrap: anywhere; }
+.monitor-inspector .monitor-table { font-family: var(--font-mono); font-size: var(--font-xs); }
+.monitor-inspector .monitor-table :is(th, td) { padding: 0.375rem; }
+.monitor-inspector .monitor-table.task-table :is(thead, tbody, tr, th, td) { border: 0; background: transparent; box-shadow: none; }
+.monitor-inspector .monitor-table thead { position: static; }
+.monitor-inspector .monitor-conditions th:first-child { width: 45% !important; }
+.monitor-inspector .monitor-conditions th:nth-child(2) { width: 35% !important; }
+.monitor-inspector .monitor-conditions th:last-child { width: 20% !important; }
+.monitor-instance-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; font: 500 var(--font-xs)/1.4 var(--font-mono); }
+.monitor-identity-label { display: block; text-align: left; overflow-wrap: anywhere; }
+.monitor-identity-label small { color: var(--text-dim); font-size: inherit; font-weight: 400; }
+.monitor-selected { outline: 1px solid var(--selected-row-accent); outline-offset: -1px; }
+.monitor-instance-list .monitor-table thead { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }
+.monitor-instance-list .monitor-table.task-table tbody tr > td { padding: 0.25rem 0.375rem; vertical-align: middle; }
+.monitor-instance-list col:first-child { width: 54%; }
+.monitor-instance-list col:nth-child(2) { width: 20%; }
+.monitor-instance-list col:nth-child(3) { width: 12%; }
+.monitor-instance-list col:last-child { width: 14%; }
+.monitor-instance-list .monitor-table.task-table tbody tr > td:nth-child(n+3) { text-align: right; }
+.monitor-instance-list .task-row-open { font: inherit; }
+.monitor-instance-list [data-instance] { display: flex; flex-wrap: wrap; gap: 0 0.5rem; width: 100%; text-align: left; }
+.monitor-instance-list .monitor-identity-label { display: inline; min-width: 0; }
+.monitor-instance-list .monitor-selected { outline: none; background: color-mix(in srgb, var(--text-primary) 6%, var(--surface-content)) !important; }
+.monitor-instance-list .monitor-table.task-table .monitor-selected > td:first-child { box-shadow: inset 2px 0 var(--selected-row-accent); }
+.monitor-instance-list .monitor-incident-link { display: inline; width: auto; text-decoration: underline; text-underline-offset: 0.2em; }
+#monitorSelection h3 { margin: 0.5rem 0; font: 600 var(--font-base)/1.4 var(--font-mono); }
+.monitor-state[data-state="pass"] { color: var(--status-done); }
+@media (max-width: 768px) {
+    #monitoringPanel > .header-register > .header-register-control-row { display: flex; flex-wrap: wrap; }
+    #monitoringPanel, .monitor-record { font-size: var(--mobile-font-base); }
+    #monitoringPanel .btn, .monitor-record .btn, .monitor-table .task-row-open { min-height: 44px; }
+    .monitor-state, .monitor-rule { font-size: var(--mobile-font-sm); }
+    .monitor-record input, .monitor-filters input, .monitor-filters select { font-size: 16px; }
+}
+@container monitor-register (max-width: 700px) {
+    #monitorList .monitor-table, #monitorList .monitor-table tbody { display: block; width: 100%; }
+    #monitorList .monitor-table thead { display: none; }
+    #monitorList .monitor-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; padding: 0.75rem; }
+    #monitorList .monitor-table td { display: block; width: auto; padding: 0; border: 0; font-size: var(--mobile-font-sm); }
+    #monitorList .monitor-table td:first-child { grid-column: 1 / -1; font-size: var(--mobile-font-base); }
+    #monitorList .monitor-history-cell { grid-column: 1 / -1; grid-row: 3; }
+    #monitorList [data-history-part="metrics"] { text-align: right; }
+    #monitorList .monitor-table td:nth-child(2)::before { content: 'STATE'; display: block; color: var(--text-dim); }
+    #monitorList .monitor-table td[data-history-part="metrics"]::before { content: 'UPTIME / SATISFACTION'; display: block; color: var(--text-dim); }
+    #monitorList .monitor-table td:nth-child(3):not(.monitor-history-cell)::before { content: 'ACKNOWLEDGED'; display: block; color: var(--text-dim); }
+    #monitorList .monitor-table td:nth-child(4):not([data-history-part])::before { content: 'ASSIGNEE'; display: block; color: var(--text-dim); }
+}
 
 .call-panel { position: fixed; z-index: 1000; right: 1rem; bottom: 1rem; width: min(25rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: var(--frame-border); background: var(--surface-content); color: var(--text-primary); box-shadow: 0 0.5rem 2rem var(--overlay-backdrop); }
 .call-panel[hidden], .call-panel [hidden], #callStart[hidden], #callHistory[hidden] { display: none !important; }
