@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261116ticketcategory3";
+const CACHE_NAME = "nrc-terminal-20261116alignment2";
 
 const APP_SHELL = [
   "./",
@@ -11,7 +11,7 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261116ticketcategory3",
+  "./css/main.css?v=20261116alignment2",
   "./css/foundation.css?v=20261116ticketcategory3",
   "./css/workspace.css?v=20261023attachment1",
   "./css/entities.css?v=20261108memory9",
@@ -21,7 +21,7 @@ const APP_SHELL = [
   "./css/custom-select.css?v=20261019compact1",
   "./css/voice.css?v=20261105voice12",
   "./dialog.js?v=20261021taskslice1",
-  "./portal.js?v=20261021modal1",
+  "./portal.js?v=20261116pickers1",
   "./custom-picker.js?v=20260927appointment2",
   "./custom-select.js?v=20261019customerwidth1",
   "./attachments.js?v=20261008files1",
@@ -43,7 +43,7 @@ const APP_SHELL = [
   "./query-controller.js?v=20260914workspace1",
   "./workspace-search.js?v=20261018inspectors5",
   "./task-search.js?v=20260917taskscroll1",
-  "./detail-ui.js?v=20261022cancel1",
+  "./detail-ui.js?v=20261116pickers1",
   "./column-resize.js?v=20261028fit2",
   "./record-activity.js?v=20261019ticketpages1",
   "./tasks.js?v=20261114overload3",
@@ -67,8 +67,8 @@ const APP_SHELL = [
   "./app.js?v=20261116namedlinks1",
   "./calls.js?v=20261022cancel1",
   "./newsletter.js?v=20261022cancel1",
-  "./customers.js?v=20261022cancel1",
-  "./tickets.js?v=20261116ticketcategory2",
+  "./customers.js?v=20261116pickers1",
+  "./tickets.js?v=20261116alignment2",
   "./mobile-shell.js?v=20261019registers1",
   "./latency-worker.js",
 ];

@@ -164,26 +164,31 @@
     }
     panel.append(heading, input);
     let picker = null;
-    if (suggestions) {
-      const values = [...new Set(suggestions.map(value => String(value).trim()).filter(Boolean))];
+    if (suggestions || options) {
+      const values = [...new Set((suggestions || []).map(value => String(value).trim()).filter(Boolean))];
       picker = window.CustomPicker.create({
         anchor: input,
         usePortal: false,
-        options: [{ value: "", label: "— CLEAR", alwaysVisible: true }, ...values.map(value => ({ value, label: value }))],
+        options: options || [{ value: "", label: "— CLEAR", alwaysVisible: true }, ...values.map(value => ({ value, label: value }))],
         selectedValue: input.value,
-        allowCustomValue: true,
+        allowCustomValue: !options,
         closeOnSelect: false,
         onSelect: option => { if (!session.pending) { input.value = String(option.value); submit(); } },
         onCustomValue: value => { if (!session.pending) { input.value = value; submit(); } },
       });
       picker.dropdown.classList.add("inline-field-picker");
-      picker.searchInput.value = input.value;
+      picker.searchInput.value = options ? "" : input.value;
       input.replaceWith(picker.dropdown);
-      picker.searchInput.id = input.id;
-      heading.htmlFor = picker.searchInput.id;
-      input.removeAttribute("id");
-      input = picker.searchInput;
-      input.required = Boolean(spec.required);
+      if (options) {
+        picker.searchInput.id = `${input.id}-search`;
+        heading.htmlFor = picker.searchInput.id;
+      } else {
+        picker.searchInput.id = input.id;
+        heading.htmlFor = picker.searchInput.id;
+        input.removeAttribute("id");
+        input = picker.searchInput;
+        input.required = Boolean(spec.required);
+      }
     }
     panel.append(state, actions);
     const session = {
@@ -216,6 +221,7 @@
       }
       session.pending = true;
       input.disabled = save.disabled = cancel.disabled = true;
+      if (picker) picker.dropdown.inert = true;
       if (clear) clear.disabled = true;
       state.textContent = "SAVING";
       panel.dataset.state = "saving";
@@ -232,26 +238,26 @@
       } catch (error) {
         session.pending = false;
         input.disabled = save.disabled = cancel.disabled = false;
+        if (picker) picker.dropdown.inert = false;
         if (clear) clear.disabled = false;
         state.textContent = error?.message || "SAVE FAILED — RETRY OR CANCEL";
         panel.dataset.state = "failed";
-        input.focus();
+        (picker?.searchInput || input).focus();
       }
     };
     panel.onsubmit = submit;
     if (clear) clear.onclick = () => { if (!session.pending) { input.value = ""; submit(null, true); } };
-    if (spec.options) input.onchange = submit;
     activeInline = session;
     document.body.append(panel);
     panel.showPopover();
+    if (picker) window.CustomPicker.open(picker);
     const rect = anchor.getBoundingClientRect();
     panel.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - panel.offsetWidth - 8))}px`;
     panel.style.top = `${Math.max(8, Math.min(rect.bottom + 2, window.innerHeight - panel.offsetHeight - 8))}px`;
     anchor.setAttribute("aria-expanded", "true");
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("keydown", keydown, true);
-    if (picker) window.CustomPicker.open(picker);
-    else {
+    if (!picker) {
       input.focus();
       if (input.type === "text") input.select();
     }

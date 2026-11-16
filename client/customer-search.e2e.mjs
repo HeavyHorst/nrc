@@ -169,6 +169,24 @@ try {
   for (const [id, title] of [["99", "Exact Nordwerk company"], ["100", "Exact Anna contact"], ["101", "Exact rollout activity"]]) {
     await page.locator(`[data-key="asset:${id}"]`).click();
     await page.waitForFunction(title => document.getElementById("inspectorEntityHost").textContent.includes(title), title);
+    if (id !== "99") {
+      await page.locator("#customerEdit").click();
+      const name = id === "100" ? "review_status" : "kind";
+      const choice = id === "100" ? "REVIEWED" : "Email";
+      const select = page.locator(`select[name="${name}"]`);
+      await page.locator(`nrc-select:has(select[name="${name}"]) .custom-select__trigger`).click();
+      await page.locator(".custom-select__dropdown").getByRole("option", { name: choice, exact: true }).click();
+      assert.equal(await page.locator("#inspectorHeader [data-save-state]").getAttribute("data-save-state"), "UNSAVED", "picker-only changes mark the customer draft dirty");
+      await page.locator("#customerCancel").click();
+      await page.getByRole("dialog", { name: "UNSAVED CHANGES", exact: true }).getByRole("button", { name: "Cancel", exact: true }).click();
+      assert.equal(await select.inputValue(), id === "100" ? "reviewed" : "Email", "canceling discard preserves the picker value");
+      await page.evaluate(id => NRCCustomers.onAssetChanged({ convId: 0n, assetId: BigInt(id), assetType: id === "100" ? 9 : 10,
+        preview: JSON.stringify({ version: 1, title: "Peer revision", kind: "Call" }), payload: "Peer body" }, "mutation"), id);
+      assert.equal(await page.locator("#inspectorHeader [data-save-state]").getAttribute("data-save-state"), "STALE");
+      assert.equal(await select.inputValue(), id === "100" ? "reviewed" : "Email", "peer updates do not overwrite a picker-only draft");
+      await page.locator("#customerCancel").click();
+      await page.getByRole("dialog", { name: "UNSAVED CHANGES", exact: true }).getByRole("button", { name: "Discard", exact: true }).click();
+    }
     await page.evaluate(() => NRCInspector.close());
   }
   // Asymmetric lists cross both display-page and relationship-page boundaries.

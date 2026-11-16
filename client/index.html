@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20261013fold1">
     <link rel="icon" type="image/png" href="favicon.png?v=20261013fold1">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=20261013fold1">
-    <link rel="stylesheet" href="css/main.css?v=20261116ticketcategory3">
+    <link rel="stylesheet" href="css/main.css?v=20261116alignment2">
     <link rel="stylesheet" href="css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="css/voice.css?v=20261105voice12">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -119,13 +119,13 @@
                                 <div class="header-register-control-row">
                                     <div class="header-control-scroll">
                                     <label class="header-filter-cell"><span class="filter-label">SEARCH</span><input class="filter-input" data-filter="search" type="search" placeholder="TICKETS / CONVERSATIONS / ID"></label>
-                                    <label class="header-filter-cell"><span class="filter-label">STATE</span><select class="filter-select" data-filter="status"><option value="">ALL</option><option value="open">OPEN</option><option value="in_progress">IN PROGRESS</option><option value="waiting_customer">WAITING ON CUSTOMER</option><option value="resolved">RESOLVED</option><option value="closed">CLOSED</option></select></label>
-                                    <label class="header-filter-cell"><span class="filter-label">PRIORITY</span><select class="filter-select" data-filter="priority"><option value="">ALL</option><option value="low">LOW</option><option value="normal">NORMAL</option><option value="high">HIGH</option><option value="urgent">URGENT</option></select></label>
-                                    <label class="header-filter-cell"><span class="filter-label">FOLLOW-UP</span><select class="filter-select" data-filter="follow_up"><option value="">ALL</option><option value="due">DUE</option></select></label>
+                                    <label class="header-filter-cell"><span class="filter-label">STATE</span><nrc-select><select class="filter-select" data-filter="status" data-custom-select-portal><option value="">ALL</option><option value="open">OPEN</option><option value="in_progress">IN PROGRESS</option><option value="waiting_customer">WAITING ON CUSTOMER</option><option value="resolved">RESOLVED</option><option value="closed">CLOSED</option></select></nrc-select></label>
+                                    <label class="header-filter-cell"><span class="filter-label">PRIORITY</span><nrc-select><select class="filter-select" data-filter="priority" data-custom-select-portal><option value="">ALL</option><option value="low">LOW</option><option value="normal">NORMAL</option><option value="high">HIGH</option><option value="urgent">URGENT</option></select></nrc-select></label>
+                                    <label class="header-filter-cell"><span class="filter-label">FOLLOW-UP</span><nrc-select><select class="filter-select" data-filter="follow_up" data-custom-select-portal><option value="">ALL</option><option value="due">DUE</option></select></nrc-select></label>
                                     <label class="header-filter-cell"><span class="filter-label">ASSIGNEE</span><nrc-select><select id="ticketAssigneeFilter" class="filter-select" data-filter="owner" data-custom-select-portal data-custom-select-search-placeholder="FILTER ASSIGNEE..."><option value="">ALL ASSIGNEES</option></select></nrc-select></label>
                                     <label class="header-filter-cell"><span class="filter-label">CUSTOMER</span><nrc-select><select id="ticketCustomerFilter" class="filter-select" data-filter="company" data-custom-select-portal data-custom-select-wrap data-custom-select-search-placeholder="FILTER CUSTOMER..." disabled><option value="">ALL CUSTOMERS</option></select></nrc-select></label>
                                     </div>
-                                    <label class="header-filter-cell"><span class="filter-label">SORT</span><select id="ticketsSort" class="filter-select">
+                                    <label class="header-filter-cell"><span class="filter-label">SORT</span><nrc-select><select id="ticketsSort" class="filter-select" data-custom-select-portal>
                                         <option value="id:desc">ID ↓</option><option value="id:asc">ID ↑</option>
                                         <option value="title:asc">Title A–Z</option><option value="title:desc">Title Z–A</option>
                                         <option value="status:asc">Status A–Z</option><option value="status:desc">Status Z–A</option>
@@ -136,7 +136,7 @@
                                         <option value="contact_id:asc">Contact A–Z</option><option value="contact_id:desc">Contact Z–A</option>
                                         <option value="unread:desc">Unread ↓</option><option value="unread:asc">Unread ↑</option>
                                         <option value="activity:desc" selected>Activity: newest</option><option value="activity:asc">Activity: oldest</option>
-                                    </select></label>
+                                    </select></nrc-select></label>
                                     <button id="ticketColumnsReset" class="btn header-operation" type="button">RESET COLUMNS</button>
                                     <button id="ticketsRefresh" class="btn header-operation">REFRESH</button><button id="ticketNew" class="btn btn--primary header-operation">+ TICKET</button>
                                 </div>
@@ -675,7 +675,7 @@
     </div>
 
     <script src="dialog.js?v=20261021taskslice1"></script>
-    <script src="portal.js?v=20261021modal1"></script>
+    <script src="portal.js?v=20261116pickers1"></script>
     <script src="custom-picker.js?v=20260927appointment2"></script>
     <script src="custom-select.js?v=20261019customerwidth1"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@16.1.1/lib/marked.umd.js"></script>
@@ -702,7 +702,7 @@
     <script src="query-controller.js?v=20260914workspace1"></script>
     <script src="workspace-search.js?v=20261018inspectors5"></script>
     <script src="task-search.js?v=20260917taskscroll1"></script>
-    <script src="detail-ui.js?v=20261022cancel1"></script>
+    <script src="detail-ui.js?v=20261116pickers1"></script>
     <script src="column-resize.js?v=20261028fit2"></script>
     <script src="record-activity.js?v=20261019ticketpages1"></script>
     <script src="tasks.js?v=20261114overload3"></script>
@@ -740,8 +740,8 @@
     </section>
     <script src="calls.js?v=20261022cancel1"></script>
     <script src="newsletter.js?v=20261022cancel1"></script>
-    <script src="customers.js?v=20261022cancel1"></script>
-    <script src="tickets.js?v=20261116ticketcategory2"></script>
+    <script src="customers.js?v=20261116pickers1"></script>
+    <script src="tickets.js?v=20261116alignment2"></script>
     <script src="mobile-shell.js?v=20261019registers1"></script>
     <script>
         if ("serviceWorker" in navigator) {

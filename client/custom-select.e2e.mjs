@@ -27,6 +27,7 @@ try {
       <meta charset="utf-8">
       <link rel="stylesheet" href="/css/main.css"><link rel="stylesheet" href="/css/custom-select.css">
       <script src="/portal.js"></script><script src="/custom-picker.js"></script><script src="/custom-select.js"></script>
+      <script>window.NRCAssets = { MAX_PAYLOAD_LENGTH: 65535 };</script><script src="/detail-ui.js"></script>
       <form id="editor"><div class="header-filter-cell"><label for="native">STATE</label>
         <nrc-select id="host"><select id="native" name="state" tabindex="3" data-custom-select-portal>
           <option value="draft" selected>Draft</option><option value="review">Review</option><option value="done">Done</option>
@@ -167,6 +168,62 @@ try {
     await shortRow.click();
     assert.equal(await page.locator('#customer').inputValue(), '4382');
   }
+  // Phone form controls may fill the viewport; their portals still need the
+  // same four-pixel margin on each side when matching the trigger's width.
+  for (const align of ['left', 'auto']) {
+    await page.evaluate(align => {
+      editor.innerHTML = `<nrc-select style="width:100vw;position:fixed;left:0;top:20px"><select id="fullWidth" data-custom-select-portal data-custom-select-align="${align}"><option>UNCHANGED</option><option>REVIEWED</option></select></nrc-select>`;
+      document.querySelector('#fullWidth-trigger').style.width = '100%';
+    }, align);
+    await page.locator('#fullWidth-trigger').click();
+    const menu = await page.locator('.portal-wrapper .custom-select__dropdown').boundingBox();
+    assert.ok(menu.x >= 4 && menu.x + menu.width <= 371, `${align} full-width menu retains viewport margins`);
+    await page.keyboard.press('Escape');
+  }
+  // Fixed inline choices share the themed picker, but never accept search text
+  // as a new value. Selection still waits for acknowledgement and supports retry.
+  await page.evaluate(() => {
+    window.inlineWrites = [];
+    editor.innerHTML = NRCDetailUI.inlineField({
+      key: 'category', name: 'CATEGORY', value: 'support', display: 'SUPPORT',
+      options: [{ value: '', label: 'NOT CLASSIFIED' }, { value: 'support', label: 'SUPPORT' }, { value: 'bug', label: 'BUG' }],
+      save(value) {
+        inlineWrites.push(value);
+        return new Promise((resolve, reject) => { window.acceptChoice = resolve; window.rejectChoice = reject; });
+      },
+    });
+  });
+  const inline = page.locator('.inline-field-editor');
+  await page.getByRole('button', { name: 'Edit CATEGORY: support' }).click();
+  assert.equal(await inline.locator('input').evaluate(el => getComputedStyle(el).fontSize), '16px', 'phone inline picker search retains readable input sizing');
+  assert.equal(await inline.getByRole('option', { name: 'SUPPORT', exact: true }).getAttribute('aria-selected'), 'true');
+  await inline.locator('input').fill('not a category');
+  assert.equal(await inline.getByRole('option').count(), 0);
+  await inline.locator('input').press('Enter');
+  assert.deepEqual(await page.evaluate(() => inlineWrites), []);
+  await page.keyboard.press('Escape');
+  assert.equal(await inline.count(), 0);
+  await page.getByRole('button', { name: 'Edit CATEGORY: support' }).click();
+  await inline.locator('input').fill('bug');
+  await inline.locator('input').press('ArrowDown');
+  await inline.locator('input').press('Enter');
+  assert.deepEqual(await page.evaluate(() => inlineWrites), ['bug']);
+  assert.equal(await inline.locator('.inline-field-picker').evaluate(el => el.inert), true);
+  await page.evaluate(() => rejectChoice(new Error('TRY AGAIN')));
+  await inline.getByRole('status').filter({ hasText: 'TRY AGAIN' }).waitFor();
+  assert.equal(await inline.locator('input').evaluate(el => el === document.activeElement), true);
+  await inline.getByRole('button', { name: 'SAVE', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => inlineWrites), ['bug', 'bug']);
+  await page.evaluate(() => acceptChoice());
+  await inline.waitFor({ state: 'detached' });
+  assert.equal(await page.locator('nrc-inline-field button').textContent(), 'BUG');
+  assert.equal(await page.locator('nrc-inline-field button').evaluate(el => el === document.activeElement), true);
+  await page.locator('nrc-inline-field button').click();
+  await inline.getByRole('option', { name: 'NOT CLASSIFIED', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => inlineWrites), ['bug', 'bug', '']);
+  await page.evaluate(() => acceptChoice());
+  await inline.waitFor({ state: 'detached' });
+  assert.equal(await page.locator('nrc-inline-field button').textContent(), 'NOT CLASSIFIED');
   assert.deepEqual(errors, []);
   console.log("PASS: native values/FormData/change/reset/disabled/options, parser and dynamic mount, label/tabindex restoration, reconnect/replace/move, portal and global-listener cleanup");
 } finally { await browser.close(); }

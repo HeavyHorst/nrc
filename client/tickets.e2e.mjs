@@ -129,7 +129,7 @@ try {
   };
   await inline('ASSIGNEE', 'Initial owner');
   await page.getByRole('button', { name: /^Edit PRIORITY:/ }).click();
-  await page.locator('.inline-field-editor select').selectOption('urgent');
+  await page.locator('.inline-field-editor').getByRole('option', { name: 'URGENT', exact: true }).click();
   await page.waitForFunction(() => !NRCTickets.state.pending && !document.querySelector('.inline-field-editor'));
   await inline('FOLLOW-UP · LOCAL TIME', '2020-01-02T13:45');
   const schedule = await page.evaluate(async id => JSON.parse((await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0].preview), id);

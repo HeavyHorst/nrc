@@ -53,10 +53,10 @@ try {
       if (args[11] !== null) next.attachments = args[11];
       roomTasks.get(0n).set(next.id, next);
       args.at(-1).onSuccess({ task: next });
-      const original = parseTask;
-      parseTask = () => ({ task: next, newOffset: 2 });
-      handleTaskUpdated(new DataView(new ArrayBuffer(6)));
-      parseTask = original;
+      const decode = NRCFrames.decodeServerFrame;
+      NRCFrames.decodeServerFrame = () => ({ task: next, correlationId: 0 });
+      try { NRCTasks.handleTaskUpdated(new DataView(new ArrayBuffer(0))); }
+      finally { NRCFrames.decodeServerFrame = decode; }
     };
     window.noteWrites = [];
     window.serverNote = { ...sampleNote };
@@ -149,7 +149,7 @@ try {
   await page.locator("#taskDetailToggleFocus").click();
   await page.locator("#taskDetailDesc").fill("Unsaved description\nwith whitespace  ");
   await field(".agenda-content", "category").click();
-  await editor.locator("select").selectOption("2");
+  await editor.getByRole("option", { name: "BLOCKED", exact: true }).click();
   assert.equal(await page.evaluate(() => taskWrites.at(-1)[7]), 2);
   await page.evaluate(() => ackTask());
   await editor.waitFor({ state: "detached" });
@@ -290,6 +290,15 @@ try {
   assert.equal(await editor.locator("input").evaluate(element => getComputedStyle(element).fontSize), "16px");
   await page.screenshot({ path: ".amp/in/artifacts/inline-note-narrow.png" });
   await page.keyboard.press("Escape");
+  await page.evaluate(async () => { await NRCInspector.close(); await NRCInspector.openEntity({ roomId: 0n, type: "task", id: 41n }); });
+  for (const theme of ["lupine", "dark"]) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await field(".agenda-content", "category").click();
+    assert.equal(await editor.locator("input").evaluate(element => getComputedStyle(element).fontSize), "16px", "fixed-choice search remains readable at phone width");
+    assert.ok(await editor.evaluate(element => { const r = element.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth; }), "the complete fixed-choice picker stays inside the narrow viewport");
+    await page.screenshot({ path: `.amp/in/artifacts/inline-category-narrow-${theme}.png` });
+    await page.keyboard.press("Escape");
+  }
   assert.deepEqual(errors, []);
   console.log("inline edit e2e: ok — ACK/error/retry, cancel, redraw, partial saves, draft preservation, resources, themes, narrow viewport");
 } finally {

@@ -169,11 +169,12 @@ const Portal = {
 
                 // Width must be applied before measuring so placement uses final wrapped height.
                 if (config.matchWidth) {
+                    const width = Math.min(anchorRect.width, window.innerWidth - 8);
                     if (config.align === 'auto') {
                         wrapper.style.width = '';
-                        wrapper.style.minWidth = anchorRect.width + 'px';
+                        wrapper.style.minWidth = width + 'px';
                     } else {
-                        wrapper.style.width = anchorRect.width + 'px';
+                        wrapper.style.width = width + 'px';
                         wrapper.style.minWidth = '';
                     }
                 } else {

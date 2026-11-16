@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261116ticketcategory3">
+    <link rel="stylesheet" href="../css/main.css?v=20261116alignment2">
     <link rel="stylesheet" href="../css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="../css/voice.css?v=20261105voice12">
     <link rel="stylesheet" href="catalog.css?v=20260923attention1">
@@ -1426,7 +1426,7 @@ status      ← Service Worker</code></pre>
                     <div class="panel-header header-register filter-register">
                         <div class="header-register-identity-row"><span class="header-register-title">TICKETS</span><span class="header-register-state">1 / 1 TICKETS</span></div>
                         <div class="header-register-control-row">
-                            <label class="header-filter-cell"><span class="filter-label">SORT</span><select class="filter-select">
+                            <label class="header-filter-cell"><span class="filter-label">SORT</span><nrc-select><select class="filter-select" data-custom-select-portal>
                                 <option value="id:desc">ID ↓</option><option value="id:asc">ID ↑</option>
                                 <option value="title:asc">Title A–Z</option><option value="title:desc">Title Z–A</option>
                                 <option value="status:asc">Status A–Z</option><option value="status:desc">Status Z–A</option>
@@ -1437,7 +1437,7 @@ status      ← Service Worker</code></pre>
                                 <option value="contact_id:asc">Contact A–Z</option><option value="contact_id:desc">Contact Z–A</option>
                                 <option value="unread:desc">Unread ↓</option><option value="unread:asc">Unread ↑</option>
                                 <option value="activity:desc" selected>Activity: newest</option><option value="activity:asc">Activity: oldest</option>
-                            </select></label>
+                            </select></nrc-select></label>
                         </div>
                     </div>
                     <div class="task-list-view" id="ticketsRegister" tabindex="0" aria-label="Ticket register">
@@ -1613,7 +1613,7 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
 
     <footer class="catalog-footer"><span>nrc</span><span>DESIGN SYSTEM CATALOGUE</span><span>THEME / <span data-catalog-theme-status>LUPINE</span></span><span>GEOMETRY / SQUARE</span><span id="catalogTimestamp">UPDATED 2026-09-01</span></footer>
     <script src="../dialog.js?v=20261021taskslice1"></script>
-    <script src="../portal.js?v=20261021modal1"></script>
+    <script src="../portal.js?v=20261116pickers1"></script>
     <script src="../custom-picker.js?v=20260927appointment2"></script>
     <script src="../custom-select.js?v=20261019customerwidth1"></script>
     <script src="../note-html.js?v=20261007fragments1"></script>
@@ -1622,7 +1622,7 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
     <script src="catalog.js?v=20261016registertabs1"></script>
     <script src="../attachments.js?v=20261008files1"></script>
     <script>window.NRCAssets = { MAX_PAYLOAD_LENGTH: 65535 };</script>
-    <script src="../detail-ui.js?v=20261022cancel1"></script>
+    <script src="../detail-ui.js?v=20261116pickers1"></script>
     <script>
         const ticketResources = document.getElementById("catalogTicketResources");
         ticketResources.innerHTML = [

@@ -192,6 +192,7 @@ body.sullivan-workbench #chatAttach {
     #ticketsPanel .header-filter-cell:has(#ticketsSort) { flex: 0 0 11rem; }
     #ticketsPanel .header-operation { flex-shrink: 0; white-space: nowrap; }
     #ticketFields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #ticketFields > .detail-edit-field:has(> .task-detail-input) { grid-template-rows: 1fr auto; }
     #ticketFields > :is(:first-child, .ticket-original-request, button) { grid-column: 1 / -1; }
     @container ticket-register (max-width: 900px) {
         .ticket-table, .ticket-table :is(thead, tbody) { display: block; min-width: 0; width: 100%; }
@@ -210,6 +211,7 @@ body.sullivan-workbench #chatAttach {
     }
 }
 @media (max-width: 768px) {
+    .inline-field-editor .custom-select__search { font-size: 16px; }
     #ticketsPanel > .header-register > .header-register-control-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     #ticketsPanel > .header-register > .header-register-control-row > * { grid-area: auto; }
     #ticketsPanel .header-control-scroll { display: contents; }

@@ -779,7 +779,7 @@
   function renderCustomerEditFields(kind, d, fields, asset) {
     if (kind === "activity") {
       return `<section class="customer-field-section"><div class="detail-edit-section-title">ACTIVITY RECORD</div><div class="customer-field-grid customer-field-grid--single">${field("title", "SUBJECT", d.title, true)}
-        <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">TYPE</span><select class="task-detail-select" name="kind">${["Call", "Meeting", "Email", "Decision"].map(value => `<option ${d.kind === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+        <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">TYPE</span><nrc-select><select class="task-detail-select" name="kind" data-custom-select-portal data-custom-select-align="auto">${["Call", "Meeting", "Email", "Decision"].map(value => `<option ${d.kind === value ? "selected" : ""}>${value}</option>`).join("")}</select></nrc-select></label>
         <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">RECORD</span><textarea class="task-detail-textarea" name="body" required rows="8" maxlength="8000">${escape(asset?.payload || "")}</textarea></label></div></section>`;
     }
     if (kind === "company") {
@@ -926,7 +926,7 @@
       ${asset && kind !== "company" ? '<button id="customerDelete" class="btn btn--danger header-operation inspector-matrix-control" type="button">DELETE</button>' : ""}
       ${window.NRCDetailUI.renderCloseControl("customerClose")}</div>`;
     el("inspectorEntityHost").innerHTML = `<form id="customerForm" class="customer-inspector customer-inspector--${kind}${editing ? "" : " customer-inspector--read"}">
-      ${contact && editing ? '<label class="detail-edit-field"><span class="detail-edit-label">REVIEW STATUS — EXPLICIT CONFIRMATION</span><select class="task-detail-input" name="review_status"><option value="">UNCHANGED</option><option value="reviewed">REVIEWED</option><option value="pending">PENDING</option></select></label>' : ""}
+      ${contact && editing ? '<label class="detail-edit-field"><span class="detail-edit-label">REVIEW STATUS — EXPLICIT CONFIRMATION</span><nrc-select><select class="task-detail-input" name="review_status" data-custom-select-portal data-custom-select-align="auto"><option value="">UNCHANGED</option><option value="reviewed">REVIEWED</option><option value="pending">PENDING</option></select></nrc-select></label>' : ""}
       <div class="customer-inspector-body detail-edit-form">${editing ? `<div id="customerFields" class="customer-fields detail-edit-form">${renderCustomerEditFields(kind, d, fields, asset)}</div>` :
         `${contact ? '<section class="contact-card" aria-label="Contact details">' : ""}<h2 class="note-preview-title">${escape(d.title)}</h2>${contact ? `<p id="contactCardCompany" class="contact-card-company" hidden></p>${renderContactFacts(d)}</section>` : companyFacts ? renderCompanyFacts(d, fields) : `<p class="customer-activity-context">${escape(d.kind)} · RECORDED ${escape(window.NRCDetailUI.formatHeaderDate(asset.createdAt))}</p>`}${kind === "activity" ? `<p id="customerActivityBody" class="customer-activity-body">${escape(asset.payload)}</p>` : ""}`}
       ${contact ? '<section id="contactCompanies" class="customer-section" aria-label="Linked companies"></section>' : unlink ? `<p class="customer-meta">LINKED COMPANY / ${escape(metadata(company).title)}</p><button id="customerUnlink" class="btn" type="button">REMOVE FROM THIS COMPANY</button>` : ""}
@@ -949,7 +949,7 @@
     if (!editing) return;
     const form = el("customerForm");
     const editor = editorGeneration;
-    form.oninput = event => { if (event.target.closest("#customerFields") || event.target.name === "review_status") { editorDirty = true; updateEditorState(); } };
+    form.oninput = form.onchange = event => { if (event.target.closest("#customerFields") || event.target.name === "review_status") { editorDirty = true; updateEditorState(); } };
     form.onkeydown = event => {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); form.requestSubmit(); }
     };
