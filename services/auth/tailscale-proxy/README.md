@@ -136,6 +136,29 @@ to authorized users of a configured gateway. Only private API routes are
 forwarded, never public token pages or provider webhooks. Those use a separate
 public listener described in `services/bots/nrc-newsletter/README.md`.
 
+## Monitoring history
+
+`GET /monitoring/history/<monitor-id>/samples`, `/runs` and `/uptime` forward
+read-only history queries to the private incident sidecar. Configure
+`NRC_MONITOR_HISTORY_BACKEND` as its HTTP(S) origin without a path,
+`NRC_MONITOR_HISTORY_WORKSPACE` as its workspace, and `NRC_HISTORY_SECRET` with
+the same service token used by that sidecar. One gateway currently serves one
+sidecar workspace; it does not route between multiple evaluators.
+
+Requests require authenticated Tailscale identity and `X-NRC-Workspace` matching
+the configured workspace. Access follows `NRC_WORKSPACE_ACCESS`: explicitly
+restricted workspaces require membership; other workspaces remain tailnet-open.
+The existing origin check rejects foreign browser origins. The proxy sends only
+its service token upstream, never browser credentials or cookies. Keep the
+sidecar listener private; do not expose its service token to browser code.
+
+Query parameters and response data follow the sidecar's History read API.
+The gateway checks the returned workspace and monitor ID before publishing data,
+refuses redirects, allows two concurrent reads, and limits each read to five
+seconds and 4 MiB. Invalid or mismatched responses return 502. Backend 400, 404,
+422 and 503 statuses are preserved with generic messages; backend bodies and
+headers are not forwarded on errors. Responses use `no-store`.
+
 ## Development
 
 Requires Go 1.26.6 or newer and a writable attachment/state directory for running

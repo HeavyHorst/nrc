@@ -1171,6 +1171,7 @@ func proxyHandler(proxy http.Handler, localClient tailscaleClient, policy worksp
 	mux.Handle("/publish/api/", publishGateway(os.Getenv("NRC_PUBLISH_BACKEND"), os.Getenv("NRC_PUBLISH_WORKSPACE")))
 	mux.Handle("/newsletter/api/", newsletterGateway(os.Getenv("NRC_NEWSLETTER_BACKEND"), os.Getenv("NRC_NEWSLETTER_WORKSPACE")))
 	mux.Handle("/calls/ws/", callsGateway(os.Getenv("NRC_CALLS_BACKEND")))
+	mux.Handle("/monitoring/history/", monitorHistoryGateway(os.Getenv("NRC_MONITOR_HISTORY_BACKEND"), os.Getenv("NRC_MONITOR_HISTORY_WORKSPACE"), os.Getenv("NRC_HISTORY_SECRET")))
 	mux.Handle("/ai/", aiBoundary(proxy))
 	mux.Handle("/", proxy)
 	return workspaceBoundary(mux, localClient, policy)
