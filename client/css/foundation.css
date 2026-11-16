@@ -126,6 +126,13 @@
 
     /* Status colors */
     --status-online: #00a651;
+    /* Opaque category fills retain their meaning across theme palettes. */
+    --ticket-category-bug: #d02038;
+    --ticket-category-support: #006bc7;
+    --ticket-category-feature: #8135c4;
+    --ticket-category-unclear: #ffd000;
+    --ticket-category-text: #ffffff;
+    --ticket-category-unclear-text: #111111;
     /* Task status ramp. This is the single source of truth for what a task's
        status looks like as a mark or a badge, so a status reads the same in a
        slice strip, a task row and a detail panel. It is deliberately NOT an

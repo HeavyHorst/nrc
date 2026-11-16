@@ -1,4 +1,4 @@
-@import url("foundation.css?v=20261020fill2");
+@import url("foundation.css?v=20261116ticketcategory3");
 @import url("workspace.css?v=20261023attachment1");
 @import url("entities.css?v=20261108memory9");
 @import url("ledger.css?v=20261030citation1");
@@ -129,6 +129,29 @@ body.sullivan-workbench #chatAttach {
 .ticket-table .customer-meta { position: static; display: block; transform: none; font-size: var(--font-xs); overflow: hidden; text-overflow: ellipsis; }
 .ticket-table .col-title > .customer-meta { position: static; transform: none; margin-top: 0.25rem; font-weight: 400; }
 .ticket-table .col-status { white-space: normal; }
+.ticket-category {
+    --category-color: var(--bg-secondary);
+    --category-text: var(--text-primary);
+    display: inline-block;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 0.0625rem 0.25rem;
+    border: 1px solid var(--border-primary);
+    background: var(--category-color);
+    color: var(--category-text);
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
+    font-weight: 700;
+    line-height: 1.4;
+    vertical-align: middle;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ticket-category[data-category="bug"] { --category-color: var(--ticket-category-bug); --category-text: var(--ticket-category-text); }
+.ticket-category[data-category="support"] { --category-color: var(--ticket-category-support); --category-text: var(--ticket-category-text); }
+.ticket-category[data-category="feature"] { --category-color: var(--ticket-category-feature); --category-text: var(--ticket-category-text); }
+.ticket-category[data-category="unclear"] { --category-color: var(--ticket-category-unclear); --category-text: var(--ticket-category-unclear-text); }
 .ticket-table .col-unread { display: block; color: var(--accent-highlight); font-size: var(--font-xs); }
 .ticket-table .col-activity { color: var(--text-dim); font-size: var(--font-xs); }
 .ticket-table :is(.ticket-follow-up-due, [data-priority="urgent"]) { color: var(--accent-danger); }
@@ -172,7 +195,7 @@ body.sullivan-workbench #chatAttach {
     #ticketFields > :is(:first-child, .ticket-original-request, button) { grid-column: 1 / -1; }
     @container ticket-register (max-width: 900px) {
         .ticket-table, .ticket-table :is(thead, tbody) { display: block; min-width: 0; width: 100%; }
-        .ticket-table thead tr, .ticket-table tr[data-ticket] { display: grid; grid-template-columns: 2.75rem minmax(0, 1fr) 6rem 4.5rem 8rem 5rem; align-items: center; }
+        .ticket-table thead tr, .ticket-table tr[data-ticket] { display: grid; grid-template-columns: 2.75rem minmax(0, 1fr) 6rem 7rem 4.5rem 8rem 5rem; align-items: center; }
         .ticket-table :is(th, td) { width: auto !important; max-width: none; min-width: 0; }
         .ticket-table td { height: auto; }
         .ticket-table th { padding-inline: 0.375rem; }
@@ -203,6 +226,7 @@ body.sullivan-workbench #chatAttach {
     .ticket-table tr[data-ticket] > .col-priority { grid-column: 2; grid-row: 2; text-align: right; }
     .ticket-table tr[data-ticket] > .col-follow-up { grid-column: 1; grid-row: 3; }
     .ticket-table tr[data-ticket] > .col-activity { grid-column: 2; grid-row: 3; text-align: right; }
+    .ticket-table tr[data-ticket] > .col-category { grid-column: 1 / -1; grid-row: 4; }
     #ticketEditor > .panel-header { font-size: var(--mobile-font-sm); }
     #ticketConversation .customer-activity-body { font-size: var(--mobile-font-base); }
     .ticket-customer-details > summary { min-height: 44px; box-sizing: border-box; font-size: var(--mobile-font-sm); }

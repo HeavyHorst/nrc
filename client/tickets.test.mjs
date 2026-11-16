@@ -54,6 +54,16 @@ function fixture(uploadFile = async () => { throw new Error('upload unavailable'
     edit: (name, value) => controls.get(name).save(value), ack: value => success(value), fail: message => failure({ message }) };
 }
 
+test('ticket register displays category labels and unclassified tickets', async () => {
+  const f = fixture();
+  for (const [category, label] of [['bug', 'BUG'], ['support', 'SUPPORT'], ['feature', 'FEATURE'], ['unclear', 'UNCLEAR'], ['', 'NOT CLASSIFIED']]) {
+    f.records[0].preview = JSON.stringify({ ...JSON.parse(f.records[0].preview), category });
+    await f.api.reload();
+    assert.match(f.elements.get('ticketsList').innerHTML, new RegExp(`<span class="ticket-category" data-category="${category}">${label}</span>`));
+    assert.match(f.elements.get('ticketsList').innerHTML, /data-category="">NOT CLASSIFIED<\/span>/);
+  }
+});
+
 test('ticket assignee filter uses the complete index rather than cached tickets and retains selection', async () => {
   const f = fixture();
   const select = { innerHTML: '', value: '' }; f.elements.set('ticketAssigneeFilter', select);

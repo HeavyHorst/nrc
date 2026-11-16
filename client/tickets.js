@@ -422,8 +422,8 @@
         required: true, maxBytes: 256,
         save: value => saveMetadata(a, { title: value.trim() }, identity, selection),
       });
-      return `<tr data-ticket="${a.assetId}" class="${selected ? 'task-row-selected' : ''}" aria-selected="${selected}"><td class="col-id">#${a.assetId}</td><td class="col-title">${title}<span class="customer-meta" title="${esc(context)}">${esc(context)}</span></td><td class="col-status">${esc(statusLabels[m.status] || m.status)}${waiting ? '<span class="customer-meta">CUSTOMER WAITING</span>' : ''}</td><td class="col-priority" data-priority="${esc(m.priority)}">${esc(m.priority.toUpperCase())}</td><td class="col-follow-up${due ? ' ticket-follow-up-due' : ''}" title="${esc(scheduled ? followUpLabel(m.follow_up_at, due) : 'No follow-up scheduled')}">${due ? '<span>DUE</span>' : ''}<span class="customer-meta">${esc(dateLabel)}</span></td><td class="col-activity" title="${esc(window.NRCDetailUI.formatHeaderDate(timestamp))}">${timestamp ? esc(typeof formatRelativeAge === 'function' ? formatRelativeAge(timestamp) : window.NRCDetailUI.formatHeaderDate(timestamp)) : ''}${unread ? `<span class="col-unread">${unread} UNREAD</span>` : ''}</td></tr>`;
-    }).join('') || `<tr><td colspan="6" class="customer-empty">${searchState.mode === 'loading' ? 'Searching tickets…' : 'No matching tickets.'}</td></tr>`;
+      return `<tr data-ticket="${a.assetId}" class="${selected ? 'task-row-selected' : ''}" aria-selected="${selected}"><td class="col-id">#${a.assetId}</td><td class="col-title">${title}<span class="customer-meta" title="${esc(context)}">${esc(context)}</span></td><td class="col-status">${esc(statusLabels[m.status] || m.status)}${waiting ? '<span class="customer-meta">CUSTOMER WAITING</span>' : ''}</td><td class="col-category"><span class="ticket-category" data-category="${esc(m.category || '')}">${esc(categories[m.category || ''] || m.category)}</span></td><td class="col-priority" data-priority="${esc(m.priority)}">${esc(m.priority.toUpperCase())}</td><td class="col-follow-up${due ? ' ticket-follow-up-due' : ''}" title="${esc(scheduled ? followUpLabel(m.follow_up_at, due) : 'No follow-up scheduled')}">${due ? '<span>DUE</span>' : ''}<span class="customer-meta">${esc(dateLabel)}</span></td><td class="col-activity" title="${esc(window.NRCDetailUI.formatHeaderDate(timestamp))}">${timestamp ? esc(typeof formatRelativeAge === 'function' ? formatRelativeAge(timestamp) : window.NRCDetailUI.formatHeaderDate(timestamp)) : ''}${unread ? `<span class="col-unread">${unread} UNREAD</span>` : ''}</td></tr>`;
+    }).join('') || `<tr><td colspan="7" class="customer-empty">${searchState.mode === 'loading' ? 'Searching tickets…' : 'No matching tickets.'}</td></tr>`;
     el.querySelectorAll('[data-ticket]').forEach(row => {
       row.tabIndex = 0;
       row.setAttribute('aria-label', `Open ticket ${row.dataset.ticket}: ${row.querySelector('nrc-inline-field button').textContent}`);
@@ -438,10 +438,10 @@
     if (sort) sort.value = `${state.sort}:${state.direction}`;
     if (focused) el.querySelector(`[data-ticket="${focused}"]${titleFocused ? ' nrc-inline-field button' : ''}`)?.focus({ preventScroll: true });
     window.NRCColumnResize?.init({
-      root: '#ticketsTable', headers: 'thead th', storageKey: 'nrc.ticket.columns.v3',
+      root: '#ticketsTable', headers: 'thead th', storageKey: 'nrc.ticket.columns.v4',
       viewport: '#ticketsRegister', flexible: 1,
       independent: true, rows: '#ticketsList tr[data-ticket]', resetControl: '#ticketColumnsReset',
-      defaults: [56, 280, 160, 104, 160, 100], minimums: [48, 160, 110, 88, 130, 88],
+      defaults: [56, 280, 160, 144, 104, 160, 100], minimums: [48, 160, 110, 128, 88, 130, 88],
       maximums: [640, 4096],
       apply: (table, widths, manual) => {
         table.style.tableLayout = 'fixed';
