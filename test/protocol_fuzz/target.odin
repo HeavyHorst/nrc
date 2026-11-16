@@ -40,6 +40,28 @@ exercise :: proc(input: []byte) -> pr.ProtocolParseError {
 	data := input[2:]
 	attachments: [pr.MAX_ATTACHMENTS_PER_TASK]pr.Attachment
 	#partial switch pr.get_opcode(input) {
+	case .C_QueryMonitorStatus:
+		_, err := pr.parseQueryMonitorStatusRequest(data)
+		return err
+	case .C_GetMonitorState:
+		_, err := pr.parseGetMonitorStateRequest(data)
+		return err
+	case .C_ApplyMonitorRun:
+		rows: [pr.MAX_MONITOR_INSTANCES]pr.Monitor_Observation
+		r, err := pr.parseApplyMonitorRunRequest(data, rows[:])
+		if err != nil do return err
+		for row in r.observations do check_string(input, row.identity)
+	case .C_ControlMonitorInstance:
+		_, err := pr.parseControlMonitorInstanceRequest(data)
+		return err
+	case .C_ActOnIncident:
+		r, err := pr.parseActOnIncidentRequest(data)
+		if err != nil do return err
+		check_string(input, r.assignee)
+	case .C_MonitorDelivery:
+		r, err := pr.parseMonitorDeliveryRequest(data)
+		if err != nil do return err
+		check_string(input, r.route)
 	// Retained chat and message history.
 	case .C_SendMessageV2:
 		r, err := pr.parseSendMessageV2Request(data)

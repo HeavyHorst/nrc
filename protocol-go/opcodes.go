@@ -28,27 +28,33 @@ const (
 	C_Ping    uint16 = 19
 
 	// Tasks/Kanban (Client -> Server)
-	C_CreateTask           uint16 = 20
-	C_UpdateTask           uint16 = 21
-	C_DeleteTask           uint16 = 22
-	C_MoveTask             uint16 = 23
-	C_GetTasks             uint16 = 24
-	C_ListTasksPaged       uint16 = 25
-	C_GetTask              uint16 = 26
-	C_ApplyTransaction     uint16 = 27
-	C_QueryTasks           uint16 = 28
-	C_ListTaskProjects     uint16 = 29
-	C_ListTaskSlices       uint16 = 56
-	C_ListTaskAssignees    uint16 = 57
-	C_QueryCalendar        uint16 = 58
-	C_GetWorkspaceOverview uint16 = 59
-	C_GetTasksByIDs        uint16 = 60
-	C_GetAssetsByIDs       uint16 = 61
-	C_QueryTickets         uint16 = 63
-	C_ListTaskDependents   uint16 = 64
-	C_ListSliceOwners      uint16 = 65
-	C_ListTicketAssignees  uint16 = 66
-	C_ListCalendarPeople   uint16 = 67
+	C_CreateTask             uint16 = 20
+	C_UpdateTask             uint16 = 21
+	C_DeleteTask             uint16 = 22
+	C_MoveTask               uint16 = 23
+	C_GetTasks               uint16 = 24
+	C_ListTasksPaged         uint16 = 25
+	C_GetTask                uint16 = 26
+	C_ApplyTransaction       uint16 = 27
+	C_QueryTasks             uint16 = 28
+	C_ListTaskProjects       uint16 = 29
+	C_ListTaskSlices         uint16 = 56
+	C_ListTaskAssignees      uint16 = 57
+	C_QueryCalendar          uint16 = 58
+	C_GetWorkspaceOverview   uint16 = 59
+	C_GetTasksByIDs          uint16 = 60
+	C_GetAssetsByIDs         uint16 = 61
+	C_QueryTickets           uint16 = 63
+	C_ListTaskDependents     uint16 = 64
+	C_ListSliceOwners        uint16 = 65
+	C_ListTicketAssignees    uint16 = 66
+	C_ListCalendarPeople     uint16 = 67
+	C_ApplyMonitorRun        uint16 = 68
+	C_ControlMonitorInstance uint16 = 69
+	C_ActOnIncident          uint16 = 70
+	C_MonitorDelivery        uint16 = 71
+	C_GetMonitorState        uint16 = 72
+	C_QueryMonitorStatus     uint16 = 73
 
 	// Assets (Client -> Server)
 	C_CreateAsset              uint16 = 30
@@ -119,24 +125,30 @@ const (
 	S_AckUnsubscribeConvs uint16 = 127
 
 	// Tasks/Kanban (Server -> Client)
-	S_TaskCreated        uint16 = 130
-	S_TaskUpdated        uint16 = 131
-	S_TaskDeleted        uint16 = 132
-	S_TaskMoved          uint16 = 133
-	S_TaskListResponse   uint16 = 134
-	S_TaskListPage       uint16 = 135
-	S_TaskFull           uint16 = 136
-	S_TransactionResult  uint16 = 137
-	S_TaskQueryPage      uint16 = 138
-	S_TaskProjects       uint16 = 139
-	S_TaskSliceList      uint16 = 164
-	S_TaskAssignees      uint16 = 165
-	S_CalendarPage       uint16 = 166
-	S_WorkspaceOverview  uint16 = 167
-	S_TaskDependentsPage uint16 = 170
-	S_SliceOwners        uint16 = 171
-	S_TicketAssignees    uint16 = 172
-	S_CalendarPeople     uint16 = 173
+	S_TaskCreated               uint16 = 130
+	S_TaskUpdated               uint16 = 131
+	S_TaskDeleted               uint16 = 132
+	S_TaskMoved                 uint16 = 133
+	S_TaskListResponse          uint16 = 134
+	S_TaskListPage              uint16 = 135
+	S_TaskFull                  uint16 = 136
+	S_TransactionResult         uint16 = 137
+	S_TaskQueryPage             uint16 = 138
+	S_TaskProjects              uint16 = 139
+	S_TaskSliceList             uint16 = 164
+	S_TaskAssignees             uint16 = 165
+	S_CalendarPage              uint16 = 166
+	S_WorkspaceOverview         uint16 = 167
+	S_TaskDependentsPage        uint16 = 170
+	S_SliceOwners               uint16 = 171
+	S_TicketAssignees           uint16 = 172
+	S_CalendarPeople            uint16 = 173
+	S_MonitorRunApplied         uint16 = 174
+	S_MonitorInstanceControlled uint16 = 175
+	S_IncidentActionApplied     uint16 = 176
+	S_MonitorDelivery           uint16 = 177
+	S_MonitorState              uint16 = 178
+	S_MonitorStatusPage         uint16 = 179
 
 	// Assets (Server -> Client)
 	S_AssetCreated    uint16 = 140
@@ -207,10 +219,13 @@ const (
 	AssetTypeCustomerActivity uint16 = 10
 	// AssetTypeSlice is a bound work slice: the asset records a derived slice's
 	// owner, outcome and closure. Membership stays the project label.
-	AssetTypeSlice       uint16 = 11
-	AssetTypeAppointment uint16 = 12
-	AssetTypeTicket      uint16 = 13
-	AssetTypeTicketEntry uint16 = 14
+	AssetTypeSlice         uint16 = 11
+	AssetTypeAppointment   uint16 = 12
+	AssetTypeTicket        uint16 = 13
+	AssetTypeTicketEntry   uint16 = 14
+	AssetTypeMonitor       uint16 = 15
+	AssetTypeIncident      uint16 = 16
+	AssetTypeMonitorSource uint16 = 17
 )
 
 // WorkspaceDataConvID is the reserved scope for all durable tasks, assets,

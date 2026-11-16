@@ -124,8 +124,8 @@ its own cursor and the client asks for the next one when it needs it.
 invalid before any payload parsing happens, so a new opcode must be added to both
 the enum and the range check in `protocol/protocol.odin`.
 
-- Client to server: `1-3`, `8`, `16-67`
-- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-173`
+- Client to server: `1-3`, `8`, `16-73`
+- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-179`
 
 ### Client to Server
 
@@ -176,6 +176,12 @@ the enum and the range check in `protocol/protocol.odin`.
 | 65 | `C_ListSliceOwners` | List distinct workspace slice owners, including closed slices |
 | 66 | `C_ListTicketAssignees` | List distinct workspace ticket assignees, including closed tickets |
 | 67 | `C_ListCalendarPeople` | List task assignees and appointment people independently of date range |
+| 68 | `C_ApplyMonitorRun` | Apply one complete monitor result or query failure atomically |
+| 69 | `C_ControlMonitorInstance` | Pause, resume or retire an instance with a Monitor revision fence |
+| 70 | `C_ActOnIncident` | Acknowledge or assign an Incident at its expected revision |
+| 71 | `C_MonitorDelivery` | Discover, lease, settle or resynchronize webhook delivery |
+| 72 | `C_GetMonitorState` | Read current revision and committed sequence as the configured evaluator |
+| 73 | `C_QueryMonitorStatus` | Workspace monitor summaries or instance status, problem-first live pagination |
 
 #### Assets
 
@@ -275,6 +281,12 @@ them.
 | 171 | `S_SliceOwners` | Chunked distinct slice owners, same layout as S_TaskProjects |
 | 172 | `S_TicketAssignees` | Chunked distinct ticket assignees, same layout as S_TaskProjects |
 | 173 | `S_CalendarPeople` | Chunked distinct calendar people, same layout as S_TaskProjects |
+| 174 | `S_MonitorRunApplied` | Durable monitor-run acknowledgment, including latest-run replay |
+| 175 | `S_MonitorInstanceControlled` | Durable instance-action acknowledgment and resulting Monitor revision |
+| 176 | `S_IncidentActionApplied` | Durable human-action acknowledgment and resulting Incident revision |
+| 177 | `S_MonitorDelivery` | Correlated delivery state and immutable event payload |
+| 178 | `S_MonitorState` | Current Monitor revision and last committed run sequence |
+| 179 | `S_MonitorStatusPage` | Correlation u32 followed by bounded version-1 status JSON; [wire contract](../services/bots/nrc-incidents/README.md#current-status-reads-nrc-protocol) |
 
 #### Assets
 
@@ -1241,3 +1253,125 @@ For v2 correlation-enabled RPC requests, missing trailing `CorrelationID` is tre
 11. **Unsubscribe**: Client can unsubscribe from conversations with `C_UnsubscribeConvs`.
 
 The server maintains message sequences per conversation and broadcasts new messages to all subscribed clients. Room presence is tracked and broadcast to subscribers when users join/leave conversations. Durable entities live in workspace scope `0` and are shared across every chat room in the workspace.
+
+## Monitor run protocol
+
+Monitor (asset type 15), MonitorSource (type 17) configuration and Incident (type 16) reads use the asset
+protocol. Incidents are machine-owned: generic create/update/transaction patch and
+delete commands reject them. See [the monitoring contract](../monitoring/README.md)
+for configuration fields, authorization, limits and remaining integration.
+
+`C_ApplyMonitorRun` has no caller-selected workspace or timestamp. Its body is
+big-endian: correlation ID u32, monitor ID u64, expected asset `updated_at` i64,
+monotonically increasing sequence u64, failed u8 (0 or 1), row count u16. Each row
+is identity length u16, identity bytes (1–4096), condition u8 (0 passing, 1 failing,
+2 between trigger and recovery), and IEEE-754 f64 bits as u64. Values must be
+finite. No trailing bytes are allowed. Maximum frame size is 131072 bytes,
+including the opcode; at most 1024 rows and no duplicate identities are allowed.
+
+A successful request is a complete result: omitted active identities are absent.
+A failed or incomplete query sets failed=1 and sends zero rows. It never infers
+absence. Do not send a truncated result as successful or split a run into pages.
+The server bounds the union of returned and active identities to 1024, so a legal
+frame can still exceed the monitor's capacity. Retired and paused identities are
+excluded unless returned; retained history does not consume the active budget.
+Missing instances still count as active. Any rejection rolls
+back the whole run. Retry the same sequence only with identical body bytes after
+the correlation field. The latest receipt survives reconnects and server restarts;
+older receipts are not retained. Changing the current monitor revision invalidates
+old requests, including their retries.
+
+`S_MonitorRunApplied` body: correlation ID u32, monitor ID u64, sequence u64,
+replayed u8. It is emitted only after durable commit. New/updated Incident assets
+are broadcast to workspace subscribers; replay emits only the ACK. Errors use
+`S_ErrorResponse` with origin opcode 68 and the request correlation ID. The Go
+codec takes a full request and decodes a response body without its opcode.
+
+`C_ControlMonitorInstance` (69) has a fixed 29-byte body: correlation u32, Monitor
+ID u64, expected Monitor `updated_at` i64, instance ID u64, action u8 (0 pause,
+1 resume, 2 retire). IDs must be nonzero, revision positive, and trailing bytes
+are rejected. Workspace and actor come from the authenticated connection.
+This is a workspace-member action, not an evaluator-only command.
+
+Acceptance advances the Monitor revision, fencing previously started runs.
+Pause keeps incidents open; resume requires available active capacity; retirement
+closes an episode as `removed` and preserves its history. Retired instances cannot
+be paused/resumed; a new present regular observation reactivates them. See the
+[instance lifecycle contract](../monitoring/README.md#instance-pause-resume-and-retirement).
+
+`S_MonitorInstanceControlled` (175) body: correlation u32, Monitor ID u64, instance
+ID u64, resulting Monitor revision i64, replayed u8 (0 or 1). The latest identical
+action, excluding correlation, can replay for the same actor/subject while its
+resulting Monitor revision remains current. It returns only the ACK, including
+after reconnect/reopen. Replayed ACKs describe the original action, not the current
+instance state. Conflicting or superseded actions fail without writes. Errors use
+`S_ErrorResponse` with origin opcode 69 and preserve the parsed correlation.
+
+`C_ActOnIncident` (70) body: correlation u32, Incident ID u64, expected Incident
+`updated_at` i64, action u8 (0 acknowledge, 1 assign), assignee byte length u16,
+then UTF-8 assignee bytes. ID must be nonzero and revision positive. Assignment
+allows 0–32 bytes; empty clears it. Acknowledgment requires an empty assignee and
+uses the authenticated actor. Invalid UTF-8 and trailing bytes are rejected.
+
+`S_IncidentActionApplied` (176) body: correlation u32, Incident ID u64, resulting
+Incident revision i64, replayed u8 (0 or 1). Acceptance advances only the Incident
+revision; the first acknowledgment's actor/time remain unchanged. Exact retries
+by the same actor/subject, excluding correlation, return only the ACK while that
+resulting revision remains current. Later human actions or technical recovery
+invalidate the receipt. Asset updates and history commit with the action before
+publication. Errors use `S_ErrorResponse` with origin opcode 70 and preserve the
+parsed correlation. See the [human-action contract](../monitoring/README.md#incident-acknowledgment-and-assignment).
+
+`C_MonitorDelivery` (71) body: correlation u32, Monitor ID u64, stream u8,
+action u8, delivery ID u64, lease generation i64, route byte length u8, route
+bytes. Only stream 1 is valid; it identifies a webhook route reference
+(1–64 ASCII alphanumeric, `-`, `_` or `.` bytes). Actions: 0 peek, 1 claim,
+2 delivered, 3 retry, 4 permanent failure, 5 discard dead webhook. Peek/claim
+require zero ID/generation; settlements require positive values.
+Action 6 discovers queued or dirty webhook routes: stream must be 1,
+ID/generation zero, and route is an exclusive cursor (empty for the first page).
+Unknown actions, malformed lengths and trailing bytes fail.
+
+Action 7 pages a leased resync token's open-Incident set. `id` is an exclusive
+Incident-ID cursor (zero starts); `generation` is the token's positive
+`sync_version`, not its lease generation. The active lease must belong to the
+caller. State 6 returns at most 32 decimal-string `incident_ids` and `next_id`
+(zero ends). State 7 means stale: discard staged pages and settle the obsolete
+token without publishing. Settlement still uses the token ID and lease generation.
+If the requested snapshot version belongs to an already replaced token, the command
+fails; it does not return state 7 with the replacement token's credentials.
+Ordinary responses also expose `sync_version`, `lost`, `loss_first_at` and
+`loss_last_at` as decimal strings. Only ACK of the matching snapshot clears loss.
+
+`S_MonitorDelivery` (177) body: correlation u32 followed by JSON:
+`version:1`, `state`, `id`, `generation`, `created_at`, `available_at`,
+`lease_until`, `attempts`, `payload`. IDs, generation and nanosecond timestamps
+are decimal strings; attempts is an integer and payload is a JSON-encoded string
+containing the event JSON. States: 0 empty, 1 waiting, 2 leased to this caller,
+3 dead, 4 settlement accepted. A repeated settlement may return only its ID and
+generation with zero timestamps/attempts and empty payload. Peek does not grant
+a lease and returns waiting even for a currently leased head.
+
+Discovery returns state 5, `routes` (at most 32 distinct references in byte order)
+and `next_route` (last returned reference when another page exists, otherwise
+empty). Other fields are zero/empty. Ordinary responses have empty `routes` and
+`next_route`. Discovery includes old routes and dead-only lanes, but excludes
+settlement-only receipts and clean configured routes with no queued events. Pages are
+live, not snapshots: finish a pass with the returned cursor and periodically
+restart from empty to find lanes inserted behind it. Removing the cursor's lane
+does not invalidate continuation. Clients may find an empty lane when they claim
+after another consumer has drained it.
+
+Workspace members can peek (0), discover lanes (6), and discard a dead head (5)
+with its exact event ID and generation. All other actions require the Monitor's
+current evaluator. Discard receipts remain bound to actor and subject. Errors use
+`S_ErrorResponse` with origin opcode 71 and the parsed correlation ID. See
+[queue semantics](../monitoring/README.md#direct-measurement-history-and-webhook-outbox).
+
+`C_GetMonitorState` (72) body: correlation u32, Monitor ID u64 (nonzero).
+The configured evaluator may read enabled or disabled monitors in its workspace.
+`S_MonitorState` (178) body: correlation u32, Monitor ID u64, current asset revision
+i64, last committed run sequence u64 (zero before the first run). Both values are
+read in one executor snapshot. This request never changes state. A sidecar reads
+the asset separately and requires matching revisions before evaluating; apply's
+revision and sequence checks still decide acceptance if a concurrent write occurs.

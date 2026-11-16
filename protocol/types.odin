@@ -92,6 +92,18 @@ Opcode :: enum u16 {
 	C_ListSliceOwners = 65,
 	C_ListTicketAssignees = 66,
 	C_ListCalendarPeople = 67,
+	C_ApplyMonitorRun = 68,
+	C_ControlMonitorInstance = 69,
+	C_ActOnIncident = 70,
+	C_MonitorDelivery = 71,
+	C_GetMonitorState = 72,
+	C_QueryMonitorStatus = 73,
+	S_MonitorRunApplied = 174,
+	S_MonitorInstanceControlled = 175,
+	S_IncidentActionApplied = 176,
+	S_MonitorDelivery = 177,
+	S_MonitorState = 178,
+	S_MonitorStatusPage = 179,
 
 	// Tasks/Kanban (Server -> Client)
 	S_TaskCreated = 130,

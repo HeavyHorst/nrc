@@ -185,7 +185,7 @@ sqlite_project_asset :: proc(store: ^db.Store, workspace: string, asset: ^pr.Ass
 			asset,
 			{name, u64(make_room_mapping_conv_id(workspace, name))},
 		)
-	case .Comment, .Document, .File, .Agenda:
+	case .Comment, .Document, .File, .Agenda, .Monitor, .Incident, .MonitorSource:
 	}
 	return sql.OK
 }

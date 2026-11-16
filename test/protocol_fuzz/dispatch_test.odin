@@ -32,6 +32,12 @@ test_every_client_opcode_is_dispatched :: proc(t: ^testing.T) {
 // a dispatch case. The test below verifies the target's dispatch, not whether a
 // parser exists in the protocol package.
 RESPONSE_OPCODES_WITHOUT_ODIN_PARSER := [?]pr.Opcode {
+	.S_MonitorStatusPage,
+	.S_MonitorState,
+	.S_MonitorRunApplied,
+	.S_MonitorInstanceControlled,
+	.S_IncidentActionApplied,
+	.S_MonitorDelivery,
 	.S_TransactionResult,
 	.S_TaskQueryPage,
 	.S_TaskProjects,

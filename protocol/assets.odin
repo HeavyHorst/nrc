@@ -28,6 +28,9 @@ AssetType :: enum u16 {
 	Appointment      = 12,
 	Ticket           = 13,
 	TicketEntry      = 14,
+	Monitor          = 15,
+	Incident         = 16,
+	MonitorSource    = 17,
 }
 
 MAX_APPOINTMENT_DESCRIPTION_LENGTH :: 2048

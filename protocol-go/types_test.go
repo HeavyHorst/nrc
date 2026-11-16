@@ -310,6 +310,9 @@ func TestAssetTypesMatchOdin(t *testing.T) {
 		"Appointment":      int(AssetTypeAppointment),
 		"Ticket":           int(AssetTypeTicket),
 		"TicketEntry":      int(AssetTypeTicketEntry),
+		"Monitor":          int(AssetTypeMonitor),
+		"Incident":         int(AssetTypeIncident),
+		"MonitorSource":    int(AssetTypeMonitorSource),
 	}
 	for name, value := range odin {
 		got, present := goTypes[name]
