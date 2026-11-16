@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261116alignment2";
+const CACHE_NAME = "nrc-terminal-20261116ticketfilters1";
 
 const APP_SHELL = [
   "./",
@@ -11,7 +11,7 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261116alignment2",
+  "./css/main.css?v=20261116ticketfilters1",
   "./css/foundation.css?v=20261116ticketcategory3",
   "./css/workspace.css?v=20261023attachment1",
   "./css/entities.css?v=20261108memory9",

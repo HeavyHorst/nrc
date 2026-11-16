@@ -189,6 +189,8 @@ body.sullivan-workbench #chatAttach {
 .ticket-resources .document-resource-action { gap: 0.5rem; }
 .document-resources .ticket-work-context { display: block; overflow: hidden; text-overflow: ellipsis; }
 @media (min-width: 769px) {
+    #ticketsPanel .header-control-scroll > .header-filter-cell { flex: 1 0 11rem; }
+    #ticketsPanel .header-control-scroll > .header-filter-cell:has(> .filter-input) { flex: 0 1 24rem; min-width: 18rem; max-width: 24rem; }
     #ticketsPanel .header-filter-cell:has(#ticketsSort) { flex: 0 0 11rem; }
     #ticketsPanel .header-operation { flex-shrink: 0; white-space: nowrap; }
     #ticketFields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
