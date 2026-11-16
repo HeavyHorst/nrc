@@ -11,6 +11,7 @@ import "core:os"
 import "core:strings"
 import "core:sys/linux"
 import "core:testing"
+import "core:thread"
 import "core:time"
 import nbio "nbio/poly"
 import pr "protocol"
@@ -499,6 +500,111 @@ worker_db_test_task_handler :: proc(t: ^testing.T, c: ^NRC_Connection) {
 	c.state = .Idle
 	testing.expect(t, len(td.workspaces) == 0, "protocol reads must not populate workspace maps")
 	testing.expect(t, td.database.port.in_flight == 0 && td.database.port.charged_bytes == 0)
+}
+
+@(test)
+test_worker_db_monitor_maintenance_without_clients :: proc(t: ^testing.T) {
+	// Exercise timer entry, admission, real writer and completion without a
+	// socket or io_uring. Only the worker's owned shards may be maintained.
+	old_td := new(Server_Thread); old_td^ = td
+	td = {}; defer {td = old_td^; free(old_td)}
+	td.backing_allocator = context.allocator
+	worker_state_init_core(nil, 1, 8)
+	defer worker_state_destroy_core_for_test()
+	threads: [2]^thread.Thread
+	server := NRC_Server {
+		threads = threads[:],
+	}
+	td.server = &server
+	dir, err := os.make_directory_temp("", "nrc-monitor-worker-*", context.allocator)
+	if !testing.expect(t, err == nil) do return
+	defer {os.remove_all(dir); delete(dir)}
+	paths: [4]cstring
+	defer for path in paths do delete(path)
+	for &path, shard in paths {
+		name := fmt.aprintf("%s/%d.db", dir, shard); defer delete(name)
+		path = strings.clone_to_cstring(name)
+		store, rc := db.open(path, true)
+		if !testing.expect_value(t, rc, sql.OK) do return
+		defer db.close(&store)
+		testing.expect_value(t, db.begin(&store), sql.OK)
+		preview := `{"version":1,"name":"Disk","evaluator":"checker","enabled":true,"interval_ns":10,"timeout_ns":2,"failures":5,"recoveries":5,"missing":3}`
+		payload := `{"kind":"tcp"}`
+		asset := pr.Asset {
+			asset_id        = 1,
+			asset_type      = .Monitor,
+			created_at      = 100,
+			updated_at      = 100,
+			preview         = transmute([]byte)preview,
+			payload         = transmute([]byte)payload,
+			payload_raw_len = u32(len(payload)),
+		}
+		testing.expect_value(t, sqlite_put_asset(&store, "unloaded", &asset, true), sql.OK)
+		inputs := [1]db.Monitor_Evaluation{{1, "host=a", {5, 5, 3, 32}, {1, 101, .Failing, 7}}}
+		outputs: [1]db.Monitor_Application
+		testing.expect_value(t, db.apply_monitor_evaluations(&store, "unloaded", inputs[:], outputs[:]), sql.OK)
+		if shard == 1 {
+			for i in 1 ..< 1024 {
+				identity := fmt.aprintf("host-%d", i); defer delete(identity)
+				inputs[0].identity = identity
+				testing.expect_value(t, db.apply_monitor_evaluations(&store, "unloaded", inputs[:], outputs[:]), sql.OK)
+			}
+		}
+		testing.expect_value(t, db.commit(&store), sql.OK)
+	}
+	e, start_err := db.start_executor(paths[:], 1, 2, mem.Megabyte, 4096, context.allocator, command_handler = sqlite_execute_task_command)
+	if !testing.expect_value(t, start_err, .None) do return
+	defer db.destroy_executor(e)
+	worker_db_attach(&e.ports[0])
+	defer {
+		worker_db_begin_shutdown()
+		for len(td.database.pending) > 0 do _ = worker_db_drain()
+		db.join_executor(e)
+		worker_db_detach()
+	}
+	for tick in 0 ..< 3 {
+		previous := td.database.next_request
+		run_worker_maintenance()
+		testing.expect(t, td.database.monitor_pending && len(td.database.pending) == 1)
+		run_worker_maintenance()
+		testing.expect_value(t, len(td.database.pending), 1)
+		start := clock.now_monotonic()
+		for len(td.database.pending) > 0 {
+			_ = worker_db_drain()
+			if time.diff(start, clock.now_monotonic()) > 5 * time.Second do testing.fail_now(t, "Maintenance completion timed out")
+			time.sleep(time.Millisecond)
+		}
+		testing.expect(t, !td.database.monitor_pending && td.database.port.charged_bytes == 0)
+		testing.expect_value(t, td.database.next_request - previous, tick < 2 ? u64(8) : 1)
+		if tick == 0 {
+			store, rc := db.open(paths[3])
+			if !testing.expect_value(t, rc, sql.OK) do return
+			defer db.close(&store)
+			neighbor, found, read_rc := db.get_monitor_instance(&store, "unloaded", 1, "host=a")
+			testing.expect(t, found && read_rc == sql.OK && neighbor.state.freshness == .No_Data, "Large shard must not starve its neighbor")
+		}
+	}
+	// Finished/empty scans are not polled again by every timer tick.
+	previous := td.database.next_request
+	run_worker_maintenance()
+	testing.expect(t, len(td.database.pending) == 0 && td.database.next_request == previous)
+	td.database.monitor_due = {} // Make shards eligible so shutdown, not backoff, prevents admission.
+	worker_db_begin_shutdown()
+	run_worker_maintenance()
+	testing.expect_value(t, len(td.database.pending), 0)
+	for path, shard in paths {
+		store, rc := db.open(path)
+		if !testing.expect_value(t, rc, sql.OK) do return
+		defer db.close(&store)
+		record, found, read_rc := db.get_monitor_instance(&store, "unloaded", 1, "host=a")
+		testing.expect(t, found && read_rc == sql.OK)
+		testing.expect(t, record.state.last_sequence == 1 && record.state.last_seen_at == 101 && record.state.last_value == 7)
+		testing.expect_value(t, int(record.state.freshness), shard % 2 == 1 ? 3 : 1)
+		if shard == 1 {
+			tail, tail_found, tail_rc := db.get_monitor_instance(&store, "unloaded", 1, "host-1023")
+			testing.expect(t, tail_found && tail_rc == sql.OK && tail.state.freshness == .No_Data)
+		}
+	}
 }
 
 worker_db_test_history :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstring) {

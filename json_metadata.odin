@@ -54,11 +54,14 @@ json_metadata_string :: proc(token: json.Token, allocator: mem.Allocator) -> str
 // Duplicate selected fields are rejected, ignored-field duplicates have no effect.
 // This is the existing metadata contract, not a general JSON decoder: nesting
 // is capped at 64 and every integer token (even ignored ones) must fit i64.
+// Adapter-owned monitoring payloads opt out of the integer bound only; their
+// numbers remain untouched tokens for the sidecar's exact decimal validation.
 json_metadata_fields :: proc(
 	data: []byte,
 	names: [$N]string,
 	allocator: mem.Allocator,
 	strict := false,
+	bound_integers := true,
 ) -> (
 	fields: [N]json.Token,
 	object: bool,
@@ -78,7 +81,7 @@ json_metadata_fields :: proc(
 		end = token.offset + len(token.text)
 		if token.kind == .EOF do return fields, object, token.offset == len(data) && depth == 0 && stack[0] == .Root_Done
 		if err != nil do return
-		if token.kind == .Integer {if _, ok := json_metadata_integer(token.text); !ok do return}
+		if bound_integers && token.kind == .Integer {if _, ok := json_metadata_integer(token.text); !ok do return}
 		if token.kind == .String {
 			// Tighten permissive Unicode and apostrophe escapes.
 			for i := 1; i < len(token.text) - 1; i += 1 {

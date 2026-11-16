@@ -23,7 +23,7 @@ history_asset_label :: proc(asset: ^pr.Asset, allocator: mem.Allocator) -> (labe
 	asset_type = u16(asset.asset_type)
 	// Never use document bodies, teasers, descriptions or arbitrary JSON as names.
 	if asset.asset_type == .Comment do return
-	key := asset.asset_type == .Slice ? "name" : "title"
+	key := asset.asset_type == .Slice || asset.asset_type == .Monitor ? "name" : "title"
 	fields, object, valid := json_metadata_fields(asset.preview, [2]string{key, "filename"}, allocator)
 	if valid && object {
 		value := json_metadata_string(fields[0], allocator)

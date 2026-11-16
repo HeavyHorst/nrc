@@ -161,12 +161,19 @@ sqlite_unblock_tasks :: proc(store: ^db.Store, request: ^db.Request, completed: 
 }
 
 sqlite_execute_task_command :: proc(store: ^db.Store, request: ^db.Request, output: ^db.Command_Output) -> c.int {
+	if request.operation == .Monitor_Maintenance do return sqlite_monitor_maintenance(store, request, output)
 	#partial switch request.opcode {
 	case .C_SendMessage, .C_SendMessageV2, .C_SubscribeConvs, .C_SubscribeConvsV2, .C_UnsubscribeConvs, .C_ListMessagesBefore, .C_ReplayMessagesAfter:
 		return sqlite_authorize_dm_request(store, request, output)
 	}
 	if request.opcode == .C_StartDM || request.opcode == .C_ListDMs || request.opcode == .C_LeaveDM do return sqlite_execute_dm(store, request, output)
 	if request.opcode == .C_ApplyTransaction do return sqlite_apply_transaction(store, request, output)
+	if request.opcode == .C_ApplyMonitorRun do return sqlite_apply_monitor_run(store, request, output)
+	if request.opcode == .C_GetMonitorState do return sqlite_get_monitor_state(store, request, output)
+	if request.opcode == .C_QueryMonitorStatus do return sqlite_query_monitor_status(store, request, output)
+	if request.opcode == .C_ControlMonitorInstance do return sqlite_control_monitor_instance(store, request, output)
+	if request.opcode == .C_ActOnIncident do return sqlite_act_on_incident(store, request, output)
+	if request.opcode == .C_MonitorDelivery do return sqlite_monitor_delivery(store, request, output)
 	if request.opcode == .C_QueryTickets do return sqlite_query_tickets(store, request, output)
 	if request.opcode == .C_QueryCalendar do return sqlite_query_calendar(store, request, output)
 	if request.opcode == .C_GraphQuery || request.opcode == .C_GraphShortestPath || request.opcode == .C_GraphRank do return sqlite_graph_traverse(store, request, output)
@@ -313,7 +320,19 @@ worker_db_command_error :: proc(c: ^NRC_Connection, opcode: pr.Opcode, correlati
 		send_task_list_page(c, 0, nil, false, 0, 0, 0, text, correlation)
 	case .C_CreateEdge, .C_DeleteEdge, .C_ListEdges, .C_ListAllEdges, .C_ListAllEdgesPaged, .C_ListEdgesPaged:
 		send_error_response(c, opcode, text, correlation)
-	case .C_CreateAsset, .C_UpdateAsset, .C_DeleteAsset, .C_ListAssets, .C_ListAssetsPaged, .C_ListAssetsPagedByProject, .C_ListAssetsPagedByTag:
+	case .C_ControlMonitorInstance,
+	     .C_GetMonitorState,
+	     .C_QueryMonitorStatus,
+	     .C_MonitorDelivery,
+	     .C_ActOnIncident,
+	     .C_ApplyMonitorRun,
+	     .C_CreateAsset,
+	     .C_UpdateAsset,
+	     .C_DeleteAsset,
+	     .C_ListAssets,
+	     .C_ListAssetsPaged,
+	     .C_ListAssetsPagedByProject,
+	     .C_ListAssetsPagedByTag:
 		send_error_response(c, opcode, text, correlation)
 	case .C_ListSliceOwners, .C_ListTicketAssignees, .C_ListCalendarPeople, .C_ListNoteProjects, .C_ListNoteTags:
 		send_error_response(c, opcode, text, correlation)
@@ -328,6 +347,12 @@ worker_db_complete_command :: proc(c: ^NRC_Connection, correlation: u32, job: ^d
 	if job.result.status != sql.OK {
 		if c != nil {
 			text := "Failed to change task"
+			if job.request.opcode == .C_QueryMonitorStatus do text = "Failed to query monitor status: check monitor, cursor and page timestamp"
+			if job.request.opcode == .C_ApplyMonitorRun do text = "Monitor run rejected: check evaluator, revision, sequence and instance limits"
+			if job.request.opcode == .C_ControlMonitorInstance do text = "Monitor instance action rejected: check revision, instance state and active capacity"
+			if job.request.opcode == .C_ActOnIncident do text = "Incident action rejected: check incident ID and revision"
+			if job.request.opcode == .C_MonitorDelivery do text = "Monitor delivery rejected: check evaluator, stream, event and lease"
+			if job.request.opcode == .C_ApplyMonitorRun && job.result.status == sql.CONSTRAINT do text = "Monitor run rejected: check evaluator, revision, sequence, instance limits and queue capacity"
 			#partial switch job.request.opcode {
 			case .C_GraphQuery, .C_GraphShortestPath, .C_GraphRank, .C_GraphDegree, .C_GraphCommonNeighbors:
 				text = "Failed to query graph"

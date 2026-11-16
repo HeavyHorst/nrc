@@ -450,6 +450,49 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte, dm_auth
 		} else {
 			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		}
+	case .C_QueryMonitorStatus:
+		req, parse_err := pr.parseQueryMonitorStatusRequest(frame_data[2:])
+		if parse_err != nil {
+			send_error_response(c, opcode, "Invalid monitor status request", req.correlation_id)
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
+	case .C_GetMonitorState:
+		req, parse_err := pr.parseGetMonitorStateRequest(frame_data[2:])
+		if parse_err != nil {
+			send_error_response(c, opcode, "Invalid monitor state request", req.correlation_id)
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
+	case .C_ApplyMonitorRun:
+		rows: [pr.MAX_MONITOR_INSTANCES]pr.Monitor_Observation
+		req, parse_err := pr.parseApplyMonitorRunRequest(frame_data[2:], rows[:])
+		if parse_err != nil {
+			send_error_response(c, opcode, "Invalid monitor run", req.correlation_id)
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
+	case .C_ControlMonitorInstance:
+		req, parse_err := pr.parseControlMonitorInstanceRequest(frame_data[2:])
+		if parse_err != nil {
+			send_error_response(c, opcode, "Invalid monitor instance action", req.correlation_id)
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
+	case .C_ActOnIncident:
+		req, parse_err := pr.parseActOnIncidentRequest(frame_data[2:])
+		if parse_err != nil {
+			send_error_response(c, opcode, "Invalid incident action", req.correlation_id)
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
+	case .C_MonitorDelivery:
+		req, parse_err := pr.parseMonitorDeliveryRequest(frame_data[2:])
+		if parse_err != nil {
+			send_error_response(c, opcode, "Invalid monitor delivery action", req.correlation_id)
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
 	case .C_CreateAsset:
 		attachments: [pr.MAX_ATTACHMENTS_PER_TASK]pr.Attachment
 		req, parse_err := pr.parseCreateAssetRequestWithAttachments(frame_data[2:], attachments[:])

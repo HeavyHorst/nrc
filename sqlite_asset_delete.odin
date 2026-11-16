@@ -56,6 +56,8 @@ sqlite_delete_record :: proc(store: ^db.Store, request: ^db.Request, output: ^db
 		root, found, read_rc := sqlite_read_asset(store, request.workspace, request.actor, root_id, false)
 		if read_rc != sql.OK do return read_rc
 		if !found {error_text = "Asset not found"} else if root.asset_type == .RoomMapping {error_text = "Room mappings are immutable"} else if !appointment_mutation_allowed(&root, nil, request.actor) {error_text = "Only the organizer may delete this appointment"}
+		if found && (root.asset_type == .Monitor || root.asset_type == .Incident) do error_text = "Monitoring records cannot be deleted; disable the monitor instead"
+		if found && monitoring_is_webhook_route(&root) do error_text = "Webhook routes are immutable"
 	}
 	if error_text != "" {
 		if transaction_batch do return sql.CONSTRAINT

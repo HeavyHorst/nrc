@@ -475,6 +475,7 @@ worker_thread :: proc(worker_data: Worker_Thread_Data) {
 run_worker_maintenance :: proc() {
 	now := nrc_time_now_monotonic()
 	check_idle_connections(now)
+	worker_db_monitor_maintenance()
 	if td.next_send_watchdog_at != {} && time.diff(td.next_send_watchdog_at, now) >= 0 {
 		check_stalled_sends(now)
 	}

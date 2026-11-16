@@ -1,10 +1,12 @@
 package main
 
+import "core:log"
 import "core:strings"
 import "core:sys/linux"
 import "core:time"
 import nbio "nbio/poly"
 import pr "protocol"
+import sql "sqlite"
 import db "workspace_db"
 
 // Startup and isolated tests attach one SPSC port owned by this worker.
@@ -22,11 +24,17 @@ Worker_DB_DM_Key :: struct {
 	id:        pr.ConversationID,
 }
 Worker_DB :: struct {
-	idle_dms:     map[Worker_DB_DM_Key]bool,
-	port:         ^db.Worker_Port,
-	pending:      map[u64]Worker_DB_Pending,
-	next_request: u64,
-	stopping:     bool,
+	idle_dms:        map[Worker_DB_DM_Key]bool,
+	port:            ^db.Worker_Port,
+	pending:         map[u64]Worker_DB_Pending,
+	next_request:    u64,
+	stopping:        bool,
+	monitor_pending: bool,
+	monitor_shard:   int,
+	monitor_cursors: [LOGICAL_SHARD_COUNT]u64,
+	monitor_through: [LOGICAL_SHARD_COUNT]u64,
+	monitor_due:     [LOGICAL_SHARD_COUNT]time.Time,
+	monitor_budget:  int,
 }
 
 worker_db_attach :: proc(port: ^db.Worker_Port) {
@@ -171,6 +179,72 @@ worker_db_detach :: proc() {
 worker_db_mark_dm :: proc(ws: ^Workspace_State, id: pr.ConversationID) {
 	if td.database.port == nil || !pr.is_dm_conversation(id) do return
 	td.database.idle_dms[{ws, id}] = true
+}
+
+MONITOR_MAINTENANCE_JOBS_PER_TICK :: 8
+MONITOR_MAINTENANCE_RECHECK :: 5 * time.Second
+
+// A bounded burst per timer tick, still only one job in flight. Completions
+// continue the burst; rotating ready shards prevents a large shard monopolizing it.
+worker_db_monitor_maintenance :: proc() {
+	state := &td.database
+	if state.port == nil || td.server == nil || state.stopping || state.monitor_pending || state.next_request == max(u64) do return
+	state.monitor_budget = MONITOR_MAINTENANCE_JOBS_PER_TICK
+	worker_db_submit_monitor_maintenance()
+}
+
+worker_db_submit_monitor_maintenance :: proc() {
+	state := &td.database
+	if state.stopping || state.monitor_pending || state.monitor_budget == 0 || state.next_request == max(u64) do return
+	workers := len(td.server.threads)
+	if workers == 0 do return
+	now := nrc_time_now_monotonic()
+	shard := state.monitor_shard
+	found := false
+	for _ in 0 ..< LOGICAL_SHARD_COUNT {
+		if shard % workers == td.thread_index &&
+		   shard < len(state.port.executor.paths) &&
+		   len(string(state.port.executor.paths[shard])) != 0 &&
+		   (state.monitor_due[shard] == {} || time.diff(state.monitor_due[shard], now) >= 0) {
+			found = true
+			break
+		}
+		shard = (shard + 1) % LOGICAL_SHARD_COUNT
+	}
+	if !found do return
+	id := state.next_request + 1
+	request := db.Request {
+		request_id      = id,
+		shard           = shard,
+		operation       = .Monitor_Maintenance,
+		timestamp       = nrc_time_unix_nanos(),
+		monitor_cursor  = state.monitor_cursors[shard],
+		monitor_through = state.monitor_through[shard],
+	}
+	if !db.submit(state.port, request) do return
+	state.monitor_budget -= 1
+	state.next_request = id
+	state.monitor_pending = true
+	state.monitor_shard = (shard + 1) % LOGICAL_SHARD_COUNT
+	state.pending[id] = {
+		callback = worker_db_monitor_maintenance_complete,
+	}
+}
+
+worker_db_monitor_maintenance_complete :: proc(_: ^NRC_Connection, _: u32, job: ^db.Completion) {
+	state := &td.database
+	state.monitor_pending = false
+	if job.result.status == sql.OK {
+		state.monitor_cursors[job.request.shard] = job.result.command.monitor_cursor
+		state.monitor_through[job.request.shard] = job.result.command.monitor_through
+	} else {
+		// Keep this shard's cursor for retry on the next round; other shards proceed.
+		log.errorf("[T%d] Monitor maintenance failed for shard %d: %d", td.thread_index, job.request.shard, job.result.status)
+	}
+	if job.result.status != sql.OK || job.result.command.monitor_through == 0 {
+		state.monitor_due[job.request.shard] = time.time_add(nrc_time_now_monotonic(), MONITOR_MAINTENANCE_RECHECK)
+	}
+	worker_db_submit_monitor_maintenance()
 }
 
 // Presence batches may borrow conversation pointers until the wave finishes.

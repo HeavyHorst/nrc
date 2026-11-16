@@ -33,6 +33,9 @@ sqlite_put_asset :: proc(store: ^db.Store, workspace: string, a: ^pr.Asset, inse
 		},
 	)
 	if rc != sql.OK do return rc
+	if a.asset_type == .Monitor {
+		if rc = sqlite_monitor_register_lanes(store, workspace, a); rc != sql.OK do return rc
+	}
 	if rc = sqlite_projection_write(store, "DELETE FROM asset_attachments WHERE workspace=?1 AND asset_id=?2", workspace, a, nil); rc != sql.OK do return rc
 	for attachment, i in a.attachments {
 		if rc = sqlite_projection_write(store, "INSERT INTO asset_attachments VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", workspace, a, {i64(i), string(attachment.file_id), string(attachment.filename), attachment.size, string(attachment.mime_type), attachment.uploaded_at}); rc != sql.OK do return rc
@@ -237,6 +240,9 @@ sqlite_mutate_asset :: proc(store: ^db.Store, request: ^db.Request, allocator: m
 		result.error = creating ? "Invalid reminder visibility or personal reminder links/attachments" : "Reminder visibility is fixed at creation"
 		return
 	}
+	if !monitoring_asset_mutation_valid(&a, allocator) {result.error = "Invalid monitor or machine-owned incident"; return}
+	if !creating &&
+	   (monitoring_is_webhook_route(&old) || monitoring_is_webhook_route(&a)) {result.error = "Webhook routes are immutable; create a new route"; return}
 	// No business-error response may commit a consumed ID or partial mutation.
 	if creating {
 		a.asset_id, result.rc = db.next_id(store, .Asset)

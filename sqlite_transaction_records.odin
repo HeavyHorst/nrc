@@ -44,7 +44,13 @@ sqlite_transaction_prepare_records :: proc(
 	results: []pr.TransactionOperationResult,
 	failed: ^u16,
 ) -> c.int {
-	rc := sql.exec(store.db, "CREATE TEMP TABLE IF NOT EXISTS nrc_batch_delete(kind INTEGER,id BLOB,PRIMARY KEY(kind,id)) WITHOUT ROWID; DELETE FROM temp.nrc_batch_delete", nil, nil, nil)
+	rc := sql.exec(
+		store.db,
+		"CREATE TEMP TABLE IF NOT EXISTS nrc_batch_delete(kind INTEGER,id BLOB,PRIMARY KEY(kind,id)) WITHOUT ROWID; DELETE FROM temp.nrc_batch_delete",
+		nil,
+		nil,
+		nil,
+	)
 	if rc != sql.OK do return rc
 	arena: virtual.Arena
 	if virtual.arena_init_growing(&arena) != nil do return sql.NOMEM
@@ -79,6 +85,8 @@ sqlite_transaction_prepare_records :: proc(
 				a, found, read_rc := sqlite_read_asset(store, request.workspace, request.actor, r.entity.value, false)
 				if read_rc != sql.OK do return read_rc
 				if !found || a.asset_type == .RoomMapping || r.if_updated_at != 0 && a.updated_at != r.if_updated_at || !appointment_mutation_allowed(&a, nil, request.actor) do return sql.CONSTRAINT
+				if a.asset_type == .Monitor || a.asset_type == .Incident do return sql.CONSTRAINT
+				if monitoring_is_webhook_route(&a) do return sql.CONSTRAINT
 				if a.asset_type == .Slice {slice_roots += 1; if slice_roots > MAX_DELETE_SLICES do return sql.CONSTRAINT}
 			} else if kind == .Edge {
 				s: ^sql.Statement
@@ -205,6 +213,8 @@ sqlite_transaction_assets :: proc(
 		if a.payload_encoding < min(pr.PayloadEncoding) || a.payload_encoding > max(pr.PayloadEncoding) || a.payload_encoding == .Plain && a.payload_raw_len != u32(len(a.payload)) do return sql.CONSTRAINT
 		if !validate_appointment_asset(a.asset_type, a.payload_encoding, a.payload_raw_len, a.preview, a.payload) || !validate_ticket_asset(a.asset_type, a.parent_type, a.parent_id, a.payload_encoding, a.payload_raw_len, a.preview, a.payload) || !validate_reminder_asset(&a) do return sql.CONSTRAINT
 		if a.asset_type == .Slice {if _, valid := slice_preview_name(a.preview, context.allocator); !valid do return sql.CONSTRAINT}
+		if !monitoring_asset_mutation_valid(&a, context.allocator) do return sql.CONSTRAINT
+		if !creating && (monitoring_is_webhook_route(&old) || monitoring_is_webhook_route(&a)) do return sql.CONSTRAINT
 		// Parent checks follow after all post-images exist, allowing forward refs.
 		if rc := sqlite_put_asset(store, request.workspace, &a, insert_only = creating); rc != sql.OK do return rc
 		if rc := sqlite_asset_history(store, request, &old, &a, creating); rc != sql.OK do return rc
