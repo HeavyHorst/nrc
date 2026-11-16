@@ -10,7 +10,8 @@ handling. The successful ring's flags select the submission path.
 Tested locally with Odin
 `dev-2026-09-nightly:a2fb372`, Go `1.26.8` and Node `24.21.0`.
 Go module requirements are in each `go.mod`; the proxy requires at least Go 1.26.6.
-Docker builds supply their own toolchains and build Odin from upstream HEAD.
+The server Docker build pins Odin to `7e313bd6f1fa9ae887c7b522611481cbf2da4cac`
+(`dev-2026-10`), the compiler used for the WAL-to-SQLite migration rehearsal.
 
 For the reviewed baseline of newer Odin escape-analysis warnings, see
 [the escape-analysis audit](ODIN_ESCAPE_ANALYSIS_AUDIT.md). Its lifetime arguments
@@ -34,6 +35,49 @@ npm run build --prefix client
 
 Keep the default Odin target for binaries that you distribute.
 Use `-microarch:native` only if the target hardware supports the same CPU features.
+
+### Server image and SQLite pin
+
+`docker/Dockerfile` pins its Ubuntu 24.04 base by digest and builds SQLite 3.54.1
+from the official `sqlite-autoconf-3540100.tar.gz` archive. The build checks its
+SHA3-256 against the value published on the [SQLite download page](https://www.sqlite.org/download.html):
+`b6ced585c750916b1052667239a12c25a7ff34e7f06e1e6e01ecb0427657d9c4`.
+A mismatch stops the build. The builder and runtime use the same shared library
+under `/opt/sqlite/lib`; neither installs Ubuntu's SQLite package.
+The SQLite CLI is `/opt/sqlite/bin/sqlite3`.
+
+```sh
+docker build -f docker/Dockerfile -t nrc-server:local .
+docker run --rm --network none --entrypoint /opt/sqlite/bin/sqlite3 nrc-server:local --version
+docker run --rm --network none --entrypoint ldd nrc-server:local /usr/local/bin/server
+```
+
+Check that `ldd` resolves `libsqlite3.so` under `/opt/sqlite/lib`.
+Updating the pin requires a new official checksum, a successful image build and
+storage/migration tests against that library. The remaining apt packages still
+follow Ubuntu's repositories; these pins do not make the entire image
+bit-for-bit reproducible. Building an image does not migrate data or deploy it.
+
+### Preserve production storage on deployment
+
+After an offline migration into a new Docker volume, set `NRC_TASK_DATA_VOLUME`
+in the host's private `.env` to that verified volume name. Both the server and
+attachment GC use it. Without an override, Compose retains its normal
+`<project>_task-data` name for fresh installations.
+
+Before tests, backup, source synchronization or service changes, `docker/deploy.sh`
+renders the incoming base Compose file with the host's environment and enabled
+overlays. It refuses to proceed unless its data volume matches the running
+server's named `/app/data` mount. A missing server, bind mount or multiple server
+mounts also blocks deployment. Use the offline migration procedure to switch
+storage; deployment is not a migration command. `--dry-run` performs this check
+without changing production. Python 3 is required locally for the config check.
+Run its regression checks with `python3 docker/deploy_test.py` (Docker Compose
+required; no Docker daemon or production access).
+
+Compose sends `SIGINT` to the server on stop, matching its graceful shutdown
+handler. Keep this setting for quiesced backups; Docker's default `SIGTERM` does
+not request the server's graceful shutdown.
 
 The standalone server listens on port 8080 and expects authenticated upgrades.
 Serving static `client/` alone does not provide browser authentication.
@@ -187,8 +231,8 @@ on network workers. The store opens only an explicitly supplied path; creation
 must be requested and only initializes an empty database. Unrecognized schema
 versions and other database formats are refused. It uses WAL, FULL synchronous
 commits, foreign keys and a 4 MiB suggested page-cache budget per connection.
-That budget is not a hard memory limit. The system SQLite library is used during
-this development stage; release pinning remains a prerequisite for deployment.
+That budget is not a hard memory limit. Local builds use the system SQLite
+library; the [server image](#server-image-and-sqlite-pin) uses its pinned release.
 
 The layout manifest uses mode 3 (`SQLite_V1`) with the existing 256-shard hash
 and generation naming. Each `sharded-<generation>/shard_<number>/workspace.sqlite3`

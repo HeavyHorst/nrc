@@ -71,7 +71,7 @@ if [[ $head_revision != "$origin_revision" ]]; then
     exit 1
 fi
 
-for command in git rsync ssh; do
+for command in git rsync ssh python3; do
     if ! command -v "$command" >/dev/null; then
         echo "Required command not found: $command" >&2
         exit 1
@@ -90,6 +90,33 @@ if [[ -n $newsletter_enabled ]]; then
 fi
 # Keep managed sidecars in the model, including newsletter's search dependency.
 COMPOSE_ARGS+=" --profile search --profile ai --profile metrics"
+
+# Render the incoming base Compose file against the host's private environment
+# before installing anything or stopping services. A migrated installation must
+# never fall back to its old project-scoped WAL volume on the next source sync.
+active_volume=$(ssh "$DEPLOY_HOST" "bash -s" <<'REMOTE'
+set -euo pipefail
+ids=$(docker ps -q --filter label=com.docker.compose.project=docker --filter label=com.docker.compose.service=websocket-server)
+[[ -n $ids && $ids != *$'\n'* ]] || { echo "Expected one running websocket-server; cannot verify production storage." >&2; exit 1; }
+docker inspect --format '{{range .Mounts}}{{if and (eq .Destination "/app/data") (eq .Type "volume")}}{{.Name}}{{end}}{{end}}' $ids
+REMOTE
+)
+if [[ ! $active_volume =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+    echo "Refusing to deploy: expected one named production data volume." >&2
+    exit 1
+fi
+candidate_args=${COMPOSE_ARGS/-f $COMPOSE_FILE/--project-directory docker -f -}
+candidate_volume=$(ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && docker compose $candidate_args config --format json" < "$COMPOSE_FILE" |
+    python3 -c 'import json, sys
+model = json.load(sys.stdin)
+mount, = (v for v in model["services"]["websocket-server"]["volumes"] if v["target"] == "/app/data" and v["type"] == "volume")
+print(model["volumes"][mount["source"]]["name"])')
+if [[ $candidate_volume != "$active_volume" ]]; then
+    echo "Refusing to deploy: incoming task-data volume '$candidate_volume' differs from running '$active_volume'." >&2
+    echo "Set NRC_TASK_DATA_VOLUME in the host .env to the verified migrated volume; do not switch storage through deploy.sh." >&2
+    exit 1
+fi
+echo "Verified production data volume: $active_volume"
 
 echo "Deploying $head_revision from clean main to $DEPLOY_HOST:$REMOTE_DIR"
 

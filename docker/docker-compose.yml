@@ -48,6 +48,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     command: server -debug
+    stop_signal: SIGINT
     env_file:
       - ../.env
     environment:
@@ -202,6 +203,7 @@ services:
 volumes:
   tailscale-state:
   task-data:
+    name: ${NRC_TASK_DATA_VOLUME:-${COMPOSE_PROJECT_NAME}_task-data}
   attachments:
   search-data:
   registry-data:
