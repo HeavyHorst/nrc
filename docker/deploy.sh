@@ -120,9 +120,55 @@ echo "Verified production data volume: $active_volume"
 
 echo "Deploying $head_revision from clean main to $DEPLOY_HOST:$REMOTE_DIR"
 
-changed_output=$(git ls-files -z | rsync -rltcn --from0 --files-from=- \
-    --out-format='%n' ./ "$DEPLOY_HOST:$REMOTE_DIR/")
-mapfile -t changed_files < <(printf '%s\n' "$changed_output" | sed '/\/$/d; /^$/d')
+# Include current source on both sides and obsolete source only on the receiver.
+# The final exclusion protects host-only files (.env, data, etc.) from deletion.
+# Earlier deployments did not record a source manifest, so use Git history.
+source_filter=$(mktemp)
+trap 'rm -f "$source_filter"' EXIT
+python3 - > "$source_filter" <<'PY'
+import subprocess
+
+def paths(*args):
+    return set(filter(None, subprocess.check_output(["git", *args]).split(b"\0")))
+
+current = paths("ls-files", "-z")
+historical = paths("log", "HEAD", "--format=", "--name-only", "-z")
+all_paths = current | historical
+directories = set()
+for path in all_paths:
+    parts = path.split(b"/")
+    directories.update(b"/".join(parts[:i]) for i in range(1, len(parts)))
+
+def rule(prefix, path, suffix=b""):
+    # rsync filters are line-based wildmatch patterns, not literal paths.
+    if b"\n" in path or b"\r" in path:
+        raise SystemExit("Cannot deploy source paths containing newlines")
+    for char in (b"\\", b"*", b"?", b"["):
+        path = path.replace(char, b"\\" + char)
+    print((prefix + b"/" + path + suffix).decode())
+
+for path in sorted(directories):
+    rule(b"+ ", path, b"/")
+for path in sorted(current):
+    rule(b"+ ", path)
+for path in sorted(historical - current):
+    rule(b"+r ", path)
+print("- *")
+PY
+
+sync_source() {
+    rsync -rlt --delete --filter="merge $source_filter" "$@" ./ "$DEPLOY_HOST:$REMOTE_DIR/"
+}
+
+source_changes() {
+    # Protected host files can keep an obsolete directory nonempty. Only file
+    # changes matter for rebuild selection and parity, not those directories.
+    sync_source -cn --out-format='%n' |
+        sed 's/^deleting //; /^cannot delete non-empty directory: /d; /\/$/d; /^$/d'
+}
+
+changed_output=$(source_changes)
+mapfile -t changed_files < <(printf '%s\n' "$changed_output" | sed '/^$/d')
 
 if $full; then
     echo "Deployment mode: full stack"
@@ -256,7 +302,7 @@ if ! $full && ((${#changed_files[@]} == 0 && ${#update_services[@]} == 0)); then
 fi
 
 if $dry_run; then
-    git ls-files -z | rsync -anv --from0 --files-from=- ./ "$DEPLOY_HOST:$REMOTE_DIR/"
+    sync_source -nv
     echo "Dry run complete; production was not changed."
     exit 0
 fi
@@ -324,9 +370,7 @@ fi
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 echo "Synchronizing tracked source; rollback copies: /root/nrc-deploy-backups/$stamp"
-git ls-files -z | rsync -av --from0 --files-from=- \
-    --backup --backup-dir="/root/nrc-deploy-backups/$stamp" \
-    ./ "$DEPLOY_HOST:$REMOTE_DIR/"
+sync_source -pv --backup --backup-dir="/root/nrc-deploy-backups/$stamp"
 
 ssh "$DEPLOY_HOST" "if test -f '$REMOTE_DIR/docker/backup.sh'; then bash -n '$REMOTE_DIR/docker/backup.sh' && install -m 0750 '$REMOTE_DIR/docker/backup.sh' /usr/local/sbin/nrc-backup; fi"
 ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && docker compose $COMPOSE_ARGS config -q"
@@ -380,8 +424,7 @@ if [[ -n $newsletter_enabled ]]; then
     ssh "$DEPLOY_HOST" 'curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8097/health'
 fi
 
-git ls-files -z | rsync -anrc --from0 --files-from=- \
-    --out-format='%n' ./ "$DEPLOY_HOST:$REMOTE_DIR/" | \
+source_changes | \
     if read -r mismatch; then
         echo "Tracked-source parity check failed; first mismatch: $mismatch" >&2
         exit 1

@@ -145,6 +145,66 @@ esac
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("incoming task-data volume 'docker_attachments'", result.stderr)
 
+    def test_deleted_source_is_backed_up_without_removing_host_files(self):
+        self.configure("docker_sqlite-migrated")
+        obsolete = ("shard_compaction.odin", "removed/package/old.go", "old[1].odin")
+        for name in obsolete:
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("obsolete source")
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        identity = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
+        subprocess.run(["git", *identity, "commit", "-qm", "old source"],
+                       cwd=self.repo, check=True)
+        shutil.copytree(self.repo, self.remote, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(".git"))
+        subprocess.run(["git", "rm", "-q", *obsolete], cwd=self.repo, check=True)
+        subprocess.run(["git", *identity, "commit", "-qm", "remove old source"],
+                       cwd=self.repo, check=True)
+        subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+                       cwd=self.repo, check=True)
+        private = ("host.env", "data/retained.wal", "removed/package/private.env",
+                   "old1.odin")
+        for name in private:
+            path = self.remote / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("host-only data")
+        # A local untracked copy of old source must not be sent either.
+        (self.repo / obsolete[0]).write_text("local scratch")
+        saved_filter = Path(self.temp.name) / "source.filter"
+        self.env.update(REAL_RSYNC=shutil.which("rsync"), SAVED_FILTER=str(saved_filter))
+        self.tool("rsync", r'''
+args=("$@")
+for arg in "$@"; do
+  if [[ $arg == --filter=merge\ * ]]; then
+    cp "${arg#--filter=merge }" "$SAVED_FILTER"
+  fi
+done
+last=$((${#args[@]} - 1))
+args[$last]=${args[$last]#isolated-host:}
+exec "$REAL_RSYNC" "${args[@]}"
+''')
+        result = self.deploy("--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Services to rebuild: websocket-server", result.stdout)
+        for name in obsolete:
+            self.assertIn(f"deleting {name}", result.stdout)
+            self.assertTrue((self.remote / name).exists())
+        backup = Path(self.temp.name) / "rollback"
+        subprocess.run(
+            [self.env["REAL_RSYNC"], "-rlt", "--delete", "--backup",
+             f"--backup-dir={backup}", f"--filter=merge {saved_filter}",
+             f"{self.repo}/", f"{self.remote}/"], check=True, capture_output=True,
+        )
+        for name in obsolete:
+            self.assertFalse((self.remote / name).exists())
+            self.assertEqual((backup / name).read_text(), "obsolete source")
+        for name in private:
+            self.assertEqual((self.remote / name).read_text(), "host-only data")
+        parity = self.deploy("--dry-run")
+        self.assertEqual(parity.returncode, 0, parity.stderr)
+        self.assertIn("nothing to deploy", parity.stdout)
+
     def test_compose_uses_custom_project_and_graceful_shutdown(self):
         self.configure()
         result = subprocess.run(
