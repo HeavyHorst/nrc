@@ -75,10 +75,31 @@ try {
   assert.equal(await page.evaluate(() => NRCInspector.hasEntity()), false, 'metadata editing does not open the note');
   await page.keyboard.press('Escape');
 
+  // Named Markdown links preserve authored labels and use existing inspector routes.
+  await page.evaluate(async () => {
+    const types = ["note", "task", "reminder", "appointment", "file", "ticket", "slice", "company", "contact", "activity"];
+    const source = NRCAssets.roomAssets.get(0n).get(1n);
+    source.payload = types.map(type => `[Open **${type}**](${type.toUpperCase()}:2)`).join("\n\n") +
+      "\n\n[Too large](note:18446744073709551616) [Zero](task:0) [Unknown](unknown:2) ` [Code](note:2) ` [External](https://example.test/note:2)";
+    await NRCInspector.openEntity({ type: "note", id: 1n });
+  });
+  const namedBody = page.locator(".note-preview-body");
+  for (const type of ["note", "task", "reminder", "appointment", "file", "ticket", "slice", "company", "contact", "activity"]) {
+    const link = namedBody.getByRole("link", { name: `Open ${type}`, exact: true });
+    assert.equal(await link.getAttribute("href"), `#/inspect/note-panel/${type}/2`);
+    assert.equal(await link.locator("strong").textContent(), type, "authored label formatting survives");
+  }
+  assert.equal(await namedBody.locator('a[href^="#/inspect/"]').count(), 10, "invalid IDs, unknown types, code and external links are not converted");
+  await namedBody.getByRole("link", { name: "Open note", exact: true }).click();
+  await page.waitForFunction(() => NRCInspector.current()?.type === "note" && NRCInspector.current()?.id === 2n && !NRCInspector.isLoading());
+  await page.locator("#inspectorBack").click();
+  await page.waitForFunction(() => NRCInspector.current()?.id === 1n && !NRCInspector.isLoading());
+  assert.equal(await namedBody.getByRole("link", { name: "Open note", exact: true }).innerText(), "Open note", "navigation does not replace the authored label");
+
   // Markdown references share the inspector's cache, lazy reads and history.
   await page.evaluate(async () => {
     const source = NRCAssets.roomAssets.get(0n).get(1n);
-    source.payload = "Der Shop-Link führt zum externen Kaufangebot. Siehe [note:2].\n\nPrüfen: [TASK:18446744073709551615].\n\n`[note:2]` [existing [note:2]](https://example.test) [task:0] [task:18446744073709551616]";
+    source.payload = "Der Shop-Link führt zum externen Kaufangebot. Siehe [note:2].\n\nPrüfen: [TASK:18446744073709551615]. [Aufgabe öffnen](task:18446744073709551615)\n\n`[note:2]` [existing [note:2]](https://example.test) [task:0] [task:18446744073709551616]";
     window.__originalReferenceTaskRequest = NRCTasks.requestTask;
     window.__referenceReads = [];
     NRCTasks.requestTask = (room, id, options) => {
@@ -132,7 +153,7 @@ try {
   });
 
   const popupPromise = page.context().waitForEvent("page");
-  await taskLink.click({ button: "middle" });
+  await body.getByRole("link", { name: "Aufgabe öffnen", exact: true }).click({ button: "middle" });
   const popup = await popupPromise;
   await popup.waitForFunction(() => window.NRCInspector && typeof currentWorkspaceId !== "undefined" && currentWorkspaceId === "note-panel");
   assert.match(popup.url(), /#\/inspect\/note-panel\/task\/18446744073709551615$/);
@@ -152,8 +173,8 @@ try {
 
   await page.evaluate(() => {
     const paragraphs = "A paragraph of the source document.\n\n".repeat(45);
-    NRCAssets.roomAssets.get(0n).get(1n).payload = `${paragraphs}[task:18446744073709551615]\n\n${paragraphs}`;
-    NRCTasks.roomTasks.get(0n).get(18446744073709551615n).description = `${paragraphs}[note:2]\n\n${paragraphs}`;
+    NRCAssets.roomAssets.get(0n).get(1n).payload = `${paragraphs}[Aufgabe öffnen](task:18446744073709551615 "TASK #18446744073709551615")\n\n${paragraphs}`;
+    NRCTasks.roomTasks.get(0n).get(18446744073709551615n).description = `${paragraphs}[Note two](note:2 "NOTE #2")\n\n${paragraphs}`;
     NRCInspector.prefetchNote = () => {};
     window.__pendingLinks = [];
     NRCLinksUI.loadLinks = (_room, type, id) => new Promise(resolve => {

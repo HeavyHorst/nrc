@@ -307,6 +307,16 @@ try {
     loadRoomHistory(2n);
     logMessage("Message", "See [task:123] and [note:456].", 2n, { author: "anna" });
   });
+  await page.evaluate(() => logMessage("Message", "[Meine **Notiz**](note:456) und [Meine Aufgabe](task:123)", 2n, { author: "anna" }));
+  const namedNote = page.locator("#logOutput").getByRole("link", { name: "Meine Notiz", exact: true });
+  const namedTask = page.locator("#logOutput").getByRole("link", { name: "Meine Aufgabe", exact: true });
+  const workspace = await page.evaluate(() => encodeURIComponent(currentWorkspaceId));
+  assert.equal(await namedNote.getAttribute("href"), `#/inspect/${workspace}/note/456`);
+  assert.equal(await namedNote.locator("strong").textContent(), "Notiz");
+  assert.equal(await namedTask.getAttribute("href"), `#/inspect/${workspace}/task/123`);
+  await namedTask.click();
+  await page.waitForFunction(() => NRCInspector.current()?.type === "task" && NRCInspector.current()?.id === 123n);
+  await page.keyboard.press("Escape");
   const requests = [];
   await page.route("**/search", async (route) => {
     const body = route.request().postDataJSON();

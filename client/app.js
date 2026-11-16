@@ -4833,6 +4833,15 @@ function parseMarkdown(text, { entityReferences = true } = {}) {
   const container = document.createElement("div");
   container.innerHTML = renderedHtml;
 
+  // Named links use the same type and ID contract as inspector deep links.
+  // Keep their authored label rather than resolving it to the record title.
+  for (const link of container.querySelectorAll("a[href]")) {
+    const match = link.getAttribute("href").match(/^([a-z]+):([0-9]+)$/i);
+    if (!match) continue;
+    const hash = `#/inspect/${encodeURIComponent(currentWorkspaceId)}/${match[1].toLowerCase()}/${match[2]}`;
+    if (parseInspectorRouteFromHash(hash)) link.setAttribute("href", hash);
+  }
+
   if (entityReferences) {
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     const nodes = [];
