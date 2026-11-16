@@ -362,6 +362,27 @@ test_slice_schema_upgrade_is_explicit_and_atomic :: proc(t: ^testing.T) {
 	testing.expect_value(t, execute(&store, #load("slice_pagination.sql", string)), sql.OK)
 	testing.expect_value(t, commit(&store), sql.OK)
 	testing.expect_value(t, close(&store), sql.OK)
+	rejected, rc = open(path)
+	testing.expect(t, rc == sql.NOTADB && rejected.db == nil)
+	testing.expect_value(t, sql.open_v2(path, &store.db, sql.OPEN_READWRITE, nil), sql.OK)
+	// Fail after allocating the new sequence; all schema changes must roll back.
+	testing.expect_value(t, execute(&store, "CREATE TABLE monitor_instances(dummy INTEGER)"), sql.OK)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect(t, execute(&store, #load("monitoring.sql", string)) != sql.OK)
+	testing.expect_value(t, rollback(&store), sql.OK)
+	version, version_rc = scalar(&store, "PRAGMA user_version")
+	testing.expect(t, version_rc == sql.OK && version == 4)
+	partial, partial_rc = scalar(&store, "SELECT count(*) FROM sequences WHERE domain='monitor_instance'")
+	testing.expect(t, partial_rc == sql.OK && partial == 0)
+	testing.expect_value(t, execute(&store, "DROP TABLE monitor_instances"), sql.OK)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect_value(t, execute(&store, #load("monitoring.sql", string)), sql.OK)
+	testing.expect_value(t, commit(&store), sql.OK)
+	// Reapplying the migration is refused, without changing canonical data.
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect(t, execute(&store, #load("monitoring.sql", string)) != sql.OK)
+	testing.expect_value(t, rollback(&store), sql.OK)
+	testing.expect_value(t, close(&store), sql.OK)
 	store, rc = open(path)
 	if !testing.expect_value(t, rc, sql.OK) do return
 	preserved, preserved_rc := scalar(

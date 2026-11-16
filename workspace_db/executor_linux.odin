@@ -21,6 +21,7 @@ Operation :: enum {
 	Remove_Task,
 	Create_Task,
 	Command,
+	Monitor_Maintenance, // Internal writer job; never selected by a wire opcode.
 }
 Request :: struct {
 	request_id:       u64,
@@ -35,6 +36,8 @@ Request :: struct {
 	opcode:           pr.Opcode,
 	body:             []byte,
 	timestamp:        i64,
+	monitor_cursor:   u64, // Last globally allocated instance ID scanned in this shard.
+	monitor_through:  u64, // Fixed scan boundary, captured with the first page.
 	ticket_reads:     []Ticket_Read_Cursor,
 	read_generation:  u64,
 	dm_target_online: bool, // Worker presence snapshot; SQLite still checks persistent identity.
@@ -243,7 +246,7 @@ submit :: proc(port: ^Worker_Port, request: Request, rejection: ^Admission_Rejec
 	e := port.executor
 	if port.closed || request.shard < 0 || request.shard >= len(e.paths) do return false
 	if len(string(e.paths[request.shard])) == 0 do return false
-	if request.operation == .Command && (e.command_handler == nil || len(request.body) > pr.MAX_PROTOCOL_PAYLOAD_SIZE) do return false
+	if (request.operation == .Command || request.operation == .Monitor_Maintenance) && (e.command_handler == nil || len(request.body) > pr.MAX_PROTOCOL_PAYLOAD_SIZE) do return false
 	if (request.operation == .Put_Task || request.operation == .Create_Task) && len(request.task.attachments) > pr.MAX_ATTACHMENTS_PER_TASK do return false
 	order, exists := port.orders[request.ordering_key]
 	// Key zero is the internal stream, not a WebSocket connection.
@@ -288,7 +291,7 @@ submit :: proc(port: ^Worker_Port, request: Request, rejection: ^Admission_Rejec
 	if !take_credit(&remaining, len(request.actor)) || !take_credit(&remaining, len(request.body)) do return false
 	if len(request.ticket_reads) > remaining / size_of(Ticket_Read_Cursor) do return false
 	remaining -= len(request.ticket_reads) * size_of(Ticket_Read_Cursor)
-	if (request.operation == .Get_Task || request.operation == .Command) && !take_credit(&remaining, e.max_result_bytes) do return false
+	if (request.operation == .Get_Task || request.operation == .Command || request.operation == .Monitor_Maintenance) && !take_credit(&remaining, e.max_result_bytes) do return false
 	if request.operation == .Put_Task || request.operation == .Create_Task {
 		for bytes in ([7][]byte{request.task.title, request.task.description, request.task.assignee, request.task.created_by, request.task.external_ref, request.task.completed_by, request.task.project}) {
 			if !take_credit(&remaining, len(bytes)) do return false
@@ -688,7 +691,7 @@ execute_job :: proc(store: ^Store, job: ^Completion, max_result_bytes: int, hand
 	rc := grouped ? execute(store, "SAVEPOINT nrc_group_job") : begin(store)
 	if rc == sql.OK {
 		switch r.operation {
-		case .Command:
+		case .Command, .Monitor_Maintenance:
 			job.result.command.limit = max_result_bytes
 			rc = handler(store, &job.request, &job.result.command)
 			if rc == sql.OK do rc = seal_command_output(&job.result.command)
@@ -735,6 +738,8 @@ read_eligible :: proc(request: Request) -> bool {
 	case .C_GetTasks,
 	     .C_GetTasksByIDs,
 	     .C_GetAsset,
+	     .C_GetMonitorState,
+	     .C_QueryMonitorStatus,
 	     .C_GetAssetsByIDs,
 	     .C_ListTasksPaged,
 	     .C_QueryTasks,
@@ -779,6 +784,10 @@ group_commit_eligible :: proc(request: Request) -> bool {
 	     .C_DeleteTask,
 	     .C_MoveTask,
 	     .C_ApplyTransaction,
+	     .C_ApplyMonitorRun,
+	     .C_ControlMonitorInstance,
+	     .C_ActOnIncident,
+	     .C_MonitorDelivery,
 	     .C_CreateAsset,
 	     .C_UpdateAsset,
 	     .C_DeleteAsset,

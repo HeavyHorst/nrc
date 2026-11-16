@@ -125,8 +125,8 @@ class ImportTests(unittest.TestCase):
         self.assertTrue((self.target / "IMPORT_COMPLETE.json").is_file())
         self.assertFalse((self.target / "storage-layout.manifest").exists())
         self.assertEqual(result["retained_message_generation"], 9)
-        self.assertEqual(result["schema_version"], 4)
-        self.assertEqual(json.loads((self.target / "IMPORT_COMPLETE.json").read_text())["schema_version"], 4)
+        self.assertEqual(result["schema_version"], 5)
+        self.assertEqual(json.loads((self.target / "IMPORT_COMPLETE.json").read_text())["schema_version"], 5)
         return result
 
     def connection(self):
@@ -166,7 +166,11 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(db.execute("SELECT id,source_type,source_id,target_type,target_id,created_at,created_by FROM edges").fetchone(),
                          (u(eid), 2, u(tid), 1, u(aid), -42, b"creator\xff"))
         self.assertEqual(db.execute("SELECT members FROM dm_conversations").fetchone(), (0,))
-        self.assertEqual(db.execute("SELECT high_water FROM sequences").fetchall(), [(u(2**64 - 1),)] * 3)
+        self.assertEqual(db.execute("SELECT high_water FROM sequences WHERE domain IN ('task','asset','edge')").fetchall(), [(u(2**64 - 1),)] * 3)
+        self.assertEqual(db.execute("SELECT high_water FROM sequences WHERE domain='monitor_instance'").fetchone(), (u(0),))
+        for table in ("monitor_instances", "monitor_episodes", "monitor_runs", "monitor_actions", "incident_actions",
+                      "monitor_queue_usage", "monitor_deliveries", "monitor_delivery_receipts", "monitor_delivery_lanes"):
+            self.assertEqual(db.execute(f"SELECT count(*) FROM {table}").fetchone(), (0,))
         self.assertEqual(db.execute("SELECT high_water FROM history_sequences").fetchone(), (u(2**63 + 100),))
         row = db.execute("SELECT id,entity_kind,entity_id,source_kind,source_id,target_kind,target_id,private_owner,body FROM history").fetchone()
         restored = row[0] + bytes([row[1]]) + row[2] + bytes([row[3]]) + row[4] + bytes([row[5]]) + row[6] + b(row[7]) + row[8]
@@ -206,7 +210,7 @@ class ImportTests(unittest.TestCase):
                     mutation(3, 1, edge(19, scope=43)), mutation(4, 1, dm(0))])
         self.run_import()
         db = self.connection()
-        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (4,))
+        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (5,))
         for table in ("tasks", "assets", "edges", "task_attachments", "asset_attachments",
                       "room_mappings", "note_metadata", "note_tags", "reminder_metadata",
                       "appointment_metadata", "appointment_people", "slice_metadata",
@@ -287,6 +291,35 @@ class ImportTests(unittest.TestCase):
         self.fails_unchanged()
         self.builder.write_text(f"#!{sys.executable}\nimport sqlite3,sys\ndb=sqlite3.connect(sys.argv[1])\ndb.execute('DELETE FROM tasks')\ndb.commit()\n")
         self.fails_unchanged()
+        # A schema-valid receipt is canonical data even when legacy imports
+        # initially contain none. Change only that table, with valid foreign keys.
+        self.write([mutation(2, 1, asset(17), 3)])
+        for table, size in (("monitor_actions", 25), ("incident_actions", 19)):
+            self.builder.write_text(f"""#!{sys.executable}
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute('PRAGMA foreign_keys=ON')
+    db.execute("INSERT INTO {table} SELECT workspace,id,72,?, ?, ? FROM assets",
+               (b'alice', b'alice-id', bytes({size})))
+""")
+            with self.subTest(table=table):
+                before = importer.inventory(self.source)
+                with self.assertRaisesRegex(ValueError, "projection builder changed canonical data"):
+                    importer.import_directory(self.source, self.target, self.builder)
+                self.assertEqual(importer.inventory(self.source), before)
+                self.assertFalse(self.target.exists())
+                self.assertEqual(list(self.root.glob(".target.incomplete-*")), [])
+        for table, statement in (
+            ("monitor_delivery_lanes", "INSERT INTO monitor_delivery_lanes(workspace,monitor_id,stream,route) SELECT workspace,id,1,x'61' FROM assets"),
+            ("monitor_queue_usage", "INSERT INTO monitor_queue_usage VALUES(x'77',1,1,1)"),
+            ("monitor_deliveries", "INSERT INTO monitor_deliveries(workspace,monitor_id,stream,route,id,body,created_at,available_at) SELECT workspace,id,1,x'61',x'0000000000000001',x'31',1,1 FROM assets"),
+            ("monitor_delivery_receipts", "INSERT INTO monitor_delivery_receipts SELECT workspace,id,1,x'61',x'0000000000000001',1,2,x'61',x'62' FROM assets"),
+        ):
+            self.builder.write_text(f"#!{sys.executable}\nimport sqlite3,sys\nwith sqlite3.connect(sys.argv[1]) as db:\n db.execute('PRAGMA foreign_keys=ON')\n db.execute({statement!r})\n")
+            with self.subTest(table=table):
+                with self.assertRaisesRegex(ValueError, "projection builder changed canonical data"):
+                    importer.import_directory(self.source, self.target, self.builder)
+                self.assertFalse(self.target.exists())
         self.builder.unlink()
         self.fails_unchanged()
 

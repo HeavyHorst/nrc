@@ -29,8 +29,9 @@ changes, not `origin/main`, were the source of truth. The bundled `schema.sql`
 includes the history ACL/endpoint columns and workspace-only keys;
 `slice_summaries.sql` upgrades to schema 2, and `slice_incremental.sql` replaces
 the dirty cache with schema-3 incremental Slice projections. `slice_pagination.sql`
-adds schema-4 Slice ordering indexes. The import
-fingerprints all four files and creates schema-4 databases. Keep all four
+adds schema-4 Slice ordering indexes; `monitoring.sql` adds the schema-5
+monitoring state foundation. The import fingerprints all five files and creates
+schema-5 databases with initially empty monitoring tables. Keep all five
 files in the migration bundle. The real Odin projection builder populates the
 derived membership, summary, project and workspace counters before activation.
 
@@ -78,7 +79,7 @@ access times; file contents and names are never written by the importer.
 
 The target contains `shard_000.sqlite3`, etc., only for shards with replay
 records. A shard containing only high-water metadata is still occupied. Each
-database has `application_id=0x4e524351` and `user_version=4`.
+database has `application_id=0x4e524351` and `user_version=5`.
 
 ## Replay and preservation rules
 

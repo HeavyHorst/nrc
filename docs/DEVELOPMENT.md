@@ -85,18 +85,20 @@ Use the [Compose deployment](../README.md#quickstart) for the complete web appli
 Production serves the complete generated `client/dist/`, not the source directory.
 After frontend changes, rebuild the Nginx image and reload open browser tabs.
 
-## SQLite schema 4
+## SQLite schema 5
 
 New databases use `workspace_db/schema.sql` followed by
 `workspace_db/slice_summaries.sql`, `workspace_db/slice_incremental.sql` and
-`workspace_db/slice_pagination.sql`. These are the explicit migrations through
-schema 4, which adds a durable Slice ordering key and paging indexes.
+`workspace_db/slice_pagination.sql`, then `workspace_db/monitoring.sql`.
+Schema 4 adds Slice ordering indexes; schema 5 adds monitoring instance state,
+bounded last-evaluation receipts and episode lifecycle records.
 Startup rejects older versions; it does not upgrade files implicitly.
 
 Stop the server and back up the complete data directory before migrating.
 Test on an offline copy first. From the repository root, run the following for
 each schema-3 `workspace.sqlite3` in the selected generation, replacing the example
-path. For schema 2, run `slice_incremental.sql` before `slice_finalize.sql`;
+path. For schema 4, run only `monitoring.sql` inside the transaction.
+For schema 2, run `slice_incremental.sql` before `slice_finalize.sql`;
 for schema 1, also run `slice_summaries.sql` first inside the same transaction:
 
 ```sh
@@ -105,13 +107,14 @@ PRAGMA foreign_keys=ON;
 BEGIN IMMEDIATE;
 .read workspace_db/slice_finalize.sql
 .read workspace_db/slice_pagination.sql
+.read workspace_db/monitoring.sql
 COMMIT;
 SQL
 ```
 
 The migration checks the application ID and old version and replaces derived
 tables and triggers. It does not alter canonical records or Retained files.
-Finish all shards before starting the schema-4 server. The initial backfill is
+Finish all shards before starting the schema-5 server. The initial backfill is
 offline work and must be measured separately from ordinary requests.
 
 Unfiltered and owner-filtered Slice pages select IDs from the ordering index

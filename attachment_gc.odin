@@ -15,6 +15,7 @@ import "clock"
 import "persistence"
 import sql "sqlite"
 import "storage_io"
+import db "workspace_db"
 
 foreign import attachment_gc_libc "system:c"
 
@@ -584,17 +585,20 @@ attachment_gc_sqlite_live_references :: proc(data_dir: string, generation: u64, 
 		defer if database != nil do sql.close(database)
 		if rc != sql.OK do return false
 		if sql.exec(database, "BEGIN", nil, nil, nil) != sql.OK do return false
-		checks := [?]cstring {
-			"SELECT application_id=0x4e524351 FROM pragma_application_id",
-			"SELECT user_version=4 FROM pragma_user_version",
-			"SELECT integrity_check='ok' FROM pragma_integrity_check",
-			"SELECT NOT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+		checks := [?]struct {
+			query:    cstring,
+			expected: i64,
+		} {
+			{"SELECT application_id FROM pragma_application_id", db.APPLICATION_ID},
+			{"SELECT user_version FROM pragma_user_version", db.SCHEMA_VERSION},
+			{"SELECT integrity_check='ok' FROM pragma_integrity_check", 1},
+			{"SELECT NOT EXISTS(SELECT 1 FROM pragma_foreign_key_check)", 1},
 		}
-		for query in checks {
+		for check in checks {
 			s: ^sql.Statement
-			if sql.prepare_v2(database, query, -1, &s, nil) != sql.OK do return false
+			if sql.prepare_v2(database, check.query, -1, &s, nil) != sql.OK do return false
 			defer sql.finalize(s)
-			if sql.step(s) != sql.ROW || sql.column_int64(s, 0) != 1 || sql.step(s) != sql.DONE do return false
+			if sql.step(s) != sql.ROW || sql.column_int64(s, 0) != check.expected || sql.step(s) != sql.DONE do return false
 		}
 		s: ^sql.Statement
 		if sql.prepare_v2(database, "SELECT file_id FROM task_attachments UNION ALL SELECT file_id FROM asset_attachments", -1, &s, nil) != sql.OK do return false

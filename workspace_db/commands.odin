@@ -36,6 +36,8 @@ Command_Output :: struct {
 	reading, more:       bool,
 	ticket_reads:        []Ticket_Read_Cursor, // Internal upload result, never a wire frame.
 	dm_states:           []DM_State, // Committed membership snapshots for the owning worker.
+	monitor_cursor:      u64, // Internal maintenance continuation; zero restarts the scan.
+	monitor_through:     u64, // Fixed upper ID for the current scan; zero starts a new scan.
 }
 
 // Reserve output before serialization/commit. Serialize before requesting the

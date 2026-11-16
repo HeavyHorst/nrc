@@ -18,16 +18,19 @@ import legacy as old
 
 
 CANONICAL = ("sequences", "tasks", "task_attachments", "assets", "asset_attachments",
-             "edges", "dm_conversations", "history_sequences", "history")
+             "edges", "dm_conversations", "history_sequences", "history",
+             "monitor_instances", "monitor_episodes", "monitor_runs", "monitor_actions", "incident_actions",
+             "monitor_queue_usage", "monitor_deliveries", "monitor_delivery_receipts", "monitor_delivery_lanes")
 SCHEMA = Path(__file__).with_name("schema.sql")
 SLICE_SCHEMA = Path(__file__).with_name("slice_summaries.sql")
 INCREMENTAL_SCHEMA = Path(__file__).with_name("slice_incremental.sql")
 PAGINATION_SCHEMA = Path(__file__).with_name("slice_pagination.sql")
-SCHEMA_VERSION = 4
+MONITORING_SCHEMA = Path(__file__).with_name("monitoring.sql")
+SCHEMA_VERSION = 5
 
 
 def schema_text():
-    return SCHEMA.read_text() + SLICE_SCHEMA.read_text() + INCREMENTAL_SCHEMA.read_text() + PAGINATION_SCHEMA.read_text()
+    return SCHEMA.read_text() + SLICE_SCHEMA.read_text() + INCREMENTAL_SCHEMA.read_text() + PAGINATION_SCHEMA.read_text() + MONITORING_SCHEMA.read_text()
 
 
 def schema_hash():

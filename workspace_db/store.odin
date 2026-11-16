@@ -16,9 +16,14 @@ Store :: struct {
 	slice_statement_count: int,
 }
 
-SCHEMA_VERSION :: 4
+SCHEMA_VERSION :: 5
 APPLICATION_ID :: 0x4e524351
-SCHEMA :: #load("schema.sql", string) + #load("slice_summaries.sql", string) + #load("slice_incremental.sql", string) + #load("slice_pagination.sql", string)
+SCHEMA ::
+	#load("schema.sql", string) +
+	#load("slice_summaries.sql", string) +
+	#load("slice_incremental.sql", string) +
+	#load("slice_pagination.sql", string) +
+	#load("monitoring.sql", string)
 
 // create permits initialization of an empty database only. Existing NRC files
 // must match the schema version; other databases are never adopted or migrated.
@@ -197,6 +202,8 @@ ID_Domain :: enum {
 	Task,
 	Asset,
 	Edge,
+	Monitor_Instance,
+	Monitor_Delivery,
 }
 
 // Durable floors are independent of live rows and include referenced IDs.
@@ -204,9 +211,11 @@ ID_Domain :: enum {
 advance_floor :: proc(store: ^Store, floor: u64, domain := ID_Domain.Task) -> c.int {
 	if sql.get_autocommit(store.db) != 0 do return sql.MISUSE
 	queries := [ID_Domain]cstring {
-		.Task  = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'task'",
-		.Asset = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'asset'",
-		.Edge  = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'edge'",
+		.Task             = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'task'",
+		.Asset            = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'asset'",
+		.Edge             = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'edge'",
+		.Monitor_Instance = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'monitor_instance'",
+		.Monitor_Delivery = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'monitor_delivery'",
 	}
 	statement, rc := prepare(store, queries[domain])
 	if rc != sql.OK do return rc
@@ -219,9 +228,11 @@ advance_floor :: proc(store: ^Store, floor: u64, domain := ID_Domain.Task) -> c.
 next_id :: proc(store: ^Store, domain := ID_Domain.Task) -> (id: u64, status: c.int) {
 	if sql.get_autocommit(store.db) != 0 do return 0, sql.MISUSE
 	queries := [ID_Domain]cstring {
-		.Task  = "SELECT high_water FROM sequences WHERE domain = 'task'",
-		.Asset = "SELECT high_water FROM sequences WHERE domain = 'asset'",
-		.Edge  = "SELECT high_water FROM sequences WHERE domain = 'edge'",
+		.Task             = "SELECT high_water FROM sequences WHERE domain = 'task'",
+		.Asset            = "SELECT high_water FROM sequences WHERE domain = 'asset'",
+		.Edge             = "SELECT high_water FROM sequences WHERE domain = 'edge'",
+		.Monitor_Instance = "SELECT high_water FROM sequences WHERE domain = 'monitor_instance'",
+		.Monitor_Delivery = "SELECT high_water FROM sequences WHERE domain = 'monitor_delivery'",
 	}
 	statement, rc := prepare(store, queries[domain])
 	if rc != sql.OK do return 0, rc
