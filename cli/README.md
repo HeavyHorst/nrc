@@ -35,6 +35,191 @@ Rooms and DMs are chat-only. All stored work belongs to the configured workspace
 Changing chat rooms does not change the tasks, notes or other records you see.
 Use `--room` only for chat commands, not for data or graph commands.
 
+## Victoria monitors and sources
+
+Use named flags instead of constructing asset preview and payload JSON. The same
+create/update commands support HTTP, TCP, VictoriaMetrics and VictoriaLogs.
+Victoria sources are shared workspace records. Authentication is optional:
+
+```sh
+nrc monitor source create metrics --kind victoriametrics --url http://metrics:8428
+nrc monitor source create logs-short --kind victorialogs --url http://logs:9428 --retention 7d
+nrc monitor source list --human
+```
+
+Use the IDs returned by those commands below; `123` and `456` are examples.
+Put the complete query in `disk.metricsql`, including healthy rows. Alert
+comparisons belong in `--trigger`, not in a query filter that hides healthy rows.
+
+```sh
+nrc monitor create 'Disk space' --source 123 --query-file disk.metricsql \
+  --identity instance,mountpoint --trigger '<10' --recovery '>15' \
+  --interval 1m --timeout 10s --failures 5 --recoveries 5
+nrc monitor get 456 --pretty
+nrc monitor update 456 --query-file disk.metricsql --dry-run
+nrc monitor update 456 --interval 30s
+nrc monitor list --human
+```
+
+`--source` reads the source's kind and pins its current revision automatically.
+`--query` accepts inline text; `--query-file -` reads stdin. Queries are limited
+to 32 KiB of UTF-8. VictoriaLogs queries must contain their own time window.
+Defaults are one minute, ten-second timeout, 5/5 failure/recovery thresholds,
+three missing results and evaluator `nrc-incidents`. The evaluator must match
+the sidecar's authenticated nickname. Numeric comparisons preserve decimal
+precision. `--webhooks 789` sets immutable webhook route asset IDs, not destination URLs.
+
+Updates preserve omitted fields and reject concurrent edits using the record's
+revision. Source edits invalidate pinned monitors; unrelated monitor edits never
+silently adopt the changed source. Refresh each affected monitor explicitly:
+
+```sh
+nrc monitor source update 123 --url http://new-metrics:8428
+nrc monitor update 456 --refresh-source --dry-run
+nrc monitor update 456 --refresh-source
+nrc monitor source update 123 --secret-ref METRICS_READ
+nrc monitor source update 123 --secret-ref ''
+```
+
+Secret references resolve only in the sidecar's environment; no secret value is
+stored in NRC. Empty `--secret-ref`, `--retention`, `--recovery` or `--webhooks`
+clears that setting. `--identity` and `--webhooks` replace their entire lists.
+`--dry-run` reads configuration and validates the proposed write, but neither
+writes nor executes the query. It is not a Victoria query syntax or connectivity
+test. Retention is descriptive, not a remote retention setting.
+
+List commands return one page, newest edits first, with `has_more` and
+`next_cursor`. Continue with `--cursor` and optionally `--limit` (1–250).
+These are configuration lists, not the web client's problem-first status register.
+Use `--fields` for JSON projection and `--human` for readable listings.
+
+### Pause, resume and retire instances
+
+Find stable instance IDs, including healthy instances without an incident:
+
+```sh
+nrc monitor instances 456 --human
+nrc monitor instances 456 --include-retired
+nrc monitor instances 456 --limit 8
+nrc monitor instances 456 --cursor '<next_cursor>'
+```
+
+Each call returns one status page, with up to 16 instances, in the server's
+problem-first order. JSON exposes `entries`, `monitor_id`, `at`, `has_more` and
+`next_cursor`; IDs and timestamps remain strings. Human output shows instance
+ID, state, identity labels, value and incident ID. Retired instances are excluded
+unless requested. Continue with the same monitor and `--include-retired` setting.
+Cursors preserve the page time and sort position, but concurrent updates can
+move rows: this is a live view, not a frozen snapshot. Restart without a cursor
+to refresh, or when the server rejects a cursor older than five minutes.
+
+These commands target one stable instance ID within a monitor, not the whole rule:
+
+```sh
+nrc monitor pause 456 71
+nrc monitor resume 456 71
+nrc monitor retire 456 71 --confirm
+```
+
+Use the `id` from `monitor instances`, the Incident Inspector or an incident's
+`instance_id` from `nrc incident get`; `456` and `71` are examples. Pause retains
+the last sample and any open incident but clears qualification counters. Resume
+allows new observations without declaring the instance healthy. Retirement closes
+an open incident as `removed`, not `recovered`, retains history and frees active
+capacity. It requires `--confirm`. A later present observation can reactivate the
+same instance with new qualification counters; resume cannot reactivate it.
+
+Each command reads the monitor's current revision and submits one fenced action.
+Concurrent edits are rejected. A lost or invalid receipt reports an unconfirmed,
+non-retryable outcome: inspect the instance before issuing another command. A new
+invocation reads a fresh revision and is a new action, not an exact replay.
+Use `monitor update <id> --enabled=false` to disable a whole rule instead.
+
+### HTTP and TCP checks
+
+```sh
+nrc monitor create Health --kind http --url https://example.net/health \
+  --status 200 --max-latency 2s --certificate-valid-for 72h
+nrc monitor create Database --kind tcp --address db.internal:5432
+nrc monitor update 456 --url https://example.net/ready --dry-run
+nrc monitor update 456 --max-latency 0
+nrc monitor update 456 --conditions-file conditions.json
+```
+
+HTTP defaults to status 200, verified TLS and no redirects. Use
+`--follow-redirects` or `--insecure-tls` explicitly. Policy flags and 5/5 defaults
+are shared with Victoria rules. Check kind cannot change on update.
+`--status`, `--max-latency` and `--certificate-valid-for` replace conditions for
+their own field and preserve other fields. Zero removes the duration condition.
+`--conditions-file` replaces all conditions and cannot be combined with these
+shortcuts; `-` reads stdin. It accepts up to 32 KiB and 1–32 conditions, for example:
+
+```json
+[{"field":"status","op":"==","value":200},
+ {"field":"json","path":"/healthy","op":"==","value":true}]
+```
+
+Paths are JSON Pointers, not JSONPath. Conditions also support `latency_ns` and
+`certificate_remaining_ns` with numeric nanoseconds. Dry runs do not contact targets.
+Without `-monitors`, the sidecar discovers rules assigned to its evaluator every
+30 seconds; existing deployments using a fixed list must remove that flag to opt in.
+
+### Outgoing webhook routes
+
+```sh
+nrc monitor source create ops-v1 --kind webhook --url https://receiver.example.net/nrc
+nrc monitor update 456 --webhooks 789
+nrc monitor source get 789
+```
+
+Replace `789` with the created route's ID. Authentication is optional; add
+`--secret-ref OPS` to resolve `NRC_MONITOR_SECRET_OPS` in the sidecar. A webhook
+source is immutable and cannot be deleted, including through generic asset
+commands. To change its URL, create a new route and update the monitor's list.
+Queued events still go to the old destination. Source lists include both Victoria
+sources and webhook routes. Webhook sources cannot be used by Victoria queries.
+
+Receivers must support the [NRC webhook contract](../services/bots/nrc-incidents/README.md#outgoing-webhook-routes),
+including idempotency and replacement-set resynchronization after outbox overflow.
+
+Workspace members can inspect and unblock lanes without impersonating the evaluator:
+
+```sh
+nrc monitor webhook list 456
+nrc monitor webhook get 456 789
+nrc monitor webhook discard 456 789 --event 901 --generation 4 --confirm
+```
+
+Use the exact event ID and generation from `get`; the example numbers are not
+defaults. Discard only accepts a dead head, preserves the incident and marks the
+lane for state resynchronization. It does not resend the lost transition.
+Concurrent changes are rejected. After a lost response, retry only the same
+event/generation pair. `list` returns `next_route`; continue with `--cursor`.
+Leasing and delivery acknowledgments remain evaluator-only.
+
+## Incidents
+
+Incidents are created automatically. Inspect them, acknowledge awareness, or
+assign responsibility with dedicated commands:
+
+```sh
+nrc incident list --human
+nrc incident get 789
+nrc incident ack 789
+nrc incident assign 789 alice
+nrc incident assign 789 --clear
+```
+
+Acknowledgment and assignment do not resolve an incident or change its technical
+status. NRC records the authenticated actor and acknowledgment time. Actions use
+the current revision and reject concurrent changes rather than overwriting them.
+There is no manual create or resolve command.
+
+The list currently includes closed incidents and uses the asset API's newest-edit
+order, not problem priority. It returns one page with `has_more`, `next_cursor`
+and `total_count`; use `--limit` and `--cursor` to continue. `get` exposes monitor,
+instance and episode IDs, lifecycle times, acknowledgment and assignment.
+
 ## Staff tickets
 
 Company ticket-sharing groups are managed separately from individual tickets:
