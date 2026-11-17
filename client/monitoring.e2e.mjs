@@ -160,15 +160,20 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-history-monitor="13"][data-history-part="metrics"]').textContent.includes('NO HISTORY'));
   assert.match(await page.locator('#monitorSummary').textContent(), /2 \/ 2 LOADED MONITORS.*3 INSTANCES.*1 FIRING/);
   await page.fill('#monitorSearch', 'BACKUP');
+  await page.waitForSelector('#monitorList [data-monitor="13"]');
   assert.deepEqual(await page.locator('#monitorList [data-monitor]').evaluateAll(nodes => nodes.map(n => n.dataset.monitor)), ['13']);
-  assert.match(await page.locator('#monitorSummary').textContent(), /1 \/ 2 LOADED MONITORS.*2 INSTANCES.*0 FIRING/);
+  assert.match(await page.locator('#monitorSummary').textContent(), /1 \/ 1 LOADED MONITORS.*2 INSTANCES.*0 FIRING/);
   await page.fill('#monitorSearch', '#12');
+  await page.waitForSelector('#monitorList [data-monitor="12"]');
   assert.equal(await page.locator('#monitorList [data-monitor="12"]').count(), 1);
   await page.fill('#monitorSearch', '');
-  for (const [state, ids] of [['problems', ['12']], ['healthy', ['13']], ['paused', []], ['all', ['12', '13']]]) {
+  for (const [state, ids] of [['problems', ['12']], ['healthy', ['13']], ['paused', []], ['all', ['12']]]) {
     await page.selectOption('#monitorStateFilter', state);
+    await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
     assert.deepEqual(await page.locator('#monitorList [data-monitor]').evaluateAll(nodes => nodes.map(n => n.dataset.monitor)), ids);
   }
+  await page.click('#monitorMore');
+  await page.waitForSelector('[data-monitor="13"]');
   // Boundaries 23/24 and 47/48 distinguish hourly input from 24-hour display buckets.
   await page.evaluate(() => { monitorFixture.registerRows = [
     { hour: 23, identity: 'a', healthy: 3600 }, { hour: 24, identity: 'a', failing: 3600 },
@@ -203,9 +208,12 @@ try {
   await page.click('#monitorMore');
   await page.waitForSelector('[data-monitor="13"]');
   await page.selectOption('#monitorStateFilter', 'paused');
+  await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
   assert.deepEqual(await page.locator('#monitorList [data-monitor]').evaluateAll(nodes => nodes.map(n => n.dataset.monitor)), ['13']);
-  assert.match(await page.locator('#monitorSummary').textContent(), /1 \/ 2 LOADED MONITORS.*2 INSTANCES.*0 FIRING/);
+  assert.match(await page.locator('#monitorSummary').textContent(), /1 \/ 1 LOADED MONITORS.*2 INSTANCES.*0 FIRING/);
   await page.selectOption('#monitorStateFilter', 'all');
+  await page.waitForSelector('[data-monitor="12"]');
+  await page.click('#monitorMore');
   await page.waitForFunction(() => document.querySelector('[data-history-monitor="13"][data-history-part="metrics"]').textContent.includes('NO HISTORY'));
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => {
@@ -221,7 +229,7 @@ try {
   assert.deepEqual(await page.evaluate(() => ['table', 'thead tr', 'tbody', 'tbody tr', 'td'].map(s => getComputedStyle(document.querySelector(`#monitorList ${s}`)).display)), ['table', 'table-row', 'table-row-group', 'table-row', 'table-cell'], 'Task-register responsive rules must not leak into monitoring');
   await page.setViewportSize({ width: 1600, height: 1000 });
   // A held register read plus a held selection must leave the latest selection usable.
-  await page.evaluate(() => { Object.assign(monitorFixture, { enforceAdmission: true, deferRegister: true, deferHistoryKind: 'runs', instancePages: true }); });
+  await page.evaluate(() => { Object.assign(monitorFixture, { enforceAdmission: true, deferRegister: true, deferHistoryKind: 'inspector', instancePages: true }); });
   await page.click('#monitorRefresh');
   await page.waitForFunction(() => monitorFixture.pendingRegister.length === 1);
   await page.click('[data-monitor="12"]');
@@ -243,10 +251,11 @@ try {
   await page.click('[data-instance="1"]');
   assert.equal(await page.evaluate(() => monitorFixture.rejectedHistory), 0);
   await page.evaluate(() => { monitorFixture.deferHistoryKind = ''; monitorFixture.pendingHistory.shift()(); });
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus')?.textContent === '');
   await page.waitForFunction(() => document.getElementById('monitorUptime')?.textContent.includes('CURRENT REVISION ONLY'));
   assert.equal(await page.locator('[data-instance="1"]').getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('#monitorSelection h3').count(), 0, 'Selected identity is not duplicated below a visible list');
-  assert.equal(await page.evaluate(() => monitorFixture.admittedHistory.filter(url => url.includes('/runs?')).length), 2);
+  assert.equal(await page.evaluate(() => monitorFixture.admittedHistory.filter(url => url.includes('/inspector?')).length), 2);
   assert.equal(await page.evaluate(() => monitorFixture.maxActiveHistory), 2);
   assert.equal(await page.evaluate(() => monitorFixture.rejectedHistory), 0);
   await page.evaluate(() => { monitorFixture.deferRegister = false; monitorFixture.pendingRegister.shift()(); });
@@ -302,6 +311,7 @@ try {
         await page.click('[data-instance="0"]');
         await page.waitForFunction(() => document.querySelectorAll('.monitor-check').length === 5);
       }
+      await page.waitForFunction(() => document.getElementById('monitorHistoryStatus').textContent === '');
       await page.locator('.monitor-checks').scrollIntoViewIfNeeded();
       const before = await page.locator('.monitor-checks').boundingBox();
       const height = await page.locator('.monitor-check-panels').evaluate(node => node.getBoundingClientRect().height);
@@ -351,6 +361,7 @@ try {
   await page.click('#monitorDetailRefresh');
   await page.evaluate(() => { monitorFixture.drops = '0'; monitorFixture.rollups = '0'; });
   await page.click('[data-instance="0"]');
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus')?.textContent === '');
   await page.waitForFunction(() => document.getElementById('monitorUptime')?.textContent.includes('CURRENT REVISION ONLY'));
   assert.doesNotMatch(await page.locator('.monitor-record').textContent(), /HISTORY DROPS|ROLLUPS PENDING/);
   // Replacing the instance snapshot must invalidate both rendered and pending history.
@@ -359,7 +370,7 @@ try {
   await page.waitForFunction(() => document.getElementById('monitorInstanceStatus').textContent.includes('LOADED'));
   assert.doesNotMatch(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION/);
   assert.equal(await page.locator('#monitorSelection').textContent(), '');
-  await page.evaluate(() => { monitorFixture.statusSequence = '17'; monitorFixture.deferHistoryKind = 'samples'; });
+  await page.evaluate(() => { monitorFixture.statusSequence = '17'; monitorFixture.deferHistoryKind = 'inspector'; });
   await page.uncheck('#monitorRetired');
   await page.click('[data-instance="0"]');
   await page.waitForFunction(() => monitorFixture.pendingHistory.length === 1);
@@ -408,11 +419,13 @@ try {
   await page.check('#monitorRetired');
   await page.evaluate(() => { monitorFixture.old = true; });
   await page.click('[data-instance="0"]');
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus')?.textContent === '');
   await page.waitForFunction(() => document.getElementById('monitorHistory').textContent.includes('HISTORICAL / NOT CURRENT'));
   assert.match(await page.locator('#monitorHistory').textContent(), /definition revision unavailable/);
   for (const mismatch of [{ unknown: true, sequence: '17' }, { unknown: false, sequence: '16' }]) {
     await page.evaluate(value => Object.assign(monitorFixture, { old: false }, value), mismatch);
     await page.click('[data-instance="0"]');
+    await page.waitForFunction(() => document.getElementById('monitorHistoryStatus')?.textContent === '');
     await page.waitForFunction(() => document.getElementById('monitorHistory').textContent.includes('HISTORICAL / NOT CURRENT'));
     assert.doesNotMatch(await page.locator('#monitorHistory').textContent(), /definition revision unavailable/);
     if (mismatch.unknown) {
@@ -459,7 +472,7 @@ try {
   assert.match(await page.locator('.monitor-meter[data-kind="coverage"]').getAttribute('aria-label'), /UNKNOWN/);
   await page.evaluate(() => { monitorFixture.config.failures = 5; Object.assign(monitorFixture, { failures: 5, recoveries: 0, uptimeRows: undefined }); });
   // An automatic read must not repopulate a replacement snapshot with no instances.
-  await page.evaluate(() => { monitorFixture.deferHistoryKind = 'samples'; });
+  await page.evaluate(() => { monitorFixture.deferHistoryKind = 'inspector'; });
   await page.click('#monitorDetailRefresh');
   await page.waitForFunction(() => monitorFixture.pendingHistory.length === 1);
   await page.evaluate(() => { monitorFixture.empty = true; });
@@ -478,7 +491,7 @@ try {
   assert.equal(await page.locator('#monitorHistoryDetails .monitor-checks').isVisible(), true);
   await page.evaluate(() => { monitorFixture.fail = true; });
   await page.click('#monitorDetailRefresh');
-  await page.waitForFunction(() => document.getElementById('monitorHistory').textContent.includes('HTTP 503'));
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus').textContent.includes('HTTP 503'));
   await page.click('#monitorSelection [data-incident="51"]');
   await page.waitForSelector('#incidentAck');
   await page.click('#incidentAck');
@@ -497,7 +510,7 @@ try {
       Object.assign(monitorFixture, { value: 18.4, recoveries: 3, failures: 0, fail: true, old: false });
     }, kind);
     await page.click('[data-monitor="12"]');
-    await page.waitForFunction(() => document.getElementById('monitorHistoryDetails')?.textContent.includes('HTTP 503'));
+    await page.waitForFunction(() => document.getElementById('monitorHistoryStatus')?.textContent.includes('HTTP 503'));
     assert.deepEqual(await page.locator('#monitorHistory td').allTextContents(), ['18.4', '< 10', '> 15']);
     assert.equal(await page.locator('#monitorSelection [data-state="firing"]').count(), 1);
     assert.match(await page.locator('#monitorSelection').textContent(), /RECOVER 3\/5/);
@@ -713,6 +726,137 @@ try {
   await page.evaluate(() => { monitorFixture.deferOverview = false; monitorFixture.pendingStatus.shift()(); });
   await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'monitorSearch');
+  await page.click('#monitorRefresh');
+  await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
+  assert.equal(await page.locator('#monitorList [data-monitor="200"]').count(), 0);
+  await page.fill('#monitorSearch', '#200');
+  await page.clock.runFor(300);
+  await page.waitForSelector('#monitorList [data-monitor="200"]');
+  assert.equal(await page.locator('#monitorList [data-monitor]').count(), 1, 'Server search reaches an unloaded page');
+  assert.equal(await page.evaluate(() => monitorFixture.requests.at(-1).cursor), '0', 'Search resets pagination');
+  await page.clock.runFor(30000);
+  assert.equal(await page.evaluate(() => monitorFixture.requests.at(-1).search), '#200', 'Polling preserves the server query');
+  // A response from a superseded query must not replace the new result.
+  await page.evaluate(() => { monitorFixture.deferOverview = true; });
+  await page.fill('#monitorSearch', '#201');
+  await page.clock.runFor(300);
+  await page.waitForFunction(() => monitorFixture.pendingStatus.length === 1);
+  await page.fill('#monitorSearch', '#202');
+  await page.clock.runFor(300);
+  await page.waitForFunction(() => monitorFixture.pendingStatus.length === 2);
+  await page.evaluate(() => { monitorFixture.deferOverview = false; monitorFixture.pendingStatus.pop()(); });
+  await page.waitForSelector('#monitorList [data-monitor="202"]');
+  await page.evaluate(() => monitorFixture.pendingStatus.shift()());
+  assert.deepEqual(await page.locator('#monitorList [data-monitor]').evaluateAll(nodes => nodes.map(n => n.dataset.monitor)), ['202']);
+  // More and a two-page poll must retain both filters, not just the cursor.
+  await page.evaluate(() => {
+    monitorFixture.overviewIDs = ['900', ...Array.from({ length: 18 }, (_, i) => String(300 + i)), '999'];
+    monitorFixture.firingID = '305';
+  });
+  await page.fill('#monitorSearch', 'Monitor 3');
+  await page.selectOption('#monitorStateFilter', 'healthy');
+  await page.clock.runFor(300);
+  await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
+  assert.equal(await page.locator('#monitorList [data-monitor]').count(), 16);
+  const filteredStart = await page.evaluate(() => monitorFixture.requests.length);
+  await page.click('#monitorMore');
+  await page.waitForFunction(() => document.querySelectorAll('#monitorList [data-monitor]').length === 17);
+  const expectedFiltered = Array.from({ length: 18 }, (_, i) => String(300 + i)).filter(id => id !== '305');
+  assert.deepEqual(await page.locator('#monitorList [data-monitor]').evaluateAll(nodes => nodes.map(n => n.dataset.monitor)), expectedFiltered);
+  await page.clock.runFor(30000);
+  await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
+  assert.deepEqual(await page.locator('#monitorList [data-monitor]').evaluateAll(nodes => nodes.map(n => n.dataset.monitor)), expectedFiltered);
+  assert.deepEqual(await page.evaluate(start => monitorFixture.requests.slice(start).filter(r => r.id === '0').map(({ cursor, search, state }) => ({ cursor, search, state })), filteredStart), [
+    { cursor: '316', search: 'monitor 3', state: 2 },
+    { cursor: '0', search: 'monitor 3', state: 2 },
+    { cursor: '316', search: 'monitor 3', state: 2 },
+  ]);
+  // Inspector uses one bundled read, and cached data is explicitly historical
+  // while that read is held or fails. A new identity must never see the old data.
+  await page.reload();
+  await page.waitForFunction(() => window.NRCMonitoring && window.NRCTickets);
+  await page.evaluate(installMonitoringFixture);
+  await page.evaluate(() => { monitorFixture.sampleRows = [{ ago: 60, condition: 1, value: 0 }]; });
+  await page.click('#monitoringBtn');
+  await page.click('[data-monitor="12"]');
+  await page.waitForSelector('.monitor-check');
+  assert.equal(await page.evaluate(() => monitorFixture.inspectorRequests.length), 1);
+  assert.match(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION/);
+  await page.evaluate(() => { monitorFixture.deferHistoryKind = 'inspector'; monitorFixture.sampleRows = [{ ago: 60, condition: 0, value: 1 }]; });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => monitorFixture.pendingHistory.length === 1);
+  assert.match(await page.locator('#monitorHistoryStatus').textContent(), /PREVIOUS RESULT/);
+  assert.equal(await page.locator('.monitor-check').getAttribute('data-state'), 'failing');
+  assert.doesNotMatch(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION/);
+  await page.evaluate(() => { monitorFixture.deferHistoryKind = ''; monitorFixture.pendingHistory.shift()(); });
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus').textContent === '');
+  assert.equal(await page.locator('.monitor-check').getAttribute('data-state'), 'healthy');
+  assert.equal(await page.evaluate(() => monitorFixture.inspectorRequests.length), 2);
+  await page.evaluate(() => { monitorFixture.fail = true; });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus').textContent.includes('503'));
+  assert.equal(await page.locator('.monitor-check').getAttribute('data-state'), 'healthy', 'Failed revalidation preserves the previous result');
+  await page.evaluate(() => { monitorFixture.fail = false; monitorFixture.identity = 'other-target'; monitorFixture.deferHistoryKind = 'inspector'; });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => monitorFixture.pendingHistory.length === 1);
+  assert.equal(await page.locator('.monitor-check').count(), 0, 'An identity change cannot reuse another instance history');
+  await page.evaluate(() => { monitorFixture.deferHistoryKind = ''; monitorFixture.pendingHistory.shift()(); });
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus').textContent === '');
+  await page.evaluate(() => { monitorFixture.sectionLimit = 'runs'; });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus').textContent === '');
+  assert.match(await page.locator('#monitorHistory').textContent(), /section exceeds/);
+  assert.equal(await page.locator('.monitor-check').count(), 1, 'A run limit does not discard samples');
+  assert.match(await page.locator('#monitorUptime').textContent(), /66.66%/);
+  await page.clock.setSystemTime(await page.evaluate(() => Date.now() + 300001));
+  await page.evaluate(() => { monitorFixture.deferHistoryKind = 'inspector'; });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => monitorFixture.pendingHistory.length === 1);
+  assert.equal(await page.locator('.monitor-check').count(), 0, 'Expired history is not reused');
+  await page.evaluate(() => { monitorFixture.deferHistoryKind = ''; monitorFixture.pendingHistory.shift()(); });
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus').textContent === '');
+  const openCachedMonitor = async (id = '12', held = false) => {
+    const before = await page.evaluate(() => monitorFixture.inspectorRequests.length);
+    await page.evaluate(id => NRCInspector.openEntity({ type: 'monitor', id: BigInt(id) }, { replaceCurrent: true }), id);
+    await page.waitForFunction(({ before, held }) => monitorFixture.inspectorRequests.length > before && (held ? monitorFixture.pendingHistory.length === 1 : document.getElementById('monitorHistoryStatus')?.textContent === ''), { before, held });
+  };
+  const releaseCachedRead = async () => {
+    await page.evaluate(() => { monitorFixture.deferHistoryKind = ''; monitorFixture.pendingHistory.shift()(); });
+    await page.waitForFunction(() => document.getElementById('monitorHistoryStatus').textContent === '');
+  };
+  for (const scope of ['workspace', 'monitor', 'revision']) {
+    await page.evaluate(() => { currentWorkspaceId = 'fixture'; monitorFixture.workspace = 'fixture'; monitorFixture.assetRevision = '100'; monitorFixture.sectionLimit = ''; });
+    await openCachedMonitor();
+    // Positive control: the same complete key really has a usable cache entry.
+    await page.evaluate(() => { monitorFixture.deferHistoryKind = 'inspector'; });
+    await openCachedMonitor('12', true);
+    assert.match(await page.locator('#monitorHistoryStatus').textContent(), /PREVIOUS RESULT/);
+    assert.equal(await page.locator('.monitor-check').count(), 1);
+    await releaseCachedRead();
+    await page.evaluate(scope => {
+      monitorFixture.deferHistoryKind = 'inspector';
+      if (scope === 'workspace') currentWorkspaceId = monitorFixture.workspace = 'other-workspace';
+      if (scope === 'revision') monitorFixture.assetRevision = '101';
+    }, scope);
+    await openCachedMonitor(scope === 'monitor' ? '13' : '12', true);
+    assert.equal(await page.locator('.monitor-check').count(), 0, `${scope} must isolate cached history`);
+    assert.doesNotMatch(await page.locator('#monitorHistoryStatus').textContent(), /PREVIOUS RESULT/);
+    await releaseCachedRead();
+  }
+  await page.evaluate(() => { currentWorkspaceId = monitorFixture.workspace = 'fixture'; monitorFixture.assetRevision = '100'; });
+  for (let i = 0; i < 9; i++) {
+    await page.evaluate(i => { monitorFixture.identity = `eviction-${i}`; }, i);
+    await openCachedMonitor();
+  }
+  await page.evaluate(() => { monitorFixture.identity = 'eviction-0'; monitorFixture.deferHistoryKind = 'inspector'; });
+  await openCachedMonitor('12', true);
+  assert.equal(await page.locator('.monitor-check').count(), 0, 'The ninth key evicts the oldest cache entry');
+  await releaseCachedRead();
+  await page.evaluate(() => { monitorFixture.identity = 'eviction-8'; monitorFixture.deferHistoryKind = 'inspector'; });
+  await openCachedMonitor('12', true);
+  assert.equal(await page.locator('.monitor-check').count(), 1, 'Eviction retains the newest entry');
+  assert.match(await page.locator('#monitorHistoryStatus').textContent(), /PREVIOUS RESULT/);
+  await releaseCachedRead();
   assert.deepEqual(errors, []);
   console.log('PASS: hourly history, weighted uptime/coverage, gaps/pauses, stale history races, narrow layout, status pagination, diagnostics, history failure, ACK/assignment, disconnect');
 } finally { await browser.close(); }

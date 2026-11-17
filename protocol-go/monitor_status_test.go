@@ -13,6 +13,15 @@ func TestMonitorStatusWireContract(t *testing.T) {
 	if err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("%x %v", got, err)
 	}
+	filtered, err := EncodeQueryMonitorStatus(MonitorStatusQuery{Limit: 16, StateFilter: 2, Search: "#12"})
+	if err != nil || len(filtered) != 37 || !bytes.Equal(filtered[31:], []byte{16, 0, 2, '#', '1', '2'}) {
+		t.Fatalf("filtered: %x %v", filtered, err)
+	}
+	for _, q := range []MonitorStatusQuery{{Limit: 1, StateFilter: 4}, {Limit: 1, Search: "\xff"}, {Limit: 1, MonitorID: 7, Search: "a"}} {
+		if _, err := EncodeQueryMonitorStatus(q); err == nil {
+			t.Fatal("accepted invalid filter", q)
+		}
+	}
 	for _, q := range []MonitorStatusQuery{{Limit: 0}, {Limit: 17}, {Limit: 1, CursorRank: 9}, {Limit: 1, CursorID: 1}, {Limit: 1, CursorRank: 1}, {Limit: 1, IncludeRetired: true}, {Limit: 1, At: -1}} {
 		if _, err := EncodeQueryMonitorStatus(q); err == nil {
 			t.Fatal("accepted invalid query", q)

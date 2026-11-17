@@ -5,6 +5,7 @@ import "core:encoding/endian"
 import "core:encoding/json"
 import "core:fmt"
 import "core:mem/virtual"
+import "core:strconv"
 import "core:strings"
 import pr "protocol"
 import sql "sqlite"
@@ -85,7 +86,10 @@ sqlite_query_monitor_status :: proc(store: ^db.Store, request: ^db.Request, outp
 	query :=
 		MONITOR_STATUS_CTE +
 		`SELECT id,rank,name,revision,run_sequence,run_at,n0,n1,n2,n3,n4,n5,n6,n7,n8
- FROM summary WHERE (?4=zeroblob(8) OR rank>?5 OR (rank=?5 AND id>?4)) ORDER BY rank,id LIMIT ?6`
+ FROM summary WHERE (?4=zeroblob(8) OR rank>?5 OR (rank=?5 AND id>?4))
+ AND (?9=0 OR (?9=1 AND rank<6) OR (?9=2 AND rank=6) OR (?9=3 AND rank=7))
+ AND (length(?10)=0 OR instr(lower(name),lower(CAST(?10 AS TEXT)))>0 OR id=?11)
+ ORDER BY rank,id LIMIT ?6`
 	if r.monitor_id != 0 {
 		query =
 			MONITOR_STATUS_CTE +
@@ -110,6 +114,16 @@ sqlite_query_monitor_status :: proc(store: ^db.Store, request: ^db.Request, outp
 	if rc = sql.bind_int64(statement, 6, i64(r.limit) + 1); rc != sql.OK do return rc
 	if rc = sql.bind_int64(statement, 7, r.include_retired ? 1 : 0); rc != sql.OK do return rc
 	if rc = sql.bind_int64(statement, 8, i64(pr.AssetType.Monitor)); rc != sql.OK do return rc
+	if r.monitor_id == 0 {
+		search := strings.trim_space(r.search)
+		id_text := search
+		if strings.has_prefix(id_text, "#") do id_text = id_text[1:]
+		search_id, valid_id := strconv.parse_u64(id_text)
+		if !valid_id do search_id = 0
+		if rc = sql.bind_int64(statement, 9, i64(r.state_filter)); rc != sql.OK do return rc
+		if rc = sql.bind_bytes(statement, 10, transmute([]byte)search); rc != sql.OK do return rc
+		if rc = sql.bind_id(statement, 11, search_id); rc != sql.OK do return rc
+	}
 	page := Monitor_Status_Page {
 		version    = 1,
 		monitor_id = fmt.aprintf("%d", r.monitor_id),

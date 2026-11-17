@@ -12,17 +12,25 @@ QueryMonitorStatusRequest :: struct {
 	at:                    i64,
 	limit:                 u8,
 	include_retired:       bool,
+	// Optional monitor-list suffix: state byte (all/problems/healthy/paused), UTF-8 name or exact ID.
+	state_filter:          u8,
+	search:                string,
 }
 
 parseQueryMonitorStatusRequest :: proc(data: []byte) -> (r: QueryMonitorStatusRequest, err: ProtocolParseError) {
 	if len(data) >= 4 do r.correlation_id, _ = endian.get_u32(data, .Big)
-	if len(data) != 31 do return r, .InvalidValue
+	if len(data) < 31 || len(data) > 288 do return r, .InvalidValue
 	r.monitor_id, _ = endian.get_u64(data[4:], .Big)
 	r.cursor_id, _ = endian.get_u64(data[12:], .Big)
 	r.cursor_rank = data[20]
 	r.at, _ = endian.get_i64(data[21:], .Big)
 	r.limit = data[29]
 	r.include_retired = data[30] == 1
+	if len(data) > 31 {
+		r.state_filter = data[31]
+		r.search = string(data[32:])
+		if r.monitor_id != 0 || r.state_filter > 3 || !utf8.valid_string(r.search) do return r, .InvalidValue
+	}
 	if r.limit == 0 ||
 	   r.limit > 16 ||
 	   data[30] > 1 ||

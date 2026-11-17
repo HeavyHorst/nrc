@@ -49,7 +49,7 @@ func monitorHistoryGateway(backend, workspace, secret string) http.Handler {
 		}
 		id, err := strconv.ParseUint(parts[0], 10, 64)
 		batch := parts[0] == "batch" && parts[1] == "uptime"
-		if !batch && (err != nil || id == 0 || strconv.FormatUint(id, 10) != parts[0] || (parts[1] != "samples" && parts[1] != "runs" && parts[1] != "uptime")) {
+		if !batch && (err != nil || id == 0 || strconv.FormatUint(id, 10) != parts[0] || (parts[1] != "samples" && parts[1] != "runs" && parts[1] != "uptime" && parts[1] != "inspector")) {
 			http.NotFound(w, r)
 			return
 		}
@@ -122,12 +122,18 @@ func monitorHistoryGateway(backend, workspace, secret string) http.Handler {
 			Version    int      `json:"version"`
 			Workspace  string   `json:"workspace"`
 			MonitorID  string   `json:"monitor_id"`
+			Kind       string   `json:"kind"`
+			Identity   string   `json:"identity"`
 			MonitorIDs []string `json:"monitor_ids"`
 			Results    []struct {
 				MonitorID string `json:"monitor_id"`
 			} `json:"results"`
 		}
 		if json.Unmarshal(body, &scope) != nil || scope.Version != 1 || scope.Workspace != workspace || scope.MonitorID != parts[0] {
+			http.Error(w, "invalid history scope", http.StatusBadGateway)
+			return
+		}
+		if parts[1] == "inspector" && (scope.Kind != "inspector" || scope.Identity != query.Get("identity") || scope.Identity == "") {
 			http.Error(w, "invalid history scope", http.StatusBadGateway)
 			return
 		}

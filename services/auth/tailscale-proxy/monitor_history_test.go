@@ -12,6 +12,40 @@ import (
 	"time"
 )
 
+func TestMonitorHistoryInspector(t *testing.T) {
+	secret := strings.Repeat("s", 32)
+	const good = `{"version":1,"workspace":"alice-private","monitor_id":"2","kind":"inspector","identity":"host-a","sections":{}}`
+	body := good
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/history/2/inspector" || r.URL.Query().Get("identity") != "host-a" || r.Header.Get("Authorization") != "Bearer "+secret || r.Header.Get("Cookie") != "" {
+			t.Error("inspector forwarding")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, body)
+	}))
+	defer backend.Close()
+	h := workspaceBoundary(monitorHistoryGateway(backend.URL, "alice-private", secret), workspaceTestIdentity("alice@example.com"), workspaceTestPolicy(t))
+	for _, tc := range []struct {
+		body, workspace string
+		want            int
+	}{
+		{good, "alice-private", 200}, {good, "other", 403},
+		{strings.Replace(good, "host-a", "host-b", 1), "alice-private", 502},
+		{strings.Replace(good, `"kind":"inspector"`, `"kind":"runs"`, 1), "alice-private", 502},
+		{strings.Replace(good, `"monitor_id":"2"`, `"monitor_id":"3"`, 1), "alice-private", 502},
+	} {
+		body = tc.body
+		r := httptest.NewRequest("GET", "http://nrc/monitoring/history/2/inspector?identity=host-a&resolution=raw&acceptance=all", nil)
+		r.Header.Set("X-NRC-Workspace", tc.workspace)
+		r.Header.Set("Cookie", "private")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestMonitorHistoryBatch(t *testing.T) {
 	secret := strings.Repeat("s", 32)
 	const good = `{"version":1,"workspace":"alice-private","monitor_id":"batch","monitor_ids":["2","18446744073709551615"],"results":[{"monitor_id":"2","status":200,"rows":[]},{"monitor_id":"18446744073709551615","status":404,"rows":[]}]}`

@@ -158,6 +158,11 @@ accepts up to 16 distinct monitor IDs. The gateway validates every requested and
 returned ID and keeps the same workspace authorization and reader limits as a
 single-monitor request. Batch results distinguish empty history from unavailable
 monitors; an envelope-level 422 requires splitting the batch.
+`/monitoring/history/<id>/inspector` bundles runs, samples and uptime for one
+identity in a single read. It follows the sidecar's Inspector query contract;
+the gateway also checks the returned kind and identity. It uses one of the same
+two reader slots, not three parallel requests. Deploy endpoint support in both
+sidecar and gateway before the client that calls it.
 The gateway checks the returned workspace and monitor ID before publishing data,
 refuses redirects, allows two concurrent reads, and limits each read to five
 seconds and 4 MiB. Invalid or mismatched responses return 502. Backend 400, 404,

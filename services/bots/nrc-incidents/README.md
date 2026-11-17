@@ -360,6 +360,19 @@ Endpoints:
 | `/v1/history/<monitor-id>/runs` | `raw`, `5m`, `1h` | Attempts, including failed/empty runs, or execution statistics |
 | `/v1/history/<monitor-id>/uptime` | `5m`, `1h` | Healthy/failing/unknown/paused durations, uptime and coverage |
 | `/v1/history/batch/uptime` | `5m`, `1h` | Uptime results for up to 16 monitor IDs in one read transaction |
+| `/v1/history/<monitor-id>/inspector` | `raw` | Runs, identity-filtered samples and 24-hour uptime in one read transaction |
+
+The Inspector endpoint requires `identity`, `acceptance=all`, and a raw `from`/`to`
+window of at most one hour. It returns `kind: "inspector"`, the requested identity,
+and `sections.runs`, `sections.samples`, `sections.uptime`. Each section contains
+`status`, `rows`, `from`, `to`, and `pending_rollup_hours_global`. Runs are
+monitor-wide; samples and uptime match the selected identity. Uptime covers the
+24 hours ending at `to` rounded down to five minutes. Raw retention or the
+5,000-row/section-byte limit produces section status 422 with no rows; other
+sections remain available. The complete envelope is limited to 4 MiB (HTTP 422
+if exceeded), one reader slot and one three-second deadline. Metadata and all
+sections use the same database snapshot. Existing individual endpoints remain
+available for narrower CLI reads.
 
 The uptime batch requires `ids=12,34,...`: one to 16 distinct, canonical positive
 uint64 IDs. It rejects `identity` and `acceptance`. Its envelope has
@@ -466,11 +479,25 @@ of the evaluator-only availability snapshot endpoint. Monitor ID zero lists
 monitors; a nonzero ID lists that monitor's instances. This reads NRC SQLite,
 not DuckDB. No configuration payloads, source URLs or secrets are returned.
 
-The request body is exactly 31 bytes, big-endian: correlation ID u32, monitor ID
+The base request body is 31 bytes, big-endian: correlation ID u32, monitor ID
 u64, cursor ID u64, cursor rank u8, page time i64 (Unix nanoseconds), limit u8,
 include-retired u8 (0 or 1). Limit is 1–16. Start with cursor ID/rank/time zero;
 continue with the previous page's cursor and time. Include-retired is only valid
 for instance lists. Retired instances are otherwise omitted, not paused ones.
+
+Monitor lists accept an optional suffix: state-filter u8 (0 all, 1 problems,
+2 healthy, 3 paused), followed by up to 256 UTF-8 bytes of search text. Old
+31-byte requests remain unfiltered. Search matches a literal name substring
+(SQLite ASCII case-insensitive) or an exact numeric ID, optionally prefixed
+with `#`. `%` and `_` are literal characters, not wildcards. Problems includes
+firing, failing, error, no_data, unknown and between. Both filters apply across
+the authorized workspace before pagination. Keep filters unchanged when
+continuing a cursor; reset the cursor on changes.
+
+The web monitor register sends these filters to NRC, debounces search by 250 ms,
+and preserves them during polling and pagination. Its counters describe loaded
+matches, not a server-wide total. Incident search remains client-side. Deploy
+NRC server support before the updated client; older servers reject the suffix.
 
 `S_MonitorStatusPage` (179) returns correlation ID u32 followed by version-1 JSON.
 Go bindings are `EncodeQueryMonitorStatus` and `DecodeMonitorStatusPage` in
@@ -513,7 +540,13 @@ protocol actions and wait for a receipt. A timeout is not proof of failure;
 refresh before retrying. Neither action changes the technical firing state.
 
 Selecting an instance reads the last hour of runs/samples through the authenticated
-history gateway and displays the latest 20 samples. Diagnostics are labelled current
+history gateway in one Inspector request, including uptime, and displays the latest
+20 samples. The client retains up to eight Inspector responses for five minutes,
+keyed by workspace, monitor revision and identity. Every selection revalidates;
+a retained response is displayed immediately as a previous result while waiting,
+and remains explicitly marked if the refresh fails. Disconnect clears the cache.
+Cached diagnostics are never labelled as matching the current evaluation. Deploy
+the sidecar and gateway Inspector endpoint before this client. Diagnostics are labelled current
 only when confirmed and matching the displayed configuration and instance revision
 and sequence. Old definitions are not guessed. Uptime uses the current revision's
 retained durations in the last complete 24-hour, five-minute-aligned window;

@@ -13,8 +13,9 @@ window.NRCMonitoring = (() => {
   let registerHistoryTail = Promise.resolve();
   let registerController;
   let period = 1;
-  let statusPages = 1, refreshTimer;
+  let statusPages = 1, refreshTimer, searchTimer;
   const registerHistory = new Map();
+  const inspectorHistory = new Map();
   const hour = 3600000;
   const historyMaxAge = 5 * 60000;
   const percent = (n, d) => d > 0n ? `${Number(n * 10000n / d) / 100}%` : 'UNKNOWN';
@@ -142,10 +143,16 @@ window.NRCMonitoring = (() => {
     request.reject(new Error(error.errorMsg)); return true;
   }
   function statusQuery(id = '0', cursor = null, retired = false) {
-    const view = new DataView(new ArrayBuffer(33));
+    const search = new TextEncoder().encode(id === '0' ? el('monitorSearch').value.trim() : '');
+    if (search.length > 256) throw new Error('Search exceeds 256 UTF-8 bytes.');
+    const view = new DataView(new ArrayBuffer(id === '0' ? 34 + search.length : 33));
     view.setUint16(0, 73); view.setBigUint64(6, BigInt(id));
     view.setBigUint64(14, BigInt(cursor?.cursor_id || '0')); view.setUint8(22, cursor?.cursor_rank || 0);
     view.setBigUint64(23, BigInt(cursor?.at || '0')); view.setUint8(31, 16); view.setUint8(32, Number(retired));
+    if (id === '0') {
+      view.setUint8(33, ['all', 'problems', 'healthy', 'paused'].indexOf(el('monitorStateFilter').value));
+      new Uint8Array(view.buffer, 34).set(search);
+    }
     return rpc(view.buffer, 179);
   }
   function assetRead(id) {
@@ -188,22 +195,24 @@ window.NRCMonitoring = (() => {
     const query = el('monitorSearch').value.trim().toLowerCase();
     const filter = el('monitorStateFilter').value;
     const visible = rows.filter(row => {
-      const m = tab === 'status' ? row : metadata(row);
-      const text = tab === 'status' ? `${row.name} #${row.id}` : `${m.title} #${row.assetId} #${m.monitor_id}`;
-      return text.toLowerCase().includes(query) && (tab !== 'status' || filter === 'all' || (filter === 'problems' ? ['firing', 'failing', 'error', 'no_data', 'unknown', 'between'].includes(m.status) : m.status === filter));
+      if (tab === 'status') return true; // Server filters before pagination.
+      const m = metadata(row);
+      return `${m.title} #${row.assetId} #${m.monitor_id}`.toLowerCase().includes(query);
     });
+    el('monitorFilterScope').textContent = tab === 'status' ? 'SEARCH & STATE: ALL WORKSPACE MONITORS · COUNTS: LOADED MATCHES · PROBLEMS FIRST · RULES VIA CLI' : 'SEARCH & COUNTS: LOADED INCIDENTS · RULES VIA CLI';
     const counts = tab === 'status' ? visible.reduce((s, row) => s.map((n, i) => n + row.counts[i]), Array(9).fill(0)) : null;
     el('monitorSummary').textContent = tab === 'status'
       ? `SHOWN: ${visible.length} / ${rows.length} LOADED MONITORS · ${counts.reduce((a, b) => a + b, 0)} INSTANCES · ${counts[0]} FIRING · ${counts[1]} PENDING${page?.has_more ? ' · MORE MONITORS AVAILABLE' : ''}`
       : `SHOWN: ${visible.length} / ${rows.length} LOADED INCIDENTS · ${visible.filter(a => metadata(a).status === 'firing').length} FIRING`;
     el('monitorList').innerHTML = visible.length ? tab === 'status' ? table(['MONITOR / INSTANCES', 'CURRENT STATE', `HISTORY · ${period === 1 ? '24H' : `${period}D`}`, 'UPTIME / SATISFACTION'], visible.map(row => `<tr><td><button class="task-row-open" data-monitor="${esc(row.id)}">${esc(row.name)}</button><span class="customer-meta">#${esc(row.id)} · ${row.counts.reduce((a, b) => a + b, 0)} instances · ${row.counts[0]} firing</span></td><td>${badge(row.status)}<span class="customer-meta">${esc(stamp(row.evaluated_at))}</span></td><td class="monitor-history-cell" data-history-monitor="${esc(row.id)}" data-history-part="trail">${historyDisplay(row, 'trail')}</td><td data-history-monitor="${esc(row.id)}" data-history-part="metrics">${historyDisplay(row, 'metrics')}</td></tr>`).join('')) :
       table(['INCIDENT', 'STATE', 'ACKNOWLEDGED', 'ASSIGNEE'], visible.map(asset => { const m = metadata(asset); return `<tr><td><button class="task-row-open" data-incident="${asset.assetId}">${esc(m.title)}</button><span class="customer-meta">#${asset.assetId} · MONITOR #${esc(m.monitor_id)}</span></td><td>${badge(m.status)}</td><td>${esc(m.acknowledged_by || 'NOT ACKNOWLEDGED')}</td><td>${esc(m.assigned_to || 'UNASSIGNED')}</td></tr>`; }).join('')) :
-      `<p class="customer-empty">${loading ? 'Reading NRC…' : rows.length ? 'No matching loaded records. Filters apply to loaded records only.' : 'No records loaded.'}</p>`;
+      `<p class="customer-empty">${loading ? 'Reading NRC…' : tab === 'status' && page && (query || filter !== 'all') ? 'No matching monitors in this workspace.' : rows.length ? 'No matching loaded records.' : 'No records loaded.'}</p>`;
     if (focusedMonitor) [...el('monitorList').querySelectorAll('[data-monitor]')].find(button => button.dataset.monitor === focusedMonitor)?.focus({ preventScroll: true });
   }
   async function refresh(more = false, automatic = false) {
     if (!active()) return;
     if (automatic && (loading || !ready() || tab !== 'status' || document.hidden)) return;
+    clearTimeout(searchTimer);
     const token = ++generation;
     registerController = new AbortController();
     if (!more && !automatic) for (const cached of registerHistory.values()) cached.updatedAt = 0;
@@ -390,15 +399,18 @@ window.NRCMonitoring = (() => {
       };
     });
   }
-  async function history(id, kind, identity, signal, range = null) {
-    const to = kind === 'uptime' ? Math.floor(Date.now() / 300000) * 300000 : Date.now();
-    const query = new URLSearchParams({ from: new Date(range?.from ?? to - (kind === 'uptime' ? 86400000 : 3600000)).toISOString(), to: new Date(range?.to ?? to).toISOString(), resolution: range?.resolution ?? (kind === 'uptime' ? '5m' : 'raw') });
-    if (kind !== 'uptime') query.set('acceptance', 'all');
-    if (identity && kind !== 'runs') query.set('identity', identity);
-    const response = await fetch(`/monitoring/history/${id}/${kind}?${query}`, { signal, cache: 'no-store', headers: { 'X-NRC-Workspace': currentWorkspaceId } });
+  async function history(id, identity, signal, range) {
+    const query = new URLSearchParams({ from: new Date(range.from).toISOString(), to: new Date(range.to).toISOString(), resolution: 'raw', acceptance: 'all', identity });
+    const response = await fetch(`/monitoring/history/${id}/inspector?${query}`, { signal, cache: 'no-store', headers: { 'X-NRC-Workspace': currentWorkspaceId } });
     if (!response.ok) throw new Error(response.status === 422 ? 'History range exceeds retained data or result limit. Use the CLI for a narrower range.' : `History unavailable (HTTP ${response.status}). Current NRC state is independent.`);
     const result = await response.json();
-    if (result.version !== 1 || result.workspace !== currentWorkspaceId || result.monitor_id !== String(id) || !Array.isArray(result.rows)) throw new Error('History scope mismatch.');
+    if (result.version !== 1 || result.workspace !== currentWorkspaceId || result.monitor_id !== String(id) || result.kind !== 'inspector' || result.identity !== identity) throw new Error('History scope mismatch.');
+    if (['runs', 'samples', 'uptime'].some(key => {
+      const section = result.sections?.[key];
+      const end = key === 'uptime' ? Math.floor(range.to / 300000) * 300000 : range.to;
+      const start = key === 'uptime' ? end - 86400000 : range.from;
+      return !section || ![200, 422].includes(section.status) || !Array.isArray(section.rows) || Date.parse(section.from) !== start || Date.parse(section.to) !== end || (section.status !== 200 && section.rows.length);
+    })) throw new Error('Invalid Inspector history response.');
     return result;
   }
   function diagnostics(run, definition, revision, sequence, instanceRevision) {
@@ -458,7 +470,7 @@ window.NRCMonitoring = (() => {
         ${section('INSTANCES · CURRENT NRC STATE', '<div class="monitor-instance-toolbar"><span id="monitorInstanceStatus" role="status"></span><label><input id="monitorRetired" type="checkbox"> INCLUDE RETIRED</label></div><div id="monitorInstances"></div><button class="btn" id="monitorInstanceMore" hidden>MORE INSTANCES</button>')}
         <div id="monitorSelection"></div>
         ${section(victoria ? 'VALUE & THRESHOLDS' : definition.conditions?.length ? 'CONDITIONS · ALL MUST PASS' : 'EVALUATION RESULT', `<div id="monitorHistory"><p class="customer-empty">Select an instance.</p></div><h3 class="monitor-subheading">ALARM THRESHOLDS</h3><dl class="monitor-thresholds"><div><dt>TRIGGER</dt><dd>${config.failures} failures</dd></div><div><dt>RESOLVE</dt><dd>${config.recoveries} successes</dd></div><div><dt>MISSING</dt><dd>${config.missing} absent evaluations</dd></div></dl>`)}
-        ${section('HISTORY & AVAILABILITY', '<div id="monitorUptime" hidden></div><div id="monitorHistoryDetails"></div>')}
+        ${section('HISTORY & AVAILABILITY', '<p id="monitorHistoryStatus" class="customer-meta" role="status"></p><div id="monitorUptime" hidden></div><div id="monitorHistoryDetails"></div>')}
         <section class="monitor-footer">${facts([['MONITOR ID', String(ref.id)], ['REVISION', String(asset.updatedAt)]])}<p class="customer-meta">CLI MANAGED · WEBHOOK ROUTE IDS: ${esc(config.webhooks?.join(', ') || 'NONE')} · Delivery state is not shown here.</p></section>`;
       let instancePage, instances = [], instanceGeneration = 0, historyGeneration = 0, instancesLoading = false, selectedInstance = null;
       const loadInstances = async (more = false) => {
@@ -469,6 +481,7 @@ window.NRCMonitoring = (() => {
         if (!more) {
           instancePage = null; instances = []; historyGeneration++;
           selectedInstance = null; el('monitorSelection').replaceChildren();
+          el('monitorHistoryStatus').textContent = '';
           el('monitorUptime').replaceChildren(); el('monitorUptime').hidden = true; el('monitorHistoryDetails').replaceChildren();
           el('monitorInstances').replaceChildren();
           el('monitorInstanceMore').hidden = true;
@@ -513,29 +526,22 @@ window.NRCMonitoring = (() => {
           target.innerHTML = `${row.revision !== String(asset.updatedAt) ? '<p class="customer-meta">CONFIGURATION CHANGED · VALUE FROM PREVIOUS REVISION</p>' : ''}${table(['LAST OBSERVED VALUE', 'TRIGGER', 'RECOVERY'], `<tr><td>${esc(row.value ?? '—')}</td><td>${esc(definition.trigger.op)} ${esc(definition.trigger.value)}</td><td>${definition.recovery ? `${esc(definition.recovery.op)} ${esc(definition.recovery.value)}` : 'When trigger no longer matches'}</td></tr>`)}${valueScale(row, definition, asset.updatedAt)}<p class="customer-meta">LAST SEEN ${esc(stamp(row.seen_at))} · CURRENT CONFIGURATION THRESHOLDS</p>`;
         } else target.textContent = 'Reading history…';
         el('monitorUptime').replaceChildren(); el('monitorUptime').hidden = true; el('monitorHistoryDetails').replaceChildren();
-        // Serialize whole selections, not just the reads within one selection.
-        // Wait for the old response; abort alone need not free the server slot yet.
-        const previous = inspectorHistoryTail;
-        let release;
-        inspectorHistoryTail = new Promise(resolve => { release = resolve; });
-        await previous;
-        try {
-          if (!valid() || local !== historyGeneration) return;
-          const to = Date.now(), range = { from: to - hour, to };
-          const attempts = await history(ref.id, 'runs', null, signal, range);
-          if (!valid() || local !== historyGeneration) return;
-          const sample = await history(ref.id, 'samples', row.identity, signal, range);
-          if (!valid() || local !== historyGeneration) return;
+        const key = JSON.stringify([scope, String(ref.id), String(asset.updatedAt), row.identity]);
+        const cached = inspectorHistory.get(key);
+        const usable = cached && Date.now() - cached.at < historyMaxAge;
+        const renderHistory = (result, previous = false) => {
+          const { runs: attempts, samples: sample, uptime } = result.sections;
+          const range = { from: Date.parse(sample.from), to: Date.parse(sample.to) };
+          const limit = 'History section exceeds retention or result limits. Use the CLI for a narrower range.';
           const run = attempts.rows.findLast(r => r.acceptance === 'confirmed' && r.revision === String(asset.updatedAt) && r.sequence === row.sequence) || attempts.rows.at(-1);
-          if (!victoria) target.innerHTML = diagnostics(run, definition, asset.updatedAt, row.sequence, row.revision);
-          const observations = victoria ? sampleChart(sample.rows, definition, asset.updatedAt, config.interval_ns, range) : '<div class="monitor-recent-checks"></div>';
-          el('monitorHistoryDetails').innerHTML = section(victoria ? 'HISTORY · LAST HOUR' : 'RECENT CHECKS · LAST HOUR', `${observations}${sample.dropped_process_total !== '0' ? `<p class="customer-meta">PROCESS HISTORY DROPS: ${esc(sample.dropped_process_total)}</p>` : ''}`);
+          if (!victoria) target.innerHTML = attempts.status === 200 ? diagnostics(run, definition, asset.updatedAt, previous ? null : row.sequence, row.revision) : `<p>${limit}</p>`;
+          const observations = sample.status !== 200 ? `<p>${limit}</p>` : victoria ? sampleChart(sample.rows, definition, asset.updatedAt, config.interval_ns, range) : '<div class="monitor-recent-checks"></div>';
+          el('monitorHistoryDetails').innerHTML = section(victoria ? 'HISTORY · LAST HOUR' : 'RECENT CHECKS · LAST HOUR', `${observations}${result.dropped_process_total !== '0' ? `<p class="customer-meta">PROCESS HISTORY DROPS: ${esc(result.dropped_process_total)}</p>` : ''}`);
           if (victoria) bindSampleChart(el('monitorHistoryDetails'));
-          else recentChecks(el('monitorHistoryDetails').querySelector('.monitor-recent-checks'), sample.rows, attempts.rows, definition, asset.updatedAt, range);
-          el('monitorUptime').hidden = false; el('monitorUptime').textContent = 'Reading 24h coverage…';
-          try {
-            const uptime = await history(ref.id, 'uptime', row.identity, signal);
-            if (!valid() || local !== historyGeneration) return;
+          else if (sample.status === 200) recentChecks(el('monitorHistoryDetails').querySelector('.monitor-recent-checks'), sample.rows, attempts.rows, definition, asset.updatedAt, range);
+          el('monitorUptime').hidden = false;
+          if (uptime.status !== 200) el('monitorUptime').textContent = limit;
+          else {
             const revisionRows = uptime.rows.filter(r => r.revision === String(asset.updatedAt));
             const totals = revisionRows.reduce((s, r) => { for (const k of Object.keys(s)) s[k] += BigInt(r[k]); return s; }, { healthy_ns: 0n, failing_ns: 0n, unknown_ns: 0n, paused_ns: 0n });
             const known = totals.healthy_ns + totals.failing_ns;
@@ -545,8 +551,31 @@ window.NRCMonitoring = (() => {
               return `<div><dt>${label}</dt><dd>${value}<div class="monitor-meter" data-kind="${kind}" data-known="${d > 0n}" role="img" aria-label="${label}: ${value}" style="--fill:${d > 0n ? Math.max(0, Math.min(100, Number(n * 10000n / d) / 100)) : 0}%"><span></span></div></dd></div>`;
             };
             el('monitorUptime').innerHTML = `<dl class="customer-facts monitor-metrics">${meter(`24H ${definition.kind.startsWith('victoria') ? 'CONDITION SATISFACTION' : 'UPTIME'} OF KNOWN TIME`, totals.healthy_ns, known, 'uptime')}${meter('24H COVERAGE', known, 86400000000000n - totals.paused_ns, 'coverage')}</dl><p class="customer-meta">HATCHED: NOT COVERED · PAUSED EXCLUDED</p><p class="customer-meta">CURRENT REVISION ONLY${uptime.pending_rollup_hours_global !== '0' ? ' · ROLLUPS PENDING (GLOBAL)' : ''}</p>`;
-          } catch (error) { if (valid() && local === historyGeneration) el('monitorUptime').textContent = error.message; }
-        } catch (error) { if (valid() && local === historyGeneration) (victoria ? el('monitorHistoryDetails') : target).textContent = error.message; }
+          }
+        };
+        if (usable) renderHistory(cached.result, true);
+        else inspectorHistory.delete(key);
+        el('monitorHistoryStatus').textContent = usable ? 'HISTORY UPDATING · PREVIOUS RESULT' : 'Reading history…';
+        // Cache hits render immediately, but refreshes still share only one
+        // Inspector slot. Waiting selections skip requests when superseded.
+        const previous = inspectorHistoryTail;
+        let release;
+        inspectorHistoryTail = new Promise(resolve => { release = resolve; });
+        await previous;
+        try {
+          if (!valid() || local !== historyGeneration) return;
+          const to = Date.now(), range = { from: to - hour, to };
+          const result = await history(ref.id, row.identity, signal, range);
+          if (!valid() || local !== historyGeneration) return;
+          renderHistory(result);
+          el('monitorHistoryStatus').textContent = '';
+          // Bound memory to eight <=4 MiB responses; refresh every selection.
+          inspectorHistory.delete(key);
+          inspectorHistory.set(key, { result, at: Date.now() });
+          while (inspectorHistory.size > 8) inspectorHistory.delete(inspectorHistory.keys().next().value);
+        } catch (error) {
+          if (valid() && local === historyGeneration) el('monitorHistoryStatus').textContent = `${error.message}${usable ? ' · PREVIOUS RESULT · UPDATE FAILED' : ''}`;
+        }
         finally { release(); }
       };
       el('monitorInstances').onclick = event => {
@@ -563,7 +592,8 @@ window.NRCMonitoring = (() => {
     } catch (error) { if (valid()) record.textContent = error.message; }
   }
   function disconnect() {
-    generation++; detailGeneration++; registerHistory.clear();
+    clearTimeout(searchTimer);
+    generation++; detailGeneration++; registerHistory.clear(); inspectorHistory.clear();
     for (const request of pending.values()) { clearTimeout(request.timeout); request.reject(new Error('Disconnected.')); }
     pending.clear(); rows = []; page = null; loading = false;
     if (el('monitorStatus')) el('monitorStatus').textContent = 'OFFLINE'; render();
@@ -575,8 +605,15 @@ window.NRCMonitoring = (() => {
     el('monitoringBtn').onclick = () => window.NRCViewManager.setActiveView('monitoring');
     for (const [id, value] of [['monitorStatusTab', 'status'], ['monitorIncidentsTab', 'incidents']]) el(id).onclick = () => { tab = value; rows = []; page = null; refresh(); };
     el('monitorRefresh').onclick = () => refresh(); el('monitorMore').onclick = () => refresh(true);
-    el('monitorSearch').oninput = render;
-    el('monitorStateFilter').onchange = render;
+    const filtersChanged = (delay = 0) => {
+      clearTimeout(searchTimer);
+      if (tab !== 'status') { render(); return; }
+      generation++; rows = []; page = null; statusPages = 1; loading = true;
+      render();
+      searchTimer = setTimeout(() => refresh(), delay);
+    };
+    el('monitorSearch').oninput = () => filtersChanged(250);
+    el('monitorStateFilter').onchange = () => filtersChanged();
     el('monitorPeriods').onclick = event => {
       const button = event.target.closest('[data-monitor-days]');
       if (!button || Number(button.dataset.monitorDays) === period) return;

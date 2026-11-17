@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 )
 
 // MonitorID zero lists monitors; a nonzero ID lists that monitor's instances.
@@ -15,11 +16,16 @@ type MonitorStatusQuery struct {
 	At                  int64
 	Limit               uint8
 	IncludeRetired      bool
+	StateFilter         uint8  // 0 all, 1 problems, 2 healthy, 3 paused; monitor lists only.
+	Search              string // UTF-8 name substring or exact ID, optionally prefixed with #.
 }
 
 func EncodeQueryMonitorStatus(q MonitorStatusQuery) ([]byte, error) {
 	if q.Limit == 0 || q.Limit > 16 || q.CursorRank > 8 || q.At < 0 || q.CursorID == 0 && q.CursorRank != 0 || q.CursorID != 0 && q.At == 0 || q.MonitorID == 0 && q.IncludeRetired {
 		return nil, fmt.Errorf("invalid monitor status query")
+	}
+	if q.StateFilter > 3 || len(q.Search) > 256 || !utf8.ValidString(q.Search) || q.MonitorID != 0 && (q.StateFilter != 0 || q.Search != "") {
+		return nil, fmt.Errorf("invalid monitor status filter")
 	}
 	b := make([]byte, 33)
 	binary.BigEndian.PutUint16(b, C_QueryMonitorStatus)
@@ -31,6 +37,10 @@ func EncodeQueryMonitorStatus(q MonitorStatusQuery) ([]byte, error) {
 	b[31] = q.Limit
 	if q.IncludeRetired {
 		b[32] = 1
+	}
+	if q.StateFilter != 0 || q.Search != "" {
+		b = append(b, q.StateFilter)
+		b = append(b, q.Search...)
 	}
 	return b, nil
 }

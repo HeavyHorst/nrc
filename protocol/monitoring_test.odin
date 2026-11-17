@@ -23,6 +23,14 @@ test_monitor_status_wire_contract :: proc(t: ^testing.T) {
 		r.include_retired,
 	)
 	testing.expect_value(t, get_opcode({0, 179}), .S_MonitorStatusPage)
+	filtered: [35]byte
+	filtered[29] = 16; filtered[31] = 2; filtered[32] = '#'; filtered[33] = '1'; filtered[34] = '2'
+	f, fe := parseQueryMonitorStatusRequest(filtered[:])
+	testing.expect(t, fe == nil && f.state_filter == 2 && f.search == "#12")
+	filtered[31] = 4
+	_, fe = parseQueryMonitorStatusRequest(filtered[:]); testing.expect(t, fe != nil)
+	filtered[31] = 0; filtered[32] = 255
+	_, fe = parseQueryMonitorStatusRequest(filtered[:]); testing.expect(t, fe != nil)
 	for cut in 0 ..< 31 {_, parse_err := parseQueryMonitorStatusRequest(fixture[2:2 + cut]); testing.expect(t, parse_err != nil)}
 	for pair in ([3][2]u8{{20, 9}, {29, 0}, {30, 2}}) {
 		bad: [31]byte; copy(bad[:], fixture[2:]); bad[pair[0]] = pair[1]

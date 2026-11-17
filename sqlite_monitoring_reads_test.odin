@@ -109,17 +109,25 @@ test_sqlite_monitor_status_reads :: proc(t: ^testing.T) {
 		rank: u8 = 0,
 		retired := false,
 		workspace := "w",
+		search := "",
+		state_filter: u8 = 0,
 	) -> (
 		Monitor_Status_Page,
 		c.int,
 	) {
-		body: [33]byte
+		body: [290]byte
 		endian.put_u16(body[:], .Big, u16(pr.Opcode.C_QueryMonitorStatus))
 		endian.put_u32(body[2:], .Big, 123)
 		endian.put_u64(body[6:], .Big, monitor)
 		endian.put_u64(body[14:], .Big, cursor)
 		body[22] = rank; endian.put_i64(body[23:], .Big, at); body[31] = limit; body[32] = retired ? 1 : 0
-		rc := execute(store, output, body[:], at, "viewer", workspace)
+		n := 33
+		if search != "" || state_filter != 0 {
+			body[33] = state_filter
+			copy(body[34:], transmute([]byte)search)
+			n = 34 + len(search)
+		}
+		rc := execute(store, output, body[:n], at, "viewer", workspace)
 		if rc != sql.OK do return {}, rc
 		page: Monitor_Status_Page
 		if len(output.frames) != 1 do return {}, sql.CORRUPT
@@ -148,6 +156,23 @@ test_sqlite_monitor_status_reads :: proc(t: ^testing.T) {
 	second, second_rc := query(&store, &output, 0, at, 1, last_id, first.cursor_rank)
 	testing.expect_value(t, second_rc, sql.OK)
 	testing.expect(t, first.has_more && second.rows[0].id == "3")
+	// Match outside the unfiltered first page, then paginate only filtered rows.
+	matched, matched_rc := query(&store, &output, 0, at, 1, search = "mONItor 1")
+	testing.expect(t, matched_rc == sql.OK && len(matched.rows) == 1 && matched.rows[0].id == "1" && !matched.has_more)
+	matched, matched_rc = query(&store, &output, 0, at, 1, search = "#6", state_filter = 3)
+	testing.expect(t, matched_rc == sql.OK && len(matched.rows) == 1 && matched.rows[0].id == "6")
+	matched, matched_rc = query(&store, &output, 0, at, 1, search = "#6", state_filter = 2)
+	testing.expect(t, matched_rc == sql.OK && len(matched.rows) == 0)
+	matched, matched_rc = query(&store, &output, 0, at, 1, state_filter = 2)
+	testing.expect(t, matched_rc == sql.OK && len(matched.rows) == 1 && matched.rows[0].id == "1" && !matched.has_more)
+	matched, matched_rc = query(&store, &output, 0, at, 1, search = "Monitor", state_filter = 1)
+	testing.expect(t, matched_rc == sql.OK && matched.rows[0].id == "2" && matched.has_more)
+	matched, matched_rc = query(&store, &output, 0, at, 1, 2, 0, search = "Monitor", state_filter = 1)
+	testing.expect(t, matched_rc == sql.OK && matched.rows[0].id == "3")
+	for search in ([]string{"%", "_", "' OR 1=1 --"}) {
+		matched, matched_rc = query(&store, &output, 0, at, 16, search = search)
+		testing.expect(t, matched_rc == sql.OK && len(matched.rows) == 0)
+	}
 	// Escaped 4KiB identities hit the byte cap before the requested row cap.
 	seen := make(map[string]bool)
 	cursor: u64; rank: u8

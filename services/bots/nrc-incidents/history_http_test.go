@@ -153,6 +153,29 @@ func TestHistoryHTTPContract(t *testing.T) {
 		return result
 	}
 	auth := "Bearer " + token
+	inspectorPath := query("inspector", "raw") + "&identity=host-a"
+	inspector := request(inspectorPath, auth, 200)
+	sections := inspector["sections"].(map[string]any)
+	if inspector["identity"] != "host-a" || inspector["kind"] != "inspector" {
+		t.Fatal(inspector)
+	}
+	for kind, count := range map[string]int{"runs": 3, "samples": 1, "uptime": 1} {
+		section := sections[kind].(map[string]any)
+		if section["status"] != float64(200) || len(section["rows"].([]any)) != count {
+			t.Fatal(kind, section)
+		}
+	}
+	if sections["samples"].(map[string]any)["rows"].([]any)[0].(map[string]any)["condition"] != "0" {
+		t.Fatal(sections)
+	}
+	coverage := sections["uptime"].(map[string]any)
+	if coverage["from"] != base.Add(-23*time.Hour).Format(time.RFC3339Nano) || coverage["to"] != base.Add(time.Hour).Format(time.RFC3339Nano) || coverage["rows"].([]any)[0].(map[string]any)["healthy_ns"] != "30" {
+		t.Fatal(coverage)
+	}
+	request(inspectorPath, "", 401)
+	for _, path := range []string{query("inspector", "raw"), query("inspector", "5m") + "&identity=host-a", strings.Replace(inspectorPath, "acceptance=all", "acceptance=confirmed", 1), strings.Replace(inspectorPath, "T01", "T02", 1), inspectorPath + "&workspace=other", inspectorPath + "&identity=host-b"} {
+		request(path, auth, 400)
+	}
 	batchPath := strings.Replace(query("uptime", "1h"), id, "batch", 1) + "&ids=" + id + ",2,4,3"
 	exec(`INSERT INTO uptime_buckets VALUES (?,?,'ops',2,9,'different-host',7,13,0,0)`, historyHour, n)
 	batch := request(batchPath, auth, 200)["results"].([]any)
@@ -227,6 +250,16 @@ func TestHistoryHTTPContract(t *testing.T) {
 	}
 	exec("UPDATE history_meta SET value=? WHERE key='raw_floor'", n+1)
 	request(query("runs", "raw"), auth, 422)
+	sections = request(inspectorPath, auth, 200)["sections"].(map[string]any)
+	for _, kind := range []string{"runs", "samples"} {
+		section := sections[kind].(map[string]any)
+		if section["status"] != float64(422) || len(section["rows"].([]any)) != 0 {
+			t.Fatal(section)
+		}
+	}
+	if sections["uptime"].(map[string]any)["status"] != float64(200) {
+		t.Fatal(sections)
+	}
 	request(query("runs", "5m"), auth, 200)
 	exec("UPDATE history_meta SET value=0 WHERE key='raw_floor'")
 
@@ -245,10 +278,44 @@ func TestHistoryHTTPContract(t *testing.T) {
 	bulkRequest(200)
 	exec(`INSERT INTO runs VALUES ('extra','ops',2,1,5001,?,1,false,'confirmed')`, n)
 	bulkRequest(422)
+	limited := request(strings.Replace(bulk, "/runs?", "/inspector?", 1)+"&identity=host-a", auth, 200)["sections"].(map[string]any)
+	if limited["runs"].(map[string]any)["status"] != float64(422) || len(limited["runs"].(map[string]any)["rows"].([]any)) != 0 || limited["samples"].(map[string]any)["status"] != float64(200) || limited["uptime"].(map[string]any)["status"] != float64(200) {
+		t.Fatal(limited)
+	}
 	// Fewer than 5,000 rows can still exceed the encoded byte budget.
 	exec(`INSERT INTO samples SELECT 'bulk-'||i,repeat('x',4090)||i,0,1 FROM range(1,1101) t(i)`)
 	bulk = strings.Replace(bulk, "/runs?", "/samples?", 1)
 	bulkRequest(422)
+	// Inspector: two individually valid sections can exceed the envelope budget.
+	exec(`INSERT INTO runs SELECT 'inspector-'||repeat('x',4000)||i,'ops',4,1,i,?,1,false,'confirmed' FROM range(1,601) t(i)`, n)
+	exec(`INSERT INTO samples SELECT run_id,'host-a',0,1 FROM runs WHERE monitor_id=4`)
+	inspectorBulk := strings.Replace(query("inspector", "raw"), id, "4", 1) + "&identity=host-a"
+	for _, kind := range []string{"runs", "samples"} {
+		path := strings.Replace(query(kind, "raw"), id, "4", 1)
+		if kind == "samples" {
+			path += "&identity=host-a"
+		}
+		if rows := request(path, auth, 200)["rows"].([]any); len(rows) != 600 {
+			t.Fatal(len(rows))
+		}
+	}
+	request(inspectorBulk, auth, 422)
+	// A byte-heavy runs section has only 1,100 rows, below the row cap. Keep
+	// one sample and one uptime bucket to prove unaffected sections survive.
+	exec(`DELETE FROM samples WHERE run_id IN (SELECT run_id FROM runs WHERE monitor_id=4 AND sequence!=1)`)
+	exec(`INSERT INTO runs SELECT 'inspector-'||repeat('x',4000)||i,'ops',4,1,i,?,1,false,'confirmed' FROM range(601,1101) t(i)`, n)
+	exec(`INSERT INTO uptime_buckets VALUES (?,?,'ops',4,1,'host-a',60,0,0,0)`, historyFiveMinutes, n)
+	byteLimited := request(inspectorBulk, auth, 200)["sections"].(map[string]any)
+	for kind, want := range map[string]int{"runs": 0, "samples": 1, "uptime": 1} {
+		section := byteLimited[kind].(map[string]any)
+		status := float64(200)
+		if kind == "runs" {
+			status = 422
+		}
+		if section["status"] != status || len(section["rows"].([]any)) != want {
+			t.Fatal(kind, section)
+		}
+	}
 	// Per-monitor row overflow must not hide other monitors in a batch.
 	exec(`INSERT INTO uptime_buckets SELECT ?,?,'ops',4,1,'bulk-'||i,1,0,0,0 FROM range(1,5002) t(i)`, historyHour, n)
 	batch = request(batchPath, auth, 200)["results"].([]any)

@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261117monitor27";
+const CACHE_NAME = "nrc-terminal-20261117monitor28";
 
 const APP_SHELL = [
   "./",
@@ -65,7 +65,7 @@ const APP_SHELL = [
   "./retained-messages.js?v=20261023protocol2",
   "./chat.js?v=20261020composer1",
   "./app.js?v=20261117monitor22",
-  "./monitoring.js?v=20261117monitor27",
+  "./monitoring.js?v=20261117monitor28",
   "./calls.js?v=20261022cancel1",
   "./newsletter.js?v=20261022cancel1",
   "./customers.js?v=20261116pickers1",

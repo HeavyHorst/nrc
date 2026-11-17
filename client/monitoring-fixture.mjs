@@ -1,6 +1,6 @@
 // Disposable browser fixture. It replaces transport only; production renders/actions run unchanged.
 export function installMonitoringFixture() {
-  window.monitorFixture = { old: false, fail: false, empty: false, actions: [], requests: [], pendingStatus: [], pendingHistory: [], pendingRegister: [], historyRequests: [] };
+  window.monitorFixture = { old: false, fail: false, empty: false, actions: [], requests: [], pendingStatus: [], pendingHistory: [], pendingRegister: [], historyRequests: [], inspectorRequests: [] };
   const f = window.monitorFixture;
   const now = BigInt(Date.now()) * 1000000n, rev = String(now - 3456000000000000n);
   const config = { version: 1, name: 'Marketplace / API', enabled: true, interval_ns: 60000000000, failures: 5, recoveries: 5, missing: 5, webhooks: ['42'] };
@@ -9,7 +9,7 @@ export function installMonitoringFixture() {
   f.definition = definition;
   const incident = { version: 1, title: 'Marketplace / API unavailable', status: 'firing', monitor_id: '12', instance_id: '31', opened_at: String(now - 300000000000n), closed_at: '', acknowledged_by: '', acknowledged_at: '', assigned_to: '' };
   let incidentRevision = BigInt(rev);
-  const asset = id => ({ assetId: BigInt(id), assetType: id === '12' ? 15 : 16, updatedAt: id === '12' ? BigInt(rev) : incidentRevision, preview: JSON.stringify(id === '12' ? config : incident), payload: window.monitorFixture?.rawDefinition ?? JSON.stringify(definition) });
+  const asset = id => ({ assetId: BigInt(id), assetType: id !== '51' ? 15 : 16, updatedAt: id !== '51' ? BigInt(f.assetRevision || rev) : incidentRevision, preview: JSON.stringify(id !== '51' ? config : incident), payload: window.monitorFixture?.rawDefinition ?? JSON.stringify(definition) });
   NRCAssets.sendGetAsset = (_room, id, callbacks) => { queueMicrotask(() => callbacks.onSuccess({ asset: asset(String(id)) })); return 1; };
   NRCAssets.requestAllAssets = async () => ({ assets: f.empty ? [] : [asset('51')] });
   serverReady = true; currentWorkspaceId = 'fixture';
@@ -33,7 +33,7 @@ export function installMonitoringFixture() {
       const monitor = v.getBigUint64(6), cursor = v.getBigUint64(14);
       const base = { revision: f.statusRevision || rev, sequence: statusSequence, evaluated_at: String(now), seen_at: String(now), counts: [1, 0, 0, 0, 0, 0, 0, 0, 0], status: 'firing' };
       const row = monitor === 0n ? { ...base, id: cursor ? '13' : '12', monitor_id: cursor ? '13' : '12', name: cursor ? 'Backup / Storage' : config.name } :
-        { ...base, id: '31', monitor_id: '12', identity: f.identity || '{"target":"default"}', failures: f.failures ?? 5, recoveries: f.recoveries ?? 0, value: f.value === undefined ? 0 : f.value, incident_id: '51' };
+        { ...base, id: '31', monitor_id: String(monitor), identity: f.identity || '{"target":"default"}', failures: f.failures ?? 5, recoveries: f.recoveries ?? 0, value: f.value === undefined ? 0 : f.value, incident_id: '51' };
       if (monitor === 0n && cursor) { row.status = f.secondState || 'healthy'; row.counts = [0, 0, 0, 0, 0, 0, row.status === 'healthy' ? 2 : 0, row.status === 'paused' ? 2 : 0, 0]; }
       const page = { version: 1, monitor_id: String(monitor), at: String(now), cursor_id: row.id, cursor_rank: 0, has_more: !f.empty && monitor === 0n && !cursor, rows: f.empty ? [] : [row] };
       if (monitor === 0n && f.overviewIDs) {
@@ -48,6 +48,20 @@ export function installMonitoringFixture() {
         page.cursor_id = row.id;
         page.has_more = !cursor;
       }
+      if (monitor === 0n && v.byteLength > 33) {
+        const state = v.getUint8(33), search = new TextDecoder().decode(new Uint8Array(buffer, 34)).toLowerCase();
+        f.requests.at(-1).search = search; f.requests.at(-1).state = state;
+        if (search || state) {
+          const second = f.secondState || 'healthy';
+          const all = f.overviewIDs ? f.overviewIDs.map(id => ({ ...base, id, monitor_id: id, name: `Monitor ${id}`, status: id === f.firingID ? 'firing' : 'healthy' })) : [
+            { ...base, id: '12', monitor_id: '12', name: config.name },
+            { ...base, id: '13', monitor_id: '13', name: 'Backup / Storage', status: second, counts: [0, 0, 0, 0, 0, 0, second === 'healthy' ? 2 : 0, second === 'paused' ? 2 : 0, 0] },
+          ];
+          const matching = f.empty ? [] : all.filter(r => (!search || r.name.toLowerCase().includes(search) || r.id === search.replace(/^#/, '')) && (!state || state === 1 && !['healthy', 'paused'].includes(r.status) || state === 2 && r.status === 'healthy' || state === 3 && r.status === 'paused'));
+          const start = cursor ? matching.findIndex(r => r.id === String(cursor)) + 1 : 0;
+          page.rows = matching.slice(start, start + 16); page.has_more = start + 16 < matching.length; page.cursor_id = page.rows.at(-1)?.id || '0';
+        }
+      }
       const body = new TextEncoder().encode(JSON.stringify(page)), response = new DataView(new ArrayBuffer(6 + body.length));
       response.setUint16(0, 179); response.setUint32(2, correlation); new Uint8Array(response.buffer, 6).set(body);
       const deliver = () => handleBinaryMessage(response.buffer);
@@ -59,7 +73,7 @@ export function installMonitoringFixture() {
   window.fetch = async (input, options) => {
     const url = new URL(input, location.href);
     if (!url.pathname.startsWith('/monitoring/history/')) return nativeFetch(input, options);
-    if (options.headers['X-NRC-Workspace'] !== 'fixture' || url.searchParams.has('workspace')) throw new Error('Invalid history workspace');
+    if (options.headers['X-NRC-Workspace'] !== (f.workspace || 'fixture') || url.searchParams.has('workspace')) throw new Error('Invalid history workspace');
     if (f.fail) return new Response('busy', { status: 503 });
     const kind = url.pathname.split('/').at(-1);
     if (kind === 'uptime' && url.searchParams.get('resolution') === '1h') {
@@ -88,14 +102,21 @@ export function installMonitoringFixture() {
       return response;
     }
     const base = { run_id: 'attempt-17', revision: f.old ? '1' : rev, sequence: f.sequence || '17', observed_at_ns: String(now), acceptance: f.unknown ? 'unknown' : 'confirmed' };
-    const rows = f.empty ? [] : kind === 'runs' ? f.runRows?.map(r => ({ ...base, ...r })) || [{ ...base, duration_ns: '125000000', diagnostics: { version: 1, conditions: [
+    if (kind !== 'inspector') throw new Error('Inspector must use the bundled endpoint');
+    f.inspectorRequests.push(url.href);
+    const rowsFor = kind => f.empty ? [] : kind === 'runs' ? f.runRows?.map(r => ({ ...base, ...r })) || [{ ...base, duration_ns: '125000000', diagnostics: { version: 1, conditions: [
       { index: 0, state: 'fail', actual_type: 'number', actual: '503', expected_number: '200' },
       { index: 1, state: 'pass', actual_type: 'boolean', actual: 'true' },
     ] } }] : kind === 'samples' ? f.sampleRows?.map(({ ago, ...r }) => ({ ...base, observed_at_ns: String(BigInt(Date.parse(url.searchParams.get('to')) - ago * 1000) * 1000000n), identity: url.searchParams.get('identity'), ...r, ...(r.condition == null ? {} : { condition: String(r.condition) }) })) || [{ ...base, identity: '{"target":"default"}', condition: '1', value: 0 }] : f.uptimeRows?.map(r => ({ revision: rev, ...r })) || [
       { revision: rev, healthy_ns: '600000000000', failing_ns: '300000000000', unknown_ns: '300000000000', paused_ns: '0' },
       { revision: '1', healthy_ns: '600000000000', failing_ns: '0', unknown_ns: '0', paused_ns: '0' },
     ];
-    const response = Response.json({ version: 1, workspace: 'fixture', monitor_id: '12', rows, dropped_process_total: f.drops ?? '2', pending_rollup_hours_global: f.rollups ?? '1' });
+    const sections = Object.fromEntries(['runs', 'samples', 'uptime'].map(key => {
+      const to = key === 'uptime' ? Math.floor(Date.parse(url.searchParams.get('to')) / 300000) * 300000 : Date.parse(url.searchParams.get('to'));
+      const from = key === 'uptime' ? to - 86400000 : Date.parse(url.searchParams.get('from'));
+      return [key, { status: f.sectionLimit === key ? 422 : 200, rows: f.sectionLimit === key ? [] : rowsFor(key), from: new Date(from).toISOString(), to: new Date(to).toISOString(), pending_rollup_hours_global: f.rollups ?? '1' }];
+    }));
+    const response = Response.json({ version: 1, workspace: f.workspace || 'fixture', monitor_id: url.pathname.split('/').at(-2), kind, identity: url.searchParams.get('identity'), sections, dropped_process_total: f.drops ?? '2' });
     if (f.deferHistoryKind === kind) return new Promise(resolve => f.pendingHistory.push(() => resolve(response)));
     return response;
   };

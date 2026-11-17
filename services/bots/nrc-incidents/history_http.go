@@ -50,7 +50,8 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseUint(parts[0], 10, 64)
 	kind := parts[1]
 	batch := parts[0] == "batch" && kind == "uptime"
-	if !batch && (err != nil || !a.monitors.contains(id) || (kind != "samples" && kind != "runs" && kind != "uptime")) {
+	inspector := kind == "inspector"
+	if !batch && (err != nil || !a.monitors.contains(id) || (kind != "samples" && kind != "runs" && kind != "uptime" && !inspector)) {
 		http.NotFound(w, r)
 		return
 	}
@@ -105,6 +106,10 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acceptance := q.Get("acceptance")
+	if inspector && (resolution != "raw" || to-from > historyHour || to < int64(24*time.Hour) || !hasIdentity || acceptance != "all") {
+		bad()
+		return
+	}
 	if kind == "uptime" {
 		if _, exists := q["acceptance"]; exists {
 			bad()
@@ -153,6 +158,10 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	if inspector {
+		a.serveInspector(w, ctx, tx, id, identity[0], from, to)
+		return
+	}
 	var floor, pending, lastMaintenance int64
 	dirtyTable := "history_dirty_hours"
 	if kind == "uptime" {
@@ -174,47 +183,7 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.serveUptimeBatch(w, ctx, tx, ids, from, to, step, pending)
 		return
 	}
-	var query, order string
-	args := []any{a.workspace, strconv.FormatUint(id, 10), from, to}
-	if step == 0 {
-		if kind == "runs" {
-			query = `SELECT r.run_id,r.revision,r.sequence,r.observed_at AS observed_at_ns,r.duration_ns,r.failed,r.acceptance,d.diagnostics FROM runs r LEFT JOIN check_diagnostics d USING(run_id)`
-			order = "r.observed_at,r.run_id"
-		} else {
-			query = `SELECT r.run_id,r.revision,r.sequence,r.observed_at AS observed_at_ns,r.acceptance,s.identity,s.condition,s.value FROM runs r JOIN samples s USING(run_id)`
-			order = "r.observed_at,r.run_id,s.identity"
-		}
-		query += " WHERE r.workspace=? AND r.monitor_id=CAST(? AS UBIGINT) AND r.observed_at>=? AND r.observed_at<?"
-	} else {
-		switch kind {
-		case "samples":
-			query = `SELECT bucket_ns,revision,acceptance,identity,value_count,min_value,max_value,sum_value,last_value,last_at AS last_at_ns,last_run_id,passing_count,failing_count,between_count FROM sample_buckets`
-			order = "bucket_ns,revision,acceptance,identity"
-		case "runs":
-			query = `SELECT bucket_ns,revision,acceptance,run_count,failed_count,duration_sum_ns,duration_max_ns FROM run_buckets`
-			order = "bucket_ns,revision,acceptance"
-		case "uptime":
-			query = `SELECT bucket_ns,revision,identity,healthy_ns,failing_ns,unknown_ns,paused_ns,uptime,coverage FROM uptime_summary`
-			order = "bucket_ns,revision,identity"
-		}
-		query += " WHERE workspace=? AND monitor_id=CAST(? AS UBIGINT) AND bucket_ns>=? AND bucket_ns<? AND resolution_ns=?"
-		args = append(args, step)
-	}
-	if hasIdentity {
-		query += " AND identity=?"
-		args = append(args, identity[0])
-	}
-	if kind != "uptime" && acceptance != "all" {
-		query += " AND acceptance=?"
-		args = append(args, acceptance)
-	}
-	query += " ORDER BY " + order + " LIMIT " + strconv.Itoa(historyReadRows+1)
-	rows, err := tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	data, tooLarge, err := historyJSONRows(rows)
+	data, tooLarge, err := readHistoryRows(ctx, tx, a.workspace, id, kind, q.Get("identity"), acceptance, from, to, step)
 	if tooLarge {
 		http.Error(w, "history result too large; narrow range, filter identity or choose coarser resolution", http.StatusUnprocessableEntity)
 		return
@@ -240,6 +209,110 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(result)
+}
+
+func readHistoryRows(ctx context.Context, tx *sql.Tx, workspace string, id uint64, kind, identity, acceptance string, from, to, step int64) ([]json.RawMessage, bool, error) {
+	var query, order string
+	args := []any{workspace, strconv.FormatUint(id, 10), from, to}
+	if step == 0 {
+		if kind == "runs" {
+			query = `SELECT r.run_id,r.revision,r.sequence,r.observed_at AS observed_at_ns,r.duration_ns,r.failed,r.acceptance,d.diagnostics FROM runs r LEFT JOIN check_diagnostics d USING(run_id)`
+			order = "r.observed_at,r.run_id"
+		} else {
+			query = `SELECT r.run_id,r.revision,r.sequence,r.observed_at AS observed_at_ns,r.acceptance,s.identity,s.condition,s.value FROM runs r JOIN samples s USING(run_id)`
+			order = "r.observed_at,r.run_id,s.identity"
+		}
+		query += " WHERE r.workspace=? AND r.monitor_id=CAST(? AS UBIGINT) AND r.observed_at>=? AND r.observed_at<?"
+	} else {
+		switch kind {
+		case "samples":
+			query = `SELECT bucket_ns,revision,acceptance,identity,value_count,min_value,max_value,sum_value,last_value,last_at AS last_at_ns,last_run_id,passing_count,failing_count,between_count FROM sample_buckets`
+			order = "bucket_ns,revision,acceptance,identity"
+		case "runs":
+			query = `SELECT bucket_ns,revision,acceptance,run_count,failed_count,duration_sum_ns,duration_max_ns FROM run_buckets`
+			order = "bucket_ns,revision,acceptance"
+		case "uptime":
+			query = `SELECT bucket_ns,revision,identity,healthy_ns,failing_ns,unknown_ns,paused_ns,uptime,coverage FROM uptime_summary`
+			order = "bucket_ns,revision,identity"
+		}
+		query += " WHERE workspace=? AND monitor_id=CAST(? AS UBIGINT) AND bucket_ns>=? AND bucket_ns<? AND resolution_ns=?"
+		args = append(args, step)
+	}
+	if identity != "" {
+		query += " AND identity=?"
+		args = append(args, identity)
+	}
+	if kind != "uptime" && acceptance != "all" {
+		query += " AND acceptance=?"
+		args = append(args, acceptance)
+	}
+	query += " ORDER BY " + order + " LIMIT " + strconv.Itoa(historyReadRows+1)
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	return historyJSONRows(rows)
+}
+
+// Inspector reads share one admission slot, deadline and database snapshot.
+// A section that exceeds retention/row limits is explicit, never a partial list.
+func (a *historyAPI) serveInspector(w http.ResponseWriter, ctx context.Context, tx *sql.Tx, id uint64, identity string, from, to int64) {
+	var floor, maintenance int64
+	if err := tx.QueryRowContext(ctx, `SELECT (SELECT value FROM history_meta WHERE key='raw_floor'), (SELECT value FROM history_meta WHERE key='uptime_now')`).Scan(&floor, &maintenance); err != nil {
+		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	sections := make(map[string]any)
+	for _, kind := range []string{"runs", "samples", "uptime"} {
+		start, end, step, filter := from, to, int64(0), identity
+		dirty := "history_dirty_hours"
+		if kind == "runs" {
+			filter = ""
+		}
+		if kind == "uptime" {
+			step = historyFiveMinutes
+			end = to / step * step
+			start = end - int64(24*time.Hour)
+			dirty = "uptime_dirty_hours"
+		}
+		var pending int64
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM "+dirty+" WHERE hour_ns < ? AND hour_ns + ? > ?", end, historyHour, start).Scan(&pending); err != nil {
+			http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		data := []json.RawMessage{}
+		status := http.StatusOK
+		if step == 0 && start < floor {
+			status = http.StatusUnprocessableEntity
+		} else {
+			rows, tooLarge, err := readHistoryRows(ctx, tx, a.workspace, id, kind, filter, "all", start, end, step)
+			if err != nil {
+				http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if tooLarge {
+				status = http.StatusUnprocessableEntity
+			} else {
+				data = rows
+			}
+		}
+		sections[kind] = map[string]any{"status": status, "rows": data, "from": time.Unix(0, start).UTC().Format(time.RFC3339Nano), "to": time.Unix(0, end).UTC().Format(time.RFC3339Nano), "pending_rollup_hours_global": strconv.FormatInt(pending, 10)}
+	}
+	body, err := json.Marshal(map[string]any{"version": 1, "workspace": a.workspace, "monitor_id": strconv.FormatUint(id, 10), "kind": "inspector", "identity": identity, "sections": sections, "raw_floor_ns": strconv.FormatInt(floor, 10), "uptime_last_maintenance_ns": strconv.FormatInt(maintenance, 10), "dropped_process_total": strconv.FormatUint(a.history.dropped.Load(), 10)})
+	if err != nil {
+		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if len(body) > historyReadBytes {
+		http.Error(w, "history result too large; use individual history reads", http.StatusUnprocessableEntity)
+		return
+	}
+	if tx.Commit() != nil {
+		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
 }
 
 // A page shares one admission slot and one snapshot. Each monitor retains the
