@@ -68,6 +68,7 @@ HTTP_Upgrade_Connection :: struct {
 	verified_subject:    string,
 	user_type:           pr.User_Type,
 	authenticated:       bool,
+	chronicle_access:    u8,
 
 	// HTTP upgrade tracking
 	http_received:       int,
@@ -182,6 +183,7 @@ HTTP_Upgrade_Decision :: struct {
 	verified_subject:        string,
 	user_type:               pr.User_Type,
 	authenticated:           bool,
+	chronicle_access:        u8,
 	key_present:             bool,
 	upgrade_present:         bool,
 	version:                 string,
@@ -237,6 +239,7 @@ parse_http_upgrade_decision :: proc(request_headers: string, service_secret: str
 	key, version: string
 	workspace_id: string
 	nrc_auth_token: string
+	nrc_auth_present: bool
 	nrc_user_type: string
 	nrc_bot_secret: string
 	nrc_bot_nickname: string
@@ -280,6 +283,12 @@ parse_http_upgrade_decision :: proc(request_headers: string, service_secret: str
 			continue
 		}
 		if http_ascii_equal_fold(header_name, "X-NRC-Auth") {
+			if nrc_auth_present {
+				decision.kind = .Reject_Auth
+				decision.reason = "duplicate authentication header"
+				return decision
+			}
+			nrc_auth_present = true
 			nrc_auth_token = value
 			continue
 		}
@@ -322,7 +331,9 @@ parse_http_upgrade_decision :: proc(request_headers: string, service_secret: str
 	}
 
 	jwt_identity, jwt_ok, jwt_reason := validate_nrc_jwt(nrc_auth_token, workspace_id, workspace_access_enabled)
-	if !jwt_ok && user_type == .User {
+	// An explicitly supplied JWT must never fall back to broad legacy service
+	// credentials, including a malformed or unauthorized Chronicle service JWT.
+	if !jwt_ok && (user_type == .User || nrc_auth_present) {
 		decision.kind = .Reject_Auth
 		decision.reason = jwt_reason
 		return decision
@@ -331,7 +342,7 @@ parse_http_upgrade_decision :: proc(request_headers: string, service_secret: str
 	verified_username := ""
 	if jwt_ok {
 		verified_username = jwt_identity.username
-		if user_type == .User {
+		if user_type == .User || jwt_identity.chronicle_access & pr.CHRONICLE_ACCESS_SERVICE != 0 {
 			user_type = jwt_identity.user_type
 		}
 	} else if user_type != .User {
@@ -350,6 +361,7 @@ parse_http_upgrade_decision :: proc(request_headers: string, service_secret: str
 	decision.verified_username_owned = jwt_ok
 	decision.user_type = user_type
 	decision.authenticated = jwt_ok || user_type != .User
+	decision.chronicle_access = jwt_identity.chronicle_access
 	return decision
 }
 
@@ -571,6 +583,7 @@ worker_process_http_upgrade :: proc(c: ^HTTP_Upgrade_Connection) {
 	}
 	c.user_type = decision.user_type
 	c.authenticated = decision.authenticated
+	c.chronicle_access = decision.chronicle_access
 
 	websocket_accept: [60]byte
 	copy(websocket_accept[:], decision.sec_websocket_key)

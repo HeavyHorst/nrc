@@ -53,6 +53,7 @@ RESPONSE_OPCODES_WITHOUT_ODIN_PARSER := [?]pr.Opcode {
 	.S_CustomerSearchPage,
 	.S_TicketPage,
 	.S_GraphRankResult,
+	.S_Chronicle,
 }
 
 @(test)

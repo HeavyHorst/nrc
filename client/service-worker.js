@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261117monitor29";
+const CACHE_NAME = "nrc-terminal-20261117monitorchronicle3";
 
 const APP_SHELL = [
   "./",
@@ -11,7 +11,7 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261117monitor27",
+  "./css/main.css?v=20261117monitorchronicle1",
   "./css/foundation.css?v=20261116ticketcategory3",
   "./css/workspace.css?v=20261116monitor5",
   "./css/entities.css?v=20261108memory9",
@@ -26,7 +26,7 @@ const APP_SHELL = [
   "./custom-select.js?v=20261019customerwidth1",
   "./attachments.js?v=20261008files1",
   "./protocol.js?v=20261023protocol2",
-  "./frames.js?v=20261023protocol2",
+  "./frames.js?v=20261117chronicle1",
   "./db-retry.js?v=20261114overload1",
   "./assets.js?v=20261114overload1",
   "./transactions.js?v=20261114overload1",
@@ -55,7 +55,8 @@ const APP_SHELL = [
   "./task-query.js?v=20261114overload1",
   "./slices.js?v=20261114overload1",
   "./overview.js?v=20261114overload1",
-  "./history.js?v=20261114overload1",
+  "./chronicle.js?v=20261117chronicle6",
+  "./history.js?v=20261117chronicle1",
   "./note-html.js?v=20261007fragments1",
   "./notes.js?v=20261027columns2",
   "./task-references.js?v=20260914workspace1",
@@ -64,7 +65,7 @@ const APP_SHELL = [
   "./voice.js?v=20261108memory8",
   "./retained-messages.js?v=20261023protocol2",
   "./chat.js?v=20261020composer1",
-  "./app.js?v=20261117monitor22",
+  "./app.js?v=20261117monitorchronicle1",
   "./monitoring.js?v=20261117monitor29",
   "./calls.js?v=20261022cancel1",
   "./newsletter.js?v=20261022cancel1",

@@ -529,6 +529,15 @@ build_request_seeds :: proc(seeds: ^[dynamic]Seed, buf: []byte) {
 	assert(n > 0)
 	add_seed(seeds, "list_history", buf[:n])
 
+	// Chronicle JSON requests own decoded strings; include escaped text and
+	// identities above signed-64-bit range in serializer-generated seeds.
+	chronicle_names := [4]string{"chronicle_status", "chronicle_claim", "chronicle_chunk", "chronicle_commit"}
+	for request, i in ([?]pr.Chronicle_Request{{op = "status"}, {op = "claim", consumer = pr.CHRONICLE_CONSUMER_VERSION, limit = 32}, {op = "chunk", consumer = pr.CHRONICLE_CONSUMER_VERSION, epoch = "1", generation = "9007199254740993", cursor = "18446744073709551615", field = 5, length = 16384}, {op = "commit", consumer = pr.CHRONICLE_CONSUMER_VERSION, epoch = "1", generation = "9007199254740993", sources = {"9007199254740993", "18446744073709551615"}, outcome = "result", summary = "Notiz: \"α\" wurde geändert.", model = "fake", prompt_version = "test", schema_version = "s1"}}) {
+		n = pr.serializeChronicleRequest(request, 0x01020304, buf)
+		assert(n > 0)
+		add_seed(seeds, chronicle_names[i], buf[:n])
+	}
+
 	// Tickets: the body is the raw query payload behind a correlation id.
 	n = pr.serializeTicketQueryRequest(0x01020304, bstr(`{"ticket":1}`), buf)
 	assert(n > 0)

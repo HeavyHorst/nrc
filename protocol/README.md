@@ -124,8 +124,8 @@ its own cursor and the client asks for the next one when it needs it.
 invalid before any payload parsing happens, so a new opcode must be added to both
 the enum and the range check in `protocol/protocol.odin`.
 
-- Client to server: `1-3`, `8`, `16-73`
-- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-179`
+- Client to server: `1-3`, `8`, `16-74`
+- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-180`
 
 ### Client to Server
 
@@ -182,6 +182,7 @@ the enum and the range check in `protocol/protocol.odin`.
 | 71 | `C_MonitorDelivery` | Discover, lease, settle or resynchronize webhook delivery |
 | 72 | `C_GetMonitorState` | Read current revision and committed sequence as the configured evaluator |
 | 73 | `C_QueryMonitorStatus` | Workspace monitor summaries or instance status, problem-first live pagination |
+| 74 | `C_Chronicle` | Multiplexed JSON chronicle request with trailing correlation |
 
 #### Assets
 
@@ -287,6 +288,7 @@ them.
 | 177 | `S_MonitorDelivery` | Correlated delivery state and immutable event payload |
 | 178 | `S_MonitorState` | Current Monitor revision and last committed run sequence |
 | 179 | `S_MonitorStatusPage` | Correlation u32 followed by bounded version-1 status JSON; [wire contract](../services/bots/nrc-incidents/README.md#current-status-reads-nrc-protocol) |
+| 180 | `S_Chronicle` | Multiplexed JSON chronicle response with leading correlation |
 
 #### Assets
 
@@ -1375,3 +1377,178 @@ i64, last committed run sequence u64 (zero before the first run). Both values ar
 read in one executor snapshot. This request never changes state. A sidecar reads
 the asset separately and requires matching revisions before evaluating; apply's
 revision and sequence checks still decide acceptance if a concurrent write occurs.
+
+## Chronicle interface
+
+Chronicle uses one multiplexed request opcode, `C_Chronicle = 74`, and one
+response opcode, `S_Chronicle = 180`. This section defines the codec interface;
+it does not assert that every server operation is implemented or enabled.
+
+```
+request:  opcode:u16 | JSON object | correlation:u32
+response: opcode:u16 | correlation:u32 | JSON object
+```
+
+Integers in the binary envelope are big-endian. The complete application frame,
+including opcode and correlation but excluding the WebSocket header, must not
+exceed 131072 bytes. There is no JSON length prefix. The JSON occupies all bytes
+between the fixed fields. JSON must be strict UTF-8 JSON, not JSON5.
+
+Request fields (snake_case in both JSON and Odin):
+
+| Fields | Type and codec bounds |
+| --- | --- |
+| `op` | One of `list`, `claim`, `chunk`, `reserve`, `commit`, `retry`, `status`, `history`, `gaps`, `delete` |
+| `note_id`, `cursor`, `epoch`, `generation` | Optional canonical unsigned 64-bit decimal strings |
+| `consumer`, `model`, `prompt_version`, `schema_version` | UTF-8 strings, at most 128 bytes each |
+| `outcome`, `reason` | UTF-8 strings, at most 128 bytes each |
+| `summary` | UTF-8 string, at most 4096 bytes |
+| `sources` | At most 32 nonzero canonical u64 decimal strings in strictly increasing numeric order |
+| `limit`, `length` | u16 JSON integers |
+| `field` | u8 JSON integer |
+| `offset`, `input_tokens`, `output_tokens` | u32 JSON integers |
+
+An absent ID is represented by an omitted field or an empty string. A present ID
+uses only ASCII digits, has no leading zero except `"0"`, and must fit u64.
+JSON numbers are never accepted for IDs, cursors, epochs or generations. Zero
+is valid at the codec layer; operation handlers decide whether it is allowed.
+Null request fields, unknown keys, duplicate keys and nested objects are rejected.
+Omitted scalar fields decode to their zero values. The consumer version constant
+is `CHRONICLE_CONSUMER_VERSION = "chronicle-v1"`.
+
+Operation handlers own required-field checks, authorization, lease fencing,
+budget enforcement and persistence. The interface separates these operations:
+
+| Operation | Interface purpose and relevant fields |
+| --- | --- |
+| `list` | Page available inputs using `consumer`, `cursor`, `limit` |
+| `claim` | Claim at most `limit` inputs for `consumer` / optional `note_id`; return epoch, generation, note, lease and exact source IDs |
+| `chunk` | Read one claimed source ID in `cursor`, using `field`, `offset`, `length` and lease identity |
+| `reserve` | Reserve model-call budget with `input_tokens`, `output_tokens` and lease identity |
+| `commit` | Submit `sources`, `outcome`, `summary`, model/prompt/schema metadata and usage under the claimed lease |
+| `retry` | Release or defer claimed work with `reason` and lease identity |
+| `status` | Inspect consumer progress and pending/raw-byte/call/token counters |
+| `history` | Page committed entries for `note_id` with `cursor`, `limit` |
+| `gaps` | Page compact loss receipts with optional `note_id`, exclusive first-source `cursor`, and `limit` |
+| `delete` | Request deletion for `note_id`; return a deletion watermark |
+
+Access bits are `CHRONICLE_ACCESS_READ = 1`, `CHRONICLE_ACCESS_SERVICE = 2`
+and `CHRONICLE_ACCESS_DELETE = 4`; the authenticated server determines the
+authority needed for each operation. A codec-valid request alone grants nothing.
+
+Response objects may contain string fields `status`, `error`, `epoch`,
+`generation`, `lease_until`, `note_id`, `cursor`, `summary`, `outcome`,
+`deleted_through`; numeric counters `pending`, `raw_bytes`, `calls`,
+`input_tokens`, `output_tokens`, `processing`, `failed`, `acknowledged`, `gap_count`,
+`expired`; `enabled`, `more`, `can_delete` (bool); `sources` (decimal strings);
+`inputs`, `entries`, and `gaps` arrays; and `chunk` (base64 text). Status values include
+`claimed`, `empty`, `busy`, `committed`, `acknowledged`, `gap`, `deleted`,
+`forbidden`, `expired`, `budget`, `backoff`, `parked` and `exhausted`.
+
+Each input descriptor has string `source_id`, `note_id`, `captured_at`,
+`expires_at`, `before_version`, `after_version`, hex `before_hash` / `after_hash`,
+`actor_id`, `actor_name`; numeric `operation`, `attempts`; boolean
+`before_present`, `after_present`; and `lengths`, six signed 64-bit raw-field
+lengths. Each entry has string `generation`, `note_id`, `created_at`, `first_at`,
+`last_at`, `note_title`, `summary`, `model`, `prompt_version`, `schema_version`; `sources`
+(decimal strings); and boolean `source_available`.
+Each gap has exact decimal strings `first_source`, `last_source`, `note_id`,
+`first_at`, `last_at`; strings `note_title`, `reason`; numeric `input_count`; and boolean
+`source_available`. Gap responses contain no raw source text, actor or hashes.
+
+For both read collections, `note_title` is the current bounded note-title label
+(at most 256 UTF-8 bytes), read in the same transaction as the page. Deleted
+notes use their last technical-history label and remain unavailable, not linked.
+An empty title means no title metadata is available; never substitute note-body
+text. IDs remain the stable identity, including when titles repeat or change.
+
+Odin APIs: `parseChronicleEnvelope` checks only framing without allocating;
+`parseChronicleRequest` checks the JSON object and codec bounds using the caller's
+scoped arena. The caller must destroy that arena on success or failure after
+consuming any result. `serializeChronicleRequest` writes the full request frame
+and returns zero on failure. Its temporary JSON allocation is explicitly freed.
+Go APIs: `EncodeChronicleRequest` writes the full frame;
+`DecodeChronicleResponse` accepts a payload with its opcode already removed.
+The Go response types preserve IDs as strings and counters as uint64, never
+through float64. Unknown response fields are ignored for forward compatibility.
+
+### Implemented operation rules
+
+All service operations require `consumer:"chronicle-v1"`. `list` and `claim`
+require `limit` in 1–32. `list` returns pending descriptors after the exclusive
+source cursor. A claim takes one note's prefix of global pending source order;
+it cannot skip an earlier unresolved note to enlarge its batch. There is one
+active claim per workspace. Its epoch, generation, authenticated subject and
+ordered sources are immutable. `note_id` may restrict the head, not choose a
+later note. The lease is at most five minutes and never exceeds input expiry.
+
+`chunk`, `reserve`, `commit` and `retry` require epoch/generation and the same
+consumer/subject. Except for `chunk`, they require the exact ordered `sources`
+from the claim. Chunk fields 0–5 mean before title/format/body, then after
+title/format/body; `length` is 1–16384 and the response `chunk` is base64.
+Raw reads and new terminal commits enforce the 72h TTL and current epoch even
+before cleanup. `reserve` requires 1–16000 complete-request input tokens and
+exactly 1000 output tokens. Duplicate identical reservation is free; changed
+counts conflict. Persisted daily limits are 8000000 input/500000 output tokens.
+The daily call count is telemetry, not a separate limit.
+Reservations remain spent on timeout or restart.
+
+On `commit` or `retry`, `input_tokens`/`output_tokens` optionally report confirmed
+provider usage, including all request/output tokens, not just summary text.
+Both must be positive and no greater than their respective reservation; zero/zero
+or omitted values mean unknown usage and retain the full reservation. Partial or
+over-reservation reports are invalid. The unused portion is credited atomically
+with the terminal transition/retry release, only to the reservation's UTC day.
+No later day's budget receives the credit. Calls and attempts are not refunded.
+Result replay fingerprints include usage; identical replay never credits twice,
+and changed usage conflicts. Consumers without usage reporting remain conservative.
+
+`commit` outcomes are `result` (nonblank summary), `ack` (empty summary), and
+`gap`. Result/Ack require a reservation plus nonempty model/prompt/schema versions
+and an empty reason. An unreserved singleton may commit `gap` with
+`reason:"token_limit"` and no model metadata or summary. Successful replay
+returns the stored status/summary; changed content returns `conflict`.
+`retry` accepts `rebatch` before reservation, or `temporary`, `timeout`,
+`invalid_output` or `permanent` after reservation. `permanent` returns `parked`
+and persists `retry_at=expires_at`, preventing deterministic provider failures
+from spending more attempts across restart. The input stays pending until TTL or
+authorized deletion; claims return `parked` at that boundary. Attempts survive rebatching and lease expiry.
+After five attempts, claims return `exhausted`. The failed input stays visible
+until TTL or authorized deletion; later pending inputs cannot skip it.
+
+`history` requires `limit` in 1–16, pages by exclusive generation cursor, and
+optionally filters by note ID; a response is also bounded to about 60 KB of entry
+JSON. Only results appear, never no-change Acks. Source deletion leaves a result
+with `source_available:false`. `delete` requires a nonzero note ID and separate
+human-delete authority. It atomically deletes Chronicle prose and suppresses
+all that note's pending inputs through the returned source watermark. Old replay
+then returns `deleted` with no summary. Later mutations remain eligible.
+`gaps` requires `limit` in 1–16 and returns ascending compact receipts after
+the exclusive `first_source` cursor. `cursor` is the last returned first source;
+`more` indicates another row. Optional nonzero `note_id` restricts the page.
+Source deletion retains receipts with `source_available:false`. Result and Ack
+are not gaps. Paging is live, not a snapshot: cleanup can extend compact ranges.
+Empty `history` and `gaps` pages retain the request cursor, or return `"0"` when
+no cursor was supplied. Public collection fields (`sources`, `inputs`, `entries`,
+`gaps`) serialize as JSON arrays, including `[]` when empty, never `null`.
+
+`status` returns opt-in, epoch and `can_delete`, derived only from the current
+authenticated DELETE capability. Optional nonzero `note_id` scopes `pending`,
+`processing`, `failed`, `acknowledged`, `gap_count` and `expired`. `pending` is
+the logically live unresolved input total; `processing` and `failed` are
+disjoint subsets of it. Processing requires an active, unexpired current-epoch
+lease. Failed inputs are unleased, permanently parked or have exhausted five
+attempts; a live fifth attempt is still processing. Queued/backoff work is
+pending but neither processing nor failed. `expired` counts pending rows already
+logically expired by TTL or disabled epoch, before physical cleanup; these are
+excluded from pending/processing/failed. `acknowledged` counts successful
+no-change inputs. `gap_count` sums lost inputs, not compact receipt rows.
+`raw_bytes` and current-day `calls`, `input_tokens`, `output_tokens` remain
+workspace-wide even for note-scoped status. Reads do not trigger cleanup.
+Pending/raw counters on other operations describe the pre-operation snapshot.
+
+Service-only operations are list/claim/chunk/reserve/commit/retry. Authenticated
+workspace readers may use history/status/gaps, without a consumer version. These
+read operations never grant claim or raw-chunk authority. The Chronicle service
+identity cannot send unrelated canonical commands. See the operator configuration and remaining
+worker rollout gate in [DEVELOPMENT.md](../docs/DEVELOPMENT.md#chronicle-service-boundary).

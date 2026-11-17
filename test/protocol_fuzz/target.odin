@@ -307,6 +307,15 @@ exercise :: proc(input: []byte) -> pr.ProtocolParseError {
 	case .C_ListHistory:
 		_, err := pr.parseListHistoryRequest(data)
 		return err
+	case .C_Chronicle:
+		// Chronicle decodes JSON into caller-owned memory, unlike the borrowed
+		// binary request parsers. Bound its lifetime to this one fuzz input.
+		arena: virtual.Arena
+		if virtual.arena_init_growing(&arena) != nil do return .InvalidValue
+		defer virtual.arena_destroy(&arena)
+		r, _, err := pr.parseChronicleRequest(data, virtual.arena_allocator(&arena))
+		if err != nil do return err
+		assert(pr.validateChronicleRequest(r))
 
 	// Tickets.
 	case .C_QueryTickets:
@@ -558,7 +567,7 @@ exercise_response :: proc(input: []byte) -> pr.ProtocolParseError {
 	// S_TaskProjects, S_TaskAssignees, S_CalendarPage, S_WorkspaceOverview,
 	// S_HistoryPage, S_TaskDependentsPage, S_SliceOwners, S_TicketAssignees,
 	// S_CalendarPeople, S_EdgeListPage, S_CustomerSearchPage, S_TicketPage and
-	// S_GraphRankResult are decoded by the Go CLI and the JS client.
+	// S_GraphRankResult and S_Chronicle are decoded by the Go CLI and the JS client.
 	case:
 		return .InvalidOpcode
 	}

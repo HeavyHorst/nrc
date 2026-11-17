@@ -85,37 +85,178 @@ Use the [Compose deployment](../README.md#quickstart) for the complete web appli
 Production serves the complete generated `client/dist/`, not the source directory.
 After frontend changes, rebuild the Nginx image and reload open browser tabs.
 
-## SQLite schema 5
+## SQLite schema 6
 
 New databases use `workspace_db/schema.sql` followed by
-`workspace_db/slice_summaries.sql`, `workspace_db/slice_incremental.sql` and
-`workspace_db/slice_pagination.sql`, then `workspace_db/monitoring.sql`.
-Schema 4 adds Slice ordering indexes; schema 5 adds monitoring instance state,
-bounded last-evaluation receipts and episode lifecycle records.
+`workspace_db/slice_summaries.sql`, `workspace_db/slice_incremental.sql`,
+`workspace_db/slice_pagination.sql`, `workspace_db/monitoring.sql` and
+`workspace_db/chronicle.sql`. Schema 4 adds Slice ordering indexes; schema 5
+adds monitoring instance state, bounded last-evaluation receipts and episode
+lifecycle records. Schema 6 adds
+note-chronicle inputs, epochs, claims, results, deletion receipts and budgets
+without historical text backfill.
 Startup rejects older versions; it does not upgrade files implicitly.
 
 Stop the server and back up the complete data directory before migrating.
 Test on an offline copy first. From the repository root, run the following for
-each schema-3 `workspace.sqlite3` in the selected generation, replacing the example
-path. For schema 4, run only `monitoring.sql` inside the transaction.
-For schema 2, run `slice_incremental.sql` before `slice_finalize.sql`;
-for schema 1, also run `slice_summaries.sql` first inside the same transaction:
+each schema-5 `workspace.sqlite3` in the selected generation, replacing the example
+path. Keep all writers stopped until every shard has been migrated:
 
 ```sh
 sqlite3 -bail /absolute/offline-copy/shard_000/workspace.sqlite3 <<'SQL'
 PRAGMA foreign_keys=ON;
 BEGIN IMMEDIATE;
-.read workspace_db/slice_finalize.sql
-.read workspace_db/slice_pagination.sql
-.read workspace_db/monitoring.sql
+.read workspace_db/chronicle.sql
 COMMIT;
 SQL
 ```
 
-The migration checks the application ID and old version and replaces derived
-tables and triggers. It does not alter canonical records or Retained files.
-Finish all shards before starting the schema-5 server. The initial backfill is
-offline work and must be measured separately from ordinary requests.
+The migration requires the NRC application ID and exactly schema 5; foreign
+versions and repeated upgrades fail. With `-bail`, an error exits before commit
+and the transaction rolls back. Check the exit status and `PRAGMA user_version`
+for every shard before starting the schema-6 server. Canonical records and
+Retained files are unchanged. The new chronicle tables start empty; neither this
+migration nor the frozen legacy importer invents inputs or opts workspaces in.
+
+For schema 4, run `monitoring.sql` before `chronicle.sql`. For schema 3, run
+`slice_finalize.sql` then `slice_pagination.sql` before those two migrations
+inside the same transaction. For schema 2, first run
+`slice_incremental.sql`; for schema 1, also run `slice_summaries.sql` before it.
+These earlier steps rebuild derived Slice data offline; measure that backfill
+separately from ordinary requests. Startup rejects prior versions and never
+performs a silent upgrade.
+
+Capture, the authenticated Chronicle API, the processing worker, and the
+History client/CLI are implemented locally. Processing is default-off; the
+Terra adapter requires explicit configuration and has not been activated in production.
+The existing OpenAI approval covers automatic note-change processing; deployment
+and workspace activation still require approval. Use the
+[operations runbook](CHRONICLE_OPERATIONS.md) for Compose, migration and read-only
+checks. Keep `NRC_CHRONICLE_WORKSPACES` empty until operational activation is approved.
+The setting accepts comma-separated,
+exact workspace IDs (trimmed, no wildcard expansion). Server startup applies this
+operator allowlist once per shard and advances existing workspace epochs. Removing
+a workspace on restart atomically fences its pending inputs through a persistent
+disabled-epoch boundary. A bounded first cleanup pass runs in that transaction;
+remaining raw rows are removed by the executor. Re-enabling cannot make those old
+inputs readable or publishable, even before cleanup, and does not backfill changes.
+
+Capture shares the canonical mutation's transaction for single writes, batches
+and cascades. Title/content/format changes retain ordered decoded images; tag,
+project and attachment-only changes remain technical history. The capture ceiling
+is 256 KiB for decoded before+after content including titles. The existing 65,535
+decoded-byte per-note protocol limit remains unchanged. Pending raw quota defaults
+to 64 MiB per workspace, counting stored title/body/format bytes. Exceeding quota
+stores a text-free gap without rejecting the note write; a failure to store either
+capture or gap rolls back the complete mutation. Each input records a 72-hour
+expiry. Internal raw-chunk reads (at most 16 KiB) and terminal transitions check
+expiry, current epoch, opt-in and the disabled-epoch boundary in their transaction.
+The expiry boundary is exclusive: at `expires_at` neither reading nor new success
+is allowed, regardless of cleaner progress. Callers must supply server wall time
+at execution, not an earlier admission timestamp. Chronicle API operations use
+fresh server execution time and check service rights separately.
+
+Each production SQLite writer visits one assigned shard per second, including
+while idle and under sustained request load. One transaction terminally gaps at
+most 128 expired/disabled inputs and removes their raw bytes through accounting
+triggers. This is not a physical deletion deadline or a cleanup throughput SLA.
+Errors roll back the batch and retry on a later sweep. Input identities and
+terminal reasons remain durable; processed/Ack states, canonical notes, technical
+history and ID floors are not aged out. Terminal states cannot return to pending.
+Pending metadata also has a separate default limit of 4096 inputs per workspace,
+with actor ID/name each bounded to 256 bytes. Exhaustion produces an `input_quota`
+gap; oversized actor metadata produces `metadata_size`, without truncating it or
+rejecting the canonical note write. Terminal transitions release the slot atomically.
+Gap inputs immediately lose their full metadata row. `chronicle_gaps` retains only
+workspace, exact unsigned source endpoints, note ID, a reason of at most 64 bytes,
+capture-time min/max and count. Only consecutive IDs of the same note/reason merge,
+up to 4096 inputs per range; successes, different notes/reasons and missing IDs split
+ranges. Indexed receipt lookup and an insert guard prevent reuse after compaction.
+This bounds pending metadata, individual gap rows and compaction work, not total
+disk usage: arbitrary alternating gaps require separate durable receipts. No loss
+of source identities is allowed to satisfy a global storage limit.
+SQL deletion is logical, not erasure from WAL pages, held snapshots or backups.
+
+### Chronicle service boundary
+
+`NRC_CHRONICLE_SERVICE_SUBJECTS` and `NRC_CHRONICLE_DELETE_SUBJECTS` are JSON maps
+from exact workspace IDs to arrays of verified JWT subjects. Empty maps deny
+these rights; malformed configuration prevents startup. Service JWTs require
+`capability:"chronicle"`, `user_type:"bot"`, an exact nonempty `workspace`, and
+an allowlisted `sub`. That capability restricts the entire connection to
+`C_Chronicle` and ping, including executor admission/execution; it grants no
+canonical task/note/chat writes. A legacy bot secret does not grant Chronicle
+rights. Explicit invalid, empty or duplicate auth headers cannot fall back to it.
+Deletion requires a separately allowlisted verified human subject, never service
+or bot classification. Current authenticated workspace readers may read results
+and status. This adds no per-note ACL or general workspace-role system.
+
+The [Chronicle wire contract](../protocol/README.md#chronicle-interface) describes
+the multiplexed JSON API and precise decimal-string IDs. All operations use the
+SQLite writer lane. One active claim per workspace takes at most 32 inputs from
+one note's prefix of the global pending order, without skipping another note.
+Its immutable sources/hashes, authenticated owner, consumer version, monotonic
+epoch/generation and at most five-minute lease fence chunk reads and commits.
+Restart advances the epoch; an expired claim can be reclaimed without resetting
+attempt counters. Disable/re-enable cannot revive fenced inputs.
+
+`reserve` charges the current UTC-day budget before a provider attempt: at most
+8,000,000 input tokens and 500,000 output tokens per workspace/day. The daily call
+count is telemetry, not a separate limit.
+Each call reserves 1–16,000 input tokens and exactly 1,000 output tokens. The
+worker must count the complete request, including instructions/serialization.
+Reservations are never refunded on unknown outcomes or restart. Exact repeats
+do not charge twice. Confirmed provider input/output usage settles the reservation
+atomically with Result/Ack or a retry release. Only the unused portion is credited
+to its original UTC day; it cannot increase a later day's budget. Missing usage
+keeps the full reservation. Result replay includes usage in its fingerprint and
+cannot credit the budget twice. Calls and attempt counts are never refunded.
+Retry retains attempts and applies exponential backoff plus
+jitter. An unreserved `rebatch` release does not charge an attempt. After five
+failed/reserved-and-abandoned attempts, claims return `exhausted`; the input stays
+visible and pending until TTL or authorized deletion. Later inputs cannot skip it.
+A singleton that cannot fit the token budget may commit a `token_limit` gap
+without a provider reservation; silent truncation is not supported.
+Deterministic provider failures may release a reserved claim with
+`retry/permanent`: the input remains pending with `retry_at=expires_at`, and
+future claims return `parked` until TTL or authorized deletion, including restart.
+No artificial attempts are charged to express that permanent state.
+
+The AI sidecar has an isolated, default-off [Chronicle worker mode](../services/bots/nrc-ai/README.md#chronicle-worker).
+It uses dedicated service JWT sockets and server-side reservations, not Sullivan's
+general-purpose connection. Fake entries are visibly synthetic but commit real
+terminal state; use disposable workspaces. The Terra adapter is wired separately;
+fake mode does not invoke it or require an external provider key. This does not
+authorize external processing of workspace data.
+
+The Linux Chronicle crash acceptance test compiles a test-only C interposer with
+`cc` and SQLite development headers. It stops the real server immediately before
+or after an armed SQLite COMMIT, then sends SIGKILL and checks recovered SQL and
+public replay state. From the repository root, run:
+
+```sh
+go -C test/e2e test -v -count=1 -run '^TestChronicleCrashAtCommitBoundary$' .
+```
+
+The interposer
+is never linked into the application or container. This tests process crashes,
+not power failure or physical erasure from WAL/snapshots/backups.
+For the full client path, run the fake-process test with
+`NRC_CHRONICLE_CLIENT_ACCEPTANCE=1`. It builds the CLI and opens the real History
+client through a disposable JWT-injecting HTTP/WebSocket proxy. Browser/CLI reads
+use the same real server, SQLite result and token-limit gap as the fake worker;
+no service response is mocked. This needs Node, Playwright and Chromium and is
+included in the browser section of `test/run_all_tests.sh`.
+
+`commit` accepts exactly the claim's ordered sources. Result insertion or a
+no-relevant-change Ack, terminal receipt and raw deletion commit together.
+Successful retries return the stored result; different content conflicts.
+Results have no age expiry. Source deletion keeps them with an unavailable
+source link. Explicit Chronicle deletion atomically records a source watermark,
+removes result prose and suppresses pending/claimed inputs through that boundary.
+Replay then returns `deleted`, never former prose. Later note mutations above
+the watermark may produce new entries. These guarantees concern logical SQL
+state, not erasure from WAL files or backups.
 
 Unfiltered and owner-filtered Slice pages select IDs from the ordering index
 before loading page fields. Open-only pages restrict the range to `closed=0`.
@@ -220,7 +361,7 @@ WAL layouts; no existing data is automatically migrated. The base schema defines
 ordered attachments, history with immutable ACL/endpoint columns, DM membership
 and persistent ID floors. Derived tables cover notes/tags, reminders, appointments,
 customers, tickets, slices and room mappings. Server and importer use
-[schema 4](#sqlite-schema-4), including the Slice projection and pagination migrations.
+[schema 6](#sqlite-schema-6), including the Slice migrations, monitoring and chronicle capture tables.
 Recreate test databases after schema
 changes during development; there is no automatic migration. Workspace tables and their projections use workspace/ID
 keys without a scope column. Protocol scope fields must still be zero; storage
@@ -568,7 +709,7 @@ ready/unresolved/Done ordering and cursor reanchoring. Each page rebuilds that
 order. No workspace-sized task or dependency array is retained in Odin.
 
 `C_ListTaskSlices` reads persistent summaries and coverage counts; see
-[SQLite schema 4](#sqlite-schema-4) for index-based paging and filter scan limits.
+[SQLite schema 6](#sqlite-schema-6) for index-based paging and filter scan limits.
 Unicode name searches stage matching rows in `temp.nrc_slices`, which is emptied
 on success and failure, not dropped. Odin keeps only the bounded response page.
 Counts include closed-slice coverage on the first unfiltered page, and project
@@ -686,7 +827,7 @@ each limited to one page plus lookahead. Only these bounded candidate sets are
 merged; legacy self-links appear once. Counts share the page transaction but still
 visit matching edges. These paging indexes supplement the relation-first indexes
 used for relation filters. Server and importer use the same schema and migrations;
-see [SQLite schema 4](#sqlite-schema-4).
+see [SQLite schema 6](#sqlite-schema-6).
 Membership preflight uses two explicitly indexed endpoint seeks rather than a
 workspace-wide `OR` scan. The unique normalized membership index still enforces
 the invariant. `room_mapping_asset` is unique on workspace/asset: one mapping asset

@@ -289,6 +289,20 @@ func waitForClientReady(ctx context.Context, client *NRCClient, timeout time.Dur
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: metadataLogAttr})))
+	if mode := os.Getenv("NRC_CHRONICLE_MODE"); mode != "" {
+		provider, err := loadChronicleProvider(mode, os.Getenv("NRC_CHRONICLE_API_KEY_FILE"))
+		if err != nil {
+			slog.Error("chronicle provider configuration rejected", "error", err)
+			os.Exit(1)
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		if err := runChronicle(ctx, envOrDefault("NRC_SERVER", "ws://localhost:8080"), os.Getenv("NRC_CHRONICLE_TOKEN_FILE"), provider); err != nil {
+			slog.Error("chronicle startup failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	cfg := loadConfig()
 	startTime := time.Now()
 	issuer := os.Getenv("NRC_JWT_ISSUER")

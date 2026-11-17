@@ -16,20 +16,22 @@ JWT_Header :: struct {
 }
 
 JWT_Claims :: struct {
-	sub:       string `json:"sub"`,
-	username:  string `json:"username"`,
-	workspace: string `json:"workspace"`,
-	iss:       string `json:"iss"`,
-	aud:       string `json:"aud"`,
-	exp:       i64 `json:"exp"`,
-	nbf:       i64 `json:"nbf"`,
-	user_type: string `json:"user_type"`,
+	sub:        string `json:"sub"`,
+	username:   string `json:"username"`,
+	workspace:  string `json:"workspace"`,
+	iss:        string `json:"iss"`,
+	aud:        string `json:"aud"`,
+	exp:        i64 `json:"exp"`,
+	nbf:        i64 `json:"nbf"`,
+	user_type:  string `json:"user_type"`,
+	capability: string `json:"capability"`,
 }
 
 JWT_Identity :: struct {
-	subject:   string,
-	username:  string,
-	user_type: pr.User_Type,
+	subject:          string,
+	username:         string,
+	user_type:        pr.User_Type,
+	chronicle_access: u8,
 }
 
 @(thread_local)
@@ -159,6 +161,9 @@ validate_nrc_jwt :: proc(token: string, workspace: string = "", require_workspac
 		return {}, false, "invalid audience"
 	}
 
+	chronicle_access, capability_ok := chronicle_claim_access(claims, workspace)
+	if !capability_ok do return {}, false, "invalid chronicle capability"
+
 	username := claims.username
 	if username == "" {
 		username = claims.sub
@@ -180,7 +185,7 @@ validate_nrc_jwt :: proc(token: string, workspace: string = "", require_workspac
 		user_type = .System
 	}
 
-	return JWT_Identity{subject = strings.clone(claims.sub), username = username, user_type = user_type}, true, ""
+	return JWT_Identity{subject = strings.clone(claims.sub), username = username, user_type = user_type, chronicle_access = chronicle_access}, true, ""
 }
 
 decode_base64url_segment :: proc(segment: string) -> (decoded: []u8, ok: bool) {

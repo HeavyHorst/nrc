@@ -161,7 +161,9 @@ sqlite_unblock_tasks :: proc(store: ^db.Store, request: ^db.Request, completed: 
 }
 
 sqlite_execute_task_command :: proc(store: ^db.Store, request: ^db.Request, output: ^db.Command_Output) -> c.int {
+	if request.chronicle_access & pr.CHRONICLE_ACCESS_SERVICE != 0 && request.opcode != .C_Chronicle do return sql.CONSTRAINT
 	if request.operation == .Monitor_Maintenance do return sqlite_monitor_maintenance(store, request, output)
+	if request.opcode == .C_Chronicle do return sqlite_execute_chronicle(store, request, output)
 	#partial switch request.opcode {
 	case .C_SendMessage, .C_SendMessageV2, .C_SubscribeConvs, .C_SubscribeConvsV2, .C_UnsubscribeConvs, .C_ListMessagesBefore, .C_ReplayMessagesAfter:
 		return sqlite_authorize_dm_request(store, request, output)
@@ -316,6 +318,8 @@ worker_db_command_error :: proc(c: ^NRC_Connection, opcode: pr.Opcode, correlati
 		send_workspace_overview(c, {error = transmute([]byte)text, correlation_id = correlation})
 	case .C_ListHistory:
 		send_history_error(c, correlation, text)
+	case .C_Chronicle:
+		send_error_response(c, opcode, text, correlation)
 	case .C_ListTasksPaged:
 		send_task_list_page(c, 0, nil, false, 0, 0, 0, text, correlation)
 	case .C_CreateEdge, .C_DeleteEdge, .C_ListEdges, .C_ListAllEdges, .C_ListAllEdgesPaged, .C_ListEdgesPaged:

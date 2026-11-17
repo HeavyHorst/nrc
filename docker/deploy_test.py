@@ -8,7 +8,6 @@ import subprocess
 import tempfile
 import unittest
 
-
 SOURCE = Path(__file__).resolve().parent
 DOCKER = shutil.which("docker")
 
@@ -34,7 +33,8 @@ class DeploymentStorageTest(unittest.TestCase):
         ):
             subprocess.run(["git", *args], cwd=self.repo, check=True)
         self.env = dict(os.environ)
-        for name in ("NRC_TASK_DATA_VOLUME", "COMPOSE_PROJECT_NAME", "COMPOSE_FILE"):
+        for name in ("NRC_TASK_DATA_VOLUME", "COMPOSE_PROJECT_NAME", "COMPOSE_FILE",
+                     "NRC_CHRONICLE_CREDENTIAL_DIR"):
             self.env.pop(name, None)
         self.env.update(
             PATH=f"{self.bin}:{os.environ['PATH']}",
@@ -209,6 +209,41 @@ exec "$REAL_RSYNC" "${args[@]}"
         self.assertEqual(parity.returncode, 0, parity.stderr)
         self.assertIn("nothing to deploy", parity.stdout)
 
+    def test_chronicle_overlay_is_restricted_and_preserved_on_deploy(self):
+        self.configure("docker_sqlite-migrated")
+        shutil.copyfile(SOURCE / "compose.chronicle.yml",
+                        self.remote / "docker/compose.chronicle.yml")
+        (self.remote / "chronicle.env").write_text(
+            "NRC_CHRONICLE_CREDENTIAL_DIR=/private/fixture\n")
+        result = subprocess.run(
+            [DOCKER, "compose", "--project-directory", str(self.remote / "docker"),
+             "--env-file", str(self.remote / ".env"),
+             "--env-file", str(self.remote / "chronicle.env"),
+             "-f", str(self.repo / "docker/docker-compose.yml"),
+             "-f", str(self.remote / "docker/compose.chronicle.yml"),
+             "--profile", "chronicle", "config", "--format", "json"],
+            env=self.env, capture_output=True, text=True, check=True)
+        worker = json.loads(result.stdout)["services"]["chronicle"]
+        self.assertEqual(worker["environment"], {
+            "NRC_SERVER": "ws://websocket-server:8080",
+            "NRC_CHRONICLE_MODE": "terra",
+            "NRC_CHRONICLE_TOKEN_FILE": "/private/service-tokens.json",
+            "NRC_CHRONICLE_API_KEY_FILE": "/private/openai-key",
+        })
+        self.assertFalse(worker.get("ports"))
+        self.assertTrue(worker["read_only"])
+        self.assertEqual(worker["user"], "65532:65532")
+        self.assertEqual(len(worker["volumes"]), 2)
+        for mount in worker["volumes"]:
+            self.assertEqual(mount["type"], "bind")
+            self.assertTrue(mount["read_only"])
+            self.assertFalse(mount["bind"]["create_host_path"])
+        for path in ("services/bots/nrc-ai/main.go", "docker/compose.chronicle.yml"):
+            self.tool("rsync", f"cat >/dev/null; echo {path}")
+            result = self.deploy("--dry-run")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Services to rebuild: ai chronicle\n", result.stdout)
+
     def test_compose_uses_custom_project_and_graceful_shutdown(self):
         self.configure()
         result = subprocess.run(
@@ -220,6 +255,7 @@ exec "$REAL_RSYNC" "${args[@]}"
             env=self.env, capture_output=True, text=True, check=True,
         )
         model = json.loads(result.stdout)
+        self.assertNotIn("chronicle", model["services"])
         self.assertEqual(model["volumes"]["task-data"]["name"], "nrc-fixture_task-data")
         self.assertEqual(model["services"]["websocket-server"]["stop_signal"], "SIGINT")
 
@@ -275,6 +311,61 @@ exec "$REAL_RSYNC" "${args[@]}"
                          ("volume", "monitoring-history", "/data"))
         self.assertIn("ws://websocket-server:8080", evaluator["command"])
         self.assertNotIn("-monitors", evaluator["command"])
+
+
+class ChronicleOperationsTest(unittest.TestCase):
+    def status(self, **changes):
+        return dict(dict.fromkeys(("pending", "processing", "failed", "acknowledged",
+                                   "gap_count", "expired", "raw_bytes", "calls",
+                                   "input_tokens", "output_tokens"), 0),
+                    status="ok", enabled=True, **changes)
+
+    def check(self, current, previous=None, elapsed=0):
+        with tempfile.TemporaryDirectory() as directory:
+            args = ["python3", str(SOURCE / "chronicle_check.py")]
+            if previous is not None:
+                path = Path(directory) / "previous.json"
+                path.write_text(json.dumps(previous))
+                args += ["--previous", str(path), "--elapsed-seconds", str(elapsed)]
+            result = subprocess.run(args, input=json.dumps(current), text=True,
+                                    capture_output=True)
+            return result.returncode, json.loads(result.stdout)
+
+    def alerts(self, current, previous=None, elapsed=0):
+        code, response = self.check(current, previous, elapsed)
+        self.assertIn(code, (0, 1))
+        self.assertEqual(code, int(bool(response["warnings"])))
+        return response["warnings"]
+
+    def test_status_thresholds_and_progress(self):
+        current = self.status()
+        self.assertEqual(self.alerts(current), [])
+        current.update(pending=3, input_tokens=7_199_999, output_tokens=449_999)
+        self.assertEqual(self.alerts(current, current.copy(), 599), [])
+        self.assertIn("backlog_without_observed_progress_10m",
+                      self.alerts(current, current.copy(), 600))
+        previous = current.copy()
+        current["calls"] += 1
+        self.assertEqual(self.alerts(current, previous, 600), [])
+        for key, boundary in (("input_tokens", 7_200_000), ("output_tokens", 450_000)):
+            probe = self.status()
+            probe[key] = boundary
+            self.assertIn("daily_token_budget_above_90_percent", self.alerts(probe))
+        current.update(enabled=False, failed=1, expired=2, gap_count=4)
+        self.assertEqual(set(self.alerts(current, previous)), {
+            "capture_disabled", "failed_or_parked_inputs",
+            "expired_inputs_await_cleanup", "new_lost_inputs"})
+
+    def test_malformed_status_fails_closed_and_cli_never_echoes_input(self):
+        for value in ({}, {"status": "forbidden"}, self.status(pending=True),
+                      self.status(pending=-1)):
+            self.assertEqual(self.check(value), (2, {"status": "invalid_status"}))
+        result = subprocess.run(
+            ["python3", str(SOURCE / "chronicle_check.py")],
+            input='{"secret":"fixture-sensitive-data"}', text=True, capture_output=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stdout), {"status": "invalid_status"})
+        self.assertNotIn("fixture-sensitive-data", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

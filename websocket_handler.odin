@@ -243,12 +243,18 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte, dm_auth
 		return
 	}
 	opcode := pr.get_opcode(frame_data)
+	if !chronicle_service_opcode_allowed(c.chronicle_access, opcode) {
+		send_error_response(c, opcode, "Chronicle service connection is restricted")
+		return
+	}
 	if !dm_authorized && worker_db_defer_dm_access(c, opcode, frame_data[2:]) do return
 	if opcode != .C_ListHistory && is_workspace_data_opcode(opcode) && !workspace_data_scope_valid(frame_data[2:]) {
 		send_error_response(c, opcode, "Workspace data requires scope 0; update your client")
 		return
 	}
 	#partial switch opcode {
+	case .C_Chronicle:
+		process_chronicle(c, frame_data[2:])
 	case .C_ListTaskDependents:
 		req, err := pr.parseListTaskDependentsRequest(frame_data[2:])
 		if err != nil {

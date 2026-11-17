@@ -16,6 +16,7 @@ Worker_DB_Pending :: struct {
 	handle:            Connection_Handle,
 	username, subject: string,
 	user_type:         pr.User_Type,
+	chronicle_access:  u8,
 	correlation:       u32,
 	callback:          Worker_DB_Callback,
 }
@@ -63,6 +64,7 @@ worker_db_submit :: proc(c: ^NRC_Connection, request: db.Request, correlation: u
 	owned_request.workspace = c.workspace_id
 	owned_request.actor = c.verified_username
 	owned_request.subject = c.verified_subject
+	owned_request.chronicle_access = c.chronicle_access
 	if request.operation == .Create_Task {
 		owned_request.task.created_by = transmute([]byte)c.verified_username
 	}
@@ -83,12 +85,13 @@ worker_db_submit :: proc(c: ^NRC_Connection, request: db.Request, correlation: u
 	}
 	state.next_request = id
 	state.pending[id] = {
-		handle      = c.handle,
-		username    = username,
-		subject     = subject,
-		user_type   = c.user_type,
-		correlation = correlation,
-		callback    = callback,
+		handle           = c.handle,
+		username         = username,
+		subject          = subject,
+		user_type        = c.user_type,
+		chronicle_access = c.chronicle_access,
+		correlation      = correlation,
+		callback         = callback,
 	}
 	return true
 }
@@ -112,6 +115,8 @@ worker_db_drain :: proc() -> (did_work: bool) {
 			   c.workspace_id != job.request.workspace ||
 			   c.verified_username != pending.username ||
 			   c.verified_subject != pending.subject ||
+			   c.chronicle_access != pending.chronicle_access ||
+			   job.request.chronicle_access != pending.chronicle_access ||
 			   c.user_type != pending.user_type {
 				c = nil
 			}

@@ -29,6 +29,9 @@ fi
 if [[ -f monitoring.env ]]; then
   COMPOSE_ARGS+=(--env-file monitoring.env -f docker/compose.monitoring.yml)
 fi
+if [[ -f chronicle.env ]]; then
+  COMPOSE_ARGS+=(--env-file chronicle.env -f docker/compose.chronicle.yml)
+fi
 # Model every running profiled service, but restart only the captured set below.
 COMPOSE_ARGS+=(--profile '*')
 docker compose "${COMPOSE_ARGS[@]}" config -q
@@ -66,6 +69,7 @@ trap restart_stack EXIT INT TERM
   printf "compose_file=%s/%s\n" "$COMPOSE_DIR" "$COMPOSE_FILE"
   printf "publish_enabled=%s\n" "$(test -f publish.env && echo yes || echo no)"
   printf "monitoring_enabled=%s\n" "$(test -f monitoring.env && echo yes || echo no)"
+  printf "chronicle_enabled=%s\n" "$(test -f chronicle.env && echo yes || echo no)"
   printf "mode=quiesced\n"
   printf "retention_days=7\n"
   printf "services=%s\n" "${RUNNING_SERVICES[*]}"

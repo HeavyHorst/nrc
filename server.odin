@@ -251,7 +251,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-11:a053403"
+BUILD_VERSION :: "dev-2026-11:6d8030d"
 PROTOCOL_VERSION :: 10 // Calendar kind 3 carries a stable series occurrence identity.
 
 jwt_auth_secret: string
@@ -287,6 +287,11 @@ main :: proc() {
 		return
 	}
 	defer jwt_validation_scratch_destroy()
+	if !chronicle_auth_init() {
+		log.error("Invalid Chronicle subject authorization configuration")
+		os.exit(2)
+	}
+	defer chronicle_auth_destroy()
 	gc_options, gc_requested, gc_args_ok := attachment_gc_parse_command(os.args)
 	if gc_requested && !gc_args_ok {
 		attachment_gc_print_usage()

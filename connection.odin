@@ -965,6 +965,7 @@ NRC_Connection :: struct #align (64) {
 	queued_count:              u32, // 4 bytes - cached queue depth for fast fanout checks
 	is_sending:                bool, // 1 byte - checked on every send
 	authenticated:             bool, // 1 byte - checked on message handlers
+	chronicle_access:          u8, // Immutable verified JWT capabilities, never legacy headers.
 	logical_cleanup_done:      bool, // 1 byte - subscriptions/presence/DM cleanup ran
 	close_submitted:           bool,
 	close_completed:           bool,

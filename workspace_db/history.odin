@@ -63,6 +63,7 @@ append_history_event :: proc(
 	target: History_Reference = {},
 	private_owner := "",
 	batch: ^History_Batch = nil,
+	appended_id: ^u64 = nil,
 ) -> c.int {
 	if sql.get_autocommit(store.db) != 0 do return sql.MISUSE
 	batch := batch
@@ -96,5 +97,6 @@ append_history_event :: proc(
 	if rc = sql.bind_int64(insert, 9, i64(target.kind)); rc != sql.OK do return rc
 	if rc = sql.bind_id(insert, 10, target.id); rc != sql.OK do return rc
 	rc = sql.step(insert)
+	if rc == sql.DONE && appended_id != nil do appended_id^ = id
 	return rc == sql.DONE ? sql.OK : rc
 }

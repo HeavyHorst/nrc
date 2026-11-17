@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -336,6 +337,16 @@ func databaseCorrelation(msg *protocol.Message) (uint32, bool) {
 		return 0, false
 	}
 	switch msg.Opcode {
+	case protocol.C_Chronicle:
+		var request protocol.ChronicleRequest
+		if json.Unmarshal(b[:len(b)-4], &request) != nil {
+			return 0, false
+		}
+		// Human deletion and service operations must never be blindly replayed.
+		if request.Op != "history" && request.Op != "status" && request.Op != "gaps" {
+			return 0, false
+		}
+		return binary.BigEndian.Uint32(b[len(b)-4:]), true
 	case protocol.C_GetTasksByIDs, protocol.C_GetAssetsByIDs:
 		if len(b) < 12 {
 			return 0, false

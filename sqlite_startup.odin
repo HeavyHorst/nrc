@@ -3,6 +3,7 @@ package main
 import "core:mem"
 import "core:os"
 import "core:strings"
+import sql "sqlite"
 import db "workspace_db"
 
 SQLITE_EXECUTOR_LIMIT :: #config(NRC_SQLITE_EXECUTOR_LIMIT, 4)
@@ -84,6 +85,7 @@ sqlite_sync_directory :: proc(path: string) -> bool {
 // four writer/reader pairs share workers; each shard belongs to one pair.
 start_server_databases :: proc(server: ^NRC_Server, dir: string, generation: u64, workers: int) -> bool {
 	if !valid_storage_layout_worker_count(workers) || !sqlite_generation_valid(dir, generation) do return false
+	if !sqlite_start_chronicle(dir, generation) do return false
 	count := min(workers, SQLITE_EXECUTOR_LIMIT)
 	server.databases = make([]^db.Executor, count)
 	success := false
@@ -108,11 +110,41 @@ start_server_databases :: proc(server: ^NRC_Server, dir: string, generation: u64
 			validate_paths = true,
 			read_reserved_requests = 16,
 			read_reserved_bytes = 6 * mem.Megabyte,
+			chronicle_maintenance = true,
 		)
 		if err != .None do return false
 		server.databases[index] = e
 	}
 	success = true
+	return true
+}
+
+// Operator-only opt-in. Apply once under the existing data-directory lock,
+// before any worker or read lane can see the new epoch. This enables capture,
+// not provider transmission; service authorization is a separate boundary.
+sqlite_start_chronicle :: proc(dir: string, generation: u64) -> bool {
+	text := os.get_env_alloc("NRC_CHRONICLE_WORKSPACES", context.allocator); defer delete(text)
+	names := strings.split(text, ","); defer delete(names)
+	by_shard: [LOGICAL_SHARD_COUNT][dynamic]string
+	defer for list in by_shard do delete(list)
+	for raw_name in names {
+		name := strings.trim_space(raw_name)
+		if name == "" do continue
+		shard := shard_for_workspace(transmute([]byte)name)
+		append(&by_shard[shard], name)
+	}
+	for shard in 0 ..< LOGICAL_SHARD_COUNT {
+		path := sqlite_shard_path(dir, generation, shard); defer delete(path)
+		cpath := strings.clone_to_cstring(path); defer delete(cpath)
+		store, rc := db.open(cpath)
+		if rc != sql.OK do return false
+		defer db.close(&store)
+		if db.begin(&store) != sql.OK do return false
+		if db.configure_chronicle(&store, by_shard[shard][:]) != sql.OK || db.commit(&store) != sql.OK {
+			db.rollback(&store)
+			return false
+		}
+	}
 	return true
 }
 

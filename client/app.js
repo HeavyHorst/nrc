@@ -60,6 +60,8 @@ let pendingInitialization = null; // Store initialization function to call when 
 const Opcode = {
   C_ListHistory: 62,
   S_HistoryPage: 168,
+  C_Chronicle: 74,
+  S_Chronicle: 180,
   C_QueryTickets: 63,
   S_TicketPage: 169,
   C_SendMessage: 1,
@@ -1955,6 +1957,9 @@ function handleBinaryMessage(arrayBuffer) {
       case Opcode.S_HistoryPage:
         window.NRCHistory?.handlePage(dataView);
         break;
+      case Opcode.S_Chronicle:
+        window.NRCChronicle?.handlePage(dataView);
+        break;
       // Asset messages
       case Opcode.S_AssetCreated:
         window.NRCAssets.handleAssetCreated(dataView);
@@ -2298,6 +2303,8 @@ function parseErrorResponse(dataView) {
   const correlationId = error.correlationId;
 
   if (window.NRCMonitoring?.handleError(error)) return;
+  if (originOpcode === Opcode.C_Chronicle && window.NRCChronicle?.handleError(correlationId)) return;
+
   const opcodeName = Object.entries(Opcode).find(([, v]) => v === originOpcode)?.[0] || `opcode ${originOpcode}`;
   console.error(`[S_ErrorResponse] ${opcodeName}: ${errorMsg} (corr=${correlationId})`);
 

@@ -249,6 +249,9 @@ test_sqlite_command_late_asset_rejection_rolls_back :: proc(t: ^testing.T) {
 		store, rc := db.open(path, true)
 		if !testing.expect_value(t, rc, sql.OK) do return
 		defer db.close(&store)
+		testing.expect_value(t, db.begin(&store), sql.OK)
+		testing.expect_value(t, db.configure_chronicle(&store, {"rollback"}), sql.OK)
+		testing.expect_value(t, db.commit(&store), sql.OK)
 		b: [4][2048]byte
 		n: [4]int
 		// A real membership gives the rollback nonempty projection state.
@@ -319,5 +322,6 @@ test_sqlite_command_late_asset_rejection_rolls_back :: proc(t: ^testing.T) {
 		defer sql.finalize(s)
 		if !testing.expect_value(t, sql.step(s), sql.ROW) do return
 		testing.expect_value(t, sql.column_int64(s, 0), i64(1))
+		sqlite_projection_test_assert(t, &store, "SELECT (SELECT count(*) FROM chronicle_inputs)=3 AND (SELECT count(*) FROM chronicle_raw)=3")
 	}
 }

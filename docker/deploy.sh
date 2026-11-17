@@ -93,6 +93,10 @@ monitoring_enabled=$(ssh "$DEPLOY_HOST" "if test -f '$REMOTE_DIR/monitoring.env'
 if $monitoring_enabled; then
     COMPOSE_ARGS+=" --env-file monitoring.env -f docker/compose.monitoring.yml"
 fi
+chronicle_enabled=$(ssh "$DEPLOY_HOST" "if test -f '$REMOTE_DIR/chronicle.env'; then echo true; else echo false; fi")
+if $chronicle_enabled; then
+    COMPOSE_ARGS+=" --env-file chronicle.env -f docker/compose.chronicle.yml --profile chronicle"
+fi
 monitoring_running=$(ssh "$DEPLOY_HOST" "docker ps --filter label=com.docker.compose.project=docker --filter label=com.docker.compose.service=incidents --format '{{.ID}}'")
 # Keep managed sidecars in the model, including newsletter's search dependency.
 COMPOSE_ARGS+=" --profile search --profile ai --profile metrics"
@@ -252,6 +256,12 @@ else
                     compose=true
                 fi
                 ;;
+            docker/compose.chronicle.yml)
+                if $chronicle_enabled; then
+                    ai=true
+                    compose=true
+                fi
+                ;;
             docker/Dockerfile | *.odin | nbio/* | byte_pool/* | persistence/* | storage_io/* | websocket/* | protocol/*.odin)
                 server=true
                 ;;
@@ -294,6 +304,8 @@ $nginx && services+=(nginx)
 $publish && services+=(publish)
 $newsletter && services+=(newsletter)
 $incidents && services+=(incidents)
+# Chronicle shares the AI image, but never Sullivan's runtime or credentials.
+if $ai && $chronicle_enabled; then services+=(chronicle); fi
 
 # Source parity does not imply that containers use the latest built images.
 stale_services=$(ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && bash -s" <<'REMOTE'

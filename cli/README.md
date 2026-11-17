@@ -670,6 +670,91 @@ subscribe with `protocol.EncodeSubscribeConvs(protocol.WorkspaceDataConvID)`.
 The server rejects nonzero durable scopes; it does not rewrite them.
 Chat and DM requests retain their conversation IDs.
 
+## Technical history and AI Chronicle
+
+These are separate workspace records. Neither command accepts `--room`.
+
+```sh
+nrc history list --limit 50
+nrc history list --kind asset --id 9007199254740993 --fields id,action,fields
+nrc history list --before 9007199254740993 --limit 50
+
+nrc chronicle history --note 9007199254740993 --limit 16
+nrc chronicle history --cursor 9007199254740993 --limit 16
+nrc chronicle status --note 9007199254740993 --human
+nrc chronicle gaps --note 9007199254740993 --limit 16 --fields first_source,last_source,reason
+```
+
+`history list` reads the existing technical change log, newest event first.
+`--kind` is `all` (default), `task`, `asset` (including notes), or `edge`.
+A non-`all` kind requires `--id`; related edge events are included. Each call
+returns one page of 1..100 events (default 50), with the existing wire names
+`{"events":[...],"nextBefore":"..."}`. Pass `nextBefore` as `--before` for the
+next page; `"0"` means the end. Event fields retain the technical protocol's
+camelCase names, such as `entityId` and `actorName`.
+
+`chronicle history` reads AI results only, oldest generation first. Acknowledged
+inputs without a relevant change are not summary entries. `chronicle gaps`
+reads ranges of inputs that could not produce results, oldest `first_source`
+first. These reads need the same permission as status, not service rights.
+Both accept an optional `--note`, an exclusive ascending `--cursor` (default
+`0`), and `--limit` 1..16 (default 16). They return `entries` or `gaps`, plus
+`cursor` and `more`. Pass the returned cursor to the same command and filters
+while `more` is true. Empty terminal pages retain the requested cursor if the
+server omits it. There is no unbounded automatic page collection.
+
+Gap fields are `first_source`, `last_source`, `note_id`, `first_at`, `last_at`,
+`reason`, `input_count`, and `source_available`. IDs and timestamps remain
+decimal strings, including values above 2^53. A missing source does not hide
+its retained result or gap; inspect `source_available`.
+
+`chronicle status` reports `enabled`, `can_delete`, `pending`, `processing`,
+`failed`, `acknowledged`, `gap_count`, and `expired`. `pending` includes the
+processing and failed subsets; do not add these counters together. Optional
+`--note` scopes those counts. `raw_bytes` and the current day's `calls`,
+`input_tokens`, and `output_tokens` always remain workspace totals.
+`gap_count` counts affected inputs, not gap rows.
+
+All reads default to JSON and support `--fields` and `--human`. Collection
+projection selects item fields and preserves paging metadata, including on
+empty pages. Status projection selects response fields. Unknown fields fail;
+`--fields` cannot be combined with `--human` or mutations.
+
+### Deleting AI Chronicle data
+
+```sh
+nrc chronicle status --note 9007199254740993 --fields can_delete,pending
+# Only after reviewing the scope:
+nrc chronicle delete 9007199254740993 --yes
+```
+
+Deletion requires explicit `--yes` and a fresh server status response granting
+`can_delete` to the authenticated human. The CLI never infers permission from
+a nickname, username, or local flag. Missing permission fails closed, including
+with older servers that omit `can_delete`. The server also authorizes the delete.
+
+The command removes AI results and removes/suppresses pending inputs through
+the returned `deleted_through` source watermark. It does not delete the canonical
+note or technical history. Future note changes can generate new AI entries.
+This is not a command for deleting NRC notes.
+
+Reads use the shared bounded retry policy for explicit correlated database
+overload refusals. They do not reconnect or replay after a timeout or lost
+connection. Deletion is never retried automatically, even on overload. A failure
+after sending it returns `delete_not_confirmed`, with `retryable:false`; inspect
+status/history before deciding whether to issue another delete. Default errors
+are JSON on stderr; offline reads return `connection_failed`.
+
+Run the maintained disposable WebSocket contract test without a live server:
+
+```sh
+go -C cli test ./cmd/nrc -run 'TestHistoryChronicle' -v
+go -C protocol-go test ./... -run Chronicle
+```
+
+The fixture builds and invokes the CLI against an in-process test server with
+an isolated temporary configuration. It never sends deletion to an NRC instance.
+
 ## Release packaging
 
 Use Python 3.9 or newer and Go 1.26 or newer. From the repository root:

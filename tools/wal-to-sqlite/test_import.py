@@ -125,8 +125,8 @@ class ImportTests(unittest.TestCase):
         self.assertTrue((self.target / "IMPORT_COMPLETE.json").is_file())
         self.assertFalse((self.target / "storage-layout.manifest").exists())
         self.assertEqual(result["retained_message_generation"], 9)
-        self.assertEqual(result["schema_version"], 5)
-        self.assertEqual(json.loads((self.target / "IMPORT_COMPLETE.json").read_text())["schema_version"], 5)
+        self.assertEqual(result["schema_version"], 6)
+        self.assertEqual(json.loads((self.target / "IMPORT_COMPLETE.json").read_text())["schema_version"], 6)
         return result
 
     def connection(self):
@@ -210,7 +210,7 @@ class ImportTests(unittest.TestCase):
                     mutation(3, 1, edge(19, scope=43)), mutation(4, 1, dm(0))])
         self.run_import()
         db = self.connection()
-        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (5,))
+        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (6,))
         for table in ("tasks", "assets", "edges", "task_attachments", "asset_attachments",
                       "room_mappings", "note_metadata", "note_tags", "reminder_metadata",
                       "appointment_metadata", "appointment_people", "slice_metadata",
@@ -221,6 +221,18 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(db.execute("SELECT id FROM edges").fetchall(), [(u(19),)])
         self.assertEqual(db.execute("SELECT id,members FROM dm_conversations").fetchall(),
                          [(dm(0)[:8], 0)])
+
+    def test_note_history_does_not_backfill_or_enable_chronicle(self):
+        self.write([mutation(2, 1, asset(17, kind=5), 3),
+                    mutation(5, 1, history(100, entity=17))])
+        result = self.run_import()
+        db = self.connection()
+        self.assertEqual(db.execute("SELECT count(*) FROM assets").fetchone(), (1,))
+        self.assertEqual(db.execute("SELECT count(*) FROM history").fetchone(), (1,))
+        for table in ("chronicle_workspaces", "chronicle_inputs", "chronicle_raw", "chronicle_gaps",
+                      "chronicle_jobs", "chronicle_job_inputs", "chronicle_deletions", "chronicle_budgets"):
+            self.assertEqual(db.execute(f"SELECT count(*) FROM {table}").fetchone(), (0,))
+            self.assertEqual(result["shards"][0]["projections"][table], 0)
 
     def test_private_workspace_records_and_tombstones_are_rejected(self):
         private = legacy.xx(b"alice\0bob") | (1 << 63)

@@ -560,15 +560,17 @@ try {
         document.documentElement.dataset.theme = theme;
         document.documentElement.style.setProperty("--border-list", "rgb(13, 57, 91)");
       }, theme);
-      for (const selector of [".note-card", ".reminder-row", ".attention-row", '.task-table tbody tr:not([aria-hidden="true"])', ".customer-row", ".customer-event:not(.history-event)", ".slice-row", ".file-assets-picker-row", "#divider-fixtures .file-assets-row:first-child", ".customer-contact", ".slice-member"]) {
+      for (const selector of [".note-card", ".reminder-row", ".attention-row", '.task-table:not(.monitor-table) tbody tr:not([aria-hidden="true"])', ".customer-row", ".customer-event:not(.history-event)", ".slice-row", ".file-assets-picker-row", "#divider-fixtures .file-assets-row:first-child", ".customer-contact", ".slice-member"]) {
         const rows = page.locator(selector);
         assert.ok(await rows.count(), `${selector} has a catalogue fixture`);
         const edge = [".customer-contact", ".slice-member"].includes(selector) ? "borderTop" : "borderBottom";
         const borders = await rows.evaluateAll((rows, edge) => rows.map(row => getComputedStyle(row)[edge]), edge);
         assert.ok(borders.every(border => border === "1px solid rgb(13, 57, 91)"), `${selector} uses shared divider at ${theme}/${width}: ${borders}`);
       }
-      for (const selector of ['#divider-fixtures tr[aria-hidden="true"]', "#divider-fixtures .file-assets-row:last-child"]) {
-        assert.equal(await page.locator(selector).evaluate(row => getComputedStyle(row).borderBottomWidth), "0px", `${selector} remains borderless`);
+      for (const selector of ['#divider-fixtures tr[aria-hidden="true"]', "#divider-fixtures .file-assets-row:last-child", ".monitor-inspector .monitor-table tbody tr"]) {
+        const rows = page.locator(selector);
+        assert.ok(await rows.count(), `${selector} has a catalogue fixture`);
+        assert.equal(await rows.evaluateAll(rows => rows.every(row => getComputedStyle(row).borderBottomWidth === "0px")), true, `${selector} remains borderless`);
       }
     }
   }

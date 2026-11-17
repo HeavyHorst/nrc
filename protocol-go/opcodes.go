@@ -55,6 +55,7 @@ const (
 	C_MonitorDelivery        uint16 = 71
 	C_GetMonitorState        uint16 = 72
 	C_QueryMonitorStatus     uint16 = 73
+	C_Chronicle              uint16 = 74
 
 	// Assets (Client -> Server)
 	C_CreateAsset              uint16 = 30
@@ -149,6 +150,7 @@ const (
 	S_MonitorDelivery           uint16 = 177
 	S_MonitorState              uint16 = 178
 	S_MonitorStatusPage         uint16 = 179
+	S_Chronicle                 uint16 = 180
 
 	// Assets (Server -> Client)
 	S_AssetCreated    uint16 = 140

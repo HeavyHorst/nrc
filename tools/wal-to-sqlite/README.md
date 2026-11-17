@@ -30,10 +30,24 @@ includes the history ACL/endpoint columns and workspace-only keys;
 `slice_summaries.sql` upgrades to schema 2, and `slice_incremental.sql` replaces
 the dirty cache with schema-3 incremental Slice projections. `slice_pagination.sql`
 adds schema-4 Slice ordering indexes; `monitoring.sql` adds the schema-5
-monitoring state foundation. The import fingerprints all five files and creates
-schema-5 databases with initially empty monitoring tables. Keep all five
+monitoring state foundation, followed by `chronicle.sql` for schema-6
+note-chronicle storage. The import fingerprints all six files and creates
+schema-6 databases with initially empty monitoring and chronicle tables. Keep all six
 files in the migration bundle. The real Odin projection builder populates the
 derived membership, summary, project and workspace counters before activation.
+
+Frozen legacy imports leave all eight Chronicle tables empty, including inputs,
+claims, results, deletion receipts and budgets. Existing notes and technical
+history do not invent capture inputs or opt a workspace in. Capture and the
+authenticated service API are implemented; the processing worker and UI remain
+separate work. The importer makes no provider sends.
+
+Existing SQLite installations must stop all writers, back up the complete data
+directory and explicitly migrate each schema-5 shard offline with `chronicle.sql`
+inside `BEGIN IMMEDIATE` / `COMMIT`. Startup never upgrades old schemas silently.
+For schema 4, apply `monitoring.sql` first; for schemas 1 through 3, also apply
+the preceding Slice migrations in order. See the
+[stopped migration procedure](../../docs/DEVELOPMENT.md#sqlite-schema-6).
 
 Decoder references in that snapshot: `storage_layout.odin`,
 `shard_compaction_manifest.odin`, `shard_segment_catalog.odin`,
@@ -79,7 +93,7 @@ access times; file contents and names are never written by the importer.
 
 The target contains `shard_000.sqlite3`, etc., only for shards with replay
 records. A shard containing only high-water metadata is still occupied. Each
-database has `application_id=0x4e524351` and `user_version=5`.
+database has `application_id=0x4e524351` and `user_version=6`.
 
 ## Replay and preservation rules
 

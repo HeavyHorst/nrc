@@ -76,7 +76,17 @@ sqlite_asset_history :: proc(store: ^db.Store, request: ^db.Request, old, a: ^pr
 		action       = deleted ? "deleted" : (created ? "created" : "updated"),
 		fields       = fields[:],
 	}
-	return db.append_history_event(store, request.workspace, event, {2, a.asset_id}, private_owner = reminder_is_personal(a) ? string(a.owner) : "")
+	source_id: u64
+	rc := db.append_history_event(
+		store,
+		request.workspace,
+		event,
+		{2, a.asset_id},
+		private_owner = reminder_is_personal(a) ? string(a.owner) : "",
+		appended_id = &source_id,
+	)
+	if rc != sql.OK do return rc
+	return sqlite_capture_chronicle(store, request, deleted ? a : (created ? nil : old), deleted ? nil : a, source_id, actor)
 }
 
 SQLite_Asset_Mutation :: struct {

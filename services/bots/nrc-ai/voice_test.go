@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -49,6 +50,27 @@ func TestVoiceCoalescesPublicTranscriptEvents(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
+	body := fmt.Sprintf(`{"workspace":"ws","id":%q}`, result.ID)
+	// The browser renews the session lease while durable capture is processing.
+	pollCtx, stopPolling := context.WithCancel(ctx)
+	pollDone := make(chan struct{})
+	defer func() { stopPolling(); <-pollDone }()
+	go func() {
+		defer close(pollDone)
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pollCtx.Done():
+				return
+			case <-ticker.C:
+				if w := call("status", body); w.Code != http.StatusOK {
+					t.Errorf("voice status poll: HTTP %d", w.Code)
+					return
+				}
+			}
+		}
+	}()
 	conn := <-connections
 	defer conn.Close()
 	write := func(event any) {
@@ -80,6 +102,8 @@ func TestVoiceCoalescesPublicTranscriptEvents(t *testing.T) {
 	} else if timeout, ok := err.(interface{ Timeout() bool }); ok && timeout.Timeout() {
 		t.Fatal(err)
 	}
+	stopPolling()
+	<-pollDone
 	seg, err := access.scope.Read(ctx, 0)
 	if err != nil || seg.State != "complete" || len(seg.Records) != 174 || seg.Revision != 175 {
 		t.Fatal(seg, err)
@@ -101,7 +125,6 @@ func TestVoiceCoalescesPublicTranscriptEvents(t *testing.T) {
 	if err != nil || policy.Segments != 3 {
 		t.Fatal(policy, err)
 	}
-	body := fmt.Sprintf(`{"workspace":"ws","id":%q}`, result.ID)
 	for i := 0; i < 2; i++ {
 		if w := call("close", body); w.Code != 200 {
 			t.Fatal(w.Code, w.Body)

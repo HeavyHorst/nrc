@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20261013fold1">
     <link rel="icon" type="image/png" href="favicon.png?v=20261013fold1">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=20261013fold1">
-    <link rel="stylesheet" href="css/main.css?v=20261117monitor27">
+    <link rel="stylesheet" href="css/main.css?v=20261117monitorchronicle1">
     <link rel="stylesheet" href="css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="css/voice.css?v=20261105voice12">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -231,6 +231,7 @@
                         </div>
                 <section id="historyPanel" class="overview-panel" style="display: none;" aria-label="Change history">
                     <header class="panel-header"><div class="header-control-scroll"><span>HISTORY</span><span id="historyScope">WORKSPACE</span></div></header>
+                    <nav class="tab-group" aria-label="History type"><button id="historyTechnical" class="btn nav-tab active" type="button" aria-pressed="true">TECHNICAL</button><button id="historyChronicle" class="btn nav-tab" type="button" aria-pressed="false">AI CHRONICLE</button></nav>
                     <div class="overview-note history-toolbar"><button id="historyClear" class="btn" hidden>CLEAR SCOPE</button> <button id="historyRefresh" class="btn">REFRESH / RETRY</button><p id="historyStatus" role="status" aria-live="polite"></p></div>
                     <div id="historyBody" class="overview-body"></div>
                     <div class="overview-note"><button id="historyMore" class="btn" hidden>LOAD MORE (UP TO 1,000 EVENTS)</button></div>
@@ -711,7 +712,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@oneidentity/zstd-js@1.0.3/asm/index.umd.js"></script>
     <script src="attachments.js?v=20261008files1"></script>
     <script src="protocol.js?v=20261023protocol2"></script>
-    <script src="frames.js?v=20261023protocol2"></script>
+    <script src="frames.js?v=20261117chronicle1"></script>
     <script src="db-retry.js?v=20261114overload1"></script>
     <script src="assets.js?v=20261114overload1"></script>
     <script src="transactions.js?v=20261114overload1"></script>
@@ -740,7 +741,8 @@
     <script src="task-query.js?v=20261114overload1"></script>
     <script src="slices.js?v=20261114overload1"></script>
     <script src="overview.js?v=20261114overload1"></script>
-    <script src="history.js?v=20261114overload1"></script>
+    <script src="chronicle.js?v=20261117chronicle6"></script>
+    <script src="history.js?v=20261117chronicle1"></script>
     <script src="note-html.js?v=20261007fragments1"></script>
     <script src="notes.js?v=20261027columns2"></script>
     <script src="task-references.js?v=20260914workspace1"></script>
@@ -750,7 +752,7 @@
     <script src="retained-messages.js?v=20261023protocol2"></script>
     <script src="chat.js?v=20261020composer1"></script>
     <script src="monitoring.js?v=20261117monitor29"></script>
-    <script src="app.js?v=20261117monitor22"></script>
+    <script src="app.js?v=20261117monitorchronicle1"></script>
     <section id="callPanel" class="call-panel" aria-label="Video call" hidden>
         <header class="panel-header"><div><span id="callPeer">VIDEO INVITATION</span><button id="callDismiss" class="btn btn--danger task-detail-close" type="button" aria-label="Hide panel" title="Hide · reopen from Conferences">×</button></div></header>
         <p id="callInvitationPeer" class="call-invitation-peer"></p>

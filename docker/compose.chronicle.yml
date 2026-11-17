@@ -1,0 +1,42 @@
+# Explicit opt-in overlay; absent from the base stack. Never load .env into
+# this worker: it must not inherit signing keys or Sullivan's broad bot secret.
+services:
+  chronicle:
+    image: ${NRC_AI_IMAGE:-docker-ai:latest}
+    profiles: ["chronicle"]
+    build:
+      context: ..
+      dockerfile: services/bots/nrc-ai/Dockerfile
+    user: "65532:65532"
+    environment:
+      NRC_SERVER: ws://websocket-server:8080
+      NRC_CHRONICLE_MODE: terra
+      NRC_CHRONICLE_TOKEN_FILE: /private/service-tokens.json
+      NRC_CHRONICLE_API_KEY_FILE: /private/openai-key
+    volumes:
+      - type: bind
+        source: ${NRC_CHRONICLE_CREDENTIAL_DIR:?set absolute NRC_CHRONICLE_CREDENTIAL_DIR}/service-tokens.json
+        target: /private/service-tokens.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NRC_CHRONICLE_CREDENTIAL_DIR:?set absolute NRC_CHRONICLE_CREDENTIAL_DIR}/openai-key
+        target: /private/openai-key
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 70s
+    depends_on:
+      - websocket-server
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - orion-network

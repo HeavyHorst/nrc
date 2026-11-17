@@ -34,6 +34,114 @@ Missing required provider credentials prevent startup. If the paste LLM initiali
 but the Ask engine fails, paste remains available and Ask returns HTTP 503.
 Health alone does not prove that your provider can complete requests.
 
+## Chronicle worker
+
+The same `nrc-ai` binary has a separate, default-off Chronicle mode. Run it as
+a separate process with `NRC_CHRONICLE_MODE=fake`, `NRC_SERVER=ws://server:8080`
+and `NRC_CHRONICLE_TOKEN_FILE=/private/chronicle-tokens.json`. Do not set this
+mode on the ordinary Sullivan process: it replaces its HTTP/chat runtime.
+The worker does not initialize Sullivan's LLM, use `LLM_API_KEY`, sign JWTs,
+subscribe to chat, download attachments or change canonical records. The only
+accepted modes are `fake` and `terra`; leaving the variable empty keeps Chronicle
+off. No deployment or production activation is implied by this implementation.
+
+For an explicitly approved real-provider run, set `NRC_CHRONICLE_MODE=terra` and
+`NRC_CHRONICLE_API_KEY_FILE=/private/chronicle-api-key` in that separate process.
+The API key file must be regular, private (0600), at most 8192 bytes and contain
+one nonempty ASCII key; a trailing newline is allowed. The worker loads it once
+at startup. There is no fallback to Sullivan's key, model or base URL. Terra mode
+uses only `gpt-6.1-terra` at `https://api.openai.com/v1/responses`, with the versioned
+`chronicle-p9` prompt, `chronicle-s1` output, reasoning `none`, strict JSON schema,
+`store=false`, truncation disabled and no tools. HTTP redirects are refused.
+`store=false` is an API setting, not a zero-retention or regional-processing
+guarantee. The existing OpenAI approval covers automatic note-change processing;
+workspace selection and operational activation remain separate approvals. See the
+[Chronicle operations runbook](../../../docs/CHRONICLE_OPERATIONS.md) for the
+default-off Compose overlay, schema upgrade, rotation and read-only checks.
+
+The German summary targets one or two sentences, at most three for multiple
+relevant changes. It starts with the change and mentions unchanged content only
+when needed to avoid a misleading explanation. Relevant numbers, negations,
+conditions and intermediate changes/reversals take priority over terseness.
+This is a prompt requirement, not a sentence-count validator or automatic
+truncation; the existing byte/token limits and empty no-change acknowledgements
+remain unchanged.
+
+The UTF-8 token file is a JSON object mapping exact workspace IDs to dedicated
+Chronicle service JWT strings, for example `{"synthetic-workspace":"<service-jwt>"}`.
+Keep it private (0600), outside Git; at most 16 workspaces, 8192 bytes per token,
+256 KiB per file. Empty/duplicate/invalid workspace credentials are rejected.
+Provision and rotate these short-lived tokens outside the worker; restart it
+after replacing the file. A rejected/expired token cannot fall back to the broad
+bot secret. The server must separately opt the workspace into capture with
+`NRC_CHRONICLE_WORKSPACES` and allow the JWT subject in
+`NRC_CHRONICLE_SERVICE_SUBJECTS`; see the [server boundary](../../../docs/DEVELOPMENT.md#chronicle-service-boundary).
+Use synthetic, disposable workspaces for this phase: fake results and token-limit
+gaps are real terminal records, not a dry run and not useful AI history.
+
+Two fixed worker lanes handle the configured workspaces, one claim/provider call
+per workspace and at most two steps globally. Pending work stays in server SQLite,
+not an unbounded sidecar queue. Each pass pages at most 4096 descriptors, retains
+at most 32 head inputs and reads raw fields in chunks of at most 16 KiB, checking
+length, UTF-8 and the server's length-framed SHA-256 before use. At most one bounded
+input is read ahead of the selected model-sized prefix. No raw texts or prompts
+are persisted locally or logged. A full pass is followed by a five-second poll
+delay; unavailable service/capacity can delay progress, so this is not a latency SLA.
+
+The head note becomes eligible after 30 seconds without another captured change
+or five minutes since its oldest pending change. The check includes later pages
+and interleaved notes. Claims still preserve the global pending prefix. All
+intermediate images, including deletion, recreation and reversals, stay in source
+order; they are not reduced to first/last images. Provider timeout is at most 60
+seconds and never exceeds the claim lease; a whole workspace step is bounded to
+four minutes. Cancellation closes the socket and cancels provider work.
+
+Both profiles budget one token per serialized UTF-8 request byte plus 256 framing
+tokens, with 16000 input and 1000 reserved output tokens per call. Terra counts
+the complete HTTP JSON body, including instructions, escaping, metadata and the
+output schema. This is a conservative admission profile, not an exact tokenizer
+or universal token bound. The same count is used in the durable daily reservation;
+a completed response whose reported usage exceeds it is not published and parks
+the input. Confirmed provider usage replaces the reservation atomically with
+Result/Ack or a retry release, even when a confirmed response is unusable or
+refused. Usage includes the full request and output, not just summary text.
+Missing or invalid usage, ambiguous calls and timeouts retain the full reservation.
+The fake profile has no provider usage and retains its reservation. Budget credits
+apply only to the original UTC day, never twice on replay or to a newer day.
+Oversized batches are released without a provider attempt and reclaimed as a
+complete-input prefix; an oversized singleton becomes a `token_limit` gap without
+reservation. Nothing is silently truncated. Server budgets, attempts, backoff,
+epochs, TTL and deletion fences remain authoritative across restart.
+
+Fake results say **Fake-Prüflauf** and contain no semantic claims about the note.
+An unchanged input can Ack without an empty entry. Output validation rejects
+truncation, malformed/duplicate/unknown fields, wrong/reordered source IDs and
+invalid result/Ack shapes. Only exact Result/Ack/Gap and reservation requests may
+be replayed once after a lost transport response; claims are never blindly retried.
+Temporary provider failures use server backoff; deterministic failures use
+`retry/permanent`, which parks the pending input until TTL or authorized deletion,
+without resetting or fabricating attempt counts. No later input may skip it.
+The Terra adapter never retries HTTP calls itself. Transport errors, HTTP 408,
+429 rate limits and 5xx responses use bounded worker/server retries. Quota/billing
+429 responses, other rejected statuses, refusals and usage contradictions park
+the input. Invalid/incomplete/oversized output uses the bounded invalid-output
+retry path; response bodies and transport error details are never logged.
+
+Run `go test -race ./...` in this directory. The root server E2E
+`TestChronicleFakeWorkerProcess` builds this binary and runs it against disposable
+SQLite state, without any LLM credentials. `TestChronicleTerraHTTPWorker` checks
+the actual adapter/worker path with a simulated HTTP transport, including budget
+admission, Result/Ack, provider failures and secret isolation. Neither suite is a
+joint real-provider/SQLite end-to-end test.
+
+`TestChronicleTerraWorkerProcess` in `test/e2e` is a separate, paid, synthetic
+end-to-end test. It skips unless `NRC_CHRONICLE_LIVE_TEST_KEY_FILE` names a private
+Terra credential file. It uses disposable local SQLite state and service JWTs,
+checks persisted results, reservations, raw-text removal and restart safety, and
+never uses production notes. Set `NRC_CHRONICLE_CLIENT_ACCEPTANCE=1` to include the
+real CLI and Playwright browser readback. Normal test runs never call a provider.
+Synthetic tests are not reliability or privacy acceptance for real data.
+
 ## Automatic ticket categories
 
 Set `NRC_TICKET_CLASSIFICATION_WORKSPACES` to a comma-separated list of workspace names to classify newly created tickets with OpenAI Decisions (`gpt-6-luna`). Sullivan keeps those workspace connections open even without an active chat. Portal, email, CLI and staff-created tickets use the same creation events. Run one AI instance with classification enabled per workspace to avoid duplicate API requests.

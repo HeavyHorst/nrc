@@ -26,11 +26,13 @@ SLICE_SCHEMA = Path(__file__).with_name("slice_summaries.sql")
 INCREMENTAL_SCHEMA = Path(__file__).with_name("slice_incremental.sql")
 PAGINATION_SCHEMA = Path(__file__).with_name("slice_pagination.sql")
 MONITORING_SCHEMA = Path(__file__).with_name("monitoring.sql")
-SCHEMA_VERSION = 5
+CHRONICLE_SCHEMA = Path(__file__).with_name("chronicle.sql")
+SCHEMA_VERSION = 6
 
 
 def schema_text():
-    return SCHEMA.read_text() + SLICE_SCHEMA.read_text() + INCREMENTAL_SCHEMA.read_text() + PAGINATION_SCHEMA.read_text() + MONITORING_SCHEMA.read_text()
+    return (SCHEMA.read_text() + SLICE_SCHEMA.read_text() + INCREMENTAL_SCHEMA.read_text()
+            + PAGINATION_SCHEMA.read_text() + MONITORING_SCHEMA.read_text() + CHRONICLE_SCHEMA.read_text())
 
 
 def schema_hash():

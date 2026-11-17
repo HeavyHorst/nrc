@@ -22,6 +22,14 @@ worker_db_test_asset_handlers :: proc(t: ^testing.T, c: ^NRC_Connection, path: c
 		),
 		sql.OK,
 	)
+	testing.expect_value(t, db.configure_chronicle(&store, {c.workspace_id}), sql.OK)
+	defer {
+		// Later fixtures deliberately reset technical source sequences. Keep
+		// their default-off contract; a real workspace never resets those IDs.
+		testing.expect_value(t, db.begin(&store), sql.OK)
+		testing.expect_value(t, db.configure_chronicle(&store, nil), sql.OK)
+		testing.expect_value(t, db.commit(&store), sql.OK)
+	}
 	for f in ([4]struct {
 			id:        u64,
 			workspace: string,
@@ -126,6 +134,13 @@ worker_db_test_asset_handlers :: proc(t: ^testing.T, c: ^NRC_Connection, path: c
 	testing.expect_value(t, send_queue_len(observer), 0)
 	sqlite_projection_test_assert(t, &store, "SELECT high_water=x'0000000000000065' FROM sequences WHERE domain='asset'")
 	sqlite_projection_test_assert(t, &store, "SELECT count(*)=2 FROM history")
+	sqlite_projection_test_assert(t, &store, "SELECT (SELECT count(*) FROM chronicle_inputs)=2 AND (SELECT count(*) FROM chronicle_raw)=2")
+	sqlite_projection_test_assert(
+		t,
+		&store,
+		`SELECT count(*)=1 FROM chronicle_inputs i JOIN chronicle_raw r USING(workspace,source_id)
+ WHERE note_id=x'0000000000000065' AND operation=2 AND before_body=x'610062' AND after_body=x'6e6577'`,
+	)
 	// Personal reminders never reach another user's subscription or totals.
 	create = {
 		asset_type      = .Reminder,

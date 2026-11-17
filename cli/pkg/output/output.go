@@ -78,7 +78,7 @@ func HasFieldProjection() bool { return len(fields) != 0 }
 // Envelope keys whose arrays take item projection for --fields. A list command
 // that invents a new envelope key must be added here, or --fields falls through
 // to projecting the envelope itself and rejects every item field.
-var collectionKeys = []string{"tasks", "notes", "rooms", "users", "results", "edges", "reminders", "appointments", "entries", "projects", "tags", "slices", "members"}
+var collectionKeys = []string{"tasks", "notes", "rooms", "users", "results", "edges", "reminders", "appointments", "entries", "projects", "tags", "slices", "members", "events", "gaps"}
 
 func fieldSet(names ...string) map[string]bool {
 	s := make(map[string]bool, len(names))

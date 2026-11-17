@@ -41,11 +41,23 @@ test_slice_finalization_reuse_after_rollback_and_failure :: proc(t: ^testing.T) 
 	store, rc := open(path, create = true)
 	if !testing.expect_value(t, rc, sql.OK) do return
 	defer close(&store)
-	testing.expect_value(t, execute(&store, `
+	testing.expect_value(
+		t,
+		execute(
+			&store,
+			`
  INSERT INTO assets VALUES(x'77',x'0000000000000002',0,0,zeroblob(8),x'',1,1,0,0,x'',x'');
  INSERT INTO slice_metadata(workspace,asset_id,name,owner,outcome,closed,closed_at,closed_by) VALUES(x'77',x'0000000000000002',x'73',x'',x'',0,0,x'');
- INSERT INTO edges VALUES(x'77',x'0000000000000003',2,x'0000000000000001',1,x'0000000000000002',7,1,x'');`), sql.OK)
-	task := pr.Task{id = 1, status = .Todo, created_at = 17, updated_at = 29}
+ INSERT INTO edges VALUES(x'77',x'0000000000000003',2,x'0000000000000001',1,x'0000000000000002',7,1,x'');`,
+		),
+		sql.OK,
+	)
+	task := pr.Task {
+		id         = 1,
+		status     = .Todo,
+		created_at = 17,
+		updated_at = 29,
+	}
 	// First initialization is rolled back, including its TEMP schema. Later
 	// calls must recreate it and must not reuse any rolled-back contributions.
 	for attempt in 0 ..< 4 {
@@ -53,7 +65,11 @@ test_slice_finalization_reuse_after_rollback_and_failure :: proc(t: ^testing.T) 
 		task.status = attempt == 3 ? .Done : .Todo
 		testing.expect_value(t, put_task(&store, "w", &task), sql.OK)
 		if attempt == 2 {
-			testing.expect_value(t, execute(&store, "CREATE TEMP TRIGGER fail_finalize BEFORE DELETE ON main.slice_pending BEGIN SELECT RAISE(ABORT,'test'); END"), sql.OK)
+			testing.expect_value(
+				t,
+				execute(&store, "CREATE TEMP TRIGGER fail_finalize BEFORE DELETE ON main.slice_pending BEGIN SELECT RAISE(ABORT,'test'); END"),
+				sql.OK,
+			)
 			testing.expect_value(t, finalize_slices(&store), sql.CONSTRAINT)
 			testing.expect_value(t, rollback(&store), sql.OK)
 			continue
@@ -382,6 +398,53 @@ test_slice_schema_upgrade_is_explicit_and_atomic :: proc(t: ^testing.T) {
 	testing.expect_value(t, begin(&store), sql.OK)
 	testing.expect(t, execute(&store, #load("monitoring.sql", string)) != sql.OK)
 	testing.expect_value(t, rollback(&store), sql.OK)
+	testing.expect_value(t, close(&store), sql.OK)
+	rejected, rc = open(path, create = true)
+	testing.expect(t, rc == sql.NOTADB && rejected.db == nil)
+	testing.expect_value(t, sql.open_v2(path, &store.db, sql.OPEN_READWRITE, nil), sql.OK)
+	// Fail after the first chronicle table is created. Rollback must leave v5
+	// and its canonical records intact, with no TEMP migration guard remaining.
+	testing.expect_value(t, execute(&store, "CREATE TABLE chronicle_inputs(dummy INTEGER)"), sql.OK)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect(t, execute(&store, #load("chronicle.sql", string)) != sql.OK)
+	testing.expect_value(t, rollback(&store), sql.OK)
+	version, version_rc = scalar(&store, "PRAGMA user_version")
+	testing.expect(t, version_rc == sql.OK && version == 5)
+	partial, partial_rc = scalar(&store, "SELECT count(*) FROM sqlite_schema WHERE name='chronicle_workspaces'")
+	testing.expect(t, partial_rc == sql.OK && partial == 0)
+	guard, guard_rc := scalar(&store, "SELECT count(*) FROM sqlite_temp_schema WHERE name='nrc_chronicle_v6_guard'")
+	testing.expect(t, guard_rc == sql.OK && guard == 0)
+	testing.expect_value(t, execute(&store, "DROP TABLE chronicle_inputs"), sql.OK)
+	// The v5 version alone is insufficient: reject another application's file.
+	testing.expect_value(t, execute(&store, "PRAGMA application_id=123"), sql.OK)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect(t, execute(&store, #load("chronicle.sql", string)) != sql.OK)
+	testing.expect_value(t, rollback(&store), sql.OK)
+	testing.expect_value(t, execute(&store, "PRAGMA application_id=0x4e524351"), sql.OK)
+	// Reject a foreign version without leaving even the TEMP guard behind.
+	testing.expect_value(t, execute(&store, "PRAGMA user_version=999"), sql.OK)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect(t, execute(&store, #load("chronicle.sql", string)) != sql.OK)
+	testing.expect_value(t, rollback(&store), sql.OK)
+	version, version_rc = scalar(&store, "PRAGMA user_version")
+	testing.expect(t, version_rc == sql.OK && version == 999)
+	testing.expect_value(t, execute(&store, "PRAGMA user_version=5"), sql.OK)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect_value(t, execute(&store, #load("chronicle.sql", string)), sql.OK)
+	testing.expect_value(t, commit(&store), sql.OK)
+	version, version_rc = scalar(&store, "PRAGMA user_version")
+	testing.expect(t, version_rc == sql.OK && version == 6)
+	empty, empty_rc := scalar(
+		&store,
+		"SELECT (SELECT count(*) FROM chronicle_workspaces)+(SELECT count(*) FROM chronicle_inputs)+(SELECT count(*) FROM chronicle_raw)+(SELECT count(*) FROM chronicle_gaps)+(SELECT count(*) FROM chronicle_jobs)+(SELECT count(*) FROM chronicle_job_inputs)+(SELECT count(*) FROM chronicle_deletions)+(SELECT count(*) FROM chronicle_budgets)",
+	)
+	testing.expect(t, empty_rc == sql.OK && empty == 0)
+	// Applying v6 twice is an error, not an implicit enable or backfill.
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect(t, execute(&store, #load("chronicle.sql", string)) != sql.OK)
+	testing.expect_value(t, rollback(&store), sql.OK)
+	version, version_rc = scalar(&store, "PRAGMA user_version")
+	testing.expect(t, version_rc == sql.OK && version == 6)
 	testing.expect_value(t, close(&store), sql.OK)
 	store, rc = open(path)
 	if !testing.expect_value(t, rc, sql.OK) do return

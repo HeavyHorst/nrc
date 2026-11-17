@@ -35,6 +35,7 @@ run "$odin_tests" . "${odin_common[@]}" -define:NRC_SIMULATION=true "${odin_hege
 	run cmp workspace_db/slice_incremental.sql tools/wal-to-sqlite/slice_incremental.sql
 	run cmp workspace_db/slice_pagination.sql tools/wal-to-sqlite/slice_pagination.sql
 	run cmp workspace_db/monitoring.sql tools/wal-to-sqlite/monitoring.sql
+	run cmp workspace_db/chronicle.sql tools/wal-to-sqlite/chronicle.sql
 	run "$odin_bin" build . -vet -o:speed -define:NRC_SQLITE_PROJECTION_BUILDER=true -out:"$builder_dir/projection-builder"
 	run env NRC_TEST_PROJECTION_BUILDER="$builder_dir/projection-builder" PYTHONDONTWRITEBYTECODE=1 \
 		python3 -W error::ResourceWarning -m unittest discover -s tools/wal-to-sqlite -v
@@ -96,6 +97,7 @@ run npm run test:build --prefix client
 run npm run build --prefix client
 
 # Browser E2E. This requires Playwright and its Chromium browser to be installed.
+run env NRC_CHRONICLE_CLIENT_ACCEPTANCE=1 go -C test/e2e test -v -count=1 -timeout=5m -run '^TestChronicleFakeWorkerProcess$' .
 run node services/bots/nrc-publish/browser.e2e.mjs
 run node services/bots/nrc-tickets/browser.e2e.mjs
 run node client/build/production.e2e.mjs
@@ -122,6 +124,7 @@ run node client/reminder-notify.e2e.mjs
 run node client/attention.e2e.mjs
 run node client/overview.e2e.mjs
 run node client/history.e2e.mjs
+run node client/chronicle.e2e.mjs
 run node client/newsletter.e2e.mjs
 run node client/calls.e2e.mjs
 run node client/appointments.e2e.mjs

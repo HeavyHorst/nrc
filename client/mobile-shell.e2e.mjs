@@ -132,9 +132,12 @@ try {
     await capture(`detail-before-edit-${theme}`);
     await page.locator("#taskDetailToggleFocus").tap();
     await page.locator('.agenda-content nrc-inline-field[data-control$="-status"] button').tap();
-    assert.equal(await page.locator(".inline-field-editor select").inputValue(), "1");
+    const statusEditor = page.getByRole("dialog", { name: "Edit STATUS", exact: true });
+    assert.equal(await statusEditor.getByRole("option", { selected: true }).innerText(), "TODO");
+    assert.deepEqual(await statusEditor.getByRole("option").allTextContents(), ["BACKLOG", "TODO", "IN PROGRESS", "DONE"]);
     assert.ok(await page.locator(".inline-field-editor").evaluate(el => el.getBoundingClientRect().right <= innerWidth));
     await page.keyboard.press("Escape");
+    assert.equal(await statusEditor.count(), 0, "Escape dismisses the status picker without changing the task");
     await page.locator("#taskDetailDesc").fill(`Unsaved mobile description ${theme}`);
     assert.ok(await page.locator("#taskDetailDesc").evaluate(el => el.getBoundingClientRect().right <= innerWidth));
     await capture(`detail-${theme}`);

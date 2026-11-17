@@ -721,6 +721,16 @@ function decodeHistoryPage(view) {
   return { correlationId, page: parsed };
 }
 
+function decodeChronicleResponse(view) {
+  if (view.byteLength < 6 || view.byteLength > 131072) throw new ProtocolError("invalid chronicle frame size");
+  const correlationId = u32(view, 2);
+  try {
+    const page = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(view.buffer, view.byteOffset + 6, view.byteLength - 6)));
+    if (!page || typeof page !== "object" || Array.isArray(page)) throw Error();
+    return { correlationId, page };
+  } catch { throw new ProtocolError("invalid chronicle response JSON"); }
+}
+
 function decodeTicketPage(view) {
   const correlationId = u32(view, 2);
   const length = u32(view, 6);
@@ -1335,6 +1345,8 @@ function decodeServerFrame(view) {
       return { opcode, kind: "workspace_overview", ...decodeWorkspaceOverview(view) };
     case 168: // S_HistoryPage
       return { opcode, kind: "history_page", ...decodeHistoryPage(view) };
+    case 180: // S_Chronicle
+      return { opcode, kind: "chronicle", ...decodeChronicleResponse(view) };
     case 169: // S_TicketPage
       return { opcode, kind: "ticket_page", ...decodeTicketPage(view) };
     case 170: // S_TaskDependentsPage
@@ -1374,6 +1386,7 @@ function decodeServerFrame(view) {
     decodeCalendarPage,
     decodeWorkspaceOverview,
     decodeHistoryPage,
+    decodeChronicleResponse,
     decodeTicketPage,
     decodeCustomerSearchPage,
     decodeEdgeListPage,

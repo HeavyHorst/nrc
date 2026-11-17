@@ -104,6 +104,7 @@ Opcode :: enum u16 {
 	S_MonitorDelivery = 177,
 	S_MonitorState = 178,
 	S_MonitorStatusPage = 179,
+	C_Chronicle = 74,
 
 	// Tasks/Kanban (Server -> Client)
 	S_TaskCreated = 130,
@@ -125,6 +126,7 @@ Opcode :: enum u16 {
 	S_SliceOwners = 171,
 	S_TicketAssignees = 172,
 	S_CalendarPeople = 173,
+	S_Chronicle = 180,
 
 	// Assets (Client -> Server)
 	C_CreateAsset = 30,

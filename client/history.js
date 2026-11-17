@@ -2,6 +2,7 @@
 window.NRCHistory = (() => {
   let kind = 0, entityId = "0", events = [], before = "0", pending = null, timer;
   let mode = "offline";
+  let chronicle = false;
   const active = () => window.NRCViewManager?.getActiveView() === "history";
   const ready = () => typeof serverReady !== "undefined" && serverReady && ws?.readyState === WebSocket.OPEN;
   const escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -45,6 +46,7 @@ window.NRCHistory = (() => {
     return html + "</ol></section>";
   }
   function render() {
+    if (chronicle) return;
     const body = document.getElementById("historyBody");
     if (!body) return;
     const selected = events.find(event => event.entityId === entityId && event.entityType === (kind === 1 ? "task" : "asset"));
@@ -54,10 +56,12 @@ window.NRCHistory = (() => {
     body.setAttribute("aria-busy", String(mode === "loading"));
     body.innerHTML = events.length ? timeline() : mode === "ready" ? '<p class="overview-note">NO HISTORY IN THIS SCOPE</p>' : "";
     document.getElementById("historyMore").hidden = before === "0";
+    document.getElementById("historyMore").textContent = "LOAD MORE (UP TO 1,000 EVENTS)";
     document.getElementById("historyMore").disabled = mode !== "ready" || events.length >= 1000;
     document.getElementById("historyRefresh").disabled = mode === "loading" || !ready();
   }
   function load(more = false) {
+    if (chronicle) { window.NRCChronicle.open(kind, entityId); return; }
     if (more && (pending || before === "0" || events.length >= 1000)) return;
     cancel();
     if (!more) { events = []; before = "0"; }
@@ -95,11 +99,22 @@ window.NRCHistory = (() => {
     kind = type; entityId = String(id); cancel(); events = []; before = "0";
     if (active()) load(); else window.NRCViewManager.setActiveView("history");
   }
+  function selectChronicle(selected) {
+    cancel(); window.NRCChronicle?.cancel(); chronicle = selected;
+    for (const [id, on] of [["historyTechnical", !selected], ["historyChronicle", selected]]) {
+      const button = document.getElementById(id);
+      button?.classList?.toggle("active", on); button?.setAttribute("aria-pressed", String(on));
+    }
+    load();
+  }
   function init() {
     document.getElementById("historyBtn").onclick = () => open();
     document.getElementById("historyClear").onclick = () => open();
     document.getElementById("historyRefresh").onclick = () => load();
-    document.getElementById("historyMore").onclick = () => load(true);
+    document.getElementById("historyMore").onclick = () => chronicle ? window.NRCChronicle.load(true) : load(true);
+    document.getElementById("historyTechnical").onclick = () => selectChronicle(false);
+    document.getElementById("historyChronicle").onclick = () => selectChronicle(true);
+    window.NRCChronicle?.init();
     document.addEventListener("click", event => {
       const button = event.target.closest("[data-history-kind]");
       if (button) open(Number(button.dataset.historyKind), button.dataset.historyId);
@@ -110,7 +125,9 @@ window.NRCHistory = (() => {
       }
     });
   }
-  return { init, open, handlePage, refresh: () => { if (active()) load(); },
-    onViewChanged: view => { cancel(); if (view === "history") load(); },
-    disconnect: () => { cancel(); events = []; before = "0"; mode = "offline"; render(); } };
+  return { init, open, handlePage, isChronicle: () => chronicle,
+    openTechnical: (type, id) => { kind = type; entityId = String(id); selectChronicle(false); },
+    refresh: () => { if (active()) load(); },
+    onViewChanged: view => { cancel(); window.NRCChronicle?.cancel(); if (view === "history") load(); },
+    disconnect: () => { cancel(); window.NRCChronicle?.disconnect(); kind = 0; entityId = "0"; events = []; before = "0"; mode = "offline"; render(); } };
 })();

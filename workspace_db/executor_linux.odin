@@ -1,9 +1,11 @@
 package workspace_db
 
+import "../clock"
 import pr "../protocol"
 import "../spsc"
 import sql "../sqlite"
 import "core:c"
+import "core:log"
 import "core:mem"
 import "core:os"
 import "core:strings"
@@ -30,6 +32,7 @@ Request :: struct {
 	operation:        Operation,
 	workspace:        string,
 	subject:          string, // Authenticated actor for domain mutations.
+	chronicle_access: u8, // Immutable verified rights copied by the owning worker.
 	scope, task_id:   u64, // Get/Remove; Put uses task.conv_id/task.id.
 	task:             pr.Task, // Borrowed only for the duration of submit.
 	actor:            string,
@@ -113,6 +116,7 @@ Executor :: struct {
 	read_reserved_requests, read_reserved_bytes: int,
 	create_databases:                            bool,
 	validate_paths:                              bool,
+	chronicle_maintenance:                       bool,
 	command_handler:                             Command_Handler,
 	startup:                                     chan.Chan(bool),
 }
@@ -138,6 +142,7 @@ start_executor :: proc(
 	validate_paths := false,
 	read_reserved_requests: int = 0,
 	read_reserved_bytes: int = 0,
+	chronicle_maintenance := false,
 ) -> (
 	e: ^Executor,
 	error: Executor_Error,
@@ -169,6 +174,7 @@ start_executor :: proc(
 	e.read_reserved_bytes = read_reserved_bytes
 	e.create_databases = create_databases
 	e.validate_paths = validate_paths
+	e.chronicle_maintenance = chronicle_maintenance
 	e.command_handler = command_handler
 	e.paths, allocation_error = make([]cstring, len(paths))
 	if allocation_error != .None do return nil, .Allocation
@@ -244,6 +250,7 @@ submit :: proc(port: ^Worker_Port, request: Request, rejection: ^Admission_Rejec
 	}
 	if rejection != nil do rejection^ = .Unavailable
 	e := port.executor
+	if !chronicle_request_allowed(request) do return false
 	if port.closed || request.shard < 0 || request.shard >= len(e.paths) do return false
 	if len(string(e.paths[request.shard])) == 0 do return false
 	if (request.operation == .Command || request.operation == .Monitor_Maintenance) && (e.command_handler == nil || len(request.body) > pr.MAX_PROTOCOL_PAYLOAD_SIZE) do return false
@@ -608,7 +615,26 @@ executor_run :: proc(e: ^Executor, lane: int) {
 	stores := make([]Store, len(e.paths))
 	defer delete(stores)
 	defer for &store in stores {rc := close(&store); assert(rc == sql.OK)}
+	cleanup_shard := 0
+	next_cleanup := metrics_now() + i64(time.Second)
 	for {
+		// One shard / bounded batch per second on the existing writer, even
+		// under sustained request load or with no connected workers. Failed
+		// batches roll back and are retried on the next shard sweep.
+		if lane == 0 && e.chronicle_maintenance && metrics_now() >= next_cleanup {
+			next_cleanup = metrics_now() + i64(time.Second)
+			for _ in 0 ..< len(e.paths) {
+				shard := cleanup_shard
+				cleanup_shard = (cleanup_shard + 1) % len(e.paths)
+				if len(string(e.paths[shard])) == 0 do continue
+				store := &stores[shard]
+				rc := sql.OK
+				if store.db == nil do store^, rc = open(e.paths[shard])
+				if rc == sql.OK do rc = cleanup_chronicle(store, time.to_unix_nanoseconds(clock.now()))
+				if rc != sql.OK do log.warnf("Chronicle cleanup failed: shard=%d status=%d", shard, rc)
+				break
+			}
+		}
 		worked := false
 		// One bounded group and at most one returned output chunk per lane/port.
 		for &owner in e.ports {
@@ -675,13 +701,17 @@ executor_run :: proc(e: ^Executor, lane: int) {
 		if pending do continue
 		if all_closed do return
 		poll_fd := [1]linux.Poll_Fd{{fd = e.wakes[lane].fd, events = {.IN}}}
-		_, err := linux.poll(poll_fd[:], -1)
+		_, err := linux.poll(poll_fd[:], lane == 0 && e.chronicle_maintenance ? 1000 : -1)
 		assert(err == .NONE || err == .EINTR)
 	}
 }
 
 @(private)
 execute_job :: proc(store: ^Store, job: ^Completion, max_result_bytes: int, handler: Command_Handler, grouped := false, execution_started: i64 = 0) {
+	if !chronicle_request_allowed(job.request) {
+		job.result.status = sql.CONSTRAINT
+		return
+	}
 	started := execution_started
 	if started == 0 {
 		metrics_observe(store.metrics, job.lane * 3, job.admitted_at)
@@ -728,6 +758,12 @@ execute_job :: proc(store: ^Store, job: ^Completion, max_result_bytes: int, hand
 
 GROUP_COMMIT_MAX_JOBS :: 32
 GROUP_COMMIT_MAX_BYTES :: 100 * mem.Megabyte
+
+// Service rights do not authorize general storage primitives, even if the
+// caller stamps C_Chronicle onto a non-command operation.
+chronicle_request_allowed :: proc(request: Request) -> bool {
+	return request.chronicle_access & pr.CHRONICLE_ACCESS_SERVICE == 0 || (request.operation == .Command && request.opcode == .C_Chronicle)
+}
 
 // Explicit whitelist: a new opcode stays on the writer until its handler has
 // been audited. Read-only SQLite handles also reject accidental main-DB writes.

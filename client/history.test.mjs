@@ -14,11 +14,11 @@ function fixture() {
   }, addEventListener() {} };
   const requests = [], timers = new Map();
   let sequence = 0, view = "chat";
-  const context = vm.createContext({ window: {}, document, DataView, Uint8Array, TextDecoder,
-    serverReady: true, ws: { readyState: 1 }, WebSocket: { OPEN: 1 }, Opcode: { C_ListHistory: 62 },
+  const context = vm.createContext({ window: {}, document, DataView, Uint8Array, TextDecoder, TextEncoder,
+    serverReady: true, ws: { readyState: 1 }, WebSocket: { OPEN: 1 }, Opcode: { C_ListHistory: 62, C_Chronicle: 68 },
     getRpcCorrelationId: () => ++sequence, sendPacket: buffer => requests.push(new DataView(buffer)),
     setTimeout: fn => { timers.set(sequence, fn); return sequence; }, clearTimeout: id => timers.delete(id) });
-  vm.runInContext(framesSource + fs.readFileSync(new URL("history.js", import.meta.url), "utf8"), context);
+  vm.runInContext(framesSource + fs.readFileSync(new URL("chronicle.js", import.meta.url), "utf8") + fs.readFileSync(new URL("history.js", import.meta.url), "utf8"), context);
   const api = context.window.NRCHistory;
   context.window.NRCViewManager = { getActiveView: () => view, setActiveView: next => { view = next; api.onViewChanged(next); } };
   api.init();
@@ -29,7 +29,13 @@ function fixture() {
     response.setUint16(0, 168); response.setUint32(2, request.getUint32(29)); new Uint8Array(response.buffer, 6).set(json);
     api.handlePage(response);
   }
-  return { api, nodes, requests, timers, context, row, reply, status: () => nodes.get("historyStatus").textContent };
+  function replyChronicle(page, request = requests.at(-1)) {
+    const json = new TextEncoder().encode(JSON.stringify(page));
+    const response = new DataView(new ArrayBuffer(6 + json.length));
+    response.setUint16(0, 174); response.setUint32(2, request.getUint32(request.byteLength - 4)); new Uint8Array(response.buffer, 6).set(json);
+    context.window.NRCChronicle.handlePage(response);
+  }
+  return { api, nodes, requests, timers, context, row, reply, replyChronicle, status: () => nodes.get("historyStatus").textContent };
 }
 
 test("history request preserves exact u64 identities and canonical scope in the 33-byte BE wire contract", () => {
@@ -95,4 +101,44 @@ test("history timeout exposes retry and load more has a hard 1,000-event bound",
   }
   assert.match(f.status(), /1000 EVENTS/); assert.equal(f.nodes.get("historyMore").disabled, true);
   const count = f.requests.length; f.nodes.get("historyMore").onclick(); assert.equal(f.requests.length, count);
+});
+
+const chronicleStatus = { status: "ok", enabled: true, can_delete: false, pending: 3, processing: 1, failed: 1, expired: 0, acknowledged: 4, gap_count: 2, calls: 5, input_tokens: 600, output_tokens: 1000 };
+const chronicleEntry = { generation: "9007199254740993", note_id: "18446744073709551615", note_title: '<img src=x onerror=alert(2)>', first_at: "1792233000000000000", last_at: "1792233060000000000", created_at: "1792233120000000000", sources: ["9007199254740997", "9007199254740999"], summary: "<img src=x onerror=alert(1)>\nNicht freigegeben.", model: "gpt-6.1-terra", prompt_version: "chronicle-p5", schema_version: "chronicle-s1", source_available: false };
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test("AI mode separates successful Ack, partial coverage and exact high-ID result provenance without HTML", async () => {
+  const f = fixture(); f.api.open(2, chronicleEntry.note_id); f.nodes.get("historyChronicle").onclick();
+  const query = request => JSON.parse(new TextDecoder().decode(new Uint8Array(request.buffer, 2, request.byteLength - 6)));
+  assert.deepEqual(query(f.requests.at(-1)), { op: "status", note_id: chronicleEntry.note_id });
+  f.replyChronicle(chronicleStatus); await settle();
+  const reads = f.requests.slice(-2);
+  f.replyChronicle({ status: "ok", entries: [chronicleEntry], cursor: chronicleEntry.generation, more: true }, reads[0]);
+  f.replyChronicle({ status: "ok", gaps: [{ first_source: "9007199254741001", last_source: "9007199254741002", note_id: chronicleEntry.note_id, first_at: chronicleEntry.first_at, last_at: chronicleEntry.last_at, input_count: 2, reason: "ttl", source_available: false }], cursor: "9007199254741001", more: false }, reads[1]);
+  await settle();
+  const html = f.nodes.get("historyBody").innerHTML;
+  assert.match(html, /4 NO-CHANGE ACKS/);
+  assert.match(html, /2 LOST INPUTS/);
+  assert.match(html, /9007199254740997, 9007199254740999/);
+  assert.match(html, /SOURCE NO LONGER AVAILABLE/);
+  assert.match(html, /&lt;img src=x onerror=alert\(2\)&gt;/);
+  assert.match(html, /NOTE #18446744073709551615/);
+  assert.match(html, /&lt;img src=x/); assert.doesNotMatch(html, /<img|data-chronicle-delete=/);
+  assert.match(html, /chronicle-p5/); assert.match(html, /CREATED/); assert.match(html, /CHANGES/);
+  f.nodes.get("historyMore").onclick(); f.replyChronicle(chronicleStatus); await settle();
+  assert.deepEqual(query(f.requests.at(-1)), { op: "history", note_id: chronicleEntry.note_id, limit: 16, cursor: chronicleEntry.generation });
+  // A duplicate generation is not silently appended, even if its sources look valid.
+  f.replyChronicle({ status: "ok", entries: [chronicleEntry], cursor: chronicleEntry.generation, more: false }); await settle();
+  assert.match(f.status(), /FAILED/); assert.doesNotMatch(f.nodes.get("historyBody").innerHTML, /Nicht freigegeben/);
+});
+
+test("AI requests cannot repopulate the next workspace or technical mode after cancellation", async () => {
+  const f = fixture(); f.api.open(); f.nodes.get("historyChronicle").onclick();
+  const old = f.requests.at(-1); f.api.disconnect();
+  f.replyChronicle({ ...chronicleStatus, can_delete: true }, old); await settle();
+  assert.match(f.status(), /OFFLINE/); assert.doesNotMatch(f.nodes.get("historyBody").innerHTML, /PENDING|DELETE/);
+  f.nodes.get("historyTechnical").onclick(); f.reply([f.row(42)]);
+  assert.match(f.status(), /1 EVENTS/); assert.doesNotMatch(f.nodes.get("historyBody").innerHTML, /AI CHRONICLE/);
+  f.api.open(1, "42"); f.nodes.get("historyChronicle").onclick(); await settle();
+  assert.match(f.nodes.get("historyBody").innerHTML, /COVERS NOTES ONLY/);
 });
