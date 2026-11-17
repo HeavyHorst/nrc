@@ -281,6 +281,43 @@ window.NRCMonitoring = (() => {
       show(event.key === 'Escape' ? -1 : event.key === 'Home' ? 0 : event.key === 'End' ? points.length - 1 : Math.max(0, Math.min(points.length - 1, selected < 0 ? 0 : selected + (event.key === 'ArrowLeft' ? -1 : 1))));
     };
   }
+  function recentChecks(host, rows, runs, definition, revision, range) {
+    const samples = rows.filter(row => {
+      const at = Number(BigInt(row.observed_at_ns) / 1000000n);
+      return at >= range.from && at < range.to;
+    }).sort((a, b) => BigInt(a.observed_at_ns) < BigInt(b.observed_at_ns) ? -1 : BigInt(a.observed_at_ns) > BigInt(b.observed_at_ns) ? 1 : 0).slice(-20);
+    if (!samples.length) { host.innerHTML = '<p class="customer-empty">No checks retained in this hour.</p>'; return; }
+    const attempts = new Map(runs.map(run => [run.run_id, run]));
+    const checks = samples.map(sample => {
+      const reason = sample.acceptance !== 'confirmed' ? `NOT CONFIRMED · ${sample.acceptance.toUpperCase()}` : sample.revision !== String(revision) ? 'PREVIOUS CONFIGURATION' : '';
+      const state = reason ? 'unknown' : sample.condition === 0 ? 'healthy' : sample.condition === 1 ? 'failing' : 'unknown';
+      const label = `${stamp(sample.observed_at_ns)} · ${state === 'healthy' ? 'PASSED' : state === 'failing' ? 'FAILED' : 'UNKNOWN'}${reason ? ` · ${reason}` : ''}`;
+      // Join by the retained attempt ID, never a possibly repeated sequence number.
+      const run = sample.run_id ? attempts.get(sample.run_id) : null;
+      const duration = run?.duration_ns != null ? `<p class="customer-meta">CHECK DURATION ${esc((Number(run.duration_ns) / 1e6).toFixed(1))} ms</p>` : '';
+      const conditions = run?.diagnostics && !run.diagnostics.conditions.length ? (run.diagnostics.error ? `<p>${esc(run.diagnostics.error)}</p>` : '') : diagnostics(run, definition, revision, null, null);
+      return { state, label, details: `<p>${esc(label)}</p>${duration}${conditions}` };
+    });
+    const hint = 'Hover, focus or tap a check for details';
+    host.innerHTML = `<p class="customer-meta">${checks.filter(check => check.state === 'healthy').length} OF ${checks.length} SHOWN CHECKS PASSED · LATEST ${esc(stamp(samples.at(-1).observed_at_ns))}</p><div class="monitor-checks" role="group" aria-label="Recent checks, oldest to newest">${checks.map((check, i) => `<button type="button" class="monitor-check" data-state="${check.state}" data-check="${i}" aria-label="${esc(check.label)}" aria-pressed="false">${check.state === 'healthy' ? '✓' : check.state === 'failing' ? '×' : '—'}</button>`).join('')}</div><p class="customer-meta">OLDEST → NEWEST · LAST ${checks.length} CHECKS · NOT A TIME SCALE</p><div class="monitor-check-detail" aria-live="polite"><p class="customer-meta">${hint}</p></div>`;
+    const buttons = [...host.querySelectorAll('[data-check]')], detail = host.querySelector('.monitor-check-detail');
+    let pinned = -1;
+    const show = index => {
+      buttons.forEach((button, i) => { button.classList.toggle('is-active', i === index); button.setAttribute('aria-pressed', String(i === pinned)); });
+      detail.innerHTML = index < 0 ? `<p class="customer-meta">${hint}</p>` : checks[index].details;
+    };
+    buttons.forEach((button, i) => {
+      button.onpointerenter = event => { if (pinned < 0 && event.pointerType !== 'touch') show(i); };
+      button.onpointerleave = () => { if (pinned < 0) show(-1); };
+      button.onfocus = () => { if (pinned < 0) show(i); };
+      button.onblur = () => { if (pinned < 0) show(-1); };
+      button.onclick = () => { pinned = pinned === i ? -1 : i; show(pinned); };
+      button.onkeydown = event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault(); event.stopPropagation(); pinned = -1; show(-1);
+      };
+    });
+  }
   async function history(id, kind, identity, signal, range = null) {
     const to = kind === 'uptime' ? Math.floor(Date.now() / 300000) * 300000 : Date.now();
     const query = new URLSearchParams({ from: new Date(range?.from ?? to - (kind === 'uptime' ? 86400000 : 3600000)).toISOString(), to: new Date(range?.to ?? to).toISOString(), resolution: range?.resolution ?? (kind === 'uptime' ? '5m' : 'raw') });
@@ -412,16 +449,17 @@ window.NRCMonitoring = (() => {
         await previous;
         try {
           if (!valid() || local !== historyGeneration) return;
-          const attempts = await history(ref.id, 'runs', null, signal);
-          if (!valid() || local !== historyGeneration) return;
           const to = Date.now(), range = { from: to - hour, to };
+          const attempts = await history(ref.id, 'runs', null, signal, range);
+          if (!valid() || local !== historyGeneration) return;
           const sample = await history(ref.id, 'samples', row.identity, signal, range);
           if (!valid() || local !== historyGeneration) return;
           const run = attempts.rows.findLast(r => r.acceptance === 'confirmed' && r.revision === String(asset.updatedAt) && r.sequence === row.sequence) || attempts.rows.at(-1);
           if (!victoria) target.innerHTML = diagnostics(run, definition, asset.updatedAt, row.sequence, row.revision);
-          const observations = victoria ? sampleChart(sample.rows, definition, asset.updatedAt, config.interval_ns, range) : `${table(['TIME', 'VALUE'], sample.rows.slice(-20).reverse().map(s => `<tr><td>${esc(stamp(s.observed_at_ns))}</td><td>${esc(s.value)}${s.acceptance !== 'confirmed' ? `<span class="customer-meta">NOT CONFIRMED · ${esc(s.acceptance.toUpperCase())}</span>` : ''}</td></tr>`).join(''))}${sample.rows.length > 20 ? '<p class="customer-meta">LATEST 20 SAMPLES</p>' : ''}`;
-          el('monitorHistoryDetails').innerHTML = section('HISTORY · LAST HOUR', `<p class="customer-meta">CHECKED ${esc(stamp(run?.observed_at_ns))}</p>${observations}${sample.dropped_process_total !== '0' ? `<p class="customer-meta">PROCESS HISTORY DROPS: ${esc(sample.dropped_process_total)}</p>` : ''}`);
+          const observations = victoria ? sampleChart(sample.rows, definition, asset.updatedAt, config.interval_ns, range) : '<div class="monitor-recent-checks"></div>';
+          el('monitorHistoryDetails').innerHTML = section(victoria ? 'HISTORY · LAST HOUR' : 'RECENT CHECKS · LAST HOUR', `${observations}${sample.dropped_process_total !== '0' ? `<p class="customer-meta">PROCESS HISTORY DROPS: ${esc(sample.dropped_process_total)}</p>` : ''}`);
           if (victoria) bindSampleChart(el('monitorHistoryDetails'));
+          else recentChecks(el('monitorHistoryDetails').querySelector('.monitor-recent-checks'), sample.rows, attempts.rows, definition, asset.updatedAt, range);
           el('monitorUptime').hidden = false; el('monitorUptime').textContent = 'Reading 24h coverage…';
           try {
             const uptime = await history(ref.id, 'uptime', row.identity, signal);

@@ -77,11 +77,11 @@ export function installMonitoringFixture() {
       if (f.deferRegister) return new Promise(resolve => f.pendingRegister.push(() => resolve(response)));
       return response;
     }
-    const base = { revision: f.old ? '1' : rev, sequence: f.sequence || '17', observed_at_ns: String(now), acceptance: f.unknown ? 'unknown' : 'confirmed' };
-    const rows = f.empty ? [] : kind === 'runs' ? [{ ...base, diagnostics: { version: 1, conditions: [
+    const base = { run_id: 'attempt-17', revision: f.old ? '1' : rev, sequence: f.sequence || '17', observed_at_ns: String(now), acceptance: f.unknown ? 'unknown' : 'confirmed' };
+    const rows = f.empty ? [] : kind === 'runs' ? f.runRows?.map(r => ({ ...base, ...r })) || [{ ...base, duration_ns: '125000000', diagnostics: { version: 1, conditions: [
       { index: 0, state: 'fail', actual_type: 'number', actual: '503', expected_number: '200' },
       { index: 1, state: 'pass', actual_type: 'boolean', actual: 'true' },
-    ] } }] : kind === 'samples' ? f.sampleRows?.map(({ ago, ...r }) => ({ ...base, observed_at_ns: String(BigInt(Date.parse(url.searchParams.get('to')) - ago * 1000) * 1000000n), identity: url.searchParams.get('identity'), ...r })) || [{ ...base, identity: '{"target":"default"}', value: 0 }] : f.uptimeRows?.map(r => ({ revision: rev, ...r })) || [
+    ] } }] : kind === 'samples' ? f.sampleRows?.map(({ ago, ...r }) => ({ ...base, observed_at_ns: String(BigInt(Date.parse(url.searchParams.get('to')) - ago * 1000) * 1000000n), identity: url.searchParams.get('identity'), ...r })) || [{ ...base, identity: '{"target":"default"}', condition: 1, value: 0 }] : f.uptimeRows?.map(r => ({ revision: rev, ...r })) || [
       { revision: rev, healthy_ns: '600000000000', failing_ns: '300000000000', unknown_ns: '300000000000', paused_ns: '0' },
       { revision: '1', healthy_ns: '600000000000', failing_ns: '0', unknown_ns: '0', paused_ns: '0' },
     ];

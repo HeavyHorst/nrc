@@ -266,11 +266,67 @@ try {
   assert.deepEqual(await page.locator('.monitor-conditions th').allTextContents(), ['CONDITION', 'OBSERVED', 'RESULT']);
   assert.equal(await page.locator('[data-instance="0"]').getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('.monitor-record details').count(), 0);
-  assert.equal(await page.locator('#monitorHistoryDetails table').isVisible(), true);
-  assert.deepEqual(await page.locator('#monitorHistoryDetails th').allTextContents(), ['TIME', 'VALUE']);
+  assert.equal(await page.locator('#monitorHistoryDetails .monitor-checks').isVisible(), true);
+  assert.equal(await page.locator('#monitorHistoryDetails table').count(), 0);
   assert.doesNotMatch(await page.locator('#monitorHistoryDetails').textContent(), /confirmed|SEQ|buckets|ACCEPTANCE/);
   assert.match(await page.locator('#monitorHistoryDetails').textContent(), /PROCESS HISTORY DROPS: 2/);
   assert.equal(await page.locator('.monitor-record').textContent().then(t => (t.match(/ROLLUPS PENDING/g) || []).length), 1);
+  const checkDefinition = await page.evaluate(() => monitorFixture.definition);
+  for (const kind of ['http', 'tcp']) {
+    await page.evaluate(kind => {
+      if (kind === 'tcp') {
+        for (const key of Object.keys(monitorFixture.definition)) delete monitorFixture.definition[key];
+        Object.assign(monitorFixture.definition, { kind: 'tcp', address: 'example.test:443' });
+        monitorFixture.runRows = [{ run_id: 'attempt-17', duration_ns: '125000000', diagnostics: { version: 1, error: 'connect_failed', conditions: [] } }];
+      }
+      monitorFixture.sampleRows = [
+        { ago: 10, run_id: 'attempt-17', condition: 1, value: 0 },
+        { ago: 60, run_id: 'unconfirmed', condition: 0, value: 1, acceptance: 'unknown' },
+        { ago: 120, run_id: 'previous', condition: 0, value: 1, revision: '1' },
+        { ago: 180, run_id: 'pass-b', condition: 0, value: 1 },
+        { ago: 240, run_id: 'pass-a', condition: 0, value: 1 },
+        { ago: 3601, run_id: 'outside', condition: 0, value: 1 },
+      ];
+    }, kind);
+    await page.click('#monitorDetailRefresh');
+    await page.click('[data-instance="0"]');
+    await page.waitForFunction(() => document.querySelectorAll('.monitor-check').length === 5);
+    assert.deepEqual(await page.locator('.monitor-check').evaluateAll(nodes => nodes.map(n => n.dataset.state)), ['healthy', 'healthy', 'unknown', 'unknown', 'failing']);
+    assert.match(await page.locator('.monitor-recent-checks').textContent(), /2 OF 5 SHOWN CHECKS PASSED/);
+    const detail = page.locator('.monitor-check-detail');
+    await page.locator('.monitor-check').last().hover();
+    assert.match(await detail.textContent(), kind === 'http' ? /FAILED.*CHECK DURATION 125.0 ms.*503/s : /FAILED.*CHECK DURATION 125.0 ms.*connect_failed/s);
+    await page.locator('.monitor-check').first().hover();
+    assert.match(await detail.textContent(), /PASSED.*No per-condition diagnostics/s);
+    assert.doesNotMatch(await detail.textContent(), /503|125.0/, 'Never borrow diagnostics from another run with the same sequence');
+    await page.locator('.monitor-check').nth(2).click();
+    await page.locator('.monitor-check').last().hover();
+    assert.match(await detail.textContent(), /PREVIOUS CONFIGURATION/);
+    assert.equal(await page.locator('.monitor-check').nth(2).getAttribute('aria-pressed'), 'true');
+    await page.locator('.monitor-check').nth(2).press('Escape');
+    assert.match(await detail.textContent(), /Hover, focus or tap/);
+    await page.locator('.monitor-check').nth(3).focus();
+    assert.match(await detail.textContent(), /NOT CONFIRMED · UNKNOWN/);
+    await page.locator('.monitor-check').nth(3).press('Enter');
+    await page.locator('.monitor-check').last().hover();
+    assert.match(await detail.textContent(), /NOT CONFIRMED · UNKNOWN/);
+  }
+  await page.evaluate(() => { monitorFixture.sampleRows = Array.from({ length: 23 }, (_, i) => ({ ago: (i + 1) * 60, condition: i < 20 ? 0 : 1, value: i < 20 ? 1 : 0 })); });
+  await page.click('#monitorDetailRefresh');
+  await page.click('[data-instance="0"]');
+  await page.waitForFunction(() => document.querySelectorAll('.monitor-check').length === 20);
+  assert.match(await page.locator('.monitor-recent-checks').textContent(), /20 OF 20 SHOWN CHECKS PASSED/);
+  await page.evaluate(() => { monitorFixture.sampleRows = []; });
+  await page.click('#monitorDetailRefresh');
+  await page.click('[data-instance="0"]');
+  await page.waitForFunction(() => document.getElementById('monitorHistoryDetails').textContent.includes('No checks retained'));
+  assert.equal(await page.locator('.monitor-check').count(), 0);
+  await page.evaluate(definition => {
+    delete monitorFixture.sampleRows; delete monitorFixture.runRows;
+    for (const key of Object.keys(monitorFixture.definition)) delete monitorFixture.definition[key];
+    Object.assign(monitorFixture.definition, definition);
+  }, checkDefinition);
+  await page.click('#monitorDetailRefresh');
   await page.evaluate(() => { monitorFixture.drops = '0'; monitorFixture.rollups = '0'; });
   await page.click('[data-instance="0"]');
   await page.waitForFunction(() => document.getElementById('monitorUptime')?.textContent.includes('CURRENT REVISION ONLY'));
@@ -339,7 +395,7 @@ try {
     assert.doesNotMatch(await page.locator('#monitorHistory').textContent(), /definition revision unavailable/);
     if (mismatch.unknown) {
       assert.match(await page.locator('#monitorHistory').textContent(), /NOT CONFIRMED/);
-      assert.match(await page.locator('#monitorHistoryDetails').textContent(), /NOT CONFIRMED · UNKNOWN/);
+      assert.match(await page.locator('.monitor-check').first().getAttribute('aria-label'), /NOT CONFIRMED · UNKNOWN/);
     }
   }
   await page.evaluate(() => { monitorFixture.instancePages = false; monitorFixture.sequence = '17'; monitorFixture.identity = JSON.stringify({ host: 'cluster01c', mountpoint: '/var/lib/mysql', label: '<img src=x onerror=alert(1)>' }); });
@@ -348,13 +404,13 @@ try {
   assert.equal(await page.locator('#monitorInstances').isVisible(), false, 'A complete single-instance result opens automatically');
   assert.match(await page.locator('#monitorSelection').textContent(), /host cluster01c.*mountpoint \/var\/lib\/mysql.*<img/s);
   assert.equal(await page.locator('#monitorSelection img').count(), 0);
-  assert.equal(await page.locator('#monitorHistoryDetails table').isVisible(), true);
+  assert.equal(await page.locator('#monitorHistoryDetails .monitor-checks').isVisible(), true);
   assert.equal(await page.locator('#monitorSelection [data-state="firing"]').count(), 1);
   assert.equal(await page.locator('#monitorHistory').textContent().then(t => t.includes('cluster01c')), false);
   const previousViewport = page.viewportSize();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.click('[data-monitor="12"]');
-  await page.waitForSelector('#monitorHistoryDetails table');
+  await page.waitForSelector('#monitorHistoryDetails .monitor-checks');
   const revision = page.locator('.monitor-record > section:last-child dd').last();
   await revision.scrollIntoViewIfNeeded();
   const revisionBox = await revision.boundingBox();
@@ -397,7 +453,7 @@ try {
   await page.click('#monitorDetailRefresh');
   await page.waitForFunction(() => document.getElementById('monitorHistory').textContent.includes('HISTORICAL / NOT CURRENT'));
   assert.equal(await page.locator('#monitorHistory').isVisible(), true);
-  assert.equal(await page.locator('#monitorHistoryDetails table').isVisible(), true);
+  assert.equal(await page.locator('#monitorHistoryDetails .monitor-checks').isVisible(), true);
   await page.evaluate(() => { monitorFixture.fail = true; });
   await page.click('#monitorDetailRefresh');
   await page.waitForFunction(() => document.getElementById('monitorHistory').textContent.includes('HTTP 503'));
