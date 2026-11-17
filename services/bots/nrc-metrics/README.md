@@ -31,9 +31,16 @@ elsewhere, configure an address it can reach and restrict access to that address
 Do not expose the endpoint to untrusted users.
 
 Import [the supplied dashboard](grafana/nrc-metrics-dashboard.json) into Grafana.
-Select a Prometheus data source. Use its `thread_id` and `wal_kind` filters to
-inspect individual workers. Its old WAL panels are compatibility panels, not
-SQLite health indicators; use the `nrc_db_*` series below for SQLite.
+Select a Prometheus data source, job and instance, then use the Worker filter
+to inspect one or more workers. Scrape health, overall coverage and process RSS
+remain instance-wide. Set the data source's scrape interval to match collection;
+rate queries use Grafana's `$__rate_interval`.
+
+The dashboard shows SQLite throughput, credit utilization, admission refusals,
+latency histograms, group size and pager activity, followed by worker I/O and
+collector diagnostics. Panel descriptions explain each measurement's limits.
+Missing telemetry is not filled with zero; an idle histogram has no percentile.
+The retired entity-WAL and compaction panels are no longer included.
 
 `GET /health` reports connections and worker coverage. `status: "degraded"` means
 no bot connection is up, an expected worker is missing, or the configured worker
@@ -129,8 +136,8 @@ COMMIT time includes any synchronous auto-checkpoint SQLite runs inside COMMIT.
 This instrumentation does not replace SQLite's WAL hook or run extra checkpoints.
 Separate checkpoint duration/backlog, fsync latency, prepare time, per-query
 statistics and client retry exhaustion are not yet measured. Retained chat has
-its own storage path and is not covered by `nrc_db_*`. The supplied dashboard
-does not yet have panels for these new series.
+its own storage path and is not covered by `nrc_db_*`. The dashboard lists these
+gaps in its measurement-boundaries panel rather than substituting unrelated data.
 
 ## Configuration
 
