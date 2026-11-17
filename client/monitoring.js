@@ -353,10 +353,30 @@ window.NRCMonitoring = (() => {
     const hint = 'Hover, focus or tap a check for details';
     host.innerHTML = `<p class="customer-meta">${checks.filter(check => check.state === 'healthy').length} OF ${checks.length} SHOWN CHECKS PASSED · LATEST ${esc(stamp(samples.at(-1).observed_at_ns))}</p><div class="monitor-checks" role="group" aria-label="Recent checks, oldest to newest">${checks.map((check, i) => `<button type="button" class="monitor-check" data-state="${check.state}" data-check="${i}" aria-label="${esc(check.label)}" aria-pressed="false">${check.state === 'healthy' ? '✓' : check.state === 'failing' ? '×' : '—'}</button>`).join('')}</div><p class="customer-meta">OLDEST → NEWEST · LAST ${checks.length} CHECKS · NOT A TIME SCALE</p><div class="monitor-check-detail" aria-live="polite"><p class="customer-meta">${hint}</p></div>`;
     const buttons = [...host.querySelectorAll('[data-check]')], detail = host.querySelector('.monitor-check-detail');
+    // Overlay intrinsic-sized panels so the tallest check reserves space before
+    // hovering, including after wrapping at narrow Inspector widths.
+    const panels = document.createElement('div');
+    panels.className = 'monitor-check-panels';
+    panels.setAttribute('aria-live', 'polite');
+    detail.removeAttribute('aria-live');
+    detail.replaceWith(panels);
+    panels.append(detail);
+    for (const check of checks) {
+      const panel = document.createElement('div');
+      panel.innerHTML = check.details;
+      panel.inert = true;
+      panel.setAttribute('aria-hidden', 'true');
+      panels.append(panel);
+    }
     let pinned = -1;
     const show = index => {
       buttons.forEach((button, i) => { button.classList.toggle('is-active', i === index); button.setAttribute('aria-pressed', String(i === pinned)); });
-      detail.innerHTML = index < 0 ? `<p class="customer-meta">${hint}</p>` : checks[index].details;
+      [...panels.children].forEach((panel, i) => {
+        const selected = i === index + 1;
+        panel.classList.toggle('monitor-check-detail', selected);
+        panel.inert = !selected;
+        panel.setAttribute('aria-hidden', String(!selected));
+      });
     };
     buttons.forEach((button, i) => {
       button.onpointerenter = event => { if (pinned < 0 && event.pointerType !== 'touch') show(i); };

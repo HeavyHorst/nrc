@@ -93,7 +93,9 @@
 .monitor-check[data-state="failing"] { color: var(--accent-danger); box-shadow: inset 0 -4px var(--accent-danger); }
 .monitor-check[data-state="unknown"] { border-style: dashed; }
 .monitor-check:is(.is-active, :focus-visible) { outline: 2px solid var(--text-primary); outline-offset: 1px; }
-.monitor-check-detail { min-height: 3em; overflow-wrap: anywhere; }
+.monitor-check-panels { display: grid; overflow-wrap: anywhere; }
+.monitor-check-panels > div { grid-area: 1 / 1; min-width: 0; visibility: hidden; }
+.monitor-check-panels > .monitor-check-detail { visibility: visible; }
 @media (pointer: coarse) { .monitor-check { width: 2.75rem; min-height: 2.75rem; } }
 .monitor-inspector #monitorSelection .task-row-open { display: inline; width: auto; }
 .monitor-inspector #monitorSelection > p > .monitor-state { font: 700 var(--font-lg)/1.4 var(--font-mono); }

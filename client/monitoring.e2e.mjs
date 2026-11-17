@@ -48,8 +48,7 @@ try {
         await page.waitForSelector(marker, { state: 'hidden' });
       }
       // Preserve keyboard access through the existing record button.
-      await page.locator('#monitorList .task-row-open').first().focus();
-      await page.keyboard.press('Enter');
+      await page.locator('#monitorList .task-row-open').first().press('Enter');
       await page.waitForSelector(marker);
       await page.evaluate(() => NRCInspector.close());
     }
@@ -265,12 +264,12 @@ try {
   assert.equal(await page.locator('.monitor-streak[data-state="fail"] .is-filled').count(), 5);
   assert.equal(await page.locator('.monitor-streak[data-state="pass"] .is-filled').count(), 0);
   assert.equal(await page.locator('.monitor-meter[data-kind="coverage"] > span').evaluate(e => getComputedStyle(e).backgroundColor), await page.locator('.monitor-footer').evaluate(e => getComputedStyle(e).color));
-  assert.deepEqual(await page.locator('.monitor-conditions th').allTextContents(), ['CONDITION', 'OBSERVED', 'RESULT']);
+  assert.deepEqual(await page.locator('.monitor-conditions th:visible').allTextContents(), ['CONDITION', 'OBSERVED', 'RESULT']);
   assert.equal(await page.locator('[data-instance="0"]').getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('.monitor-record details').count(), 0);
   assert.equal(await page.locator('#monitorHistoryDetails .monitor-checks').isVisible(), true);
-  assert.equal(await page.locator('#monitorHistoryDetails table').count(), 0);
-  assert.doesNotMatch(await page.locator('#monitorHistoryDetails').textContent(), /confirmed|SEQ|buckets|ACCEPTANCE/);
+  assert.equal(await page.locator('#monitorHistoryDetails table:visible').count(), 0);
+  assert.doesNotMatch(await page.locator('#monitorHistoryDetails').innerText(), /confirmed|SEQ|buckets|ACCEPTANCE/);
   assert.match(await page.locator('#monitorHistoryDetails').textContent(), /PROCESS HISTORY DROPS: 2/);
   assert.equal(await page.locator('.monitor-record').textContent().then(t => (t.match(/ROLLUPS PENDING/g) || []).length), 1);
   const checkDefinition = await page.evaluate(() => monitorFixture.definition);
@@ -296,6 +295,27 @@ try {
     assert.deepEqual(await page.locator('.monitor-check').evaluateAll(nodes => nodes.map(n => n.dataset.state)), ['healthy', 'healthy', 'unknown', 'unknown', 'failing']);
     assert.match(await page.locator('.monitor-recent-checks').textContent(), /2 OF 5 SHOWN CHECKS PASSED/);
     const detail = page.locator('.monitor-check-detail');
+    for (const width of [1600, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      if (!await page.locator('.monitor-checks').isVisible()) {
+        await page.click('[data-monitor="12"]');
+        await page.click('[data-instance="0"]');
+        await page.waitForFunction(() => document.querySelectorAll('.monitor-check').length === 5);
+      }
+      await page.locator('.monitor-checks').scrollIntoViewIfNeeded();
+      const before = await page.locator('.monitor-checks').boundingBox();
+      const height = await page.locator('.monitor-check-panels').evaluate(node => node.getBoundingClientRect().height);
+      for (const index of [4, 0, 3, 4]) {
+        const box = await page.locator('.monitor-check').nth(index).boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 8 });
+        assert.equal(await page.locator('.monitor-check-panels').evaluate(node => node.getBoundingClientRect().height), height, 'Different diagnostics must not change reserved height');
+        assert.equal((await page.locator('.monitor-checks').boundingBox()).y, before.y, 'Hover must not move the check strip under the pointer');
+      }
+      await page.mouse.move(before.x + before.width / 2, before.y - 4);
+      assert.equal(await page.locator('.monitor-check-panels').evaluate(node => node.getBoundingClientRect().height), height, 'Leaving the strip must not collapse details');
+      assert.equal((await page.locator('.monitor-checks').boundingBox()).y, before.y);
+    }
+    await page.setViewportSize({ width: 1600, height: 1000 });
     await page.locator('.monitor-check').last().hover();
     assert.match(await detail.textContent(), kind === 'http' ? /FAILED.*CHECK DURATION 125.0 ms.*503/s : /FAILED.*CHECK DURATION 125.0 ms.*connect_failed/s);
     await page.locator('.monitor-check').first().hover();
