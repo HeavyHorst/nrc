@@ -5,7 +5,8 @@ import "core:os"
 import "core:strings"
 import db "workspace_db"
 
-SQLITE_EXECUTOR_LIMIT :: 4
+SQLITE_EXECUTOR_LIMIT :: #config(NRC_SQLITE_EXECUTOR_LIMIT, 4)
+#assert(SQLITE_EXECUTOR_LIMIT >= 1 && SQLITE_EXECUTOR_LIMIT <= MAX_SERVER_WORKER_COUNT)
 SQLITE_QUEUE_CAPACITY :: 64
 SQLITE_PORT_BYTES :: 16 * mem.Megabyte
 SQLITE_RESULT_BYTES :: mem.Megabyte
