@@ -88,6 +88,12 @@ newsletter_enabled=$(ssh "$DEPLOY_HOST" "docker ps --filter label=com.docker.com
 if [[ -n $newsletter_enabled ]]; then
     COMPOSE_ARGS+=" -f docker/compose.newsletter.yml"
 fi
+# Keep the evaluator and authenticated history gateway in every later deployment.
+monitoring_enabled=$(ssh "$DEPLOY_HOST" "if test -f '$REMOTE_DIR/monitoring.env'; then echo true; else echo false; fi")
+if $monitoring_enabled; then
+    COMPOSE_ARGS+=" --env-file monitoring.env -f docker/compose.monitoring.yml"
+fi
+monitoring_running=$(ssh "$DEPLOY_HOST" "docker ps --filter label=com.docker.compose.project=docker --filter label=com.docker.compose.service=incidents --format '{{.ID}}'")
 # Keep managed sidecars in the model, including newsletter's search dependency.
 COMPOSE_ARGS+=" --profile search --profile ai --profile metrics"
 
@@ -190,6 +196,7 @@ compose=false
 protocol_go=false
 publish=false
 newsletter=false
+incidents=false
 
 if $full; then
     server=true
@@ -203,6 +210,7 @@ if $full; then
     protocol_go=true
     publish=$publish_enabled
     [[ -z $newsletter_enabled ]] || newsletter=true
+    incidents=$monitoring_enabled
 else
     for path in "${changed_files[@]}"; do
         case "$path" in
@@ -221,6 +229,7 @@ else
                 nginx=true
                 publish=$publish_enabled
                 [[ -z $newsletter_enabled ]] || newsletter=true
+                incidents=$monitoring_enabled
                 ;;
             docker/compose.publish.yml)
                 if $publish_enabled; then
@@ -236,6 +245,13 @@ else
                     compose=true
                 fi
                 ;;
+            docker/compose.monitoring.yml)
+                if $monitoring_enabled; then
+                    incidents=true
+                    tailscale=true
+                    compose=true
+                fi
+                ;;
             docker/Dockerfile | *.odin | nbio/* | byte_pool/* | persistence/* | storage_io/* | websocket/* | protocol/*.odin)
                 server=true
                 ;;
@@ -247,7 +263,9 @@ else
                 metrics=true
                 publish=$publish_enabled
                 [[ -z $newsletter_enabled ]] || newsletter=true
+                incidents=$monitoring_enabled
                 ;;
+            services/bots/nrc-incidents/*) incidents=$monitoring_enabled ;;
             services/bots/nrc-newsletter/*) [[ -z $newsletter_enabled ]] || newsletter=true ;;
             services/bots/nrc-publish/*) publish=$publish_enabled ;;
             services/bots/nrc-search/*) search=true ;;
@@ -256,6 +274,14 @@ else
             services/auth/tailscale-proxy/*) tailscale=true ;;
         esac
     done
+fi
+
+# First enablement must also configure the gateway even when the operator has
+# already provisioned the overlay for the storage preflight above.
+if $monitoring_enabled && [[ -z $monitoring_running ]]; then
+    incidents=true
+    tailscale=true
+    compose=true
 fi
 
 services=()
@@ -267,6 +293,7 @@ $tailscale && services+=(tailscale-proxy)
 $nginx && services+=(nginx)
 $publish && services+=(publish)
 $newsletter && services+=(newsletter)
+$incidents && services+=(incidents)
 
 # Source parity does not imply that containers use the latest built images.
 stale_services=$(ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && bash -s" <<'REMOTE'
@@ -352,11 +379,14 @@ if ! $skip_tests; then
     if $newsletter; then
         (cd services/bots/nrc-newsletter && go test -race ./... && go vet ./...)
     fi
+    if $incidents; then
+        (cd services/bots/nrc-incidents && go test -race ./... && go vet ./...)
+    fi
 else
     echo "WARNING: local tests were explicitly skipped." >&2
 fi
 
-if $server || $publish || $newsletter; then
+if $server || $publish || $newsletter || $incidents; then
     # The backup must understand newly enabled overlays before stopping services.
     ssh "$DEPLOY_HOST" 'set -eu; tmp=$(mktemp); trap '\''rm -f "$tmp"'\'' EXIT; cat > "$tmp"; bash -n "$tmp"; install -m 0750 "$tmp" /usr/local/sbin/nrc-backup' < docker/backup.sh
     echo "Taking a quiesced backup of production volumes..."

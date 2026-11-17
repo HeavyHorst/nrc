@@ -59,6 +59,10 @@ case "$1" in
   compose) exec "$REAL_DOCKER" "$@" ;;
   ps)
     [[ "$*" == *service=newsletter* ]] && exit 0
+    if [[ "$*" == *service=incidents* ]]; then
+      [[ ${MONITORING_RUNNING:-true} == true ]] && echo incidents-id
+      exit 0
+    fi
     if [[ $ACTIVE_VOLUME == *$'\n'* ]]; then
       printf 'server-one\nserver-two\n'
     elif [[ -n $ACTIVE_VOLUME ]]; then
@@ -218,6 +222,59 @@ exec "$REAL_RSYNC" "${args[@]}"
         model = json.loads(result.stdout)
         self.assertEqual(model["volumes"]["task-data"]["name"], "nrc-fixture_task-data")
         self.assertEqual(model["services"]["websocket-server"]["stop_signal"], "SIGINT")
+
+    def test_monitoring_deploy_preserves_gateway_and_selects_changed_services(self):
+        self.configure("docker_sqlite-migrated")
+        shutil.copyfile(SOURCE / "compose.monitoring.yml",
+                        self.remote / "docker/compose.monitoring.yml")
+        (self.remote / "monitoring.env").write_text(
+            "NRC_MONITOR_WORKSPACE=workspace1\nNRC_HISTORY_SECRET=" + "a" * 64 + "\n")
+        for changed, services in (
+            ("services/bots/nrc-incidents/main.go", "incidents"),
+            ("docker/compose.monitoring.yml", "tailscale-proxy incidents"),
+            ("protocol-go/monitoring.go", "websocket-server search ai metrics-bot incidents"),
+        ):
+            with self.subTest(changed=changed):
+                self.tool("rsync", f"cat >/dev/null; echo {changed}")
+                result = self.deploy("--dry-run")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"Services to rebuild: {services}\n", result.stdout)
+        self.env["MONITORING_RUNNING"] = "false"
+        self.tool("rsync", "cat >/dev/null")
+        result = self.deploy("--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Services to rebuild: tailscale-proxy incidents\n", result.stdout)
+        # Render the same overlay with publishing enabled: its !override must
+        # not remove the history gateway, and neither service exposes history.
+        shutil.copyfile(SOURCE / "compose.publish.yml",
+                        self.remote / "docker/compose.publish.yml")
+        self.env.update(NRC_PUBLISH_WORKSPACE="docs", PUBLISH_ADMIN_USER="test",
+                        PUBLISH_ADMIN_PASSWORD="fixture-password")
+        result = subprocess.run(
+            [DOCKER, "compose", "--project-directory", str(self.remote / "docker"),
+             "--env-file", str(self.remote / ".env"),
+             "--env-file", str(self.remote / "monitoring.env"),
+             "-f", str(self.repo / "docker/docker-compose.yml"),
+             "-f", str(self.remote / "docker/compose.publish.yml"),
+             "-f", str(self.remote / "docker/compose.monitoring.yml"),
+             "config", "--format", "json"],
+            env=self.env, capture_output=True, text=True, check=True,
+        )
+        model = json.loads(result.stdout)
+        proxy = model["services"]["tailscale-proxy"]
+        self.assertEqual(proxy["environment"]["NRC_PUBLISH_BACKEND"], "http://publish:8094")
+        self.assertEqual(proxy["environment"]["NRC_MONITOR_HISTORY_BACKEND"], "http://incidents:8095")
+        self.assertEqual(proxy["environment"]["NRC_MONITOR_HISTORY_WORKSPACE"], "workspace1")
+        self.assertEqual(proxy["environment"]["NRC_HISTORY_SECRET"], "a" * 64)
+        evaluator = model["services"]["incidents"]
+        self.assertFalse(evaluator.get("ports"))
+        self.assertTrue(evaluator["read_only"])
+        self.assertEqual(evaluator["environment"]["NRC_BOT_SECRET"], "fixture-bot")
+        mount, = evaluator["volumes"]
+        self.assertEqual((mount["type"], mount["source"], mount["target"]),
+                         ("volume", "monitoring-history", "/data"))
+        self.assertIn("ws://websocket-server:8080", evaluator["command"])
+        self.assertNotIn("-monitors", evaluator["command"])
 
 
 if __name__ == "__main__":

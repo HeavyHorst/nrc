@@ -1,0 +1,50 @@
+# Private evaluator and history API. No published ports or incoming Gatus hooks.
+# Load after other overlays, with --env-file monitoring.env for interpolation.
+services:
+  tailscale-proxy:
+    env_file:
+      - ../monitoring.env
+    environment:
+      NRC_MONITOR_HISTORY_BACKEND: http://incidents:8095
+      NRC_MONITOR_HISTORY_WORKSPACE: ${NRC_MONITOR_WORKSPACE:?set NRC_MONITOR_WORKSPACE}
+  incidents:
+    build:
+      context: ..
+      dockerfile: services/bots/nrc-incidents/Dockerfile
+    env_file:
+      - ../.env
+      - ../monitoring.env
+    command:
+      - -server
+      - ws://websocket-server:8080
+      - -workspace
+      - ${NRC_MONITOR_WORKSPACE:?set NRC_MONITOR_WORKSPACE}
+      - -nickname
+      - nrc-incidents
+      - -history
+      - /data/history.duckdb
+      - -history-listen
+      - :8095
+    volumes:
+      - monitoring-history:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    depends_on:
+      - websocket-server
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - orion-network
+
+volumes:
+  monitoring-history:

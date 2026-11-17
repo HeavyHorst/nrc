@@ -12,6 +12,7 @@ client/dist
 .env
 .env.*
 publish.env
+monitoring.env
 publish-branding/
 docker-compose.yml
 Dockerfile

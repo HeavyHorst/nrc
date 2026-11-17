@@ -15,6 +15,7 @@ services/bots/nrc-ai/nrc-ai
 !.env.example
 *.agekey
 /publish.env
+/monitoring.env
 /publish-branding/
 
 # Benchmark binary

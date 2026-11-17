@@ -140,6 +140,42 @@ do not update public articles automatically. Follow the
 [Publish quickstart](../services/bots/nrc-publish/README.md#start) for credentials,
 the overlay commands and the two listener boundaries.
 
+### Monitoring
+
+Monitoring requires the `incidents` evaluator, not just Monitor assets or the CLI.
+Use `docker/compose.monitoring.yml` after other overlays. Create a private
+`monitoring.env` (mode 0600) at the repository root containing:
+
+```dotenv
+NRC_MONITOR_WORKSPACE=workspace1
+NRC_HISTORY_SECRET=<independently-generated-random-secret-at-least-32-characters>
+```
+
+Generate the history secret independently from `NRC_BOT_SECRET`. Keep both secrets
+out of Git and container build contexts. `.env` remains the source of the bot
+credential. The overlay runs one `nrc-incidents` evaluator, discovers its assigned
+monitors automatically and stores DuckDB history in `monitoring-history`.
+Its port 8095 is private to the Compose network; browser reads use the authenticated
+Tailscale proxy. No host port or Gatus webhook is required. Gatus can continue
+independently while NRC builds its own history.
+
+For the first installation, include `--env-file monitoring.env` and
+`-f docker/compose.monitoring.yml` in the existing Compose command and build/start
+`incidents` and recreate `tailscale-proxy`. Preserve all other active overlays.
+On managed production, provision `monitoring.env` and the overlay on the host
+before the first `docker/deploy.sh` invocation so its preflight can render them.
+Later `docker/deploy.sh` runs detect `monitoring.env`, preserve the gateway and
+evaluator, test/rebuild changed evaluator code and include it in protocol updates
+and full deployments. Removing the file is not a supported disable operation;
+stop the evaluator explicitly if required. The deployment script's `--dry-run`
+reports the selected services without changing production.
+
+After startup, check `nrc monitor instances <id>` for accepted observations and
+the monitoring register for history. New history starts at the first observation;
+there is no Gatus history import. See the
+[sidecar contract](../services/bots/nrc-incidents/README.md) for retention and
+the distinction between checks, incidents, uptime and coverage.
+
 ## Backups and upgrades
 
 - Stop the server and proxy before you back up the database and files.
@@ -150,6 +186,11 @@ the overlay commands and the two listener boundaries.
 - If you run Publish, stop it and back up its `publish-data` volume separately.
   It contains approved copies, private drafts, withdrawn revisions and audit history;
   it cannot be rebuilt from the current NRC notes alone.
+- If you run Monitoring, stop `incidents` and back up its complete
+  `monitoring-history` volume, including DuckDB and WAL files. The managed
+  `docker/backup.sh` includes this volume and preserves the monitoring overlay
+  when restarting the captured service set. Protect `monitoring.env` with the
+  other private deployment configuration.
 - Keep the services stopped while you restore the database and attachments.
   Restore both from the same backup. Test the restore on a separate installation.
   Do not test it on a running shared installation.
