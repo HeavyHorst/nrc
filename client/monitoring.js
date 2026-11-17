@@ -13,9 +13,21 @@ window.NRCMonitoring = (() => {
   let registerHistoryTail = Promise.resolve();
   let registerController;
   let period = 1;
+  let statusPages = 1, refreshTimer;
   const registerHistory = new Map();
   const hour = 3600000;
+  const historyMaxAge = 5 * 60000;
   const percent = (n, d) => d > 0n ? `${Number(n * 10000n / d) / 100}%` : 'UNKNOWN';
+
+  function cachedHistory(row) {
+    const cached = registerHistory.get(row.id);
+    return cached?.scope === currentWorkspaceId && cached.revision === row.revision && cached.period === period && cached.to === Math.floor(Date.now() / hour) * hour ? cached : null;
+  }
+  function historyDisplay(row, part) {
+    const cached = cachedHistory(row);
+    if (!cached) return part === 'trail' ? '<span class="customer-meta">Reading history…</span>' : '—';
+    return cached[part] + (part === 'trail' && Date.now() - cached.updatedAt >= historyMaxAge ? `<span class="customer-meta">${esc(cached.error || 'HISTORY UPDATING · PREVIOUS RESULT')}</span>` : '');
+  }
 
   function availability(result, revision, range) {
     const width = range.to - range.from === 24 * hour ? hour : 24 * hour;
@@ -57,22 +69,44 @@ window.NRCMonitoring = (() => {
     registerHistoryTail = new Promise(resolve => { release = resolve; });
     await previous;
     try {
-    // One register read at a time leaves the gateway's other slot for the Inspector.
-    for (const row of snapshot) {
+    // One bounded page at a time leaves the gateway's other slot for the Inspector.
+    const missing = snapshot.filter(row => { const cached = cachedHistory(row); return !cached || Date.now() - cached.updatedAt >= historyMaxAge; });
+    for (let offset = 0; offset < missing.length; offset += 16) {
       if (!valid()) return;
-      let display;
+      const batch = missing.slice(offset, offset + 16);
+      let results;
       try {
-        const result = await history(row.id, 'uptime', null, AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]), range);
-        display = availability(result, row.revision, range);
+        results = await historyBatch(batch.map(row => row.id), range, AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]), valid);
       } catch (error) {
-        display = { trail: `<span class="customer-meta">${esc(error.message)}</span>`, metrics: 'UNAVAILABLE' };
+        results = batch.map(row => ({ monitor_id: row.id, error: error.message }));
       }
       if (!valid()) return;
-      registerHistory.set(row.id, display);
+      for (const [index, row] of batch.entries()) {
+        const result = results[index], cached = cachedHistory(row);
+        const display = result.error
+          ? cached ? { trail: cached.trail, metrics: cached.metrics, error: `HISTORY UPDATE FAILED · PREVIOUS RESULT · ${result.error}` } : { trail: `<span class="customer-meta">${esc(result.error)}</span>`, metrics: 'UNAVAILABLE', error: result.error }
+          : availability(result, row.revision, range);
+        registerHistory.set(row.id, { ...display, scope, revision: row.revision, period, to, updatedAt: display.error ? 0 : Date.now() });
+      }
       const cells = el('monitorList').querySelectorAll('[data-history-monitor]');
-      for (const cell of cells) if (cell.dataset.historyMonitor === row.id) cell.innerHTML = display[cell.dataset.historyPart];
+      const byID = new Map(batch.map(row => [row.id, row]));
+      for (const cell of cells) if (byID.has(cell.dataset.historyMonitor)) cell.innerHTML = historyDisplay(byID.get(cell.dataset.historyMonitor), cell.dataset.historyPart);
     }
     } finally { release(); }
+  }
+  async function historyBatch(ids, range, signal, valid) {
+    if (!valid()) return [];
+    const query = new URLSearchParams({ ids: ids.join(','), from: new Date(range.from).toISOString(), to: new Date(range.to).toISOString(), resolution: range.resolution });
+    const response = await fetch(`/monitoring/history/batch/uptime?${query}`, { signal, cache: 'no-store', headers: { 'X-NRC-Workspace': currentWorkspaceId } });
+    // Large pages split serially; never increase the two-slot admission pressure.
+    if (response.status === 422 && ids.length > 1) {
+      const middle = Math.ceil(ids.length / 2);
+      return [...await historyBatch(ids.slice(0, middle), range, signal, valid), ...await historyBatch(ids.slice(middle), range, signal, valid)];
+    }
+    if (!response.ok) throw new Error(`History unavailable (HTTP ${response.status}). Current NRC state is independent.`);
+    const result = await response.json();
+    if (result.version !== 1 || result.workspace !== currentWorkspaceId || result.monitor_id !== 'batch' || !Array.isArray(result.monitor_ids) || result.monitor_ids.join(',') !== ids.join(',') || !Array.isArray(result.results) || result.results.length !== ids.length || result.results.some((row, i) => row.monitor_id !== ids[i] || ![200, 404, 422].includes(row.status) || !Array.isArray(row.rows))) throw new Error('History scope mismatch.');
+    return result.results.map(row => ({ ...row, pending_rollup_hours_global: result.pending_rollup_hours_global, ...(row.status === 200 ? {} : { error: `History unavailable (HTTP ${row.status}). Current NRC state is independent.` }) }));
   }
   function rpc(buffer, response) {
     if (!ready()) return Promise.reject(new Error('Offline. Reconnect before reading or changing state.'));
@@ -139,6 +173,7 @@ window.NRCMonitoring = (() => {
   function table(headers, body) { return `<table class="task-table monitor-table"><thead><tr>${headers.map(h => `<th scope="col">${h}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`; }
   function render() {
     if (!el('monitorList')) return;
+    const focusedMonitor = el('monitorList').contains(document.activeElement) ? document.activeElement.dataset.monitor : null;
     el('monitorList').setAttribute('aria-busy', String(loading));
     el('monitorHistoryLegend').hidden = tab !== 'status';
     el('monitorMore').hidden = !page?.has_more || tab !== 'status';
@@ -161,22 +196,39 @@ window.NRCMonitoring = (() => {
     el('monitorSummary').textContent = tab === 'status'
       ? `SHOWN: ${visible.length} / ${rows.length} LOADED MONITORS · ${counts.reduce((a, b) => a + b, 0)} INSTANCES · ${counts[0]} FIRING · ${counts[1]} PENDING${page?.has_more ? ' · MORE MONITORS AVAILABLE' : ''}`
       : `SHOWN: ${visible.length} / ${rows.length} LOADED INCIDENTS · ${visible.filter(a => metadata(a).status === 'firing').length} FIRING`;
-    el('monitorList').innerHTML = visible.length ? tab === 'status' ? table(['MONITOR / INSTANCES', 'CURRENT STATE', `HISTORY · ${period === 1 ? '24H' : `${period}D`}`, 'UPTIME / SATISFACTION'], visible.map(row => `<tr><td><button class="task-row-open" data-monitor="${esc(row.id)}">${esc(row.name)}</button><span class="customer-meta">#${esc(row.id)} · ${row.counts.reduce((a, b) => a + b, 0)} instances · ${row.counts[0]} firing</span></td><td>${badge(row.status)}<span class="customer-meta">${esc(stamp(row.evaluated_at))}</span></td><td class="monitor-history-cell" data-history-monitor="${esc(row.id)}" data-history-part="trail">${registerHistory.get(row.id)?.trail || '<span class="customer-meta">Reading history…</span>'}</td><td data-history-monitor="${esc(row.id)}" data-history-part="metrics">${registerHistory.get(row.id)?.metrics || '—'}</td></tr>`).join('')) :
+    el('monitorList').innerHTML = visible.length ? tab === 'status' ? table(['MONITOR / INSTANCES', 'CURRENT STATE', `HISTORY · ${period === 1 ? '24H' : `${period}D`}`, 'UPTIME / SATISFACTION'], visible.map(row => `<tr><td><button class="task-row-open" data-monitor="${esc(row.id)}">${esc(row.name)}</button><span class="customer-meta">#${esc(row.id)} · ${row.counts.reduce((a, b) => a + b, 0)} instances · ${row.counts[0]} firing</span></td><td>${badge(row.status)}<span class="customer-meta">${esc(stamp(row.evaluated_at))}</span></td><td class="monitor-history-cell" data-history-monitor="${esc(row.id)}" data-history-part="trail">${historyDisplay(row, 'trail')}</td><td data-history-monitor="${esc(row.id)}" data-history-part="metrics">${historyDisplay(row, 'metrics')}</td></tr>`).join('')) :
       table(['INCIDENT', 'STATE', 'ACKNOWLEDGED', 'ASSIGNEE'], visible.map(asset => { const m = metadata(asset); return `<tr><td><button class="task-row-open" data-incident="${asset.assetId}">${esc(m.title)}</button><span class="customer-meta">#${asset.assetId} · MONITOR #${esc(m.monitor_id)}</span></td><td>${badge(m.status)}</td><td>${esc(m.acknowledged_by || 'NOT ACKNOWLEDGED')}</td><td>${esc(m.assigned_to || 'UNASSIGNED')}</td></tr>`; }).join('')) :
       `<p class="customer-empty">${loading ? 'Reading NRC…' : rows.length ? 'No matching loaded records. Filters apply to loaded records only.' : 'No records loaded.'}</p>`;
+    if (focusedMonitor) [...el('monitorList').querySelectorAll('[data-monitor]')].find(button => button.dataset.monitor === focusedMonitor)?.focus({ preventScroll: true });
   }
-  async function refresh(more = false) {
+  async function refresh(more = false, automatic = false) {
     if (!active()) return;
+    if (automatic && (loading || !ready() || tab !== 'status' || document.hidden)) return;
     const token = ++generation;
     registerController = new AbortController();
-    registerHistory.clear();
-    loading = true; el('monitorStatus').textContent = ready() ? 'READING NRC' : 'OFFLINE'; render();
+    if (!more && !automatic) for (const cached of registerHistory.values()) cached.updatedAt = 0;
+    loading = true; el('monitorStatus').textContent = ready() ? 'READING NRC' : 'OFFLINE';
+    if (automatic) {
+      el('monitorList').setAttribute('aria-busy', 'true');
+      el('monitorMore').disabled = true;
+      el('monitorRefresh').disabled = true;
+    } else render();
     try {
       if (!ready()) throw new Error('Offline. Reconnect to read current state.');
       if (tab === 'status') {
-        const next = await statusQuery('0', more ? page : null);
-        if (token !== generation) return;
-        page = next; rows = more ? [...rows, ...next.rows] : next.rows;
+        let next, replacement = [], count = 0;
+        const targetPages = automatic ? statusPages : 1;
+        do {
+          next = await statusQuery('0', count ? next : more ? page : null);
+          if (token !== generation) return;
+          replacement.push(...next.rows); count++;
+        } while (count < targetPages && next.has_more);
+        // Live rank changes can repeat IDs across pages. Keep the latest row at
+        // its first position, but retain the cursor from the actual server page.
+        page = next; rows = [...new Map((more ? [...rows, ...replacement] : replacement).map(row => [row.id, row])).values()];
+        statusPages = more ? statusPages + 1 : count;
+        const ids = new Set(rows.map(row => row.id));
+        for (const id of registerHistory.keys()) if (!ids.has(id)) registerHistory.delete(id);
       } else {
         const result = await window.NRCAssets.requestAllAssets(0n, 16, { isCancelled: () => token !== generation });
         if (token !== generation) return;
@@ -290,7 +342,7 @@ window.NRCMonitoring = (() => {
     const attempts = new Map(runs.map(run => [run.run_id, run]));
     const checks = samples.map(sample => {
       const reason = sample.acceptance !== 'confirmed' ? `NOT CONFIRMED · ${sample.acceptance.toUpperCase()}` : sample.revision !== String(revision) ? 'PREVIOUS CONFIGURATION' : '';
-      const state = reason ? 'unknown' : sample.condition === 0 ? 'healthy' : sample.condition === 1 ? 'failing' : 'unknown';
+      const state = reason ? 'unknown' : String(sample.condition) === '0' ? 'healthy' : String(sample.condition) === '1' ? 'failing' : 'unknown';
       const label = `${stamp(sample.observed_at_ns)} · ${state === 'healthy' ? 'PASSED' : state === 'failing' ? 'FAILED' : 'UNKNOWN'}${reason ? ` · ${reason}` : ''}`;
       // Join by the retained attempt ID, never a possibly repeated sequence number.
       const run = sample.run_id ? attempts.get(sample.run_id) : null;
@@ -498,6 +550,8 @@ window.NRCMonitoring = (() => {
     if (['monitor', 'incident'].includes(window.NRCInspector?.current()?.type)) el('inspectorEntityHost').textContent = 'Offline. Reopen this record after reconnecting.';
   }
   function init() {
+    clearInterval(refreshTimer);
+    refreshTimer = setInterval(() => void refresh(false, true), 30000);
     el('monitoringBtn').onclick = () => window.NRCViewManager.setActiveView('monitoring');
     for (const [id, value] of [['monitorStatusTab', 'status'], ['monitorIncidentsTab', 'incidents']]) el(id).onclick = () => { tab = value; rows = []; page = null; refresh(); };
     el('monitorRefresh').onclick = () => refresh(); el('monitorMore').onclick = () => refresh(true);

@@ -12,6 +12,48 @@ import (
 	"time"
 )
 
+func TestMonitorHistoryBatch(t *testing.T) {
+	secret := strings.Repeat("s", 32)
+	const good = `{"version":1,"workspace":"alice-private","monitor_id":"batch","monitor_ids":["2","18446744073709551615"],"results":[{"monitor_id":"2","status":200,"rows":[]},{"monitor_id":"18446744073709551615","status":404,"rows":[]}]}`
+	body := good
+	var calls atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path != "/v1/history/batch/uptime" || r.Header.Get("Authorization") != "Bearer "+secret || r.Header.Get("Cookie") != "" || r.URL.Query().Get("ids") != "2,18446744073709551615" {
+			t.Error("batch credentials or scope")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, body)
+	}))
+	defer backend.Close()
+	h := workspaceBoundary(monitorHistoryGateway(backend.URL, "alice-private", secret), workspaceTestIdentity("alice@example.com"), workspaceTestPolicy(t))
+	read := func(query, workspace string, want int) {
+		t.Helper()
+		r := httptest.NewRequest("GET", "http://nrc/monitoring/history/batch/uptime?"+query, nil)
+		r.Header.Set("X-NRC-Workspace", workspace)
+		r.Header.Set("Cookie", "private")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+	}
+	const query = "resolution=1h&ids=2,18446744073709551615"
+	read(query, "alice-private", 200)
+	for _, invalid := range []string{strings.Replace(good, "alice-private", "other", 1), strings.Replace(good, `"monitor_id":"2"`, `"monitor_id":"3"`, 1), strings.Replace(good, `["2","18446744073709551615"]`, `["3","18446744073709551615"]`, 1)} {
+		body = invalid
+		read(query, "alice-private", 502)
+	}
+	before := calls.Load()
+	for _, invalid := range []string{"ids=", "ids=0", "ids=02", "ids=2,2", "ids=18446744073709551616", "ids=" + strings.Repeat("2,", 16) + "3", query + "&ids=4", query + "&workspace=other", query + "&identity=x", query + "&acceptance=all"} {
+		read(invalid, "alice-private", 400)
+	}
+	read(query, "other", 403)
+	if calls.Load() != before {
+		t.Fatal("rejected request reached backend")
+	}
+}
+
 func TestMonitorHistoryBoundary(t *testing.T) {
 	secret := strings.Repeat("s", 32)
 	var calls atomic.Int32

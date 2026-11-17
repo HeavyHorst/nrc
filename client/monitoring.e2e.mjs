@@ -99,6 +99,7 @@ try {
   ]) {
     await page.evaluate(data => { monitorFixture.statusRevision = ''; monitorFixture.registerRows = data; }, data);
     await page.click('#monitorRefresh');
+    await page.waitForFunction(() => !document.getElementById('monitorList').textContent.includes('HISTORY UPDATING'));
     await page.waitForSelector('[data-history-monitor="12"] .monitor-history-bar');
     assert.match(await metrics.textContent(), /100%.*2 observed identities/);
     assert.ok((await metrics.textContent()).includes(`COVERAGE ${coverage}`));
@@ -116,14 +117,15 @@ try {
   assert.match(await metrics.textContent(), /100%.*COVERAGE 4.16%/);
   assert.doesNotMatch(await trail.textContent(), /ROLLUPS PENDING/);
   await page.evaluate(() => { delete monitorFixture.registerRows; delete monitorFixture.pendingRollups; });
-  for (const [mode, expected] of [['empty', /UNKNOWN.*COVERAGE UNKNOWN.*NO HISTORY/], ['paused', /UNKNOWN.*COVERAGE UNKNOWN.*2 observed identities/], ['limit', /UNAVAILABLE/]]) {
+  for (const [mode, expected] of [['empty', /UNKNOWN.*COVERAGE UNKNOWN.*NO HISTORY/], ['paused', /UNKNOWN.*COVERAGE UNKNOWN.*2 observed identities/], ['limit', /UNKNOWN.*COVERAGE UNKNOWN.*2 observed identities/]]) {
     await page.evaluate(mode => { monitorFixture.registerMode = mode; }, mode);
     await page.click('#monitorRefresh');
-    await page.waitForFunction(() => !document.querySelector('[data-history-part="trail"]').textContent.includes('Reading history'));
+    await page.waitForFunction(() => !/Reading history|HISTORY UPDATING/.test(document.querySelector('[data-history-part="trail"]').textContent));
     assert.match(await metrics.textContent(), expected);
     assert.match(await page.locator('#monitorList').textContent(), /FIRING/);
     assert.equal(await trail.locator('[data-state="healthy"]').count(), 0);
     if (mode === 'paused') assert.equal(await trail.locator('[data-state="paused"]').count(), 24);
+    if (mode === 'limit') assert.match(await trail.textContent(), /HISTORY UPDATE FAILED.*HTTP 422/);
   }
   // A delayed response from the previous refresh cannot replace the newer history.
   await page.evaluate(() => { monitorFixture.registerMode = ''; monitorFixture.deferRegister = true; });
@@ -139,9 +141,9 @@ try {
   assert.match(await metrics.textContent(), /NO HISTORY/);
   await page.click('#monitorRefresh');
   await page.waitForFunction(() => monitorFixture.pendingRegister.length === 1);
-  await page.evaluate(async () => { currentWorkspaceId = 'other'; monitorFixture.pendingRegister.shift()(); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); });
+  await page.evaluate(async () => { currentWorkspaceId = 'other'; NRCMonitoring.disconnect(); monitorFixture.pendingRegister.shift()(); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); });
   assert.equal(await trail.locator('.monitor-history-bar').count(), 0);
-  assert.equal(await metrics.textContent(), '—');
+  assert.equal(await metrics.count(), 0);
   await page.evaluate(() => { currentWorkspaceId = 'fixture'; });
   // Switching tabs also invalidates held results, including fixtures ignoring abort.
   await page.click('#monitorRefresh');
@@ -181,7 +183,7 @@ try {
     assert.equal(await trail.locator('.monitor-history-bar').nth(0).getAttribute('data-state'), 'unknown');
     assert.equal(await trail.locator('.monitor-history-bar').nth(1).getAttribute('data-state'), 'failing');
     assert.equal(await trail.locator('.monitor-history-bar').nth(2).getAttribute('data-state'), 'unknown');
-    const url = await page.evaluate(() => monitorFixture.historyRequests.findLast(u => u.includes('/12/')));
+    const url = await page.evaluate(() => monitorFixture.historyRequests.findLast(u => new URL(u).searchParams.get('ids')?.split(',').includes('12')));
     const q = new URL(url).searchParams;
     assert.equal(Date.parse(q.get('to')) - Date.parse(q.get('from')), days * 86400000);
   }
@@ -620,6 +622,77 @@ try {
   await page.evaluate(() => { NRCMonitoring.disconnect(); });
   assert.match(await page.locator('#inspectorEntityHost').textContent(), /Offline/);
   assert.equal(await page.locator('#incidentAck').count(), 0);
+  // Polling reloads server-ranked pages; unchanged histories are not fetched again.
+  await page.clock.install({ time: new Date('2026-11-18T10:30:00Z') });
+  await page.reload();
+  await page.clock.pauseAt(new Date('2026-11-18T10:31:00Z'));
+  await page.evaluate(installMonitoringFixture);
+  await page.evaluate(() => { monitorFixture.overviewIDs = Array.from({ length: 17 }, (_, i) => String(100 + i)); });
+  await page.click('#monitoringBtn');
+  await page.waitForFunction(() => document.querySelectorAll('#monitorList .monitor-history-bars').length === 16);
+  assert.equal(await page.evaluate(() => monitorFixture.historyRequests.length), 1, 'One history request for 16 monitors');
+  await page.click('#monitorMore');
+  await page.waitForFunction(() => document.querySelectorAll('#monitorList .monitor-history-bars').length === 17);
+  assert.equal(await page.evaluate(() => monitorFixture.historyRequests.length), 2);
+  assert.equal(await page.evaluate(() => new URL(monitorFixture.historyRequests[1]).searchParams.get('ids')), '116', 'More only reads the added monitor');
+  await page.evaluate(() => { monitorFixture.firingID = '999'; monitorFixture.overviewIDs.unshift('999'); });
+  await page.clock.runFor(30000);
+  assert.equal(await page.locator('#monitorList [data-monitor]').first().getAttribute('data-monitor'), '999');
+  assert.equal(await page.locator('#monitorList [data-monitor]').count(), 18, 'Polling preserves loaded page depth');
+  assert.equal(await page.evaluate(() => monitorFixture.historyRequests.length), 3);
+  assert.equal(await page.evaluate(() => new URL(monitorFixture.historyRequests[2]).searchParams.get('ids')), '999');
+  await page.clock.runFor(30000);
+  assert.equal(await page.evaluate(() => monitorFixture.historyRequests.length), 3, 'Status polls do not force history refreshes');
+  await page.clock.runFor(270000);
+  assert.equal(await page.evaluate(() => monitorFixture.historyRequests.length), 6, 'Expired histories refresh in bounded batches');
+  await page.evaluate(() => { monitorFixture.deferRegister = true; });
+  await page.click('#monitorRefresh');
+  await page.waitForFunction(() => monitorFixture.pendingRegister.length === 1);
+  assert.equal(await page.locator('#monitorList .monitor-history-bars').count(), 16, 'Previous bars remain while refreshing');
+  assert.match(await page.locator('#monitorList').textContent(), /HISTORY UPDATING · PREVIOUS RESULT/);
+  await page.evaluate(() => { monitorFixture.deferRegister = false; monitorFixture.pendingRegister.shift()(); });
+  await page.waitForFunction(() => !document.getElementById('monitorList').textContent.includes('HISTORY UPDATING'));
+  await page.evaluate(() => { monitorFixture.splitBatch = true; });
+  await page.click('#monitorRefresh');
+  await page.waitForFunction(() => !document.getElementById('monitorList').textContent.includes('HISTORY UPDATING'));
+  assert.equal(await page.locator('#monitorList .monitor-history-bars').count(), 16, 'Oversized batches split without losing rows');
+  await page.click('#monitorIncidentsTab');
+  const inactiveRequests = await page.evaluate(() => monitorFixture.requests.length);
+  await page.clock.runFor(60000);
+  assert.equal(await page.evaluate(() => monitorFixture.requests.length), inactiveRequests, 'No status polling in Incidents');
+  await page.click('#monitorStatusTab');
+  await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
+  await page.click('#monitorMore');
+  await page.waitForFunction(() => document.querySelectorAll('#monitorList [data-monitor]').length === 18);
+  // The first row drops behind the cursor between pages; use new IDs so the
+  // duplicate would enter the history batch rather than hitting a warm cache.
+  await page.evaluate(() => {
+    monitorFixture.splitBatch = false;
+    monitorFixture.overviewIDs = Array.from({ length: 17 }, (_, i) => String(200 + i));
+    monitorFixture.overviewAfterFirst = [...monitorFixture.overviewIDs.slice(1), '200'];
+  });
+  const beforeDuplicate = await page.evaluate(() => monitorFixture.historyRequests.length);
+  await page.clock.runFor(30000);
+  await page.waitForFunction(() => document.querySelectorAll('#monitorList .monitor-history-bars').length === 17);
+  assert.equal(await page.locator('#monitorList [data-monitor="200"]').count(), 1);
+  const batchIDs = await page.evaluate(start => monitorFixture.historyRequests.slice(start).flatMap(url => new URL(url).searchParams.get('ids').split(',')), beforeDuplicate);
+  assert.equal(batchIDs.length, 17);
+  assert.equal(new Set(batchIDs).size, 17, 'A rank change must not invalidate a batch with duplicate IDs');
+  assert.ok(batchIDs.includes('216'), 'The unrelated monitor still receives history');
+  await page.locator('#monitorList [data-monitor="205"]').focus();
+  await page.evaluate(() => { monitorFixture.deferOverview = true; });
+  await page.clock.runFor(30000);
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.monitor), '205', 'Poll start retains focus');
+  await page.evaluate(() => { monitorFixture.deferOverview = false; monitorFixture.pendingStatus.shift()(); });
+  await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.monitor), '205', 'Completed poll restores focus by stable ID');
+  // A user moving focus while a poll is pending must not have it stolen back.
+  await page.evaluate(() => { monitorFixture.deferOverview = true; });
+  await page.clock.runFor(30000);
+  await page.locator('#monitorSearch').focus();
+  await page.evaluate(() => { monitorFixture.deferOverview = false; monitorFixture.pendingStatus.shift()(); });
+  await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'monitorSearch');
   assert.deepEqual(errors, []);
   console.log('PASS: hourly history, weighted uptime/coverage, gaps/pauses, stale history races, narrow layout, status pagination, diagnostics, history failure, ACK/assignment, disconnect');
 } finally { await browser.close(); }

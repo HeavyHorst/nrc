@@ -359,6 +359,26 @@ Endpoints:
 | `/v1/history/<monitor-id>/samples` | `raw`, `5m`, `1h` | Measurements or per-instance buckets |
 | `/v1/history/<monitor-id>/runs` | `raw`, `5m`, `1h` | Attempts, including failed/empty runs, or execution statistics |
 | `/v1/history/<monitor-id>/uptime` | `5m`, `1h` | Healthy/failing/unknown/paused durations, uptime and coverage |
+| `/v1/history/batch/uptime` | `5m`, `1h` | Uptime results for up to 16 monitor IDs in one read transaction |
+
+The uptime batch requires `ids=12,34,...`: one to 16 distinct, canonical positive
+uint64 IDs. It rejects `identity` and `acceptance`. Its envelope has
+`monitor_id: "batch"`, `monitor_ids` in request order, and `results` in the same
+order. Each result contains `monitor_id`, `status` and `rows`: status 200 for a
+complete result (including empty history), 404 for a monitor outside discovery,
+or 422 if that monitor exceeds the row/byte limit. The batch shares one reader
+slot, one transaction and the existing three-second deadline. The full response
+is bounded to 4 MiB; HTTP 422 at the envelope level means callers should split
+the batch. No partial response is published.
+
+The web register requests history in batches of up to 16. It retains matching
+workspace/revision/period/window results for five minutes; adding a page reads
+only uncached monitors. Manual refresh renews history immediately and keeps old
+results labelled while loading or after a failed update. Status polling runs
+every 30 seconds while the connected status view is visible. It reloads the
+server-ranked pages to the previously loaded depth before replacing the list;
+this does not freeze server state between page reads. History never determines
+status order. Deploy the sidecar and gateway batch support before the new client.
 
 Every query requires `from`, `to` (RFC3339 timestamps with optional nanoseconds)
 and `resolution`. The interval includes `from` and excludes `to`, spans at most

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -47,7 +48,8 @@ func monitorHistoryGateway(backend, workspace, secret string) http.Handler {
 			return
 		}
 		id, err := strconv.ParseUint(parts[0], 10, 64)
-		if err != nil || id == 0 || strconv.FormatUint(id, 10) != parts[0] || (parts[1] != "samples" && parts[1] != "runs" && parts[1] != "uptime") {
+		batch := parts[0] == "batch" && parts[1] == "uptime"
+		if !batch && (err != nil || id == 0 || strconv.FormatUint(id, 10) != parts[0] || (parts[1] != "samples" && parts[1] != "runs" && parts[1] != "uptime")) {
 			http.NotFound(w, r)
 			return
 		}
@@ -57,9 +59,26 @@ func monitorHistoryGateway(backend, workspace, secret string) http.Handler {
 			return
 		}
 		for key, values := range query {
-			if len(values) != 1 || (key != "from" && key != "to" && key != "resolution" && key != "identity" && key != "acceptance") {
+			if len(values) != 1 || (key != "from" && key != "to" && key != "resolution" && key != "identity" && key != "acceptance" && !(batch && key == "ids")) {
 				http.Error(w, "invalid history query", http.StatusBadRequest)
 				return
+			}
+		}
+		var ids []string
+		if batch {
+			ids = strings.Split(query.Get("ids"), ",")
+			seen := make(map[string]bool)
+			if len(ids) > 16 || query.Has("identity") || query.Has("acceptance") {
+				http.Error(w, "invalid history batch", http.StatusBadRequest)
+				return
+			}
+			for _, text := range ids {
+				value, err := strconv.ParseUint(text, 10, 64)
+				if err != nil || value == 0 || strconv.FormatUint(value, 10) != text || seen[text] {
+					http.Error(w, "invalid history batch", http.StatusBadRequest)
+					return
+				}
+				seen[text] = true
 			}
 		}
 		target := *u
@@ -100,13 +119,29 @@ func monitorHistoryGateway(backend, workspace, secret string) http.Handler {
 			return
 		}
 		var scope struct {
-			Version   int    `json:"version"`
-			Workspace string `json:"workspace"`
-			MonitorID string `json:"monitor_id"`
+			Version    int      `json:"version"`
+			Workspace  string   `json:"workspace"`
+			MonitorID  string   `json:"monitor_id"`
+			MonitorIDs []string `json:"monitor_ids"`
+			Results    []struct {
+				MonitorID string `json:"monitor_id"`
+			} `json:"results"`
 		}
 		if json.Unmarshal(body, &scope) != nil || scope.Version != 1 || scope.Workspace != workspace || scope.MonitorID != parts[0] {
 			http.Error(w, "invalid history scope", http.StatusBadGateway)
 			return
+		}
+		if batch {
+			if !slices.Equal(scope.MonitorIDs, ids) || len(scope.Results) != len(ids) {
+				http.Error(w, "invalid history scope", http.StatusBadGateway)
+				return
+			}
+			for i, result := range scope.Results {
+				if result.MonitorID != ids[i] {
+					http.Error(w, "invalid history scope", http.StatusBadGateway)
+					return
+				}
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(body)

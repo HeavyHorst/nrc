@@ -49,7 +49,8 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := strconv.ParseUint(parts[0], 10, 64)
 	kind := parts[1]
-	if err != nil || !a.monitors.contains(id) || (kind != "samples" && kind != "runs" && kind != "uptime") {
+	batch := parts[0] == "batch" && kind == "uptime"
+	if !batch && (err != nil || !a.monitors.contains(id) || (kind != "samples" && kind != "runs" && kind != "uptime")) {
 		http.NotFound(w, r)
 		return
 	}
@@ -66,7 +67,7 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for key, values := range q {
-		if len(values) != 1 || (key != "from" && key != "to" && key != "resolution" && key != "identity" && key != "acceptance") {
+		if len(values) != 1 || (key != "from" && key != "to" && key != "resolution" && key != "identity" && key != "acceptance" && !(batch && key == "ids")) {
 			bad()
 			return
 		}
@@ -99,7 +100,7 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	identity, hasIdentity := q["identity"]
-	if hasIdentity && (kind == "runs" || identity[0] == "" || len(identity[0]) > 4096) {
+	if hasIdentity && (batch || kind == "runs" || identity[0] == "" || len(identity[0]) > 4096) {
 		bad()
 		return
 	}
@@ -112,6 +113,23 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else if acceptance != "confirmed" && acceptance != "rejected" && acceptance != "unknown" && acceptance != "all" {
 		bad()
 		return
+	}
+	var ids []string
+	if batch {
+		ids = strings.Split(q.Get("ids"), ",")
+		seen := make(map[string]bool)
+		if len(ids) > 16 {
+			bad()
+			return
+		}
+		for _, text := range ids {
+			value, err := strconv.ParseUint(text, 10, 64)
+			if err != nil || value == 0 || strconv.FormatUint(value, 10) != text || seen[text] {
+				bad()
+				return
+			}
+			seen[text] = true
+		}
 	}
 
 	select {
@@ -150,6 +168,10 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if step == 0 && from < floor {
 		http.Error(w, "range predates raw retention; choose an aggregate resolution", http.StatusUnprocessableEntity)
+		return
+	}
+	if batch {
+		a.serveUptimeBatch(w, ctx, tx, ids, from, to, step, pending)
 		return
 	}
 	var query, order string
@@ -218,6 +240,57 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(result)
+}
+
+// A page shares one admission slot and one snapshot. Each monitor retains the
+// single-read row bound; the whole response retains the existing byte bound.
+func (a *historyAPI) serveUptimeBatch(w http.ResponseWriter, ctx context.Context, tx *sql.Tx, ids []string, from, to, step, pending int64) {
+	results := make([]json.RawMessage, 0, len(ids))
+	size := 0
+	for _, text := range ids {
+		id, _ := strconv.ParseUint(text, 10, 64)
+		result := map[string]any{"monitor_id": text, "status": 404, "rows": []json.RawMessage{}}
+		if a.monitors.contains(id) {
+			rows, err := tx.QueryContext(ctx, `SELECT bucket_ns,revision,identity,healthy_ns,failing_ns,unknown_ns,paused_ns,uptime,coverage FROM uptime_summary WHERE workspace=? AND monitor_id=CAST(? AS UBIGINT) AND bucket_ns>=? AND bucket_ns<? AND resolution_ns=? ORDER BY bucket_ns,revision,identity LIMIT `+strconv.Itoa(historyReadRows+1), a.workspace, text, from, to, step)
+			if err != nil {
+				http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			data, tooLarge, err := historyJSONRows(rows)
+			if err != nil {
+				http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if tooLarge {
+				result["status"] = 422
+			} else {
+				result["status"], result["rows"] = 200, data
+			}
+		}
+		// Bound accumulated data before reading another monitor.
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		size += len(encoded) + 1
+		if size > historyReadBytes-16384 {
+			http.Error(w, "history result too large; split batch", http.StatusUnprocessableEntity)
+			return
+		}
+		results = append(results, encoded)
+	}
+	if tx.Commit() != nil {
+		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	body, err := json.Marshal(map[string]any{"version": 1, "workspace": a.workspace, "monitor_id": "batch", "monitor_ids": ids, "pending_rollup_hours_global": strconv.FormatInt(pending, 10), "results": results})
+	if err != nil {
+		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
 }
 
 // Buffer the entire bounded result before publishing: no successful partial page.

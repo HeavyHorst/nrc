@@ -153,6 +153,11 @@ its service token upstream, never browser credentials or cookies. Keep the
 sidecar listener private; do not expose its service token to browser code.
 
 Query parameters and response data follow the sidecar's History read API.
+`/monitoring/history/batch/uptime?ids=12,34&from=...&to=...&resolution=1h`
+accepts up to 16 distinct monitor IDs. The gateway validates every requested and
+returned ID and keeps the same workspace authorization and reader limits as a
+single-monitor request. Batch results distinguish empty history from unavailable
+monitors; an envelope-level 422 requires splitting the batch.
 The gateway checks the returned workspace and monitor ID before publishing data,
 refuses redirects, allows two concurrent reads, and limits each read to five
 seconds and 4 MiB. Invalid or mismatched responses return 502. Backend 400, 404,

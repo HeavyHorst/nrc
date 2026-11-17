@@ -36,6 +36,12 @@ export function installMonitoringFixture() {
         { ...base, id: '31', monitor_id: '12', identity: f.identity || '{"target":"default"}', failures: f.failures ?? 5, recoveries: f.recoveries ?? 0, value: f.value === undefined ? 0 : f.value, incident_id: '51' };
       if (monitor === 0n && cursor) { row.status = f.secondState || 'healthy'; row.counts = [0, 0, 0, 0, 0, 0, row.status === 'healthy' ? 2 : 0, row.status === 'paused' ? 2 : 0, 0]; }
       const page = { version: 1, monitor_id: String(monitor), at: String(now), cursor_id: row.id, cursor_rank: 0, has_more: !f.empty && monitor === 0n && !cursor, rows: f.empty ? [] : [row] };
+      if (monitor === 0n && f.overviewIDs) {
+        const start = cursor ? f.overviewIDs.indexOf(String(cursor)) + 1 : 0;
+        page.rows = f.overviewIDs.slice(start, start + 16).map(id => ({ ...row, id, monitor_id: id, name: `Monitor ${id}`, status: id === f.firingID ? 'firing' : 'healthy', counts: Array.from({ length: 9 }, (_, i) => Number(i === (id === f.firingID ? 0 : 6))) }));
+        page.cursor_id = page.rows.at(-1)?.id || '0'; page.has_more = start + 16 < f.overviewIDs.length;
+        if (!cursor && f.overviewAfterFirst) { f.overviewIDs = f.overviewAfterFirst; delete f.overviewAfterFirst; }
+      }
       if (monitor !== 0n && f.instancePages) {
         row.id = cursor ? '42' : '41';
         row.identity = f.instanceLabels?.[cursor ? 1 : 0] ?? `${v.getUint8(32) ? 'included' : 'active'}-${cursor ? 'next' : 'first'}`;
@@ -45,7 +51,7 @@ export function installMonitoringFixture() {
       const body = new TextEncoder().encode(JSON.stringify(page)), response = new DataView(new ArrayBuffer(6 + body.length));
       response.setUint16(0, 179); response.setUint32(2, correlation); new Uint8Array(response.buffer, 6).set(body);
       const deliver = () => handleBinaryMessage(response.buffer);
-      if (monitor !== 0n && f.deferInstances) f.pendingStatus.push(deliver);
+      if (monitor !== 0n && f.deferInstances || monitor === 0n && f.deferOverview) f.pendingStatus.push(deliver);
       else deliver();
     });
   } };
@@ -73,7 +79,11 @@ export function installMonitoringFixture() {
       }
       rows.push({ ...rows[0], revision: '1', identity: 'old-host', healthy_ns: '3600000000000', unknown_ns: '0' });
       const custom = f.registerRows?.map(r => ({ bucket_ns: String(BigInt(from + r.hour * 3600000) * 1000000n), revision: r.old ? rev : f.statusRevision || rev, identity: r.identity, healthy_ns: String((r.healthy || 0) * 1e9), failing_ns: String((r.failing || 0) * 1e9), unknown_ns: String((r.unknown || 0) * 1e9), paused_ns: String((r.paused || 0) * 1e9) }));
-      const response = f.registerMode === 'limit' ? new Response('too large', { status: 422 }) : Response.json({ version: 1, workspace: 'fixture', monitor_id: id, rows: id === '13' || f.registerMode === 'empty' ? [] : custom || rows, pending_rollup_hours_global: f.pendingRollups ?? '1' });
+      const ids = url.searchParams.get('ids')?.split(',');
+      const response = f.registerMode === 'limit' || (f.splitBatch && ids?.length > 1) ? new Response('too large', { status: 422 }) : Response.json(ids ? {
+        version: 1, workspace: 'fixture', monitor_id: 'batch', monitor_ids: ids,
+        results: ids.map(monitor_id => ({ monitor_id, status: 200, rows: monitor_id === '13' || f.registerMode === 'empty' ? [] : custom || rows })), pending_rollup_hours_global: f.pendingRollups ?? '1',
+      } : { version: 1, workspace: 'fixture', monitor_id: id, rows: id === '13' || f.registerMode === 'empty' ? [] : custom || rows, pending_rollup_hours_global: f.pendingRollups ?? '1' });
       if (f.deferRegister) return new Promise(resolve => f.pendingRegister.push(() => resolve(response)));
       return response;
     }
@@ -81,7 +91,7 @@ export function installMonitoringFixture() {
     const rows = f.empty ? [] : kind === 'runs' ? f.runRows?.map(r => ({ ...base, ...r })) || [{ ...base, duration_ns: '125000000', diagnostics: { version: 1, conditions: [
       { index: 0, state: 'fail', actual_type: 'number', actual: '503', expected_number: '200' },
       { index: 1, state: 'pass', actual_type: 'boolean', actual: 'true' },
-    ] } }] : kind === 'samples' ? f.sampleRows?.map(({ ago, ...r }) => ({ ...base, observed_at_ns: String(BigInt(Date.parse(url.searchParams.get('to')) - ago * 1000) * 1000000n), identity: url.searchParams.get('identity'), ...r })) || [{ ...base, identity: '{"target":"default"}', condition: 1, value: 0 }] : f.uptimeRows?.map(r => ({ revision: rev, ...r })) || [
+    ] } }] : kind === 'samples' ? f.sampleRows?.map(({ ago, ...r }) => ({ ...base, observed_at_ns: String(BigInt(Date.parse(url.searchParams.get('to')) - ago * 1000) * 1000000n), identity: url.searchParams.get('identity'), ...r, ...(r.condition == null ? {} : { condition: String(r.condition) }) })) || [{ ...base, identity: '{"target":"default"}', condition: '1', value: 0 }] : f.uptimeRows?.map(r => ({ revision: rev, ...r })) || [
       { revision: rev, healthy_ns: '600000000000', failing_ns: '300000000000', unknown_ns: '300000000000', paused_ns: '0' },
       { revision: '1', healthy_ns: '600000000000', failing_ns: '0', unknown_ns: '0', paused_ns: '0' },
     ];

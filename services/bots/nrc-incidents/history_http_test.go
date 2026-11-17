@@ -86,7 +86,7 @@ func TestHistoryHTTPContract(t *testing.T) {
 	h.db.Store(db)
 	const token = "test-history-reader-secret-not-a-real-key"
 	const id = "18446744073709551615"
-	s := httptest.NewServer(newHistoryAPI(h, "ops", token, newMonitorSet([]uint64{^uint64(0), 2})))
+	s := httptest.NewServer(newHistoryAPI(h, "ops", token, newMonitorSet([]uint64{^uint64(0), 2, 4})))
 	defer s.Close()
 	base := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
 	n := base.UnixNano()
@@ -147,12 +147,38 @@ func TestHistoryHTTPContract(t *testing.T) {
 		if err := json.Unmarshal(body, &result); err != nil {
 			t.Fatal(err)
 		}
-		if result["monitor_id"] != id || result["workspace"] != "ops" || strings.Contains(string(body), "secret-host") {
+		if result["monitor_id"] != strings.Split(path, "/")[3] || result["workspace"] != "ops" || strings.Contains(string(body), "secret-host") {
 			t.Fatalf("scope/precision: %s", body)
 		}
 		return result
 	}
 	auth := "Bearer " + token
+	batchPath := strings.Replace(query("uptime", "1h"), id, "batch", 1) + "&ids=" + id + ",2,4,3"
+	exec(`INSERT INTO uptime_buckets VALUES (?,?,'ops',2,9,'different-host',7,13,0,0)`, historyHour, n)
+	batch := request(batchPath, auth, 200)["results"].([]any)
+	if len(batch) != 4 {
+		t.Fatal(batch)
+	}
+	for i, expected := range []struct {
+		id     string
+		status float64
+		rows   int
+	}{{id, 200, 2}, {"2", 200, 1}, {"4", 200, 0}, {"3", 404, 0}} {
+		result := batch[i].(map[string]any)
+		if result["monitor_id"] != expected.id || result["status"] != expected.status || len(result["rows"].([]any)) != expected.rows {
+			t.Fatal(result)
+		}
+	}
+	if batch[1].(map[string]any)["rows"].([]any)[0].(map[string]any)["healthy_ns"] != "7" {
+		t.Fatal(batch)
+	}
+	request(batchPath, "", 401)
+	for _, ids := range []string{"", "0", "02", "2,2", "18446744073709551616", strings.Repeat("2,", 16) + "4"} {
+		request(strings.Replace(query("uptime", "1h"), id, "batch", 1)+"&ids="+ids, auth, 400)
+	}
+	request(batchPath+"&identity=host-a", auth, 400)
+	request(batchPath+"&workspace=other", auth, 400)
+	request(batchPath+"&acceptance=all", auth, 400)
 	request(query("samples", "raw"), "", 401)
 	request(query("samples", "raw"), "Bearer wrong", 401)
 	request(strings.Replace(query("samples", "raw"), id, "3", 1), auth, 404)
@@ -223,6 +249,18 @@ func TestHistoryHTTPContract(t *testing.T) {
 	exec(`INSERT INTO samples SELECT 'bulk-'||i,repeat('x',4090)||i,0,1 FROM range(1,1101) t(i)`)
 	bulk = strings.Replace(bulk, "/runs?", "/samples?", 1)
 	bulkRequest(422)
+	// Per-monitor row overflow must not hide other monitors in a batch.
+	exec(`INSERT INTO uptime_buckets SELECT ?,?,'ops',4,1,'bulk-'||i,1,0,0,0 FROM range(1,5002) t(i)`, historyHour, n)
+	batch = request(batchPath, auth, 200)["results"].([]any)
+	if batch[2].(map[string]any)["status"] != float64(422) || len(batch[2].(map[string]any)["rows"].([]any)) != 0 || batch[0].(map[string]any)["status"] != float64(200) {
+		t.Fatal(batch)
+	}
+	// Two individually bounded monitors can exceed the shared response budget.
+	exec(`DELETE FROM uptime_buckets WHERE monitor_id IN (2,4)`)
+	exec(`INSERT INTO uptime_buckets SELECT ?,?,'ops',m,1,repeat('x',4000)||i,1,0,0,0 FROM range(1,601) t(i), (VALUES (2),(4)) v(m)`, historyHour, n)
+	request(strings.Replace(query("uptime", "1h"), id, "2", 1), auth, 200)
+	request(strings.Replace(query("uptime", "1h"), id, "4", 1), auth, 200)
+	request(batchPath, auth, 422)
 	h.db.Store(nil)
 	request(query("runs", "raw"), auth, 503)
 	h.db.Store(db)
