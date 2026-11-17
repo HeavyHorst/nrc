@@ -476,19 +476,24 @@ test_chronicle_service_order_attempts_budget_and_exact_sources :: proc(t: ^testi
 		epoch         = r.epoch,
 		generation    = r.generation,
 		sources       = r.sources,
-		input_tokens  = 16000,
+		input_tokens  = 128000,
 		output_tokens = 1000,
 	}
-	testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_budgets SET input_tokens=7984001", nil, nil, nil), sql.OK)
+	job.input_tokens = 128001
+	invalid, _ := sqlite_chronicle_service_call(t, &store, job)
+	testing.expect_value(t, invalid.status, "invalid")
+	sqlite_projection_test_assert(t, &store, "SELECT attempts=0 FROM chronicle_inputs")
+	job.input_tokens = 128000
+	testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_budgets SET input_tokens=7872001", nil, nil, nil), sql.OK)
 	limited, _ := sqlite_chronicle_service_call(t, &store, job)
 	testing.expect_value(t, limited.status, "budget")
 	sqlite_projection_test_assert(t, &store, "SELECT attempts=0 FROM chronicle_inputs")
 	// Calls are telemetry only; both token budgets still fence reservations.
-	testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_budgets SET calls=100,input_tokens=7984000,output_tokens=499001", nil, nil, nil), sql.OK)
+	testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_budgets SET calls=100,input_tokens=7872000,output_tokens=499001", nil, nil, nil), sql.OK)
 	limited, _ = sqlite_chronicle_service_call(t, &store, job)
 	testing.expect_value(t, limited.status, "budget")
 	sqlite_projection_test_assert(t, &store, "SELECT attempts=0 FROM chronicle_inputs")
-	sqlite_projection_test_assert(t, &store, "SELECT calls=100 AND input_tokens=7984000 AND output_tokens=499001 FROM chronicle_budgets")
+	sqlite_projection_test_assert(t, &store, "SELECT calls=100 AND input_tokens=7872000 AND output_tokens=499001 FROM chronicle_budgets")
 	testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_budgets SET output_tokens=499000", nil, nil, nil), sql.OK)
 	limited, _ = sqlite_chronicle_service_call(t, &store, job)
 	testing.expect_value(t, limited.status, "reserved")

@@ -199,10 +199,10 @@ func TestChronicleBatchLimitIntegrityAndBudget(t *testing.T) {
 	for _, scenario := range []string{"rebatch", "single-too-large", "corrupt", "budget", "ack", "delete-recreate"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := &chronicleFixture{corrupt: scenario == "corrupt", budget: scenario == "budget"}
-			image := &chronicleImage{Title: "Notiz", Format: "markdown", Body: strings.Repeat("x", 8000)}
+			image := &chronicleImage{Title: "Notiz", Format: "markdown", Body: strings.Repeat("x", 64000)}
 			before, after := (*chronicleImage)(nil), image
 			if scenario == "single-too-large" {
-				image.Body = strings.Repeat("\"", 17000) // serialized escaping also consumes budget
+				image.Body = strings.Repeat("\"", 65000) // serialized escaping also consumes budget
 			}
 			if scenario == "ack" {
 				image.Body = "unverändert"
@@ -293,34 +293,84 @@ func TestChronicleProviderFailuresNeverPublish(t *testing.T) {
 }
 
 func TestChronicleTerraHTTPWorker(t *testing.T) {
-	for _, scenario := range []string{"result", "ack", "rate-limit", "billing", "quota", "server", "timeout-http", "unauthorized", "bad-request", "redirect", "network", "deadline", "malformed", "incomplete", "wrong-source", "duplicate-answer", "refusal", "tool", "oversized", "usage-missing", "usage-input", "usage-output", "budget", "token-limit"} {
+	for _, scenario := range []string{"result", "ack", "rate-limit", "billing", "quota", "server", "timeout-http", "unauthorized", "bad-request", "redirect", "network", "deadline", "malformed", "incomplete", "wrong-source", "duplicate-answer", "refusal", "tool", "oversized", "usage-missing", "usage-input", "usage-output", "budget", "token-limit", "long-note", "count-budget", "count-error", "count-malformed", "count-zero", "count-mismatch"} {
 		t.Run(scenario, func(t *testing.T) {
 			now := time.Now()
-			f := &chronicleFixture{budget: scenario == "budget"}
+			f := &chronicleFixture{budget: scenario == "budget" || scenario == "count-budget"}
 			before := &chronicleImage{Title: "Änderung", Format: "markdown", Body: "Nicht freigegeben: 17 Geräte.\n\"Quelle\""}
 			after := &chronicleImage{Title: "Änderung", Format: "markdown", Body: "Nicht freigegeben: 23 Geräte.\n\"Quelle\""}
+			counted := scenario == "long-note" || strings.HasPrefix(scenario, "count-") || scenario == "token-limit"
+			if counted {
+				// Ordinary long German Markdown with Unicode and JSON escaping;
+				// preserve both complete states, not a truncated text or a diff.
+				unchanged := strings.Repeat("## Betriebsprüfung\n- Dashboard für Geräte öffnen; Freigabe bleibt erforderlich.\n- Messwert: \"nicht verfügbar\".\n", 600)
+				before.Body = unchanged + before.Body
+				after.Body = unchanged + after.Body
+			}
 			if scenario == "token-limit" {
-				after.Body = strings.Repeat("\"", 16000)
+				after.Body = strings.Repeat("\"", 128000)
 			}
 			f.add(9007199254740993, "7", before, after, now.Add(-time.Minute))
 			answer := `{"outcome":"result","sources":["9007199254740993"],"summary":"Die Zahl wurde von 17 auf 23 korrigiert; die fehlende Freigabe bleibt erhalten."}`
 			if scenario == "ack" {
 				answer = `{"outcome":"ack","sources":["9007199254740993"],"summary":""}`
 				// A distinct image with identical values exercises semantic Ack.
+				after = &chronicleImage{Title: before.Title, Format: before.Format, Body: before.Body}
 				f = &chronicleFixture{}
-				f.add(9007199254740993, "7", before, before, now.Add(-time.Minute))
+				f.add(9007199254740993, "7", before, after, now.Add(-time.Minute))
 			}
-			calls := 0
+			calls, countCalls := 0, 0
+			var countRequest map[string]json.RawMessage
 			provider := &chronicleOpenAIProvider{key: "private-key", client: &http.Client{Transport: decisionTransport(func(r *http.Request) (*http.Response, error) {
-				calls++
 				data, err := io.ReadAll(r.Body)
 				if err != nil {
 					t.Fatal(err)
 				}
+				if r.URL.Path == "/v1/responses/input_tokens" {
+					countCalls++
+					if !counted || f.reserve != 0 || json.Unmarshal(data, &countRequest) != nil || countRequest["store"] != nil || countRequest["max_output_tokens"] != nil || r.Header.Get("Authorization") != "Bearer private-key" {
+						t.Fatal("unsafe count request")
+					}
+					deadline, ok := r.Context().Deadline()
+					if !ok || time.Until(deadline) > time.Minute {
+						t.Fatal("count missing bounded deadline")
+					}
+					code, body := 200, `{"object":"response.input_tokens","input_tokens":128000}`
+					switch scenario {
+					case "token-limit":
+						body = `{"object":"response.input_tokens","input_tokens":128001}`
+					case "count-error":
+						code, body = 503, "private-provider-body"
+					case "count-malformed":
+						body = `{"input_tokens":128000}`
+					case "count-zero":
+						body = `{"object":"response.input_tokens","input_tokens":0}`
+					case "count-mismatch":
+						body = `{"object":"response.input_tokens","input_tokens":63}`
+					}
+					return &http.Response{StatusCode: code, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+				}
+				calls++
 				if r.URL.String() != "https://api.openai.com/v1/responses" || r.Header.Get("Authorization") != "Bearer private-key" || r.Header.Get("Content-Type") != "application/json" {
 					t.Fatal("provider credentials/endpoint changed")
 				}
-				if f.reserve != uint32(len(data)+256) {
+				reservation := uint32(len(data) + 256)
+				if counted {
+					reservation = 128000
+					if scenario == "count-mismatch" {
+						reservation = 63
+					}
+					var inferenceRequest map[string]json.RawMessage
+					if json.Unmarshal(data, &inferenceRequest) != nil || len(inferenceRequest) != len(countRequest)+2 {
+						t.Fatal("different count/inference profile")
+					}
+					for key, value := range countRequest {
+						if string(inferenceRequest[key]) != string(value) {
+							t.Fatalf("count/inference mismatch in %s", key)
+						}
+					}
+				}
+				if f.reserve != reservation {
 					t.Fatal("full HTTP request not durably reserved")
 				}
 				var request struct {
@@ -342,7 +392,7 @@ func TestChronicleTerraHTTPWorker(t *testing.T) {
 					t.Fatalf("unsafe provider profile: %s", data)
 				}
 				var envelope chroniclePrompt
-				if json.Unmarshal([]byte(request.Input), &envelope) != nil || envelope.PromptVersion != chroniclePromptVersion || envelope.SchemaVersion != chronicleSchemaVersion || len(envelope.Changes) != 1 || *envelope.Changes[0].Before != *before {
+				if json.Unmarshal([]byte(request.Input), &envelope) != nil || envelope.PromptVersion != chroniclePromptVersion || envelope.SchemaVersion != chronicleSchemaVersion || len(envelope.Changes) != 1 || *envelope.Changes[0].Before != *before || *envelope.Changes[0].After != *after {
 					t.Fatal("provider lost versioned Unicode/escaped input")
 				}
 				deadline, ok := r.Context().Deadline()
@@ -402,7 +452,7 @@ func TestChronicleTerraHTTPWorker(t *testing.T) {
 			status, err := (chronicleWorker{call: f.call, provider: provider, now: func() time.Time { return now }}).step(context.Background())
 			want := "released:invalid_output"
 			switch scenario {
-			case "result":
+			case "result", "long-note":
 				want = "committed"
 			case "ack":
 				want = "acknowledged"
@@ -410,24 +460,37 @@ func TestChronicleTerraHTTPWorker(t *testing.T) {
 				want = "released:temporary"
 			case "deadline":
 				want = "released:timeout"
-			case "billing", "quota", "unauthorized", "bad-request", "redirect", "refusal", "usage-missing", "usage-input", "usage-output":
+			case "billing", "quota", "unauthorized", "bad-request", "redirect", "refusal", "usage-missing", "usage-input", "usage-output", "count-mismatch":
 				want = "parked:permanent"
-			case "budget":
+			case "budget", "count-budget":
 				want = "budget"
 			case "token-limit":
 				want = "gap"
+			case "count-error", "count-malformed", "count-zero":
+				if err == nil || strings.Contains(err.Error(), "private") || status != "input_count_unavailable" || f.commit.Op != "" || f.reserve != 0 || calls != 0 || countCalls != 1 {
+					t.Fatalf("count failure lost input, leaked data or spent inference: %s, %v", status, err)
+				}
+				for _, request := range f.requests {
+					if request.Op == "retry" || request.Op == "reserve" || request.Op == "commit" {
+						t.Fatalf("count failure must retain untouched lease/input: %+v", request)
+					}
+				}
+				return
 			}
 			if err != nil || status != want {
 				t.Fatalf("%s: %v, want %s", status, err, want)
 			}
-			if scenario == "budget" || scenario == "token-limit" {
+			if countCalls != 0 && !counted || counted && countCalls != 1 {
+				t.Fatalf("unexpected count calls: %d", countCalls)
+			}
+			if scenario == "budget" || scenario == "count-budget" || scenario == "token-limit" {
 				if calls != 0 || f.reserve != 0 {
 					t.Fatal("sent request before budget admission")
 				}
 			} else if calls != 1 {
 				t.Fatalf("HTTP retries bypassed reservation: %d", calls)
 			}
-			if scenario == "result" || scenario == "ack" {
+			if scenario == "result" || scenario == "ack" || scenario == "long-note" {
 				if f.commit.Model != "gpt-6.1-terra" || f.commit.PromptVersion != chroniclePromptVersion || f.commit.SchemaVersion != chronicleSchemaVersion || f.commit.Summary == "" && scenario == "result" {
 					t.Fatalf("lost result provenance: %+v", f.commit)
 				}
@@ -440,7 +503,7 @@ func TestChronicleTerraHTTPWorker(t *testing.T) {
 				}
 				var input, output uint32
 				switch scenario {
-				case "result", "ack", "incomplete", "wrong-source", "duplicate-answer", "refusal", "tool":
+				case "result", "ack", "long-note", "incomplete", "wrong-source", "duplicate-answer", "refusal", "tool":
 					input, output = 64, 30
 				}
 				if request.InputTokens != input || request.OutputTokens != output {

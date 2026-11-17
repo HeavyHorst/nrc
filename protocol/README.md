@@ -1487,7 +1487,7 @@ consumer/subject. Except for `chunk`, they require the exact ordered `sources`
 from the claim. Chunk fields 0–5 mean before title/format/body, then after
 title/format/body; `length` is 1–16384 and the response `chunk` is base64.
 Raw reads and new terminal commits enforce the 72h TTL and current epoch even
-before cleanup. `reserve` requires 1–16000 complete-request input tokens and
+before cleanup. `reserve` requires 1–128000 complete-request input tokens and
 exactly 1000 output tokens. Duplicate identical reservation is free; changed
 counts conflict. Persisted daily limits are 8000000 input/500000 output tokens.
 The daily call count is telemetry, not a separate limit.

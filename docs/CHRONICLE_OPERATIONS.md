@@ -23,7 +23,7 @@ restore test.
 - Verify the current production data volume and selected generation. Keep
   monitoring/newsletter/publication overlays when constructing Compose commands.
 - Approve a maintenance window, a quiesced backup and a tested restore location.
-  Do not start the schema-6 binary against schema-5 storage.
+  Do not start the schema-7 binary against older storage.
 
 ## Credentials and Compose
 
@@ -69,6 +69,19 @@ complete Compose model with `docker compose ... config -q`. Include
 `--env-file chronicle.env -f docker/compose.chronicle.yml --profile chronicle`
 alongside the base and already active overlays. Do not use plain `config` output
 in tickets: it can contain unrelated secrets. Do not start the worker yet.
+
+## Schema 6 to 7
+
+The 128,000-token input limit needs the explicit
+[schema-7 migration](DEVELOPMENT.md#sqlite-schema-7) on every shard. Stop server
+and worker, back up the complete selected generation, and rehearse on an isolated
+copy before production approval. This rebuilds the jobs table with foreign-key
+enforcement disabled outside the transaction; the migration checks foreign keys
+before commit. Preserve active reservations, completed/deleted receipts, source
+memberships, canonical/history records and daily counters. Require version 7,
+clean integrity/foreign-key checks and unchanged records across all shards before
+starting the schema-7 server. Nothing is enabled or replayed by the migration.
+The older 5-to-6 step below is still required for pre-Chronicle installations.
 
 ## Schema 5 to 6 and restore rehearsal
 
@@ -144,10 +157,16 @@ reduce the count, so use gaps/history inspection to resolve ambiguous comparison
 Cross-midnight snapshots are not valid for the simple stall comparison.
 
 Budgets are 8,000,000 input and 500,000 output tokens per workspace/UTC day, with
-no daily call-count cap. Each call reserves up to 16,000/1,000; confirmed usage
+no daily call-count cap. Each call reserves up to 128,000/1,000; confirmed usage
 credits unused reservation in the original day. Unknown outcomes retain the
 reservation. Five attempts per input and backoff survive restart. Oversized
-single inputs can become gaps without any provider call.
+single inputs can become gaps without inference. Terra first checks oversized
+byte estimates with OpenAI's free input-token counting endpoint, using the full
+request input and output schema. Only counts above 128,000 trigger rebatching or
+a single-input `token_limit` gap. A counting outage creates no gap and consumes
+no attempt or reservation; the claim remains until lease expiry before retry.
+The counting request still sends the note text to OpenAI. Daily budgets are
+unchanged; the higher per-call limit requires schema 7 as described above.
 
 ## Rotation, stop and recovery
 

@@ -27,12 +27,14 @@ INCREMENTAL_SCHEMA = Path(__file__).with_name("slice_incremental.sql")
 PAGINATION_SCHEMA = Path(__file__).with_name("slice_pagination.sql")
 MONITORING_SCHEMA = Path(__file__).with_name("monitoring.sql")
 CHRONICLE_SCHEMA = Path(__file__).with_name("chronicle.sql")
-SCHEMA_VERSION = 6
+CHRONICLE_INPUT_BUDGET_SCHEMA = Path(__file__).with_name("chronicle_input_budget.sql")
+SCHEMA_VERSION = 7
 
 
 def schema_text():
     return (SCHEMA.read_text() + SLICE_SCHEMA.read_text() + INCREMENTAL_SCHEMA.read_text()
-            + PAGINATION_SCHEMA.read_text() + MONITORING_SCHEMA.read_text() + CHRONICLE_SCHEMA.read_text())
+            + PAGINATION_SCHEMA.read_text() + MONITORING_SCHEMA.read_text() + CHRONICLE_SCHEMA.read_text()
+            + CHRONICLE_INPUT_BUDGET_SCHEMA.read_text())
 
 
 def schema_hash():
@@ -287,8 +289,8 @@ def import_directory(source, target, builder):
                 validation = AssetValidation(staging / ".mutation-validation.sqlite3", schema)
                 db = sqlite3.connect(path)
                 try:
-                    db.executescript("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; PRAGMA temp_store=FILE; "
-                                     "PRAGMA cache_size=-1024;" + schema)
+                    db.executescript("PRAGMA foreign_keys=OFF; PRAGMA synchronous=FULL; PRAGMA temp_store=FILE; "
+                                     "PRAGMA cache_size=-1024;" + schema + ";PRAGMA foreign_keys=ON;")
                     db.execute("CREATE TEMP TABLE replay_origins (workspace BLOB, domain INTEGER, id BLOB, room BLOB, PRIMARY KEY(workspace,domain,id)) WITHOUT ROWID")
                     floors, count = [0, 0, 0], 0
                     for wal in paths:

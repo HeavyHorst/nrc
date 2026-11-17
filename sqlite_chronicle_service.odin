@@ -475,7 +475,7 @@ sqlite_chronicle_job_command :: proc(
 		encoded, encode_err := base64.encode(buffer[:n]); if encode_err != nil do return sql.ERROR
 		r.chunk = encoded; r.status = "ok"
 	case "reserve":
-		if q.input_tokens == 0 || q.input_tokens > 16000 || q.output_tokens != 1000 do return sql.OK
+		if q.input_tokens == 0 || q.input_tokens > 128000 || q.output_tokens != 1000 do return sql.OK
 		if job.reserved == 1 {
 			r.status = (job.input_tokens == i64(q.input_tokens) && job.output_tokens == i64(q.output_tokens)) ? "reserved" : "conflict"
 			return sql.OK

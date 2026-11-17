@@ -96,11 +96,16 @@ order; they are not reduced to first/last images. Provider timeout is at most 60
 seconds and never exceeds the claim lease; a whole workspace step is bounded to
 four minutes. Cancellation closes the socket and cancels provider work.
 
-Both profiles budget one token per serialized UTF-8 request byte plus 256 framing
-tokens, with 16000 input and 1000 reserved output tokens per call. Terra counts
-the complete HTTP JSON body, including instructions, escaping, metadata and the
-output schema. This is a conservative admission profile, not an exact tokenizer
-or universal token bound. The same count is used in the durable daily reservation;
+Both profiles first budget one token per serialized UTF-8 request byte plus 256
+framing tokens, with 128000 input and 1000 reserved output tokens per call. If this
+estimate exceeds 128000, Terra uses OpenAI's free `POST /v1/responses/input_tokens`
+endpoint to count the complete input, including instructions, metadata and output
+schema. Short requests need no counting call; fake mode remains byte-based and
+offline. Before/after text stays complete; JSON escaping alone must not cause a
+gap when the counted input fits. A counting failure leaves the input and claim
+intact for retry after lease expiry, without spending an inference attempt or
+creating a gap. Counting has the same 60-second/lease deadline as inference.
+The admitted count is used in the durable daily reservation;
 a completed response whose reported usage exceeds it is not published and parks
 the input. Confirmed provider usage replaces the reservation atomically with
 Result/Ack or a retry release, even when a confirmed response is unusable or
@@ -109,8 +114,9 @@ Missing or invalid usage, ambiguous calls and timeouts retain the full reservati
 The fake profile has no provider usage and retains its reservation. Budget credits
 apply only to the original UTC day, never twice on replay or to a newer day.
 Oversized batches are released without a provider attempt and reclaimed as a
-complete-input prefix; an oversized singleton becomes a `token_limit` gap without
-reservation. Nothing is silently truncated. Server budgets, attempts, backoff,
+complete-input prefix; a singleton that still exceeds the input-token limit becomes
+a `token_limit` gap without reservation or inference. Counting can still contact
+OpenAI for such inputs. Nothing is silently truncated. Server budgets, attempts, backoff,
 epochs, TTL and deletion fences remain authoritative across restart.
 
 Fake results say **Fake-Prüflauf** and contain no semantic claims about the note.

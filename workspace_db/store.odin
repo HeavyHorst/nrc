@@ -16,7 +16,7 @@ Store :: struct {
 	slice_statement_count: int,
 }
 
-SCHEMA_VERSION :: 6
+SCHEMA_VERSION :: 7
 APPLICATION_ID :: 0x4e524351
 SCHEMA ::
 	#load("schema.sql", string) +
@@ -24,7 +24,8 @@ SCHEMA ::
 	#load("slice_incremental.sql", string) +
 	#load("slice_pagination.sql", string) +
 	#load("monitoring.sql", string) +
-	#load("chronicle.sql", string)
+	#load("chronicle.sql", string) +
+	#load("chronicle_input_budget.sql", string)
 
 // create permits initialization of an empty database only. Existing NRC files
 // must match the schema version; other databases are never adopted or migrated.

@@ -27,9 +27,10 @@ Erfinde keine Fakten, Motive oder Gewissheit. Lade keine Quellen nach, verwende 
 Liefere nur JSON mit outcome (result oder ack), sources (exakt die geordneten Quellen-IDs) und summary. Bei result ist summary eine kurze deutsche Erklärung. Bei ack ist summary leer. Ack bedeutet keine relevante Änderung in sämtlichen Zwischenbildern, nicht Unsicherheit oder lediglich gleichen Anfangs- und Endinhalt. Reine Änderungen von Wortlaut, Ton oder Höflichkeit ohne Änderung der Bedeutung einschließlich Geltungsbereich und Verbindlichkeit ergeben Ack; erwähne sie auch neben relevanten Änderungen nicht.`
 
 const (
-	chroniclePromptVersion = "chronicle-p9"
-	chronicleSchemaVersion = "chronicle-s1"
-	chronicleFakeModel     = "fake-chronicle-v1"
+	chroniclePromptVersion  = "chronicle-p9"
+	chronicleSchemaVersion  = "chronicle-s1"
+	chronicleFakeModel      = "fake-chronicle-v1"
+	chronicleMaxInputTokens = 128000
 )
 
 type chronicleImage struct {
@@ -71,7 +72,7 @@ type chronicleCompletion struct {
 
 type chronicleProvider interface {
 	Model() string
-	Bound([]byte) int
+	Bound(context.Context, []byte) (int, error)
 	Complete(context.Context, []byte) (chronicleCompletion, error)
 }
 
@@ -80,8 +81,8 @@ type chronicleProvider interface {
 type fakeChronicleProvider struct{}
 
 func (fakeChronicleProvider) Model() string { return chronicleFakeModel }
-func (fakeChronicleProvider) Bound(payload []byte) int {
-	return len(payload) + 256 // one token per UTF-8 byte plus reserved model framing
+func (fakeChronicleProvider) Bound(_ context.Context, payload []byte) (int, error) {
+	return len(payload) + 256, nil // one token per UTF-8 byte plus reserved model framing
 }
 func (fakeChronicleProvider) Complete(ctx context.Context, payload []byte) (chronicleCompletion, error) {
 	if err := ctx.Err(); err != nil {
@@ -327,6 +328,10 @@ func (w chronicleWorker) step(ctx context.Context) (string, error) {
 		if len(claim.Sources) == 0 || len(claim.Sources) > limit || claim.NoteID != inputs[0].NoteID {
 			return "invalid_claim", errors.New("invalid claim")
 		}
+		lease, err := chronicleTime(claim.LeaseUntil)
+		if err != nil {
+			return "invalid_lease", err
+		}
 		prompt := chroniclePrompt{Model: w.provider.Model(), Instructions: chronicleInstructions, PromptVersion: chroniclePromptVersion, SchemaVersion: chronicleSchemaVersion, MaxOutputTokens: 1000}
 		fit, tokens := 0, 0
 		var payload []byte
@@ -346,8 +351,19 @@ func (w chronicleWorker) step(ctx context.Context) (string, error) {
 			if err != nil {
 				return "invalid_input", errors.New("cannot encode provider request")
 			}
-			bound := w.provider.Bound(candidate)
-			if bound <= 0 || bound > 16000 {
+			countDeadline := time.Now().Add(60 * time.Second)
+			if lease.Before(countDeadline) {
+				countDeadline = lease
+			}
+			countCtx, cancel := context.WithDeadline(ctx, countDeadline)
+			bound, err := w.provider.Bound(countCtx, candidate)
+			cancel()
+			if err != nil {
+				// No inference or reservation yet. Keep the input intact; lease
+				// expiry bounds retries, rather than turning a count outage into loss.
+				return "input_count_unavailable", err
+			}
+			if bound <= 0 || bound > chronicleMaxInputTokens {
 				break
 			}
 			payload, tokens, fit = candidate, bound, i+1
@@ -377,10 +393,6 @@ func (w chronicleWorker) step(ctx context.Context) (string, error) {
 		if r.Status != "reserved" {
 			return r.Status, nil
 		}
-		lease, err := chronicleTime(claim.LeaseUntil)
-		if err != nil {
-			return "invalid_lease", err
-		}
 		deadline := time.Now().Add(60 * time.Second)
 		if lease.Before(deadline) {
 			deadline = lease
@@ -389,6 +401,11 @@ func (w chronicleWorker) step(ctx context.Context) (string, error) {
 		completion, providerErr := w.provider.Complete(providerCtx, payload)
 		contextErr := providerCtx.Err()
 		cancel()
+		if completion.InputTokens > uint32(tokens) || completion.OutputTokens > 1000 {
+			// A count/profile mismatch must not publish an under-reserved result.
+			completion = chronicleCompletion{}
+			providerErr = errors.New("chronicle provider usage exceeds reservation")
+		}
 		// Commit/retry carry confirmed usage, not the preceding reservation.
 		job.InputTokens, job.OutputTokens = 0, 0
 		if contextErr == nil && !errors.Is(providerErr, context.DeadlineExceeded) &&

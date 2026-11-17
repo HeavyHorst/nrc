@@ -61,7 +61,7 @@ path, workspace = sys.argv[1:3]
 epoch, enabled, notes, pending, gaps, raw = map(int, sys.argv[3:])
 with sqlite3.connect("file:" + path + "?mode=ro", uri=True) as db:
     w = workspace.encode()
-    assert db.execute("PRAGMA user_version").fetchone() == (6,)
+    assert db.execute("PRAGMA user_version").fetchone() == (7,)
     assert db.execute("SELECT epoch,enabled FROM chronicle_workspaces WHERE workspace=?", (w,)).fetchone() == (epoch,enabled)
     assert db.execute("SELECT count(*) FROM assets WHERE workspace=?", (w,)).fetchone() == (notes,)
     assert db.execute("SELECT count(*) FROM history WHERE workspace=?", (w,)).fetchone() == (notes,)

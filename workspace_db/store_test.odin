@@ -445,6 +445,53 @@ test_slice_schema_upgrade_is_explicit_and_atomic :: proc(t: ^testing.T) {
 	testing.expect_value(t, rollback(&store), sql.OK)
 	version, version_rc = scalar(&store, "PRAGMA user_version")
 	testing.expect(t, version_rc == sql.OK && version == 6)
+	// Preserve an active reservation, its immutable source membership and a
+	// completed receipt while widening the CHECK constraint, including rollback.
+	testing.expect_value(
+		t,
+		execute(
+			&store,
+			`
+INSERT INTO chronicle_workspaces(workspace,enabled,epoch) VALUES(x'77',1,1);
+INSERT INTO chronicle_jobs(workspace,generation,note_id,epoch,owner,consumer,lease_until,input_tokens,reserved,source_key,created_at,first_at,last_at)
+ VALUES(x'77',x'0000000000000001',x'0000000000000001',1,x'61',x'61',100,16000,1,zeroblob(32),1,1,1);
+INSERT INTO chronicle_job_inputs VALUES(x'77',x'0000000000000001',0,x'0000000000000001',x'',x'');
+INSERT INTO chronicle_jobs(workspace,generation,note_id,epoch,owner,consumer,lease_until,state,summary,source_key,created_at,first_at,last_at)
+ VALUES(x'77',x'0000000000000002',x'0000000000000001',1,x'61',x'62',100,1,x'6f6b',zeroblob(32),1,1,1);
+INSERT INTO chronicle_budgets VALUES(x'77',1,1,16000,1000);
+PRAGMA foreign_keys=ON;`,
+		),
+		sql.OK,
+	)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect(t, execute(&store, #load("chronicle_input_budget.sql", string)) != sql.OK)
+	testing.expect_value(t, rollback(&store), sql.OK)
+	testing.expect_value(t, execute(&store, "PRAGMA foreign_keys=OFF"), sql.OK)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect_value(t, execute(&store, #load("chronicle_input_budget.sql", string)), sql.OK)
+	testing.expect_value(t, rollback(&store), sql.OK)
+	version, version_rc = scalar(&store, "PRAGMA user_version")
+	testing.expect(t, version_rc == sql.OK && version == 6)
+	testing.expect(t, execute(&store, "UPDATE chronicle_jobs SET input_tokens=128000 WHERE state=0") != sql.OK)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect_value(t, execute(&store, #load("chronicle_input_budget.sql", string)), sql.OK)
+	testing.expect_value(t, commit(&store), sql.OK)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect(t, execute(&store, #load("chronicle_input_budget.sql", string)) != sql.OK)
+	testing.expect_value(t, rollback(&store), sql.OK)
+	testing.expect_value(t, execute(&store, "UPDATE chronicle_jobs SET input_tokens=128000 WHERE state=0"), sql.OK)
+	testing.expect(t, execute(&store, "UPDATE chronicle_jobs SET input_tokens=128001 WHERE state=0") != sql.OK)
+	preserved_jobs, jobs_rc := scalar(
+		&store,
+		`SELECT
+ (SELECT count(*) FROM chronicle_jobs WHERE state=0 AND input_tokens=128000 AND reserved=1)+
+ (SELECT count(*) FROM chronicle_jobs WHERE state=1 AND summary=x'6f6b')+
+ (SELECT count(*) FROM chronicle_job_inputs WHERE source_id=x'0000000000000001')+
+ (SELECT count(*) FROM chronicle_budgets WHERE input_tokens=16000 AND output_tokens=1000)`,
+	)
+	testing.expect(t, jobs_rc == sql.OK && preserved_jobs == 4)
+	orphans, orphans_rc := scalar(&store, "SELECT count(*) FROM pragma_foreign_key_check")
+	testing.expect(t, orphans_rc == sql.OK && orphans == 0)
 	testing.expect_value(t, close(&store), sql.OK)
 	store, rc = open(path)
 	if !testing.expect_value(t, rc, sql.OK) do return

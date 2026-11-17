@@ -85,6 +85,38 @@ Use the [Compose deployment](../README.md#quickstart) for the complete web appli
 Production serves the complete generated `client/dist/`, not the source directory.
 After frontend changes, rebuild the Nginx image and reload open browser tabs.
 
+## SQLite schema 7
+
+Server and importer now require schema 7. New databases append
+`workspace_db/chronicle_input_budget.sql` to the schema-6 initialization below.
+It raises only the per-call Chronicle input-token constraint from 16,000 to
+128,000; daily budgets, output allowance and existing records remain unchanged.
+Startup rejects schema 6 rather than silently migrating it.
+
+Stop all writers, take a quiesced backup and rehearse on an isolated copy first.
+For every schema-6 shard in the selected generation, run:
+
+```sh
+sqlite3 -bail /absolute/offline-copy/shard_000/workspace.sqlite3 <<'SQL'
+PRAGMA foreign_keys=OFF;
+BEGIN IMMEDIATE;
+.read workspace_db/chronicle_input_budget.sql
+COMMIT;
+PRAGMA foreign_keys=ON;
+PRAGMA integrity_check;
+PRAGMA foreign_key_check;
+PRAGMA user_version;
+SQL
+```
+
+Foreign-key enforcement must be disabled **before** the transaction because the
+migration rebuilds the jobs table. Its guard rejects enforcement being enabled,
+foreign application IDs, wrong versions and repeated upgrades. It checks foreign
+keys before committing. Require exit 0, version 7, integrity `ok`, no foreign-key
+violations, and unchanged canonical records, Chronicle receipts, job memberships
+and budget counters on every shard. Keep all writers stopped on any failure.
+Older installations must complete the migrations below before this final step.
+
 ## SQLite schema 6
 
 New databases use `workspace_db/schema.sql` followed by
@@ -203,7 +235,7 @@ attempt counters. Disable/re-enable cannot revive fenced inputs.
 `reserve` charges the current UTC-day budget before a provider attempt: at most
 8,000,000 input tokens and 500,000 output tokens per workspace/day. The daily call
 count is telemetry, not a separate limit.
-Each call reserves 1–16,000 input tokens and exactly 1,000 output tokens. The
+Each call reserves 1–128,000 input tokens and exactly 1,000 output tokens. The
 worker must count the complete request, including instructions/serialization.
 Reservations are never refunded on unknown outcomes or restart. Exact repeats
 do not charge twice. Confirmed provider input/output usage settles the reservation
@@ -361,7 +393,7 @@ WAL layouts; no existing data is automatically migrated. The base schema defines
 ordered attachments, history with immutable ACL/endpoint columns, DM membership
 and persistent ID floors. Derived tables cover notes/tags, reminders, appointments,
 customers, tickets, slices and room mappings. Server and importer use
-[schema 6](#sqlite-schema-6), including the Slice migrations, monitoring and chronicle capture tables.
+[schema 7](#sqlite-schema-7), including the Slice migrations, monitoring and chronicle capture tables.
 Recreate test databases after schema
 changes during development; there is no automatic migration. Workspace tables and their projections use workspace/ID
 keys without a scope column. Protocol scope fields must still be zero; storage

@@ -76,38 +76,60 @@ func (*chronicleOpenAIProvider) request(payload []byte) []byte {
 	return data
 }
 
-func (p *chronicleOpenAIProvider) Bound(payload []byte) int {
-	// One budget unit per serialized UTF-8 byte plus fixed profile framing.
-	// Deliberately conservative, not a characters/4 or exact tokenizer estimate.
-	return len(p.request(payload)) + 256
+func (p *chronicleOpenAIProvider) Bound(ctx context.Context, payload []byte) (int, error) {
+	body := p.request(payload)
+	bound := len(body) + 256
+	if bound <= chronicleMaxInputTokens {
+		return bound, nil
+	}
+	// Large serialized requests need not contain many tokens. Count the same
+	// complete input/profile, including the output schema, without inference.
+	// The counting endpoint does not accept storage or output-length options.
+	var request map[string]json.RawMessage
+	_ = json.Unmarshal(body, &request)
+	delete(request, "store")
+	delete(request, "max_output_tokens")
+	body, _ = json.Marshal(request)
+	data, err := p.post(ctx, "/responses/input_tokens", body)
+	if err != nil {
+		return 0, err
+	}
+	var count struct {
+		Object string `json:"object"`
+		Input  int    `json:"input_tokens"`
+	}
+	if len(data) > 64<<10 || !utf8.Valid(data) || json.Unmarshal(data, &count) != nil || count.Object != "response.input_tokens" || count.Input <= 0 || count.Input > bound {
+		return 0, errors.New("invalid chronicle input token count")
+	}
+	return count.Input, nil
 }
 
-func (p *chronicleOpenAIProvider) Complete(ctx context.Context, payload []byte) (chronicleCompletion, error) {
-	body := p.request(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/responses", bytes.NewReader(body))
+func (p *chronicleOpenAIProvider) post(ctx context.Context, path string, body []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1"+path, bytes.NewReader(body))
 	if err != nil {
-		return chronicleCompletion{}, errors.New("invalid chronicle provider request")
+		return nil, errors.New("invalid chronicle provider request")
 	}
 	req.Header.Set("Authorization", "Bearer "+p.key)
 	req.Header.Set("Content-Type", "application/json")
-	// No application/SDK HTTP retries: every new attempt needs a durable reserve.
+	// No application/SDK HTTP retries. Inference needs a durable reservation;
+	// the free input-token count runs before reservation and consumes no attempt.
 	resp, err := p.client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return chronicleCompletion{}, ctx.Err()
+			return nil, ctx.Err()
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return chronicleCompletion{}, context.DeadlineExceeded
+			return nil, context.DeadlineExceeded
 		}
-		return chronicleCompletion{}, chronicleTemporaryError{}
+		return nil, chronicleTemporaryError{}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
 	if err != nil {
 		if ctx.Err() != nil {
-			return chronicleCompletion{}, ctx.Err()
+			return nil, ctx.Err()
 		}
-		return chronicleCompletion{}, chronicleTemporaryError{}
+		return nil, chronicleTemporaryError{}
 	}
 	if resp.StatusCode != http.StatusOK {
 		var failure struct {
@@ -119,12 +141,21 @@ func (p *chronicleOpenAIProvider) Complete(ctx context.Context, payload []byte) 
 		// escape into worker logs, which may otherwise expose notes or keys.
 		_ = json.Unmarshal(data, &failure)
 		if resp.StatusCode == 429 && (failure.Error.Code == "insufficient_quota" || failure.Error.Code == "billing_hard_limit_reached") {
-			return chronicleCompletion{}, errors.New("chronicle provider quota unavailable")
+			return nil, errors.New("chronicle provider quota unavailable")
 		}
 		if resp.StatusCode == 408 || resp.StatusCode == 429 || resp.StatusCode >= 500 && resp.StatusCode <= 599 {
-			return chronicleCompletion{}, chronicleTemporaryError{}
+			return nil, chronicleTemporaryError{}
 		}
-		return chronicleCompletion{}, errors.New("chronicle provider request rejected")
+		return nil, errors.New("chronicle provider request rejected")
+	}
+	return data, nil
+}
+
+func (p *chronicleOpenAIProvider) Complete(ctx context.Context, payload []byte) (chronicleCompletion, error) {
+	body := p.request(payload)
+	data, err := p.post(ctx, "/responses", body)
+	if err != nil {
+		return chronicleCompletion{}, err
 	}
 	invalid := chronicleCompletion{Truncated: true}
 	if len(data) > 64<<10 || !utf8.Valid(data) {
