@@ -56,7 +56,9 @@ try {
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.click('#monitorStatusTab');
   await page.waitForSelector('[data-monitor="12"]');
-  assert.match(await page.locator('#monitorSummary').textContent(), /1 \/ 1 LOADED MONITORS.*1 INSTANCES.*1 FIRING.*MORE MONITORS AVAILABLE/);
+  await page.waitForSelector('[data-monitor="13"]');
+  assert.match(await page.locator('#monitorSummary').textContent(), /2 \/ 2 LOADED MONITORS.*3 INSTANCES.*1 FIRING/);
+  assert.equal(await page.locator('#monitorMore').count(), 0);
   assert.equal(await page.locator('#monitorIncidentsTab').evaluate(e => e.getBoundingClientRect().right <= e.parentElement.getBoundingClientRect().right), true, 'Both tabs fit their group');
   const trail = page.locator('[data-history-monitor="12"][data-history-part="trail"]');
   const metrics = page.locator('[data-history-monitor="12"][data-history-part="metrics"]');
@@ -154,10 +156,9 @@ try {
   await page.evaluate(() => { monitorFixture.deferRegister = false; monitorFixture.registerMode = ''; });
   await page.click('#monitorStatusTab');
   await page.waitForSelector('[data-monitor="12"]');
-  await page.click('#monitorMore');
   await page.waitForSelector('[data-monitor="13"]');
   assert.equal(await page.locator('#monitorList tbody tr').count(), 2);
-  await page.waitForFunction(() => document.querySelector('[data-history-monitor="13"][data-history-part="metrics"]').textContent.includes('NO HISTORY'));
+  await page.waitForFunction(() => document.querySelector('[data-history-monitor="13"][data-history-part="metrics"]')?.textContent.includes('NO HISTORY'));
   assert.match(await page.locator('#monitorSummary').textContent(), /2 \/ 2 LOADED MONITORS.*3 INSTANCES.*1 FIRING/);
   await page.fill('#monitorSearch', 'BACKUP');
   await page.waitForSelector('#monitorList [data-monitor="13"]');
@@ -167,12 +168,12 @@ try {
   await page.waitForSelector('#monitorList [data-monitor="12"]');
   assert.equal(await page.locator('#monitorList [data-monitor="12"]').count(), 1);
   await page.fill('#monitorSearch', '');
-  for (const [state, ids] of [['problems', ['12']], ['healthy', ['13']], ['paused', []], ['all', ['12']]]) {
+  for (const [state, ids] of [['problems', ['12']], ['healthy', ['13']], ['paused', []], ['all', ['12', '13']]]) {
     await page.selectOption('#monitorStateFilter', state);
     await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
+    if (state === 'all') await page.waitForSelector('[data-monitor="13"]');
     assert.deepEqual(await page.locator('#monitorList [data-monitor]').evaluateAll(nodes => nodes.map(n => n.dataset.monitor)), ids);
   }
-  await page.click('#monitorMore');
   await page.waitForSelector('[data-monitor="13"]');
   // Boundaries 23/24 and 47/48 distinguish hourly input from 24-hour display buckets.
   await page.evaluate(() => { monitorFixture.registerRows = [
@@ -202,10 +203,9 @@ try {
   assert.equal(await trail.locator('.monitor-history-bar').count(), 30, 'Old period must not replace the current history');
   await page.click('[data-monitor-days="1"]');
   await page.waitForSelector('[data-history-monitor="12"] .monitor-history-bar');
-  await page.waitForFunction(() => document.querySelector('[data-history-monitor="13"][data-history-part="metrics"]').textContent.includes('NO HISTORY'));
+  await page.waitForFunction(() => document.querySelector('[data-history-monitor="13"][data-history-part="metrics"]')?.textContent.includes('NO HISTORY'));
   await page.evaluate(() => { monitorFixture.secondState = 'paused'; });
   await page.click('#monitorRefresh');
-  await page.click('#monitorMore');
   await page.waitForSelector('[data-monitor="13"]');
   await page.selectOption('#monitorStateFilter', 'paused');
   await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
@@ -213,8 +213,7 @@ try {
   assert.match(await page.locator('#monitorSummary').textContent(), /1 \/ 1 LOADED MONITORS.*2 INSTANCES.*0 FIRING/);
   await page.selectOption('#monitorStateFilter', 'all');
   await page.waitForSelector('[data-monitor="12"]');
-  await page.click('#monitorMore');
-  await page.waitForFunction(() => document.querySelector('[data-history-monitor="13"][data-history-part="metrics"]').textContent.includes('NO HISTORY'));
+  await page.waitForFunction(() => document.querySelector('[data-history-monitor="13"][data-history-part="metrics"]')?.textContent.includes('NO HISTORY'));
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => {
     const list = document.getElementById('monitorRegisterScroll');
@@ -656,6 +655,7 @@ try {
   assert.match(await page.locator('#inspectorEntityHost').textContent(), /Offline/);
   assert.equal(await page.locator('#incidentAck').count(), 0);
   // Polling reloads server-ranked pages; unchanged histories are not fetched again.
+  await page.setViewportSize({ width: 1600, height: 600 });
   await page.clock.install({ time: new Date('2026-11-18T10:30:00Z') });
   await page.reload();
   await page.clock.pauseAt(new Date('2026-11-18T10:31:00Z'));
@@ -664,7 +664,7 @@ try {
   await page.click('#monitoringBtn');
   await page.waitForFunction(() => document.querySelectorAll('#monitorList .monitor-history-bars').length === 16);
   assert.equal(await page.evaluate(() => monitorFixture.historyRequests.length), 1, 'One history request for 16 monitors');
-  await page.click('#monitorMore');
+  await page.locator('#monitorRegisterScroll').evaluate(e => { e.scrollTop = e.scrollHeight; e.dispatchEvent(new Event('scroll')); });
   await page.waitForFunction(() => document.querySelectorAll('#monitorList .monitor-history-bars').length === 17);
   assert.equal(await page.evaluate(() => monitorFixture.historyRequests.length), 2);
   assert.equal(await page.evaluate(() => new URL(monitorFixture.historyRequests[1]).searchParams.get('ids')), '116', 'More only reads the added monitor');
@@ -695,7 +695,7 @@ try {
   assert.equal(await page.evaluate(() => monitorFixture.requests.length), inactiveRequests, 'No status polling in Incidents');
   await page.click('#monitorStatusTab');
   await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
-  await page.click('#monitorMore');
+  await page.locator('#monitorRegisterScroll').evaluate(e => { e.scrollTop = e.scrollHeight; e.dispatchEvent(new Event('scroll')); });
   await page.waitForFunction(() => document.querySelectorAll('#monitorList [data-monitor]').length === 18);
   // The first row drops behind the cursor between pages; use new IDs so the
   // duplicate would enter the history batch rather than hitting a warm cache.
@@ -759,7 +759,7 @@ try {
   await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
   assert.equal(await page.locator('#monitorList [data-monitor]').count(), 16);
   const filteredStart = await page.evaluate(() => monitorFixture.requests.length);
-  await page.click('#monitorMore');
+  await page.locator('#monitorRegisterScroll').evaluate(e => { e.scrollTop = e.scrollHeight; e.dispatchEvent(new Event('scroll')); });
   await page.waitForFunction(() => document.querySelectorAll('#monitorList [data-monitor]').length === 17);
   const expectedFiltered = Array.from({ length: 18 }, (_, i) => String(300 + i)).filter(id => id !== '305');
   assert.deepEqual(await page.locator('#monitorList [data-monitor]').evaluateAll(nodes => nodes.map(n => n.dataset.monitor)), expectedFiltered);
@@ -857,6 +857,55 @@ try {
   assert.equal(await page.locator('.monitor-check').count(), 1, 'Eviction retains the newest entry');
   assert.match(await page.locator('#monitorHistoryStatus').textContent(), /PREVIOUS RESULT/);
   await releaseCachedRead();
+  // Long registers load at the scroll boundary, then window rows without losing
+  // their measured height, history or position during a live status refresh.
+  await page.evaluate(() => NRCInspector.close());
+  await page.clock.resume();
+  await page.reload();
+  await page.waitForFunction(() => window.NRCMonitoring && window.NRCTickets);
+  await page.evaluate(installMonitoringFixture);
+  await page.evaluate(() => { monitorFixture.overviewIDs = Array.from({ length: 160 }, (_, i) => String(1000 + i)); });
+  await page.click('#monitoringBtn');
+  await page.click('#monitorRefresh');
+  await page.waitForFunction(() => document.getElementById('monitorSummary').textContent.includes('16 / 16'));
+  await page.evaluate(() => { monitorFixture.deferOverview = true; });
+  const beforeScroll = await page.evaluate(() => monitorFixture.requests.length);
+  await page.locator('#monitorRegisterScroll').evaluate(e => {
+    e.scrollTop = e.scrollHeight;
+    for (let i = 0; i < 5; i++) e.dispatchEvent(new Event('scroll'));
+  });
+  await page.waitForFunction(() => monitorFixture.pendingStatus.length === 1);
+  assert.equal(await page.evaluate(() => monitorFixture.requests.length), beforeScroll + 1, 'Repeated scroll events do not request a page twice');
+  await page.evaluate(() => { monitorFixture.deferOverview = false; monitorFixture.pendingStatus.shift()(); });
+  await page.waitForFunction(() => document.getElementById('monitorSummary').textContent.includes('32 / 32'));
+  for (let loaded = 48; loaded <= 160; loaded += 16) {
+    await page.locator('#monitorRegisterScroll').evaluate(e => { e.scrollTop = e.scrollHeight; e.dispatchEvent(new Event('scroll')); });
+    await page.waitForFunction(loaded => document.getElementById('monitorSummary').textContent.includes(`${loaded} / ${loaded}`), loaded);
+  }
+  await page.waitForFunction(() => document.getElementById('monitorList').getAttribute('aria-busy') === 'false');
+  assert.ok(await page.locator('#monitorList [data-monitor]').count() < 40, 'Only the viewport and overscan remain mounted');
+  assert.equal(await page.locator('#monitorList table').getAttribute('aria-rowcount'), '161');
+  assert.ok(await page.locator('#monitorRegisterScroll').evaluate(e => e.scrollHeight > e.clientHeight * 10), 'Spacers preserve the full loaded register height');
+  await page.locator('#monitorRegisterScroll').evaluate(e => { e.scrollTop = 0; });
+  await page.waitForSelector('[data-monitor="1000"]');
+  await page.waitForSelector('[data-history-monitor="1000"] .monitor-history-bars');
+  await page.locator('#monitorList [data-monitor="1002"]').focus();
+  await page.evaluate(() => NRCMonitoring.refresh(false, true));
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.monitor), '1002', 'Virtual status refresh preserves the focused monitor');
+  const exhaustedRequests = await page.evaluate(() => monitorFixture.requests.length);
+  await page.locator('#monitorRegisterScroll').evaluate(e => { e.scrollTop = e.scrollHeight; e.dispatchEvent(new Event('scroll')); });
+  await page.waitForSelector('[data-monitor="1159"]');
+  assert.equal(await page.evaluate(() => monitorFixture.requests.length), exhaustedRequests, 'The exhausted register does not request another page');
+  const scrolledPosition = await page.locator('#monitorRegisterScroll').evaluate(e => e.scrollTop);
+  await page.evaluate(() => NRCMonitoring.refresh(false, true));
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.monitor), '1002');
+  assert.ok(Math.abs(await page.locator('#monitorRegisterScroll').evaluate(e => e.scrollTop) - scrolledPosition) < 5, 'Polling does not scroll back to an offscreen focused monitor');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#monitorRegisterScroll').evaluate(e => { e.scrollTop = 0; });
+  await page.waitForSelector('[data-monitor="1000"]');
+  assert.equal(await page.locator('#monitorRegisterScroll').evaluate(e => e.scrollWidth <= e.clientWidth), true, 'Virtual cards stay within the narrow register');
+  await page.locator('#monitorRegisterScroll').evaluate(e => { e.scrollTop = e.scrollHeight; });
+  await page.waitForSelector('[data-monitor="1159"]');
   assert.deepEqual(errors, []);
   console.log('PASS: hourly history, weighted uptime/coverage, gaps/pauses, stale history races, narrow layout, status pagination, diagnostics, history failure, ACK/assignment, disconnect');
 } finally { await browser.close(); }

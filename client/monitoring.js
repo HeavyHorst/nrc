@@ -14,6 +14,8 @@ window.NRCMonitoring = (() => {
   let registerController;
   let period = 1;
   let statusPages = 1, refreshTimer, searchTimer;
+  let registerWindow = null;
+  let pageError = false;
   const registerHistory = new Map();
   const inspectorHistory = new Map();
   const hour = 3600000;
@@ -178,13 +180,22 @@ window.NRCMonitoring = (() => {
   function section(title, content) { return `<section class="customer-section"><header class="panel-header"><div><span>${title}</span></div></header>${content}</section>`; }
   function facts(entries) { return `<dl class="customer-facts">${entries.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>`; }
   function table(headers, body) { return `<table class="task-table monitor-table"><thead><tr>${headers.map(h => `<th scope="col">${h}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`; }
+  function loadMoreNearEnd() {
+    const scroller = el('monitorRegisterScroll');
+    if (!active() || tab !== 'status' || loading || pageError || !ready() || !page?.has_more || !scroller?.clientHeight) return;
+    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 400) void refresh(true);
+  }
   function render() {
     if (!el('monitorList')) return;
     const focusedMonitor = el('monitorList').contains(document.activeElement) ? document.activeElement.dataset.monitor : null;
+    const scroller = el('monitorRegisterScroll');
+    const previousBody = el('monitorList').querySelector('tbody');
+    if (registerWindow) registerWindow.destroy();
+    else if (previousBody) window.NRCVirtualList.capture(previousBody, scroller, previousBody.rows,
+      row => row.querySelector('[data-monitor], [data-incident]')?.dataset.monitor || row.querySelector('[data-incident]')?.dataset.incident);
+    registerWindow = null;
     el('monitorList').setAttribute('aria-busy', String(loading));
     el('monitorHistoryLegend').hidden = tab !== 'status';
-    el('monitorMore').hidden = !page?.has_more || tab !== 'status';
-    el('monitorMore').disabled = loading;
     el('monitorRefresh').disabled = loading;
     el('monitorStatusTab').setAttribute('aria-pressed', String(tab === 'status'));
     el('monitorIncidentsTab').setAttribute('aria-pressed', String(tab === 'incidents'));
@@ -204,22 +215,60 @@ window.NRCMonitoring = (() => {
     el('monitorSummary').textContent = tab === 'status'
       ? `SHOWN: ${visible.length} / ${rows.length} LOADED MONITORS · ${counts.reduce((a, b) => a + b, 0)} INSTANCES · ${counts[0]} FIRING · ${counts[1]} PENDING${page?.has_more ? ' · MORE MONITORS AVAILABLE' : ''}`
       : `SHOWN: ${visible.length} / ${rows.length} LOADED INCIDENTS · ${visible.filter(a => metadata(a).status === 'firing').length} FIRING`;
-    el('monitorList').innerHTML = visible.length ? tab === 'status' ? table(['MONITOR / INSTANCES', 'CURRENT STATE', `HISTORY · ${period === 1 ? '24H' : `${period}D`}`, 'UPTIME / SATISFACTION'], visible.map(row => `<tr><td><button class="task-row-open" data-monitor="${esc(row.id)}">${esc(row.name)}</button><span class="customer-meta">#${esc(row.id)} · ${row.counts.reduce((a, b) => a + b, 0)} instances · ${row.counts[0]} firing</span></td><td>${badge(row.status)}<span class="customer-meta">${esc(stamp(row.evaluated_at))}</span></td><td class="monitor-history-cell" data-history-monitor="${esc(row.id)}" data-history-part="trail">${historyDisplay(row, 'trail')}</td><td data-history-monitor="${esc(row.id)}" data-history-part="metrics">${historyDisplay(row, 'metrics')}</td></tr>`).join('')) :
-      table(['INCIDENT', 'STATE', 'ACKNOWLEDGED', 'ASSIGNEE'], visible.map(asset => { const m = metadata(asset); return `<tr><td><button class="task-row-open" data-incident="${asset.assetId}">${esc(m.title)}</button><span class="customer-meta">#${asset.assetId} · MONITOR #${esc(m.monitor_id)}</span></td><td>${badge(m.status)}</td><td>${esc(m.acknowledged_by || 'NOT ACKNOWLEDGED')}</td><td>${esc(m.assigned_to || 'UNASSIGNED')}</td></tr>`; }).join('')) :
+    const renderRow = row => {
+      const node = document.createElement('tr');
+      if (tab === 'status') node.innerHTML = `<td><button class="task-row-open" data-monitor="${esc(row.id)}">${esc(row.name)}</button><span class="customer-meta">#${esc(row.id)} · ${row.counts.reduce((a, b) => a + b, 0)} instances · ${row.counts[0]} firing</span></td><td>${badge(row.status)}<span class="customer-meta">${esc(stamp(row.evaluated_at))}</span></td><td class="monitor-history-cell" data-history-monitor="${esc(row.id)}" data-history-part="trail">${historyDisplay(row, 'trail')}</td><td data-history-monitor="${esc(row.id)}" data-history-part="metrics">${historyDisplay(row, 'metrics')}</td>`;
+      else {
+        const m = metadata(row);
+        node.innerHTML = `<td><button class="task-row-open" data-incident="${row.assetId}">${esc(m.title)}</button><span class="customer-meta">#${row.assetId} · MONITOR #${esc(m.monitor_id)}</span></td><td>${badge(m.status)}</td><td>${esc(m.acknowledged_by || 'NOT ACKNOWLEDGED')}</td><td>${esc(m.assigned_to || 'UNASSIGNED')}</td>`;
+      }
+      return node;
+    };
+    el('monitorList').innerHTML = visible.length ? table(tab === 'status'
+      ? ['MONITOR / INSTANCES', 'CURRENT STATE', `HISTORY · ${period === 1 ? '24H' : `${period}D`}`, 'UPTIME / SATISFACTION']
+      : ['INCIDENT', 'STATE', 'ACKNOWLEDGED', 'ASSIGNEE'], '') :
       `<p class="customer-empty">${loading ? 'Reading NRC…' : tab === 'status' && page && (query || filter !== 'all') ? 'No matching monitors in this workspace.' : rows.length ? 'No matching loaded records.' : 'No records loaded.'}</p>`;
+    const body = el('monitorList').querySelector('tbody');
+    if (body) {
+      if (previousBody) for (const property of ['virtualScrollTop', 'virtualWidth', 'virtualHeights', 'virtualAnchor']) body[property] = previousBody[property];
+      if (visible.length > 100) {
+        // Render only the viewport; measured spacers keep the full loaded height.
+        registerWindow = window.NRCVirtualList.create({
+          host: body, scroller, items: visible, columns: 4,
+          estimate: scroller.clientWidth <= 700 ? 240 : 100,
+          key: row => String(row.id ?? row.assetId),
+          render: renderRow,
+        });
+        const focusIndex = visible.findIndex(row => row.id === focusedMonitor);
+        if (focusIndex >= 0) {
+          // Mount the focused control without pulling a scrolled-away reader
+          // back to it on every live status refresh.
+          const scrollTop = scroller.scrollTop;
+          registerWindow.ensure(focusIndex);
+          scroller.scrollTop = scrollTop;
+        }
+      } else {
+        body.append(...visible.map(renderRow));
+        scroller.scrollTop = body.virtualScrollTop ?? scroller.scrollTop;
+      }
+    }
     if (focusedMonitor) [...el('monitorList').querySelectorAll('[data-monitor]')].find(button => button.dataset.monitor === focusedMonitor)?.focus({ preventScroll: true });
   }
   async function refresh(more = false, automatic = false) {
     if (!active()) return;
+    if (more && (loading || !page?.has_more)) return;
     if (automatic && (loading || !ready() || tab !== 'status' || document.hidden)) return;
     clearTimeout(searchTimer);
     const token = ++generation;
+    pageError = false;
     registerController = new AbortController();
-    if (!more && !automatic) for (const cached of registerHistory.values()) cached.updatedAt = 0;
+    if (!more && !automatic) {
+      el('monitorRegisterScroll').scrollTop = 0;
+      for (const cached of registerHistory.values()) cached.updatedAt = 0;
+    }
     loading = true; el('monitorStatus').textContent = ready() ? 'READING NRC' : 'OFFLINE';
     if (automatic) {
       el('monitorList').setAttribute('aria-busy', 'true');
-      el('monitorMore').disabled = true;
       el('monitorRefresh').disabled = true;
     } else render();
     try {
@@ -248,11 +297,12 @@ window.NRCMonitoring = (() => {
         }); page = null;
       }
       el('monitorStatus').textContent = `${rows.length} LOADED${page?.has_more ? ' · MORE AVAILABLE' : ''} · ${new Date().toLocaleTimeString()}`;
-    } catch (error) { if (token === generation) el('monitorStatus').textContent = `${error.message} · DISPLAYED ROWS MAY BE STALE`; }
+    } catch (error) { if (token === generation) { pageError = true; el('monitorStatus').textContent = `${error.message} · DISPLAYED ROWS MAY BE STALE`; } }
     finally {
       if (token === generation) {
         loading = false; render();
         if (tab === 'status' && ready()) void loadRegisterHistory(token, currentWorkspaceId, rows, registerController);
+        if (!pageError) requestAnimationFrame(loadMoreNearEnd);
       }
     }
   }
@@ -604,7 +654,9 @@ window.NRCMonitoring = (() => {
     refreshTimer = setInterval(() => void refresh(false, true), 30000);
     el('monitoringBtn').onclick = () => window.NRCViewManager.setActiveView('monitoring');
     for (const [id, value] of [['monitorStatusTab', 'status'], ['monitorIncidentsTab', 'incidents']]) el(id).onclick = () => { tab = value; rows = []; page = null; refresh(); };
-    el('monitorRefresh').onclick = () => refresh(); el('monitorMore').onclick = () => refresh(true);
+    el('monitorRefresh').onclick = () => refresh();
+    el('monitorRegisterScroll').addEventListener('scroll', loadMoreNearEnd, { passive: true });
+    new ResizeObserver(loadMoreNearEnd).observe(el('monitorRegisterScroll'));
     const filtersChanged = (delay = 0) => {
       clearTimeout(searchTimer);
       if (tab !== 'status') { render(); return; }
