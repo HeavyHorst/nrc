@@ -45,11 +45,12 @@ type timedAskModel struct {
 	fantasy.LanguageModel
 	maxContextTokens int64
 	maxOutputTokens  int64
+	tokenizedInput   bool
 }
 
 // This is a local admission error, not a retryable provider/transport error.
 // Keep it payload-free: callers may return it to clients or log it.
-var errAskInputBudget = errors.New("model input exceeds the conservative context budget; narrow the request or start a new session")
+var errAskInputBudget = errors.New("model input could not be admitted safely within the context budget")
 
 // askCallInputBound is a conservative byte-based estimate, NOT exact token
 // accounting. Fantasy v0.45.2 supplies the complete step Prompt (including
@@ -101,7 +102,10 @@ func (m timedAskModel) checkInputBudget(call fantasy.Call) error {
 	if m.maxContextTokens <= 0 || reserve <= 0 || reserve >= m.maxContextTokens {
 		return errAskInputBudget
 	}
-	bound, err := askCallInputBound(call)
+	if m.tokenizedInput && reserve > 128000 {
+		return errAskInputBudget
+	}
+	bound, err := m.inputSize(call)
 	if err != nil || bound > m.maxContextTokens-reserve {
 		return errAskInputBudget
 	}
@@ -113,11 +117,27 @@ func (m timedAskModel) Generate(ctx context.Context, call fantasy.Call) (*fantas
 	if err != nil {
 		return nil, err
 	}
+	original := call
+	ctx, call, err = m.prepareResearchContext(ctx, call, false)
+	if err != nil {
+		return nil, err
+	}
 	if err := m.checkInputBudget(call); err != nil {
 		return nil, err
 	}
 	started := time.Now()
 	response, err := m.LanguageModel.Generate(ctx, call)
+	if askContextOverflow(err) && ctx.Value(researchContextKey{}) != nil {
+		// Retry only this model step, never the agent or already executed tools.
+		ctx, call, err = m.prepareResearchContext(ctx, original, true)
+		if err == nil {
+			response, err = m.LanguageModel.Generate(ctx, call)
+		}
+		if askContextOverflow(err) {
+			// Do not let the outer retry policy restart the entire agent.
+			err = errAskInputBudget
+		}
+	}
 	attrs := []any{"duration_ms", time.Since(started).Milliseconds(), "status", "ok"}
 	if err != nil {
 		attrs = []any{"duration_ms", time.Since(started).Milliseconds(), "status", "error"}
@@ -137,6 +157,10 @@ func (m timedAskModel) Generate(ctx context.Context, call fantasy.Call) (*fantas
 
 func (m timedAskModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
 	ctx, call, err := m.withPersonalContext(ctx, call)
+	if err != nil {
+		return nil, err
+	}
+	ctx, call, err = m.prepareResearchContext(ctx, call, false)
 	if err != nil {
 		return nil, err
 	}

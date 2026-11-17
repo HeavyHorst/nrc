@@ -248,10 +248,14 @@ func TestAskInputBudgetCountsEveryInput(t *testing.T) {
 	}
 }
 
-func TestAskInputBudgetToolLoopDoesNotRetry(t *testing.T) {
-	provider := &budgetTestModel{response: &fantasy.Response{
-		Content:      fantasy.ResponseContent{fantasy.ToolCallContent{ToolCallID: "1", ToolName: "lookup", Input: `{}`}},
-		FinishReason: fantasy.FinishReasonToolCalls,
+func TestAskInputBudgetToolLoopContinuesWithoutReplay(t *testing.T) {
+	modelCalls := 0
+	provider := researchTestModel{generate: func(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+		modelCalls++
+		if modelCalls == 1 {
+			return &fantasy.Response{Content: fantasy.ResponseContent{fantasy.ToolCallContent{ToolCallID: "1", ToolName: "lookup", Input: `{}`}}, FinishReason: fantasy.FinishReasonToolCalls}, nil
+		}
+		return &fantasy.Response{Content: fantasy.ResponseContent{fantasy.TextContent{Text: "Research continued"}}, FinishReason: fantasy.FinishReasonStop}, nil
 	}}
 	toolCalls := 0
 	lookup := fantasy.NewAgentTool("lookup", "Lookup", func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -260,16 +264,13 @@ func TestAskInputBudgetToolLoopDoesNotRetry(t *testing.T) {
 	})
 	agent := fantasy.NewAgent(timedAskModel{LanguageModel: provider, maxContextTokens: 8000, maxOutputTokens: 100},
 		fantasy.WithSystemPrompt("system rules"), fantasy.WithTools(lookup), fantasy.WithMaxOutputTokens(100), fantasy.WithMaxRetries(2))
-	_, attempts, err := runFantasyAskWithRetry(t.Context(), agent, "small request")
-	if !errors.Is(err, errAskInputBudget) || attempts != 1 || len(provider.calls) != 1 || toolCalls != 1 {
-		t.Fatalf("growth not stopped or retried: attempts=%d provider=%d tool=%d err=%v", attempts, len(provider.calls), toolCalls, err)
+	answer, attempts, err := runFantasyAskWithRetry(t.Context(), agent, "small request")
+	if err != nil || answer != "Research continued" || attempts != 1 || modelCalls != 2 || toolCalls != 1 {
+		t.Fatalf("growth interrupted or replayed: answer=%q attempts=%d provider=%d tool=%d err=%v", answer, attempts, modelCalls, toolCalls, err)
 	}
-	wrapped := fmt.Errorf("temporary timeout: %w", err)
+	wrapped := fmt.Errorf("temporary timeout: %w", errAskInputBudget)
 	if shouldRetryADKRunError(wrapped) || adkAskHTTPStatus(wrapped) != http.StatusRequestEntityTooLarge {
 		t.Fatal("budget error classified as transient")
-	}
-	if strings.Contains(err.Error(), "private tool result") {
-		t.Fatal("payload leaked")
 	}
 }
 

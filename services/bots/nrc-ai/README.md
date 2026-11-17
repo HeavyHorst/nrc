@@ -318,10 +318,34 @@ voice has the same saved-policy default and explicit privacy controls.
 GPT Live context appends expose pending, acknowledged, rejected or unconfirmed
 delivery; acknowledgment confirms timeline delivery, not speech playback.
 
-Every Fantasy call checks the complete input, tool schemas and tool results using
-a conservative serialized-byte bound with output reserve. Oversized calls return
-HTTP 413 without retrying or truncating evidence. This bound intentionally rejects
-some requests a provider tokenizer could fit.
+Every Fantasy call checks the complete input, including tool schemas and results,
+and reserves the configured output allowance. OpenAI `gpt-6.1-sol` defaults to a
+240,000-token working budget. Its model ceilings are 1,050,000 total tokens,
+922,000 input tokens and 128,000 output tokens. The local input estimate uses
+o200k tokenization of the complete Fantasy JSON with 25% headroom and framing
+overhead; it is not an exact count of the provider's normalized request. Other
+models retain conservative serialized-byte accounting and the 128,000 default.
+`MAX_CONTEXT_TOKENS` overrides the working budget, not the model ceilings.
+
+Above 90% of the available input budget, Ask pages large textual tool results
+and replaces older history or complete tool rounds with bounded research summaries
+until the input fits. The system instructions, scope and current request remain
+unchanged. Summaries are untrusted, lossy evidence, not new instructions or action
+approval. If summarization fails or cannot fit, a reference remains available
+instead. `read_research_context` reads exact original bytes with continuation
+cursors, including content outside the initial page. Originals and summaries live
+only in this request's memory; they are not written to disk or workspace records
+and cannot be read from another request. Personal durable memory is unchanged.
+This bounds submitted model context, not request memory: Fantasy retains the
+original transcript, and the request retains evidence references and summaries
+until it ends.
+
+When the provider still rejects the context, Ask halves the remaining working
+limit and retries only that model step once. It does not replay executed tools;
+the lower limit applies to subsequent steps in that run. Irreducible inputs
+(for example, mandatory instructions and the current request alone exceeding the
+limit), unsupported media accounting, or a second context rejection can still
+return HTTP 413. Compaction logs contain before/after sizes and limits, not content.
 
 Memory maintenance checkpoints each minute, reports disk pressure and considers
 daily compaction. Consumed approvals and run identities remain permanently
@@ -492,7 +516,7 @@ These are standalone defaults. Compose overrides service addresses and the nickn
 | `LLM_MODEL` | `gpt-4o-mini` | Provider model name |
 | `LLM_API_KEY` | None | Provider credential |
 | `LLM_BASE_URL` | Provider default | Endpoint override |
-| `MAX_CONTEXT_TOKENS` | `128000` | Workspace context budget |
+| `MAX_CONTEXT_TOKENS` | `240000` for OpenAI `gpt-6.1-sol`, otherwise `128000` | Whole-call working budget including output reserve; capped by known model ceilings |
 | `LLM_MAX_OUTPUT_TOKENS` | Model-dependent | Output token budget |
 | `SOURCEBOT_URL` | None | Enables optional code-search tools |
 | `SOURCEBOT_ALLOWED_REPOS` | None | Required with Sourcebot: exact repository names or explicit `*` |

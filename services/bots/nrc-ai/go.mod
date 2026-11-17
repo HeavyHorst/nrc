@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/openai-go v0.0.0-20260921175203-216db9e71b83
 	github.com/gorilla/websocket v1.5.3
 	github.com/heavyhorst/nrc/protocol-go v0.0.0
+	github.com/tiktoken-go/tokenizer v0.10.0
 	google.golang.org/adk v1.2.0
 	google.golang.org/genai v1.70.0
 	modernc.org/sqlite v1.62.0
@@ -39,6 +40,7 @@ require (
 	github.com/charmbracelet/x/exp/slice v0.0.0-20250904123553-b4e2667e5ad5 // indirect
 	github.com/charmbracelet/x/exp/strings v0.1.0 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
+	github.com/dlclark/regexp2/v2 v2.5.1 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect

@@ -71,11 +71,15 @@ func loadConfig() Config {
 		cfg.NRCNickname = fmt.Sprintf("Sullivan-%s", hostname)
 	}
 
-	maxTokens := envOrDefault("MAX_CONTEXT_TOKENS", "128000")
+	defaultContext := 128000
+	if solContextModel(cfg.LLMProvider, cfg.LLMModel) {
+		defaultContext = 240000
+	}
+	maxTokens := envOrDefault("MAX_CONTEXT_TOKENS", strconv.Itoa(defaultContext))
 	n, err := strconv.Atoi(maxTokens)
-	if err != nil {
-		slog.Warn("invalid MAX_CONTEXT_TOKENS, using default 128000", "value", maxTokens, "error", err)
-		n = 128000
+	if err != nil || n <= 0 {
+		slog.Warn("invalid MAX_CONTEXT_TOKENS, using model default")
+		n = defaultContext
 	}
 	cfg.MaxContextTokens = n
 
@@ -350,7 +354,7 @@ func main() {
 		workerDone := make(chan struct{})
 		go func() {
 			defer close(workerDone)
-			bounded := timedAskModel{LanguageModel: model, maxContextTokens: int64(cfg.MaxContextTokens), maxOutputTokens: int64(cfg.LLMMaxOutputTokens)}
+			bounded := configuredAskModel(model, summaryCfg, cfg.MaxContextTokens)
 			memoryStore.RunSummaries(ctx, "sullivan-tree-v3", personalMemorySummarizer(bounded, int64(cfg.LLMMaxOutputTokens)))
 		}()
 		maintenanceDone := make(chan struct{})

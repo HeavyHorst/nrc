@@ -44,7 +44,7 @@ func (m timedAskModel) withPersonalContext(ctx context.Context, call fantasy.Cal
 		// length of this question. Admission below still counts the entire call.
 		base := call
 		base.Prompt = call.Prompt[:2]
-		bound, err := askCallInputBound(base)
+		bound, err := m.inputSize(base)
 		if err != nil {
 			return ctx, call, err
 		}

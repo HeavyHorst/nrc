@@ -20,6 +20,7 @@ func metadataLogAttr(groups []string, a slog.Attr) slog.Attr {
 		"request_id", "provider", "model", "phase", "duration_ms", "status", "cancelled",
 		"attempt", "attempts", "max_attempts", "delay", "failed", "tool", "workspace", "conv_id",
 		"input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "cache_creation_tokens", "finish_reason",
+		"context_before", "context_after", "context_limit", "context_forced",
 		"count", "has_more", "origin_opcode", "correlation_id", "timeout", "new_client",
 		"port", "llm_provider", "llm_model", "llm_max_output_tokens":
 		return a

@@ -2035,6 +2035,7 @@ Sourcebot code research:
 	fantasyTools = append(fantasyTools, newTicketTools(wm, agentSessions)...)
 	fantasyTools = append(fantasyTools, newTicketGroupTools(wm, agentSessions)...)
 	fantasyTools = append(fantasyTools, newKnowledgeGapTool())
+	fantasyTools = append(fantasyTools, newResearchContextTool())
 	for i, t := range fantasyTools {
 		fantasyTools[i] = policyTool{t}
 	}
@@ -2050,7 +2051,7 @@ Sourcebot code research:
 		}),
 	}
 	// Use the same configured context limit for whole-call admission, not just retrieval.
-	boundedModel := timedAskModel{LanguageModel: fantasyModel, maxContextTokens: int64(maxContextTokens), maxOutputTokens: int64(cfg.LLMMaxOutputTokens)}
+	boundedModel := configuredAskModel(fantasyModel, cfg, maxContextTokens)
 	askAgent := fantasy.NewAgent(boundedModel, agentOptions...)
 	privateAgent := fantasy.NewAgent(boundedModel, append(agentOptions[:len(agentOptions):len(agentOptions)], fantasy.WithSystemPrompt(askSystemPrompt+privateExecutionInstructions+temporaryMemoryInstructions))...)
 	memoryTools := append([]fantasy.AgentTool{}, fantasyTools...)
@@ -2646,6 +2647,7 @@ func emitAskProgress(client *NRCClient, convID uint64, message string) {
 }
 
 func runFantasyAskWithRetry(ctx context.Context, askAgent fantasy.Agent, prompt string, history ...fantasy.Message) (string, int, error) {
+	ctx = context.WithValue(ctx, researchContextKey{}, newResearchContext())
 	if len(history) > 0 {
 		// Fantasy prepends one system message. Mark the last stable history
 		// message, not the current request with its changing retrieval context.
