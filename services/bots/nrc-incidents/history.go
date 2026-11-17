@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -29,11 +30,31 @@ type historyWriter struct {
 	snapshots    chan historySnapshot
 	dropped      atomic.Uint64
 	db           atomic.Pointer[sql.DB]
+
+	availabilityRequestDrops  atomic.Uint64
+	availabilityReadFailures  atomic.Uint64
+	availabilityWriteFailures atomic.Uint64
+	availabilityWaits         atomic.Uint64
+	availabilityWaitNS        atomic.Uint64
 }
 
 func newHistoryWriter() *historyWriter {
 	return &historyWriter{queue: make(chan historyRun, 256), availability: make(chan p.MonitorState, 256), snapshots: make(chan historySnapshot, 8)}
 }
+
+// Process-local diagnostics, not a completeness watermark or per-monitor counts.
+func (h *historyWriter) availabilityDiagnostics() map[string]string {
+	return map[string]string{
+		"request_drops_total":           strconv.FormatUint(h.availabilityRequestDrops.Load(), 10),
+		"snapshot_read_failures_total":  strconv.FormatUint(h.availabilityReadFailures.Load(), 10),
+		"snapshot_write_failures_total": strconv.FormatUint(h.availabilityWriteFailures.Load(), 10),
+		"backpressure_total":            strconv.FormatUint(h.availabilityWaits.Load(), 10),
+		"backpressure_ns_total":         strconv.FormatUint(h.availabilityWaitNS.Load(), 10),
+		"requests_pending":              strconv.Itoa(len(h.availability)),
+		"snapshots_pending":             strconv.Itoa(len(h.snapshots)),
+	}
+}
+
 func (h *historyWriter) offer(r historyRun) {
 	select {
 	case h.queue <- r:
@@ -170,6 +191,7 @@ func (h *historyWriter) serve(ctx context.Context, path string) {
 				slog.Warn("history gap: DuckDB write failed", "monitor_id", run.Run.MonitorID)
 			} else if snapshot != nil {
 				h.dropped.Add(1)
+				h.availabilityWriteFailures.Add(1)
 				slog.Warn("history gap: availability write failed", "monitor_id", snapshot.MonitorID)
 			} else {
 				slog.Warn("DuckDB history maintenance failed; retained data will be retried")

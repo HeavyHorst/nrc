@@ -198,6 +198,7 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"raw_floor_ns": strconv.FormatInt(floor, 10), "pending_rollup_hours_global": strconv.FormatInt(pending, 10),
 		"uptime_last_maintenance_ns": strconv.FormatInt(lastMaintenance, 10),
 		"dropped_process_total":      strconv.FormatUint(a.history.dropped.Load(), 10), "rows": data,
+		"availability_process": a.history.availabilityDiagnostics(),
 	})
 	if err != nil {
 		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
@@ -298,7 +299,7 @@ func (a *historyAPI) serveInspector(w http.ResponseWriter, ctx context.Context, 
 		}
 		sections[kind] = map[string]any{"status": status, "rows": data, "from": time.Unix(0, start).UTC().Format(time.RFC3339Nano), "to": time.Unix(0, end).UTC().Format(time.RFC3339Nano), "pending_rollup_hours_global": strconv.FormatInt(pending, 10)}
 	}
-	body, err := json.Marshal(map[string]any{"version": 1, "workspace": a.workspace, "monitor_id": strconv.FormatUint(id, 10), "kind": "inspector", "identity": identity, "sections": sections, "raw_floor_ns": strconv.FormatInt(floor, 10), "uptime_last_maintenance_ns": strconv.FormatInt(maintenance, 10), "dropped_process_total": strconv.FormatUint(a.history.dropped.Load(), 10)})
+	body, err := json.Marshal(map[string]any{"version": 1, "workspace": a.workspace, "monitor_id": strconv.FormatUint(id, 10), "kind": "inspector", "identity": identity, "sections": sections, "raw_floor_ns": strconv.FormatInt(floor, 10), "uptime_last_maintenance_ns": strconv.FormatInt(maintenance, 10), "dropped_process_total": strconv.FormatUint(a.history.dropped.Load(), 10), "availability_process": a.history.availabilityDiagnostics()})
 	if err != nil {
 		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
 		return
@@ -357,7 +358,7 @@ func (a *historyAPI) serveUptimeBatch(w http.ResponseWriter, ctx context.Context
 		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	body, err := json.Marshal(map[string]any{"version": 1, "workspace": a.workspace, "monitor_id": "batch", "monitor_ids": ids, "pending_rollup_hours_global": strconv.FormatInt(pending, 10), "results": results})
+	body, err := json.Marshal(map[string]any{"version": 1, "workspace": a.workspace, "monitor_id": "batch", "monitor_ids": ids, "pending_rollup_hours_global": strconv.FormatInt(pending, 10), "availability_process": a.history.availabilityDiagnostics(), "results": results})
 	if err != nil {
 		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
 		return

@@ -301,10 +301,15 @@ The legacy monitor-state request and response remain unchanged; the optional
 detailed request uses the same opcode and evaluator authorization.
 
 Collection has a ten-second budget, a 4 MiB complete-snapshot limit, 256 pending
-request slots and eight completed-snapshot slots. A failed page, changed fence,
-overflow or dropped write loses that snapshot and logs a gap, without delaying
-check workers. Partial sets are never published. An old server can reject the
-extended read while ordinary evaluations continue.
+request slots and eight completed-snapshot slots. When the completed queue is
+full, collectors retain their snapshots and wait for the writer, or stop on
+shutdown. This wait is separate from the ten-second read budget. At most one
+complete snapshot per collector is held outside the queue; the buffer sizes are
+unchanged. Check workers never wait for history. A full request queue, failed
+page, changed fence or failed write still loses that observation and logs a gap.
+Long backlogs can invalidate queued sequence fences as evaluations advance.
+Partial sets are never published. An old server can reject the extended read
+while ordinary evaluations continue.
 
 Each instance contributes healthy, failing, unknown or paused nanoseconds to UTC
 buckets. Passing/failing observations contribute directly; 5/5 qualification only
@@ -455,6 +460,16 @@ Database metadata and rows come from one DuckDB transaction. Responses also repo
   After downtime, recent hours may not even be scheduled yet.
 - `dropped_process_total`: history drops recorded by this process since startup,
   not a durable or per-range loss count.
+- `availability_process` (also on batch responses): decimal-string counters
+  `request_drops_total`, `snapshot_read_failures_total`,
+  `snapshot_write_failures_total`, `backpressure_total` and
+  `backpressure_ns_total`, plus current queue depths `requests_pending` and
+  `snapshots_pending`. Backpressure counts waits, not losses; elapsed wait time
+  is added when each wait ends, including cancellation. These process-local
+  readings are independent of the database transaction and are not an atomic
+  snapshot or completeness watermark. Pending depths exclude active collectors
+  and the writer. Read failures log the monitor, sequence and sanitized source
+  error; debug logs on resumed delivery include wait time and snapshot age.
 
 Rollups can lag writes or late corrections. Zero pending hours does not prove
 complete history: collection gaps, retention, unscheduled availability catch-up

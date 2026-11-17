@@ -23,6 +23,7 @@ func (h *historyWriter) requestAvailability(state p.MonitorState) {
 	case h.availability <- state:
 	default:
 		h.dropped.Add(1)
+		h.availabilityRequestDrops.Add(1)
 		slog.Warn("history gap: availability requests full", "monitor_id", state.MonitorID)
 	}
 }
@@ -44,16 +45,38 @@ func collectAvailability(ctx context.Context, h *historyWriter, source interface
 				case state := <-h.availability:
 					readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 					page, err := source.snapshot(readCtx, state)
-					cancel()
-					if err == nil {
-						select {
-						case h.snapshots <- historySnapshot{workspace, page}:
-							continue
-						default:
-						}
+					if readCtx.Err() != nil {
+						err = readCtx.Err()
 					}
-					h.dropped.Add(1)
-					slog.Warn("history gap: availability snapshot unavailable", "monitor_id", state.MonitorID)
+					cancel()
+					if ctx.Err() != nil {
+						return
+					}
+					if err != nil {
+						h.dropped.Add(1)
+						h.availabilityReadFailures.Add(1)
+						slog.Warn("history gap: availability snapshot read failed", "monitor_id", state.MonitorID, "sequence", state.Sequence, "error", err)
+						continue
+					}
+					// Keep the complete snapshot until the writer accepts it. Only these
+					// bounded collectors wait; check workers still enqueue without blocking.
+					snapshot := historySnapshot{workspace, page}
+					select {
+					case h.snapshots <- snapshot:
+						continue
+					default:
+					}
+					h.availabilityWaits.Add(1)
+					start := time.Now()
+					select {
+					case <-ctx.Done():
+						h.availabilityWaitNS.Add(uint64(time.Since(start)))
+						return
+					case h.snapshots <- snapshot:
+					}
+					wait := time.Since(start)
+					h.availabilityWaitNS.Add(uint64(wait))
+					slog.Debug("availability snapshot backpressure relieved", "monitor_id", state.MonitorID, "sequence", state.Sequence, "wait_ns", int64(wait), "snapshot_age_ns", time.Now().UnixNano()-page.At)
 				}
 			}
 		}()

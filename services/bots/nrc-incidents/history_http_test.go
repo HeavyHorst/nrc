@@ -225,6 +225,21 @@ func TestHistoryHTTPContract(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("acceptance: %#v", rows)
 	}
+	// Process diagnostics are available on single, Inspector and batch reads, with
+	// distinct decimal counters rather than folding backpressure into drops.
+	h.availabilityRequestDrops.Add(2)
+	h.availabilityReadFailures.Add(3)
+	h.availabilityWriteFailures.Add(5)
+	h.availabilityWaits.Add(7)
+	h.availabilityWaitNS.Add(9007199254740993)
+	for _, path := range []string{query("runs", "raw"), inspectorPath, batchPath} {
+		diagnostics := request(path, auth, 200)["availability_process"].(map[string]any)
+		for key, want := range map[string]string{"request_drops_total": "2", "snapshot_read_failures_total": "3", "snapshot_write_failures_total": "5", "backpressure_total": "7", "backpressure_ns_total": "9007199254740993", "requests_pending": "0", "snapshots_pending": "0"} {
+			if diagnostics[key] != want {
+				t.Fatalf("%s diagnostic %s=%v, want %s", path, key, diagnostics[key], want)
+			}
+		}
+	}
 	rows = request(query("samples", "raw")+"&identity="+url.QueryEscape("' OR 1=1 --"), auth, 200)["rows"].([]any)
 	if len(rows) != 0 {
 		t.Fatal("identity was not a literal")

@@ -1,16 +1,174 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"log/slog"
 	"math"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	p "github.com/heavyhorst/nrc/protocol-go"
 )
+
+type availabilitySourceFunc func(context.Context, p.MonitorState) (p.MonitorSnapshotPage, error)
+
+func (f availabilitySourceFunc) snapshot(ctx context.Context, state p.MonitorState) (p.MonitorSnapshotPage, error) {
+	return f(ctx, state)
+}
+
+func TestAvailabilityCollectionBackpressure(t *testing.T) {
+	for _, shutdown := range []bool{false, true} {
+		t.Run(map[bool]string{false: "drain", true: "shutdown"}[shutdown], func(t *testing.T) {
+			h := newHistoryWriter()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			base := time.Now().UnixNano()
+			const count = 40
+			for i := range count {
+				h.requestAvailability(p.MonitorState{MonitorID: uint64(i + 1), Revision: 1, Sequence: uint64(i + 101)})
+			}
+			source := availabilitySourceFunc(func(_ context.Context, state p.MonitorState) (p.MonitorSnapshotPage, error) {
+				at := base + int64(state.MonitorID)
+				return p.MonitorSnapshotPage{MonitorState: state, At: at, Horizon: int64(time.Minute), Instances: []p.MonitorAvailability{{ID: 1, Identity: "target", State: 0, ValidUntil: at + int64(time.Minute)}}}, nil
+			})
+			done := make(chan struct{})
+			go func() { collectAvailability(ctx, h, source, "ops", 8); close(done) }()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("collectors did not stop with a blocked writer")
+				}
+			})
+			deadline := time.Now().Add(5 * time.Second)
+			for h.availabilityWaits.Load() == 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("collectors did not reach backpressure")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			// Check history admission remains independent of the blocked collectors.
+			h.offer(historyRun{ID: "independent-check"})
+			if got := <-h.queue; got.ID != "independent-check" {
+				t.Fatal(got)
+			}
+			if shutdown {
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("shutdown blocked on snapshot delivery")
+				}
+			} else {
+				db, err := openHistory(ctx, filepath.Join(t.TempDir(), "burst.duckdb"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				seen := map[uint64]bool{}
+				for range count {
+					select {
+					case snapshot := <-h.snapshots:
+						if snapshot.Workspace != "ops" || snapshot.Sequence != snapshot.MonitorID+100 || seen[snapshot.MonitorID] {
+							t.Fatalf("lost identity/fence or duplicate: %+v", snapshot)
+						}
+						seen[snapshot.MonitorID] = true
+						if err := writeAvailability(ctx, db, snapshot); err != nil {
+							t.Fatal(err)
+						}
+					case <-time.After(5 * time.Second):
+						t.Fatalf("only %d/%d snapshots delivered", len(seen), count)
+					}
+				}
+				var stored int
+				if err := db.QueryRow("SELECT count(*) FROM uptime_snapshots").Scan(&stored); err != nil || stored != count {
+					t.Fatalf("stored %d snapshots: %v", stored, err)
+				}
+			}
+			if h.dropped.Load() != 0 || h.availabilityReadFailures.Load() != 0 || h.availabilityWaitNS.Load() == 0 {
+				t.Fatalf("unexpected diagnostics: dropped=%d availability=%v", h.dropped.Load(), h.availabilityDiagnostics())
+			}
+		})
+	}
+}
+
+func TestAvailabilityReadFailureContinuesCollection(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+	h := newHistoryWriter()
+	h.requestAvailability(p.MonitorState{MonitorID: 7, Revision: 9, Sequence: 11})
+	h.requestAvailability(p.MonitorState{MonitorID: 7, Revision: 9, Sequence: 12})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	source := availabilitySourceFunc(func(_ context.Context, state p.MonitorState) (p.MonitorSnapshotPage, error) {
+		if state.Sequence == 11 {
+			return p.MonitorSnapshotPage{}, errRejected
+		}
+		return p.MonitorSnapshotPage{MonitorState: state}, nil
+	})
+	done := make(chan struct{})
+	go func() { collectAvailability(ctx, h, source, "ops", 1); close(done) }()
+	defer func() { cancel(); <-done }()
+	select {
+	case snapshot := <-h.snapshots:
+		if snapshot.Sequence != 12 {
+			t.Fatal("failed snapshot published", snapshot)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("collector did not recover after a rejected fence")
+	}
+	if h.dropped.Load() != 1 || h.availabilityReadFailures.Load() != 1 || h.availabilityWaits.Load() != 0 {
+		t.Fatalf("unexpected diagnostics: %v", h.availabilityDiagnostics())
+	}
+	if !strings.Contains(logs.String(), `"error":"NRC rejected the request"`) || !strings.Contains(logs.String(), `"sequence":11`) {
+		t.Fatalf("missing read failure diagnosis: %s", logs.String())
+	}
+}
+
+func TestAvailabilityLossCounters(t *testing.T) {
+	for _, kind := range []string{"request", "write"} {
+		t.Run(kind, func(t *testing.T) {
+			h := newHistoryWriter()
+			if kind == "request" {
+				for range cap(h.availability) + 1 {
+					h.requestAvailability(p.MonitorState{MonitorID: 7, Revision: 9, Sequence: 11})
+				}
+			} else {
+				// Invalid snapshot exercises a real writer rejection, not a seeded counter.
+				h.snapshots <- historySnapshot{Workspace: "ops"}
+				ctx, cancel := context.WithCancel(context.Background())
+				done := make(chan struct{})
+				path := filepath.Join(t.TempDir(), "failed-write.duckdb")
+				go func() { h.serve(ctx, path); close(done) }()
+				defer func() { cancel(); <-done }()
+				deadline := time.Now().Add(5 * time.Second)
+				for h.availabilityWriteFailures.Load() == 0 {
+					if time.Now().After(deadline) {
+						t.Fatal("writer did not report the rejected snapshot")
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+			wantRequests, wantWrites := uint64(0), uint64(0)
+			if kind == "request" {
+				wantRequests = 1
+			} else {
+				wantWrites = 1
+			}
+			if h.dropped.Load() != 1 || h.availabilityRequestDrops.Load() != wantRequests || h.availabilityWriteFailures.Load() != wantWrites || h.availabilityReadFailures.Load() != 0 || h.availabilityWaits.Load() != 0 {
+				t.Fatalf("misclassified %s failure: dropped=%d availability=%v", kind, h.dropped.Load(), h.availabilityDiagnostics())
+			}
+		})
+	}
+}
 
 func TestAvailabilityDurationsPauseLateArrivalAndRetirement(t *testing.T) {
 	ctx := context.Background()
