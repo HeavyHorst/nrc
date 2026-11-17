@@ -480,7 +480,11 @@ window.NRCMonitoring = (() => {
       render();
       if (ready() && tab === 'status') void loadRegisterHistory(token, currentWorkspaceId, rows, registerController);
     };
-    el('monitorList').onclick = event => { const button = event.target.closest('[data-monitor], [data-incident]'); if (button) open(button.dataset.monitor ? 'monitor' : 'incident', button.dataset.monitor || button.dataset.incident); };
+    el('monitorList').onclick = event => {
+      if (event.target.closest('button, input, select, textarea, a') && !event.target.closest('.task-row-open')) return;
+      const button = event.target.closest('tbody tr')?.querySelector('[data-monitor], [data-incident]');
+      if (button) open(button.dataset.monitor ? 'monitor' : 'incident', button.dataset.monitor || button.dataset.incident);
+    };
   }
   return { init, refresh, handlePage, handleError, showInspector, disconnect,
     onViewChanged(view) { if (view === 'monitoring') refresh(); else { generation++; loading = false; } },

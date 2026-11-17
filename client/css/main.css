@@ -23,6 +23,7 @@
 .monitor-table.task-table thead tr, .monitor-table.task-table tbody tr { display: table-row; padding: 0; }
 .monitor-table.task-table tbody tr > td { display: table-cell; width: auto !important; }
 .monitor-table th, .monitor-table tbody tr { cursor: default; }
+#monitorList .monitor-table tbody tr { cursor: pointer; }
 .monitor-table th, .monitor-table td { white-space: normal; overflow-wrap: anywhere; padding: 0.625rem; vertical-align: top; }
 .monitor-table .task-row-open { white-space: normal; overflow-wrap: anywhere; }
 .monitor-table .customer-meta { display: block; margin-top: 0.25rem; }

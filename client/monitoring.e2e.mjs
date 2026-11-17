@@ -35,6 +35,28 @@ try {
   await page.evaluate(() => { monitorFixture.empty = false; });
   await page.click('#monitorRefresh');
   await page.waitForSelector('[data-monitor="12"]');
+  // The whole register row opens its record, including nested text and empty cell space.
+  for (const width of [1600, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const tab of ['Status', 'Incidents']) {
+      await page.click(`#monitor${tab}Tab`);
+      const marker = tab === 'Status' ? '#monitorDetailRefresh' : '#incidentAck';
+      for (const selector of ['td:first-child .customer-meta', 'td:nth-child(2)', 'td:last-child']) {
+        await page.locator(`#monitorList tbody tr:first-child ${selector}`).click({ position: { x: 3, y: 3 } });
+        await page.waitForSelector(marker);
+        await page.evaluate(() => NRCInspector.close());
+        await page.waitForSelector(marker, { state: 'hidden' });
+      }
+      // Preserve keyboard access through the existing record button.
+      await page.locator('#monitorList .task-row-open').first().focus();
+      await page.keyboard.press('Enter');
+      await page.waitForSelector(marker);
+      await page.evaluate(() => NRCInspector.close());
+    }
+  }
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.click('#monitorStatusTab');
+  await page.waitForSelector('[data-monitor="12"]');
   assert.match(await page.locator('#monitorSummary').textContent(), /1 \/ 1 LOADED MONITORS.*1 INSTANCES.*1 FIRING.*MORE MONITORS AVAILABLE/);
   assert.equal(await page.locator('#monitorIncidentsTab').evaluate(e => e.getBoundingClientRect().right <= e.parentElement.getBoundingClientRect().right), true, 'Both tabs fit their group');
   const trail = page.locator('[data-history-monitor="12"][data-history-part="trail"]');
