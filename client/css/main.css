@@ -16,6 +16,7 @@
 .monitor-filters input { width: 12rem; max-width: 100%; }
 #monitorSummary { font-weight: 600; }
 #monitorList { overflow: visible; }
+#monitorList > .customer-empty { padding-inline: 0.625rem; }
 .monitor-table.task-table { display: table; min-width: 0; width: 100%; table-layout: fixed; }
 .monitor-table thead { display: table-header-group; }
 .monitor-table.task-table tbody { display: table-row-group; }

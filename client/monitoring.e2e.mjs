@@ -16,7 +16,24 @@ try {
   await page.goto('http://nrc.test');
   await page.waitForFunction(() => window.NRCMonitoring && window.NRCTickets);
   await page.evaluate(installMonitoringFixture);
+  await page.evaluate(() => { monitorFixture.empty = true; });
   await page.click('#monitoringBtn');
+  await page.waitForFunction(() => document.querySelector('#monitorList > .customer-empty')?.textContent === 'No records loaded.');
+  for (const width of [1600, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const aligned = await page.evaluate(() => {
+      const textLeft = selector => {
+        const range = document.createRange();
+        range.selectNodeContents(document.querySelector(selector));
+        return range.getBoundingClientRect().left;
+      };
+      return Math.abs(textLeft('#monitorList > .customer-empty') - textLeft('#monitorSummary')) < 1;
+    });
+    assert.equal(aligned, true, 'Empty register text aligns with summary at desktop and mobile widths');
+  }
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.evaluate(() => { monitorFixture.empty = false; });
+  await page.click('#monitorRefresh');
   await page.waitForSelector('[data-monitor="12"]');
   assert.match(await page.locator('#monitorSummary').textContent(), /1 \/ 1 LOADED MONITORS.*1 INSTANCES.*1 FIRING.*MORE MONITORS AVAILABLE/);
   assert.equal(await page.locator('#monitorIncidentsTab').evaluate(e => e.getBoundingClientRect().right <= e.parentElement.getBoundingClientRect().right), true, 'Both tabs fit their group');
