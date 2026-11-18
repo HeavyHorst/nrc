@@ -28,12 +28,14 @@ try {
       if (v.getUint16(0) !== 74) return;
       const q = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 2, buffer.byteLength - 6)));
       f.requests.push(q);
-      const row = { generation: q.cursor === "0" ? "9007199254740993" : "9007199254740994", note_id: "18446744073709551615", note_title: f.title ?? "Freigabe Gerätebestand", first_at: "1794909000000000000", last_at: "1794909060000000000", created_at: "1794909120000000000", sources: ["9007199254740997", "9007199254740999"], summary: "Die Zahl wurde von 17 auf 23 Geräte korrigiert. Die fehlende Freigabe bleibt erhalten.", model: "gpt-6.1-terra", prompt_version: "chronicle-p5", schema_version: "chronicle-s1", source_available: !!f.available };
+      const row = { generation: q.cursor === "0" ? "9007199254740994" : "9007199254740993", note_id: "18446744073709551615", note_title: f.title ?? "Freigabe Gerätebestand", first_at: "1794909000000000000", last_at: "1794909060000000000", created_at: "1794909120000000000", sources: ["9007199254740997", "9007199254740999"], summary: "Die Zahl wurde von 17 auf 23 Geräte korrigiert. Die fehlende Freigabe bleibt erhalten.", model: "gpt-6.1-terra", prompt_version: "chronicle-p5", schema_version: "chronicle-s1", source_available: !!f.available };
+      if (q.op === "history" && q.cursor !== "0") { row.summary = "Älterer Eintrag: Zunächst wurden 17 Geräte erfasst."; row.last_at = row.first_at; }
+      if (["history", "gaps"].includes(q.op) && q.newest_first !== true) throw Error("UI must request newest-first pages");
       if (f.injection) { row.summary = '<img src=x onerror="window.injected=true">'; row.note_title = '<img src=x onerror="window.injected=true">'; row.model = "<script>bad()</script>"; }
       let response;
       if (q.op === "status") response = { status: f.fail ? "forbidden" : "ok", enabled: f.enabled, can_delete: f.permission, pending: 3, processing: 1, failed: 1, expired: 0, acknowledged: 4, gap_count: 2, calls: 507, input_tokens: 23000, output_tokens: 5000 };
       else if (q.op === "history") response = { status: "ok", entries: f.empty || f.deleted ? [] : [row], cursor: f.empty || f.deleted ? "0" : row.generation, more: q.cursor === "0" && !f.empty && !f.deleted };
-      else if (q.op === "gaps") response = { status: "ok", gaps: f.empty ? [] : [{ first_source: q.cursor === "0" ? "9007199254741001" : "9007199254741003", last_source: q.cursor === "0" ? "9007199254741002" : "9007199254741004", note_id: q.note_id || "42", note_title: "Rollout-Abnahme", first_at: row.first_at, last_at: row.last_at, input_count: 2, reason: "ttl", source_available: false }], cursor: f.empty ? "0" : q.cursor === "0" ? "9007199254741001" : "9007199254741003", more: !f.empty && q.cursor === "0" };
+      else if (q.op === "gaps") response = { status: "ok", gaps: f.empty ? [] : [{ first_source: q.cursor === "0" ? "9007199254741003" : "9007199254741001", last_source: q.cursor === "0" ? "9007199254741004" : "9007199254741002", note_id: q.note_id || "42", note_title: "Rollout-Abnahme", first_at: row.first_at, last_at: row.last_at, input_count: 2, reason: "ttl", source_available: false }], cursor: f.empty ? "0" : q.cursor === "0" ? "9007199254741003" : "9007199254741001", more: !f.empty && q.cursor === "0" };
       else if (q.op === "delete") { f.deleted = true; response = { status: "deleted", deleted_through: "9007199254741002" }; }
       else throw Error("UI attempted service operation");
       const bytes = new TextEncoder().encode(JSON.stringify(response));
@@ -81,7 +83,20 @@ try {
   assert.equal(await page.locator(".chronicle-summary").count(), 2);
   assert.equal(await page.evaluate(() => chronicleFixture.requests.filter(q => q.op === "gaps").length), gapReads);
   assert.equal(await page.locator('[data-chronicle-more="entries"]').count(), 0);
-  assert.equal(await page.evaluate(() => chronicleFixture.requests.at(-1).cursor), "9007199254740993");
+  assert.equal(await page.evaluate(() => chronicleFixture.requests.at(-1).cursor), "9007199254740994");
+  assert.match(await page.locator("#historyStatus").innerText(), /NEWEST FIRST/);
+  assert.deepEqual(await page.locator(".chronicle-summary").allTextContents(), [
+    "Die Zahl wurde von 17 auf 23 Geräte korrigiert. Die fehlende Freigabe bleibt erhalten.",
+    "Älterer Eintrag: Zunächst wurden 17 Geräte erfasst.",
+  ]);
+  for (const theme of ["matte-black", "lupine"]) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+      await shot(`newest-first-${theme}-${width}`);
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const entryReads = await page.evaluate(() => chronicleFixture.requests.filter(q => q.op === "history").length);
   await page.click('[data-chronicle-more="gaps"]'); await ready();
   assert.equal(await page.evaluate(() => chronicleFixture.requests.filter(q => q.op === "history").length), entryReads);

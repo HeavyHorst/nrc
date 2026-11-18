@@ -1400,6 +1400,7 @@ Request fields (snake_case in both JSON and Odin):
 | --- | --- |
 | `op` | One of `list`, `claim`, `chunk`, `reserve`, `commit`, `retry`, `status`, `history`, `gaps`, `delete` |
 | `note_id`, `cursor`, `epoch`, `generation` | Optional canonical unsigned 64-bit decimal strings |
+| `newest_first` | Optional boolean for `history` and `gaps`; defaults to false |
 | `consumer`, `model`, `prompt_version`, `schema_version` | UTF-8 strings, at most 128 bytes each |
 | `outcome`, `reason` | UTF-8 strings, at most 128 bytes each |
 | `summary` | UTF-8 string, at most 4096 bytes |
@@ -1531,6 +1532,11 @@ are not gaps. Paging is live, not a snapshot: cleanup can extend compact ranges.
 Empty `history` and `gaps` pages retain the request cursor, or return `"0"` when
 no cursor was supplied. Public collection fields (`sources`, `inputs`, `entries`,
 `gaps`) serialize as JSON arrays, including `[]` when empty, never `null`.
+
+Both reads accept optional `newest_first:true` to reverse the order. In that mode,
+an absent or `"0"` cursor starts at the newest row; subsequent pages return IDs
+strictly below the cursor. The web client uses this mode so LOAD MORE appends
+older entries. Omitted or false preserves the ascending order for existing clients.
 
 `status` returns opt-in, epoch and `can_delete`, derived only from the current
 authenticated DELETE capability. Optional nonzero `note_id` scopes `pending`,

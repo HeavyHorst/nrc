@@ -49,7 +49,7 @@ window.NRCChronicle = (() => {
     if (page?.status !== "ok" || !Array.isArray(rows) || rows.length > 16 || typeof page.more !== "boolean" || !decimal(page.cursor)) throw Error("Chronicle read failed");
     for (const row of rows) {
       const id = isGap ? row.first_source : row.generation;
-      if (!positive(id) || BigInt(id) <= BigInt(previous) || !positive(row.note_id) || typeof row.source_available !== "boolean") throw Error("Invalid chronicle identity");
+      if (!positive(id) || (previous !== "0" && BigInt(id) >= BigInt(previous)) || !positive(row.note_id) || typeof row.source_available !== "boolean") throw Error("Invalid chronicle identity");
       if (row.note_title !== undefined && (typeof row.note_title !== "string" || new TextEncoder().encode(row.note_title).length > 256)) throw Error("Invalid note title");
       if (kind === 2 && row.note_id !== noteId) throw Error("Wrong note scope");
       previous = id;
@@ -81,7 +81,7 @@ window.NRCChronicle = (() => {
     systemOpen = body.querySelector?.("[data-chronicle-system]")?.open ?? systemOpen;
     document.getElementById("historyScope").textContent = kind ? `RECORD #${noteId} · NOTES ONLY` : "WORKSPACE · NOTES ONLY";
     document.getElementById("historyClear").hidden = !kind;
-    document.getElementById("historyStatus").textContent = mode === "offline" ? "OFFLINE · RECONNECT TO READ AI CHRONICLE" : mode === "error" ? "AI CHRONICLE READ FAILED · REFRESH / RETRY" : mode === "loading" ? "LOADING AI CHRONICLE…" : mode === "deleting" ? "DELETING AI CHRONICLE…" : `${status?.enabled ? "CAPTURE ENABLED" : "CAPTURE DISABLED"} · ${entries.length} ENTRIES LOADED · OLDEST FIRST`;
+    document.getElementById("historyStatus").textContent = mode === "offline" ? "OFFLINE · RECONNECT TO READ AI CHRONICLE" : mode === "error" ? "AI CHRONICLE READ FAILED · REFRESH / RETRY" : mode === "loading" ? "LOADING AI CHRONICLE…" : mode === "deleting" ? "DELETING AI CHRONICLE…" : `${status?.enabled ? "CAPTURE ENABLED" : "CAPTURE DISABLED"} · ${entries.length} ENTRIES LOADED · NEWEST FIRST`;
     body.setAttribute("aria-busy", String(busy));
     let html = '<div class="chronicle-register">';
     if (notice) html += `<p class="chronicle-notice" role="status">${escape(notice)}</p>`;
@@ -91,13 +91,13 @@ window.NRCChronicle = (() => {
       if (!status.enabled) html += '<p class="chronicle-notice">Processing is disabled. Retained explanations remain readable; re-enabling does not revive old claims.</p>';
       if (kind === 2 && status.can_delete) html += `<div><button type="button" class="btn btn--danger" data-chronicle-delete="${noteId}" ${busy || !ready() ? "disabled" : ""}>DELETE AI CHRONICLE FOR THIS NOTE</button></div>`;
     }
-    html += `<section class="chronicle-feed" aria-label="AI entries"><header class="panel-header"><div><span>AI ENTRIES <small>(${entries.length} LOADED)</small></span><span>OLDEST GENERATION FIRST</span></div></header>`;
+    html += `<section class="chronicle-feed" aria-label="AI entries"><header class="panel-header"><div><span>AI ENTRIES <small>(${entries.length} LOADED)</small></span><span>NEWEST GENERATION FIRST</span></div></header>`;
     if (!entries.length && mode === "ready" && kind !== 1) html += '<p class="chronicle-empty">NO AI ENTRIES IN THIS SCOPE. This does not mean every change was covered.</p>';
     html += '<ol class="chronicle-entries">';
     for (const row of entries) {
       html += `<li class="chronicle-entry"><div class="chronicle-content"><div class="chronicle-identity"><span>CHANGED ${escape(time(row.last_at))}</span><span>${identity(row)}</span></div><p class="chronicle-summary">${escape(row.summary)}</p><details class="chronicle-details"><summary>DETAILS</summary><div class="chronicle-system"><p>NOTE #${row.note_id}<br>CHANGES ${escape(time(row.first_at))} – ${escape(time(row.last_at))}<br>CREATED ${escape(time(row.created_at))}</p><p>SOURCES ${row.sources.join(", ")}<br>${escape(row.model)} · ${escape(row.prompt_version)} · ${escape(row.schema_version)}</p><div class="chronicle-actions"><button class="btn" type="button" data-chronicle-technical="${row.note_id}">TECHNICAL HISTORY</button>${status?.can_delete && kind !== 2 ? ` <button class="btn btn--danger" type="button" data-chronicle-delete="${row.note_id}" ${busy ? "disabled" : ""}>DELETE NOTE’S AI CHRONICLE</button>` : ""}</div></div></details></div></li>`;
     }
-    html += `</ol>${pager("entries", entries.length, more, busy)}</section><section class="chronicle-feed" aria-label="Coverage gaps"><header class="panel-header"><div><span>COVERAGE GAPS <small>(${gaps.length} LOADED)</small></span><span>OLDEST SOURCE FIRST</span></div></header>`;
+    html += `</ol>${pager("entries", entries.length, more, busy)}</section><section class="chronicle-feed" aria-label="Coverage gaps"><header class="panel-header"><div><span>COVERAGE GAPS <small>(${gaps.length} LOADED)</small></span><span>NEWEST SOURCE FIRST</span></div></header>`;
     if (!gaps.length && mode === "ready" && kind !== 1) html += '<p class="chronicle-empty">NO RECORDED GAPS IN THE LOADED PAGE</p>';
     html += '<ol class="chronicle-entries">';
     for (const row of gaps) html += `<li class="chronicle-entry chronicle-gap"><div class="chronicle-content"><div class="chronicle-identity"><span>CHANGED ${escape(time(row.last_at))}</span><span>${identity(row)}</span></div><p class="chronicle-gap-reason chronicle-warning">COVERAGE GAP · ${row.input_count} LOST INPUTS · ${escape(row.reason === "ttl" ? "TTL EXPIRED" : row.reason)}</p><details class="chronicle-details"><summary>DETAILS</summary><p class="chronicle-meta">NOTE #${row.note_id}<br>CHANGES ${escape(time(row.first_at))} – ${escape(time(row.last_at))}<br>SOURCE RANGE ${row.first_source} – ${row.last_source}</p></details></div></li>`;
@@ -122,7 +122,7 @@ window.NRCChronicle = (() => {
       status = s;
       const fetchEntries = section !== "gaps" && (!append || more) && entries.length < MAX;
       const fetchGaps = section !== "entries" && (!append || moreGaps) && gaps.length < MAX;
-      const [h, g] = await Promise.all([fetchEntries ? request("history", { limit: Math.min(16, MAX - entries.length), cursor }) : null, fetchGaps ? request("gaps", { limit: Math.min(16, MAX - gaps.length), cursor: gapCursor }) : null]);
+      const [h, g] = await Promise.all([fetchEntries ? request("history", { limit: Math.min(16, MAX - entries.length), cursor, newest_first: true }) : null, fetchGaps ? request("gaps", { limit: Math.min(16, MAX - gaps.length), cursor: gapCursor, newest_first: true }) : null]);
       if (current !== revision) return;
       // Validate both pages before publishing either, including on append.
       const nextEntries = fetchEntries ? validatePage(h, false, cursor) : [];
