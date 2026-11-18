@@ -15,7 +15,17 @@ import (
 
 var errRejected = errors.New("NRC rejected the request")
 
-type nrcSource struct{ server, workspace, nickname, secret string }
+type nrcSource struct {
+	server, workspace, nickname, secret string
+	requests                            chan struct{}
+}
+
+func newNRCSource(server, workspace, nickname, secret string) nrcSource {
+	// Checks, history, webhooks and discovery share admission, including copies
+	// of this source. Seven slots leave room in NRC's 10 MiB writer budget for
+	// maximum-size command bodies and two overlapping maintenance reservations.
+	return nrcSource{server, workspace, nickname, secret, make(chan struct{}, 7)}
+}
 
 // One request per connection, sent once. Network errors after a write are not
 // rejection; the next cycle reads NRC's committed sequence instead of replaying
@@ -23,6 +33,12 @@ type nrcSource struct{ server, workspace, nickname, secret string }
 func (s nrcSource) request(ctx context.Context, wire []byte, expected uint16, correlation uint32) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case s.requests <- struct{}{}:
+	}
+	defer func() { <-s.requests }()
 	h := http.Header{"X-NRC-User-Type": {"bot"}, "X-NRC-Bot-Secret": {s.secret}, "X-NRC-Bot-Nickname": {s.nickname}}
 	u := strings.TrimRight(s.server, "/") + "/" + url.PathEscape(s.workspace)
 	c, response, err := websocket.DefaultDialer.DialContext(ctx, u, h)

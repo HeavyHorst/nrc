@@ -29,14 +29,21 @@ NRC_HISTORY_TEST_SERVER=/absolute/path/to/server NRC_HISTORY_LOAD_TEST=1 \
 
 It uses isolated temporary databases and authenticated WebSockets. The load flag
 enables two 90-second cases at 25 accepted runs/second, including concurrent
-delivery of a 17-instance hot monitor. Without the flag, backlog, lost-ACK and
-disabled-monitor controls still run. Without the server path, this test skips.
+delivery of a 17-instance hot monitor, plus a 65-second normal-operation case
+with 93 monitors, all three worker loops and discovery. Without the flag,
+backlog, lost-ACK and disabled-monitor controls still run. Without the server
+path, this test skips.
 
 Provide `NRC_BOT_SECRET` through the process environment, not a command-line flag.
 The evaluator name must match each Monitor's preview. By default, the sidecar
 discovers assigned monitors at startup and 30 seconds after each discovery pass,
 including disabled monitors for webhook draining and availability history.
 Checks, outgoing webhooks and history-read authorization share the discovered set.
+Checks, history, outgoing webhooks and discovery also share a limit of seven
+in-flight NRC requests per process, independent of `-workers`. Waiting for a slot
+counts against the request timeout and can be canceled. External checks and
+DuckDB commits do not hold slots. This keeps the worker loops from exhausting
+NRC's DB admission budget; server rejections remain errors, not silent retries.
 The scheduler checks the set once per second; draining canceled work may delay
 reconciliation. Unchanged monitor loops keep running.
 Removed monitors are canceled and drained before replacement loops start.

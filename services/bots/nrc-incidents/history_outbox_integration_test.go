@@ -66,6 +66,110 @@ func TestHistorySnapshotOutboxIntegration(t *testing.T) {
 			}
 		}
 	}
+	t.Run("normal_three_loops_93_monitors", func(t *testing.T) {
+		if os.Getenv("NRC_HISTORY_LOAD_TEST") != "1" {
+			t.Skip("set NRC_HISTORY_LOAD_TEST=1 for concurrent normal-operation traffic")
+		}
+		source, user := startOutboxServer(t, binary)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		ids := make([]uint64, 93)
+		for i := range ids {
+			ids[i] = create(t, user).AssetID
+		}
+		set := newMonitorSet(ids)
+		h := newHistoryWriter()
+		var wg sync.WaitGroup
+		defer func() { cancel(); wg.Wait() }()
+		wg.Go(func() { h.serve(ctx, filepath.Join(t.TempDir(), "history.duckdb")) })
+		outboxEventually(t, ctx, func() bool { return h.db.Load() != nil }, "normal-operation writer startup")
+		wg.Go(func() { collectStoredAvailability(ctx, h, set, source, "proof", 8) })
+		wg.Go(func() { dispatchWebhooks(ctx, set, 8, source, "proof") })
+		wg.Go(func() { refreshMonitors(ctx, set, source.discover, 30*time.Second) })
+		checkCtx, stopChecks := context.WithCancel(ctx)
+		defer stopChecks()
+		checksDone := make(chan struct{})
+		wg.Go(func() { defer close(checksDone); schedule(checkCtx, set, 8, source, h, "proof", "checker") })
+		// Two actual scheduled waves at the fixture's 60s interval, concurrent
+		// with empty polling, snapshot delivery, webhook polling and discovery.
+		select {
+		case <-time.After(65 * time.Second):
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		stopChecks()
+		<-checksDone
+		total := 0
+		for _, id := range ids {
+			_, live, err := source.monitor(ctx, id)
+			if err != nil || live.Sequence < 2 {
+				t.Errorf("checks stalled for %d: sequence=%d err=%v", id, live.Sequence, err)
+				if err != nil {
+					continue
+				}
+			}
+			outboxEventually(t, ctx, func() bool {
+				_, found, err := source.pendingSnapshot(ctx, id)
+				if err != nil {
+					t.Fatalf("pending snapshot %d: %v", id, err)
+				}
+				return !found
+			}, fmt.Sprintf("normal-operation drain for %d", id))
+			var count, first, last int
+			if err := h.db.Load().QueryRowContext(ctx, "SELECT count(*),coalesce(min(sequence),0),coalesce(max(sequence),0) FROM uptime_snapshots WHERE monitor_id=?", id).Scan(&count, &first, &last); err != nil {
+				t.Fatal(err)
+			}
+			if count != int(live.Sequence) || count > 0 && (first != 1 || last != count) {
+				t.Fatalf("snapshot sequence gap for %d: live=%d count=%d first=%d last=%d", id, live.Sequence, count, first, last)
+			}
+			total += count
+		}
+		var states, invalid, joined int
+		if err := h.db.Load().QueryRowContext(ctx, `SELECT
+ (SELECT count(*) FROM uptime_states),
+ count(*),count(*) FILTER (WHERE NOT ((u.state=2 AND u.valid_until=s.observed_at)
+ OR (u.state IN (0,1) AND u.valid_until=s.observed_at+190000000000)))
+ FROM uptime_snapshots s JOIN uptime_states u USING(workspace,monitor_id,observed_at,snapshot_id)`).Scan(&states, &joined, &invalid); err != nil {
+			t.Fatal(err)
+		}
+		if states != total || joined != total || invalid != 0 || h.availabilityReadFailures.Load() != 0 || h.availabilityWriteFailures.Load() != 0 || h.dropped.Load() != 0 {
+			t.Errorf("normal-operation history: snapshots=%d states=%d joined=%d invalid=%d read_failures=%d write_failures=%d raw_drops=%d", total, states, joined, invalid, h.availabilityReadFailures.Load(), h.availabilityWriteFailures.Load(), h.dropped.Load())
+		}
+		// Inspect the actual owner worker's admission counters, not just the
+		// sidecar's generic warnings. This includes all three request loops.
+		wire, err := (&p.Message{Opcode: p.C_Stats, Data: p.EncodeDatabaseStats(time.Now().UnixNano())}).Write()
+		if err != nil {
+			t.Fatal(err)
+		}
+		user.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		if err := user.WriteMessage(websocket.BinaryMessage, wire); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			user.SetReadDeadline(time.Now().Add(10 * time.Second))
+			_, wire, err := user.ReadMessage()
+			if err != nil {
+				t.Fatal(err)
+			}
+			message, err := p.ReadMessage(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if message.Opcode != p.S_StatsResponse {
+				continue
+			}
+			stats, err := p.DecodeStatsResponse(message.Data)
+			if err != nil || stats.Database == nil {
+				t.Fatalf("database metrics unavailable: %v", err)
+			}
+			c := stats.Database.Counters
+			t.Logf("normal traffic: snapshots=%d states=%d admitted_write=%d admitted_read=%d rejected_connection=%d rejected_worker=%d rejected_unavailable=%d", total, states, c[8], c[9], c[10], c[11], c[12])
+			if c[10] != 0 || c[11] != 0 || c[12] != 0 {
+				t.Fatal("normal monitoring traffic exceeded DB admission")
+			}
+			break
+		}
+	})
 	for _, tc := range []struct {
 		name                 string
 		monitors, runs, rows int
@@ -726,5 +830,5 @@ func startOutboxServer(t *testing.T, binary string) (nrcSource, *websocket.Conn)
 			break
 		}
 	}
-	return nrcSource{server, "proof", "checker", "test-only-bot-secret"}, user
+	return newNRCSource(server, "proof", "checker", "test-only-bot-secret"), user
 }

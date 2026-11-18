@@ -153,7 +153,7 @@ func TestCycleDoesNotConfirmFreshMeasurementOnReplay(t *testing.T) {
 		c.WriteMessage(websocket.BinaryMessage, reply)
 	}))
 	defer server.Close()
-	source := &delayedCommitSource{nrcSource{"ws" + strings.TrimPrefix(server.URL, "http"), "test", "checker", "test-secret"}, monitorAsset(target.URL), 40}
+	source := &delayedCommitSource{newNRCSource("ws"+strings.TrimPrefix(server.URL, "http"), "test", "checker", "test-secret"), monitorAsset(target.URL), 40}
 	history := newHistoryWriter()
 	db, err := openHistory(context.Background(), filepath.Join(t.TempDir(), "history.duckdb"))
 	if err != nil {

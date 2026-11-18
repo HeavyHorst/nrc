@@ -75,7 +75,7 @@ func TestMonitorDiscoveryProtocol(t *testing.T) {
 				_ = c.WriteMessage(websocket.BinaryMessage, response)
 			}))
 			defer server.Close()
-			s := nrcSource{server: "ws" + strings.TrimPrefix(server.URL, "http"), workspace: "w", nickname: "checker", secret: "test"}
+			s := newNRCSource("ws"+strings.TrimPrefix(server.URL, "http"), "w", "checker", "test")
 			ids, err := s.discover(context.Background())
 			if mode == "complete" {
 				if err != nil || !reflect.DeepEqual(ids, []uint64{1, 3}) {
@@ -269,7 +269,7 @@ func discoveryPeer(t *testing.T, page func(int, []byte) []byte) nrcSource {
 		_ = c.WriteMessage(websocket.BinaryMessage, response)
 	}))
 	t.Cleanup(server.Close)
-	return nrcSource{server: "ws" + strings.TrimPrefix(server.URL, "http"), workspace: "w", nickname: "checker", secret: "test"}
+	return newNRCSource("ws"+strings.TrimPrefix(server.URL, "http"), "w", "checker", "test")
 }
 
 func TestDiscoveryBudgets(t *testing.T) {

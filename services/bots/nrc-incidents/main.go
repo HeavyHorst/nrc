@@ -184,7 +184,7 @@ func run() error {
 	var writer sync.WaitGroup
 	writer.Add(3)
 	go func() { defer writer.Done(); history.serve(ctx, *historyPath) }()
-	source := nrcSource{*server, *workspace, *nickname, secret}
+	source := newNRCSource(*server, *workspace, *nickname, secret)
 	if *monitors == "" {
 		writer.Add(1)
 		go func() { defer writer.Done(); refreshMonitors(ctx, monitorIDs, source.discover, 30*time.Second) }()
