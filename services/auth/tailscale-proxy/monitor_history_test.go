@@ -17,7 +17,8 @@ func TestMonitorHistoryInspector(t *testing.T) {
 	const good = `{"version":1,"workspace":"alice-private","monitor_id":"2","kind":"inspector","identity":"host-a","sections":{}}`
 	body := good
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/history/2/inspector" || r.URL.Query().Get("identity") != "host-a" || r.Header.Get("Authorization") != "Bearer "+secret || r.Header.Get("Cookie") != "" {
+		q := r.URL.Query()
+		if r.URL.Path != "/v1/history/2/inspector" || q.Get("identity") != "host-a" || q.Get("view") != "checks" || q.Get("revision") != "9" || q.Get("sequence") != "18446744073709551615" || r.Header.Get("Authorization") != "Bearer "+secret || r.Header.Get("Cookie") != "" {
 			t.Error("inspector forwarding")
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -35,7 +36,7 @@ func TestMonitorHistoryInspector(t *testing.T) {
 		{strings.Replace(good, `"monitor_id":"2"`, `"monitor_id":"3"`, 1), "alice-private", 502},
 	} {
 		body = tc.body
-		r := httptest.NewRequest("GET", "http://nrc/monitoring/history/2/inspector?identity=host-a&resolution=raw&acceptance=all", nil)
+		r := httptest.NewRequest("GET", "http://nrc/monitoring/history/2/inspector?identity=host-a&resolution=raw&acceptance=all&view=checks&revision=9&sequence=18446744073709551615", nil)
 		r.Header.Set("X-NRC-Workspace", tc.workspace)
 		r.Header.Set("Cookie", "private")
 		w := httptest.NewRecorder()

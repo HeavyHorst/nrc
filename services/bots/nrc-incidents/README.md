@@ -275,8 +275,8 @@ samples have no index. No target URL, headers or full response bodies are stored
 HTTP diagnostics retain the scalar values selected by configured conditions;
 choose fields safe for every workspace reader to see. Even a selected scalar can
 contain sensitive data. Objects and arrays are never copied into diagnostics.
-The writer uses two DuckDB threads and a 256 MiB memory limit. Files created by
-the process use private permissions. Existing files must already be protected.
+The writer uses DuckDB's default thread count and a 256 MiB memory limit. Files
+created by the process use private permissions. Existing files must already be protected.
 
 ## Retention and aggregation
 
@@ -422,6 +422,15 @@ if exceeded), one reader slot and one three-second deadline. Metadata and all
 sections use the same database snapshot. Existing individual endpoints remain
 available for narrower CLI reads.
 
+The web Inspector uses two optional compact views. `view=checks` requires
+canonical decimal `revision` (positive int64) and `sequence` (uint64, including
+zero). It returns the latest 20 identity-matching samples in ascending time order,
+their run diagnostics, the current confirmed evaluation if present in the raw
+window, and the latest monitor-wide attempt as fallback. `view=chart` retains all
+identity-matching samples and returns an empty runs section. Both views sum uptime
+durations by revision before returning them; revisions are never combined.
+Without `view`, the endpoint retains its full, bounded history response.
+
 The uptime batch requires `ids=12,34,...`: one to 16 distinct, canonical positive
 uint64 IDs. It rejects `identity` and `acceptance`. Its envelope has
 `monitor_id: "batch"`, `monitor_ids` in request order, and `results` in the same
@@ -539,6 +548,11 @@ Authenticated workspace members can use `C_QueryMonitorStatus` (73), independent
 of the evaluator-only availability snapshot endpoint. Monitor ID zero lists
 monitors; a nonzero ID lists that monitor's instances. This reads NRC SQLite,
 not DuckDB. No configuration payloads, source URLs or secrets are returned.
+
+Instance pages include `config_revision`, the monitor asset's `updated_at` from
+the same SQLite transaction as the rows. A row's `revision` identifies its
+last evaluation and may be older. Monitor lists have no single configuration
+revision and return an empty string.
 
 The base request body is 31 bytes, big-endian: correlation ID u32, monitor ID
 u64, cursor ID u64, cursor rank u8, page time i64 (Unix nanoseconds), limit u8,

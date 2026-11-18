@@ -36,6 +36,7 @@ export function installMonitoringFixture() {
         { ...base, id: '31', monitor_id: String(monitor), identity: f.identity || '{"target":"default"}', failures: f.failures ?? 5, recoveries: f.recoveries ?? 0, value: f.value === undefined ? 0 : f.value, incident_id: '51' };
       if (monitor === 0n && cursor) { row.status = f.secondState || 'healthy'; row.counts = [0, 0, 0, 0, 0, 0, row.status === 'healthy' ? 2 : 0, row.status === 'paused' ? 2 : 0, 0]; }
       const page = { version: 1, monitor_id: String(monitor), at: String(now), cursor_id: row.id, cursor_rank: 0, has_more: !f.empty && monitor === 0n && !cursor, rows: f.empty ? [] : [row] };
+      if (monitor !== 0n && !f.legacyStatus) page.config_revision = f.pageRevision || f.assetRevision || rev;
       if (monitor === 0n && f.overviewIDs) {
         const start = cursor ? f.overviewIDs.indexOf(String(cursor)) + 1 : 0;
         page.rows = f.overviewIDs.slice(start, start + 16).map(id => ({ ...row, id, monitor_id: id, name: `Monitor ${id}`, status: id === f.firingID ? 'firing' : 'healthy', counts: Array.from({ length: 9 }, (_, i) => Number(i === (id === f.firingID ? 0 : 6))) }));
@@ -103,6 +104,10 @@ export function installMonitoringFixture() {
     }
     const base = { run_id: 'attempt-17', revision: f.old ? '1' : rev, sequence: f.sequence || '17', observed_at_ns: String(now), acceptance: f.unknown ? 'unknown' : 'confirmed' };
     if (kind !== 'inspector') throw new Error('Inspector must use the bundled endpoint');
+    const chart = definition.kind.startsWith('victoria');
+    if (url.search.length - 1 > 8192) return new Response('query too long', { status: 400 });
+    if (url.searchParams.get('view') !== (f.expectFullHistory ? null : chart ? 'chart' : 'checks')) throw new Error('Wrong Inspector view');
+    if (!f.expectFullHistory && !chart && (url.searchParams.get('revision') !== (f.assetRevision || rev) || url.searchParams.get('sequence') !== (f.statusSequence || '17'))) throw new Error('Wrong current evaluation');
     f.inspectorRequests.push(url.href);
     const rowsFor = kind => f.empty ? [] : kind === 'runs' ? f.runRows?.map(r => ({ ...base, ...r })) || [{ ...base, duration_ns: '125000000', diagnostics: { version: 1, conditions: [
       { index: 0, state: 'fail', actual_type: 'number', actual: '503', expected_number: '200' },

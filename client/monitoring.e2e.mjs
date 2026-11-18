@@ -806,6 +806,92 @@ try {
     { cursor: '0', search: 'monitor 3', state: 2 },
     { cursor: '316', search: 'monitor 3', state: 2 },
   ]);
+  // Both initial NRC reads start before either reply. Either reply order must
+  // render the same record, and an early status failure must remain local.
+  await page.reload();
+  await page.waitForFunction(() => window.NRCMonitoring && window.NRCTickets);
+  await page.evaluate(installMonitoringFixture);
+  await page.evaluate(() => {
+    const read = NRCAssets.sendGetAsset;
+    monitorFixture.pendingAssets = [];
+    NRCAssets.sendGetAsset = (...args) => { monitorFixture.pendingAssets.push(() => read(...args)); return 1; };
+    monitorFixture.deferInstances = true;
+    monitorFixture.sampleRows = [{ ago: 60, condition: 1, value: 0 }];
+  });
+  await page.click('#monitoringBtn');
+  await page.click('[data-monitor="12"]');
+  await page.waitForFunction(() => monitorFixture.pendingAssets.length === 1 && monitorFixture.pendingStatus.length === 1);
+  await page.evaluate(() => monitorFixture.pendingStatus.shift()());
+  assert.match(await page.locator('.monitor-record').textContent(), /Reading NRC/);
+  await page.evaluate(() => monitorFixture.pendingAssets.shift()());
+  await page.waitForSelector('.monitor-check');
+  assert.match(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION/);
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => monitorFixture.pendingAssets.length === 1 && monitorFixture.pendingStatus.length === 1);
+  await page.evaluate(() => monitorFixture.pendingAssets.shift()());
+  await page.waitForSelector('.monitor-record h2');
+  assert.equal(await page.locator('#monitorSelection').textContent(), '');
+  await page.evaluate(() => monitorFixture.pendingStatus.shift()());
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus').textContent === '' && document.querySelector('.monitor-check'));
+  assert.match(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION/);
+  assert.equal(await page.evaluate(() => monitorFixture.requests.filter(r => r.id === '12').length), 2, 'One instance read per opening or refresh');
+  await page.evaluate(() => {
+    const send = ws.send;
+    ws.send = buffer => {
+      const view = new DataView(buffer);
+      if (view.getUint16(0) !== 73) return send(buffer);
+      // One remaining admission slot: if the optional read takes it first,
+      // the required asset will not be available to render.
+      if (!monitorFixture.pendingAssets.length) return send(buffer);
+      queueMicrotask(() => {
+        NRCMonitoring.handleError({ correlationId: view.getUint32(2), errorMsg: 'Instance read rejected' });
+        monitorFixture.failureSent = true;
+      });
+    };
+  });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForFunction(() => monitorFixture.failureSent && monitorFixture.pendingAssets.length === 1);
+  await page.evaluate(() => monitorFixture.pendingAssets.shift()());
+  await page.waitForFunction(() => document.getElementById('monitorInstanceStatus')?.textContent.includes('Instance read rejected'));
+  assert.match(await page.locator('.monitor-record h2').textContent(), /Marketplace/);
+  assert.equal(await page.locator('#monitorSelection').textContent(), '');
+  // A page tagged with another config must never start a history read. Retry
+  // once; if configurations keep changing leave refresh available to the user.
+  await page.reload();
+  await page.waitForFunction(() => window.NRCMonitoring && window.NRCTickets);
+  await page.evaluate(installMonitoringFixture);
+  await page.evaluate(() => { monitorFixture.pageRevision = '1'; });
+  await page.click('#monitoringBtn');
+  await page.click('[data-monitor="12"]');
+  await page.waitForFunction(() => document.querySelector('.monitor-record')?.textContent.includes('configuration changed while loading'));
+  assert.equal(await page.evaluate(() => monitorFixture.requests.filter(r => r.id === '12').length), 2);
+  assert.equal(await page.evaluate(() => monitorFixture.inspectorRequests.length), 0);
+  await page.evaluate(() => {
+    delete monitorFixture.pageRevision;
+    monitorFixture.definition.kind = 'victoriametrics';
+    monitorFixture.definition.trigger = { op: '>', value: 1 };
+    monitorFixture.identity = JSON.stringify({ instance: '/'.repeat(2683) });
+    monitorFixture.expectFullHistory = true;
+    monitorFixture.sampleRows = [{ ago: 60, condition: 1, value: 2 }];
+  });
+  await page.click('#monitorDetailRefresh');
+  await page.waitForSelector('#monitorUptime [role="img"]');
+  const full = new URL(await page.evaluate(() => monitorFixture.inspectorRequests.at(-1)));
+  assert.equal(full.searchParams.get('identity'), JSON.stringify({ instance: '/'.repeat(2683) }));
+  assert.ok(full.search.length - 1 <= 8192 && full.search.length - 1 + '&view=chart'.length > 8192);
+  // Legacy status pages lack config_revision. Change the configuration after
+  // the page was taken, before the confirming asset read; retry with the filter intact.
+  await page.evaluate(() => Object.assign(monitorFixture, { legacyStatus: true, instancePages: true, deferInstances: true }));
+  await page.check('#monitorRetired');
+  await page.waitForFunction(() => monitorFixture.pendingStatus.length === 1);
+  await page.evaluate(() => {
+    monitorFixture.assetRevision = '222';
+    monitorFixture.config.name = 'Changed configuration';
+    monitorFixture.deferInstances = false;
+    monitorFixture.pendingStatus.shift()();
+  });
+  await page.waitForFunction(() => document.querySelector('.monitor-record h2')?.textContent.includes('Changed configuration') && document.querySelector('#monitorInstances')?.textContent.includes('included-first'));
+  assert.ok(await page.isChecked('#monitorRetired'));
   // Inspector uses one bundled read, and cached data is explicitly historical
   // while that read is held or fails. A new identity must never see the old data.
   await page.reload();

@@ -24,6 +24,7 @@ Monitor_Status_Row :: struct {
 }
 Monitor_Status_Page :: struct {
 	version:                   int,
+	config_revision:           string,
 	monitor_id, at, cursor_id: string,
 	cursor_rank:               u8,
 	has_more:                  bool,
@@ -32,14 +33,15 @@ Monitor_Status_Page :: struct {
 
 // Canonical assets validate these JSON fields on write. Parameters scope every
 // join to the request workspace. IDs remain fixed-width blobs through sorting.
-MONITOR_STATUS_CTE :: `WITH cfg AS (
+MONITOR_STATUS_CFG :: `WITH cfg AS (
  SELECT a.id,a.updated_at revision,json_extract(CAST(a.preview AS TEXT),'$.name') name,
  json_extract(CAST(a.preview AS TEXT),'$.enabled') enabled,
  3*json_extract(CAST(a.preview AS TEXT),'$.interval_ns')+json_extract(CAST(a.preview AS TEXT),'$.timeout_ns') stale,
  coalesce(r.sequence,zeroblob(8)) run_sequence,coalesce(r.evaluated_at,0) run_at,
  coalesce(r.revision,0) run_revision,substr(r.receipt,25,1)=x'01' run_failed
  FROM assets a LEFT JOIN monitor_runs r ON r.workspace=a.workspace AND r.monitor_id=a.id
- WHERE a.workspace=?1 AND a.asset_type=?8 AND (?2=zeroblob(8) OR a.id=?2)
+ WHERE a.workspace=?1 AND a.asset_type=?8`
+MONITOR_STATUS_INSTANCES :: `
 ), instances AS (
  SELECT i.*,c.enabled,c.revision,c.name,
  CASE WHEN i.retired THEN 8 WHEN i.paused OR NOT c.enabled THEN 7
@@ -50,7 +52,9 @@ MONITOR_STATUS_CTE :: `WITH cfg AS (
  WHEN (i.has_value AND ?3-i.seen_at>=c.stale) OR i.observation=3 THEN 3
  WHEN NOT i.has_value THEN 4 WHEN i.observation=1 THEN 1
  WHEN i.observation=2 THEN 5 ELSE 6 END rank
- FROM monitor_instances i JOIN cfg c ON c.id=i.monitor_id WHERE i.workspace=?1
+ FROM monitor_instances i JOIN cfg c ON c.id=i.monitor_id
+ WHERE i.workspace=?1`
+MONITOR_STATUS_SUMMARY :: `
 ), summary AS (
  SELECT c.*,
  CASE WHEN NOT c.enabled THEN 7
@@ -78,21 +82,32 @@ sqlite_query_monitor_status :: proc(store: ^db.Store, request: ^db.Request, outp
 	now := nrc_time_unix_nanos()
 	at := r.at == 0 ? now : r.at
 	if at <= 0 || at > now || now - at > 300_000_000_000 do return sql.CONSTRAINT
+	config_revision: string
 	if r.monitor_id != 0 {
-		a, found, rc := sqlite_read_asset(store, request.workspace, request.actor, r.monitor_id, false)
+		// Monitors are workspace-visible. Read the revision even for an empty
+		// instance page, without loading an asset preview, payload or attachments.
+		rev: ^sql.Statement
+		rc := sql.prepare_v2(store.db, "SELECT updated_at FROM assets WHERE workspace=?1 AND id=?2 AND asset_type=?3", -1, &rev, nil)
 		if rc != sql.OK do return rc
-		if !found || a.asset_type != .Monitor do return sql.CONSTRAINT
+		defer sql.finalize(rev)
+		if rc = sql.bind_bytes(rev, 1, transmute([]byte)request.workspace); rc != sql.OK do return rc
+		if rc = sql.bind_id(rev, 2, r.monitor_id); rc != sql.OK do return rc
+		if rc = sql.bind_int64(rev, 3, i64(pr.AssetType.Monitor)); rc != sql.OK do return rc
+		if rc = sql.step(rev); rc != sql.ROW do return rc == sql.DONE ? sql.CONSTRAINT : rc
+		config_revision = fmt.aprintf("%d", sql.column_int64(rev, 0))
 	}
 	query :=
-		MONITOR_STATUS_CTE +
+		MONITOR_STATUS_CFG + MONITOR_STATUS_INSTANCES + MONITOR_STATUS_SUMMARY +
 		`SELECT id,rank,name,revision,run_sequence,run_at,n0,n1,n2,n3,n4,n5,n6,n7,n8
  FROM summary WHERE (?4=zeroblob(8) OR rank>?5 OR (rank=?5 AND id>?4))
  AND (?9=0 OR (?9=1 AND rank<6) OR (?9=2 AND rank=6) OR (?9=3 AND rank=7))
  AND (length(?10)=0 OR instr(lower(name),lower(CAST(?10 AS TEXT)))>0 OR id=?11)
  ORDER BY rank,id LIMIT ?6`
 	if r.monitor_id != 0 {
+		// Without ANALYZE statistics SQLite otherwise prefers a workspace-wide
+		// primary-key scan over the selective (workspace,monitor_id,identity) index.
 		query =
-			MONITOR_STATUS_CTE +
+			MONITOR_STATUS_CFG + " AND a.id=?2" + MONITOR_STATUS_INSTANCES + " AND unlikely(i.monitor_id=?2)) " +
 			`SELECT i.id,i.rank,i.identity,i.revision,i.sequence,i.evaluated_at,i.seen_at,
  i.value_bits,i.has_value,i.paused,i.retired,i.incident_open,i.observation,i.freshness,i.failures,i.recoveries,i.missing,
  coalesce(e.incident_id,zeroblob(8)),coalesce(json_extract(CAST(a.preview AS TEXT),'$.acknowledged_by'),''),
@@ -125,6 +140,7 @@ sqlite_query_monitor_status :: proc(store: ^db.Store, request: ^db.Request, outp
 		if rc = sql.bind_id(statement, 11, search_id); rc != sql.OK do return rc
 	}
 	page := Monitor_Status_Page {
+		config_revision = config_revision,
 		version    = 1,
 		monitor_id = fmt.aprintf("%d", r.monitor_id),
 		at         = fmt.aprintf("%d", at),

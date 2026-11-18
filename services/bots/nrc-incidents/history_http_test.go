@@ -605,3 +605,143 @@ func TestHistoryHTTPWriterLifecycle(t *testing.T) {
 		t.Fatal("closed writer served history", w.Code)
 	}
 }
+
+func TestCompactInspector(t *testing.T) {
+	db, err := openHistory(context.Background(), filepath.Join(t.TempDir(), "compact.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := db.Exec(query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	n := base.UnixNano()
+	exec(`INSERT INTO runs SELECT 'run-'||lpad(i::VARCHAR,2,'0'),'ops',2,9,i,?+i*1000000000,7,false,'confirmed' FROM range(1,61) t(i)`, n)
+	exec(`INSERT INTO samples SELECT run_id,'host-a',0,sequence::DOUBLE FROM runs`)
+	// A newer unconfirmed attempt reuses the current sequence but has no sample.
+	exec(`INSERT INTO runs VALUES ('latest','ops',2,9,2,?,11,true,'unknown'),('private','other',2,9,2,?,1,false,'confirmed'),('different-monitor','ops',3,9,2,?,1,false,'confirmed')`, n+62_000_000_000, n+63_000_000_000, n+63_000_000_000)
+	exec(`INSERT INTO samples VALUES ('private','host-a',1,999),('different-monitor','host-a',1,999),('latest','other-host',1,999)`)
+	exec(`INSERT INTO check_diagnostics SELECT run_id,'{"version":1,"conditions":[],"error":"'||run_id||'"}' FROM runs`)
+	// Keep revisions, identities, resolutions and half-open boundaries distinct.
+	exec(`INSERT INTO uptime_buckets VALUES
+ (?,?,'ops',2,9,'host-a',10,20,30,40), (?,?,'ops',2,9,'host-a',11,22,33,44),
+ (?,?,'ops',2,8,'host-a',100,200,300,400), (?,?,'ops',2,9,'other-host',999,0,0,0),
+ (?,?,'other',2,9,'host-a',999,0,0,0), (?,?,'ops',3,9,'host-a',999,0,0,0),
+ (?,?,'ops',2,9,'host-a',999,0,0,0), (?,?,'ops',2,9,'host-a',999,0,0,0)`,
+		historyFiveMinutes, n, historyFiveMinutes, n+historyFiveMinutes, historyFiveMinutes, n,
+		historyFiveMinutes, n, historyFiveMinutes, n, historyFiveMinutes, n,
+		historyHour, n, historyFiveMinutes, n+historyHour)
+	exec(`INSERT INTO history_dirty_hours VALUES (?)`, n)
+	exec(`INSERT INTO uptime_dirty_hours VALUES (?),(?)`, n, n-historyHour)
+	h := newHistoryWriter()
+	h.db.Store(db)
+	a := newHistoryAPI(h, "ops", "secret", newMonitorSet([]uint64{2}))
+	q := url.Values{"from": {base.Format(time.RFC3339Nano)}, "to": {base.Add(time.Hour).Format(time.RFC3339Nano)}, "resolution": {"raw"}, "acceptance": {"all"}, "identity": {"host-a"}, "view": {"checks"}, "revision": {"9"}, "sequence": {"2"}}
+	read := func(q url.Values, want int) map[string]any {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/v1/history/2/inspector?"+q.Encode(), nil)
+		r.Header.Set("Authorization", "Bearer secret")
+		w := httptest.NewRecorder()
+		a.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%d: %s", w.Code, w.Body.String())
+		}
+		if want != 200 {
+			return nil
+		}
+		var result map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result["sections"].(map[string]any)
+	}
+	sections := read(q, 200)
+	rows := func(kind string) []any { return sections[kind].(map[string]any)["rows"].([]any) }
+	samples, runs, uptime := rows("samples"), rows("runs"), rows("uptime")
+	if len(samples) != 20 || samples[0].(map[string]any)["run_id"] != "run-41" || samples[19].(map[string]any)["run_id"] != "run-60" {
+		t.Fatal(samples)
+	}
+	if len(runs) != 22 || runs[0].(map[string]any)["run_id"] != "run-02" || runs[21].(map[string]any)["run_id"] != "latest" {
+		t.Fatal(runs)
+	}
+	for _, row := range runs {
+		r := row.(map[string]any)
+		if r["diagnostics"].(map[string]any)["error"] != r["run_id"] {
+			t.Fatal(r)
+		}
+	}
+	if len(uptime) != 2 || uptime[0].(map[string]any)["revision"] != "8" || uptime[1].(map[string]any)["revision"] != "9" {
+		t.Fatal(uptime)
+	}
+	for key, want := range map[string]string{"healthy_ns": "21", "failing_ns": "42", "unknown_ns": "63", "paused_ns": "84"} {
+		if uptime[1].(map[string]any)[key] != want {
+			t.Fatal(uptime)
+		}
+	}
+	for kind, want := range map[string]string{"runs": "1", "samples": "1", "uptime": "2"} {
+		if sections[kind].(map[string]any)["pending_rollup_hours_global"] != want {
+			t.Fatal(sections)
+		}
+	}
+	q.Set("view", "chart")
+	q.Del("revision")
+	q.Del("sequence")
+	sections = read(q, 200)
+	if len(rows("samples")) != 60 || len(rows("runs")) != 0 || len(rows("uptime")) != 2 {
+		t.Fatal(sections)
+	}
+	// Legacy callers retain their full raw rows and unaggregated uptime buckets.
+	q.Del("view")
+	sections = read(q, 200)
+	if len(rows("samples")) != 60 || len(rows("runs")) != 61 || len(rows("uptime")) != 3 {
+		t.Fatal(sections)
+	}
+	// Missing history remains empty, not a fabricated zero-valued summary.
+	q.Set("view", "checks")
+	q.Set("revision", "9")
+	q.Set("sequence", "0")
+	q.Set("identity", "absent")
+	sections = read(q, 200)
+	if len(rows("samples")) != 0 || len(rows("uptime")) != 0 || len(rows("runs")) != 1 {
+		t.Fatal(sections)
+	}
+	for _, change := range []struct{ key, value string }{{"view", ""}, {"view", "bad"}, {"revision", "0"}, {"revision", "09"}, {"revision", "9223372036854775808"}, {"sequence", "-1"}, {"sequence", "18446744073709551616"}} {
+		old := q.Get(change.key)
+		q.Set(change.key, change.value)
+		read(q, 400)
+		q.Set(change.key, old)
+	}
+	// Sparse identities must search past a candidate page. Equal timestamps
+	// exercise run-ID continuation, not just timestamp pagination.
+	exec(`INSERT INTO runs SELECT 'sparse-'||lpad(i::VARCHAR,3,'0'),'ops',2,10,i,?,7,false,'confirmed' FROM range(1,301) t(i)`, n+200_000_000_000)
+	exec(`INSERT INTO samples SELECT run_id,'sparse',0,sequence::DOUBLE FROM runs WHERE revision=10 AND sequence%10=0`)
+	q.Set("identity", "sparse")
+	q.Set("sequence", "2")
+	sections = read(q, 200)
+	samples = rows("samples")
+	if len(samples) != 20 {
+		t.Fatal(samples)
+	}
+	for i, row := range samples {
+		if row.(map[string]any)["value"] != float64(110+i*10) {
+			t.Fatal(samples)
+		}
+	}
+	// Reused statements must bind new parameters and see subsequent commits.
+	q.Set("identity", "host-a")
+	sections = read(q, 200)
+	if len(rows("samples")) != 20 || rows("samples")[0].(map[string]any)["run_id"] != "run-41" {
+		t.Fatal(sections)
+	}
+	exec(`INSERT INTO runs VALUES ('sparse-310','ops',2,10,310,?,7,false,'confirmed')`, n+200_000_000_000)
+	exec(`INSERT INTO samples VALUES ('sparse-310','sparse',0,310)`)
+	q.Set("identity", "sparse")
+	sections = read(q, 200)
+	if len(rows("samples")) != 20 || rows("samples")[0].(map[string]any)["value"] != float64(120) || rows("samples")[19].(map[string]any)["value"] != float64(310) {
+		t.Fatal(sections)
+	}
+}

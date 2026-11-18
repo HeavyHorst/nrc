@@ -72,14 +72,15 @@ type MonitorStatusRow struct {
 }
 
 type MonitorStatusPage struct {
-	CorrelationID uint32             `json:"-"`
-	Version       int                `json:"version"`
-	MonitorID     string             `json:"monitor_id"`
-	At            string             `json:"at"`
-	CursorID      string             `json:"cursor_id"`
-	CursorRank    uint8              `json:"cursor_rank"`
-	HasMore       bool               `json:"has_more"`
-	Rows          []MonitorStatusRow `json:"rows"`
+	CorrelationID  uint32             `json:"-"`
+	Version        int                `json:"version"`
+	MonitorID      string             `json:"monitor_id"`
+	ConfigRevision string             `json:"config_revision,omitempty"`
+	At             string             `json:"at"`
+	CursorID       string             `json:"cursor_id"`
+	CursorRank     uint8              `json:"cursor_rank"`
+	HasMore        bool               `json:"has_more"`
+	Rows           []MonitorStatusRow `json:"rows"`
 }
 
 func DecodeMonitorStatusPage(body []byte) (MonitorStatusPage, error) {

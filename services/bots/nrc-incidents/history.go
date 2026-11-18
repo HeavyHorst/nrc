@@ -70,7 +70,7 @@ func openHistory(ctx context.Context, path string) (*sql.DB, error) {
 	// One serialized writer plus at most two admitted HTTP readers.
 	db.SetMaxOpenConns(3)
 	for _, statement := range []string{
-		"SET threads=2", "SET memory_limit='256MB'", "SET enable_external_access=false",
+		"SET memory_limit='256MB'", "SET enable_external_access=false",
 		`CREATE TABLE IF NOT EXISTS runs (
  run_id VARCHAR PRIMARY KEY, workspace VARCHAR NOT NULL, monitor_id UBIGINT NOT NULL,
  revision BIGINT NOT NULL, sequence UBIGINT NOT NULL, observed_at BIGINT NOT NULL,
@@ -78,6 +78,7 @@ func openHistory(ctx context.Context, path string) (*sql.DB, error) {
  acceptance VARCHAR NOT NULL CHECK(acceptance IN ('confirmed','rejected','unknown')))`,
 		`CREATE TABLE IF NOT EXISTS samples (
  run_id VARCHAR NOT NULL, identity VARCHAR NOT NULL, condition UTINYINT NOT NULL, value DOUBLE NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS samples_run ON samples(run_id)`,
 		`CREATE TABLE IF NOT EXISTS check_diagnostics (run_id VARCHAR PRIMARY KEY, diagnostics VARCHAR NOT NULL)`,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {

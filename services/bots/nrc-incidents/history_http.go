@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,9 @@ type historyAPI struct {
 	workspace, secret string
 	monitors          *monitorSet
 	readers           chan struct{}
+	statementsMu      sync.Mutex
+	statementsDB      *sql.DB
+	statements        map[string]*sql.Stmt
 }
 
 func newHistoryAPI(h *historyWriter, workspace, secret string, ids *monitorSet) *historyAPI {
@@ -68,7 +72,7 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for key, values := range q {
-		if len(values) != 1 || (key != "from" && key != "to" && key != "resolution" && key != "identity" && key != "acceptance" && !(batch && key == "ids")) {
+		if len(values) != 1 || (key != "from" && key != "to" && key != "resolution" && key != "identity" && key != "acceptance" && !(batch && key == "ids") && !(inspector && (key == "view" || key == "revision" || key == "sequence"))) {
 			bad()
 			return
 		}
@@ -109,6 +113,24 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if inspector && (resolution != "raw" || to-from > historyHour || to < int64(24*time.Hour) || !hasIdentity || acceptance != "all") {
 		bad()
 		return
+	}
+	if inspector {
+		view := q.Get("view")
+		if view != "" && view != "checks" && view != "chart" || q.Has("view") && view == "" {
+			bad()
+			return
+		}
+		if view == "checks" {
+			revision, revisionErr := strconv.ParseInt(q.Get("revision"), 10, 64)
+			sequence, sequenceErr := strconv.ParseUint(q.Get("sequence"), 10, 64)
+			if revisionErr != nil || revision <= 0 || strconv.FormatInt(revision, 10) != q.Get("revision") || sequenceErr != nil || strconv.FormatUint(sequence, 10) != q.Get("sequence") {
+				bad()
+				return
+			}
+		} else if q.Has("revision") || q.Has("sequence") {
+			bad()
+			return
+		}
 	}
 	if kind == "uptime" {
 		if _, exists := q["acceptance"]; exists {
@@ -152,6 +174,14 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
+	var statements map[string]*sql.Stmt
+	if inspector {
+		statements, err = a.inspectorStatements(ctx, db)
+		if err != nil {
+			http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
@@ -159,7 +189,7 @@ func (a *historyAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if inspector {
-		a.serveInspector(w, ctx, tx, id, identity[0], from, to)
+		a.serveInspector(w, ctx, tx, statements, id, q, from, to)
 		return
 	}
 	var floor, pending, lastMaintenance int64
@@ -257,36 +287,32 @@ func readHistoryRows(ctx context.Context, tx *sql.Tx, workspace string, id uint6
 
 // Inspector reads share one admission slot, deadline and database snapshot.
 // A section that exceeds retention/row limits is explicit, never a partial list.
-func (a *historyAPI) serveInspector(w http.ResponseWriter, ctx context.Context, tx *sql.Tx, id uint64, identity string, from, to int64) {
-	var floor, maintenance int64
-	if err := tx.QueryRowContext(ctx, `SELECT (SELECT value FROM history_meta WHERE key='raw_floor'), (SELECT value FROM history_meta WHERE key='uptime_now')`).Scan(&floor, &maintenance); err != nil {
+func (a *historyAPI) serveInspector(w http.ResponseWriter, ctx context.Context, tx *sql.Tx, statements map[string]*sql.Stmt, id uint64, q url.Values, from, to int64) {
+	identity := q.Get("identity")
+	uptimeTo := to / historyFiveMinutes * historyFiveMinutes
+	uptimeFrom := uptimeTo - int64(24*time.Hour)
+	var floor, maintenance, historyPending, uptimePending int64
+	metadata := tx.StmtContext(ctx, statements[inspectorMetadataQuery])
+	defer metadata.Close()
+	if err := metadata.QueryRowContext(ctx,
+		to, historyHour, from, uptimeTo, historyHour, uptimeFrom).Scan(&floor, &maintenance, &historyPending, &uptimePending); err != nil {
 		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	sections := make(map[string]any)
-	for _, kind := range []string{"runs", "samples", "uptime"} {
-		start, end, step, filter := from, to, int64(0), identity
-		dirty := "history_dirty_hours"
-		if kind == "runs" {
-			filter = ""
-		}
+	var sampleIDs []string
+	for _, kind := range []string{"samples", "runs", "uptime"} {
+		start, end, step, pending := from, to, int64(0), historyPending
 		if kind == "uptime" {
 			step = historyFiveMinutes
-			end = to / step * step
-			start = end - int64(24*time.Hour)
-			dirty = "uptime_dirty_hours"
-		}
-		var pending int64
-		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM "+dirty+" WHERE hour_ns < ? AND hour_ns + ? > ?", end, historyHour, start).Scan(&pending); err != nil {
-			http.Error(w, "history unavailable", http.StatusServiceUnavailable)
-			return
+			start, end, pending = uptimeFrom, uptimeTo, uptimePending
 		}
 		data := []json.RawMessage{}
 		status := http.StatusOK
 		if step == 0 && start < floor {
 			status = http.StatusUnprocessableEntity
 		} else {
-			rows, tooLarge, err := readHistoryRows(ctx, tx, a.workspace, id, kind, filter, "all", start, end, step)
+			rows, tooLarge, err := a.readInspectorRows(ctx, tx, statements, id, kind, q, start, end, step, sampleIDs)
 			if err != nil {
 				http.Error(w, "history unavailable", http.StatusServiceUnavailable)
 				return
@@ -295,6 +321,18 @@ func (a *historyAPI) serveInspector(w http.ResponseWriter, ctx context.Context, 
 				status = http.StatusUnprocessableEntity
 			} else {
 				data = rows
+			}
+		}
+		if kind == "samples" && q.Get("view") == "checks" {
+			for _, row := range data {
+				var sample struct {
+					RunID string `json:"run_id"`
+				}
+				if err := json.Unmarshal(row, &sample); err != nil {
+					http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				sampleIDs = append(sampleIDs, sample.RunID)
 			}
 		}
 		sections[kind] = map[string]any{"status": status, "rows": data, "from": time.Unix(0, start).UTC().Format(time.RFC3339Nano), "to": time.Unix(0, end).UTC().Format(time.RFC3339Nano), "pending_rollup_hours_global": strconv.FormatInt(pending, 10)}

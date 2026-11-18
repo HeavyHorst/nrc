@@ -179,6 +179,7 @@ test_sqlite_monitor_status_reads :: proc(t: ^testing.T) {
 	for _ in 0 ..< 25 {
 		part, part_rc := query(&store, &output, 1, at, 16, cursor, rank)
 		if !testing.expect_value(t, part_rc, sql.OK) do return
+		testing.expect_value(t, part.config_revision, fmt.aprintf("%d", base + 3_000_000_003))
 		if !testing.expect(t, len(part.rows) > 0 && len(part.rows) < 16) do return
 		for row in part.rows {
 			testing.expect(t, !seen[row.id] && row.id != "2")

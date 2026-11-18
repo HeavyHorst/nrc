@@ -458,8 +458,15 @@ window.NRCMonitoring = (() => {
       };
     });
   }
-  async function history(id, identity, signal, range) {
+  async function history(id, row, revision, victoria, signal, range) {
+    const identity = row.identity;
     const query = new URLSearchParams({ from: new Date(range.from).toISOString(), to: new Date(range.to).toISOString(), resolution: 'raw', acceptance: 'all', identity });
+    query.set('view', victoria ? 'chart' : 'checks');
+    if (!victoria) { query.set('revision', String(revision)); query.set('sequence', row.sequence); }
+    // URLSearchParams serializes to ASCII; the gateway limits the encoded query to 8192 bytes.
+    if (query.toString().length > 8192) {
+      for (const key of ['view', 'revision', 'sequence']) query.delete(key);
+    }
     const response = await fetch(`/monitoring/history/${id}/inspector?${query}`, { signal, cache: 'no-store', headers: { 'X-NRC-Workspace': currentWorkspaceId } });
     if (!response.ok) throw new Error(response.status === 422 ? 'History range exceeds retained data or result limit. Use the CLI for a narrower range.' : `History unavailable (HTTP ${response.status}). Current NRC state is independent.`);
     const result = await response.json();
@@ -484,7 +491,7 @@ window.NRCMonitoring = (() => {
     }).join('');
     return `<p class="customer-meta">${current ? 'MATCHES CURRENT EVALUATION' : 'HISTORICAL / NOT CURRENT'}${run.acceptance !== 'confirmed' ? ' · NOT CONFIRMED' : ''}</p>${run.diagnostics.error ? `<p>${esc(run.diagnostics.error)}</p>` : ''}<div class="monitor-conditions">${table(['CONDITION', 'OBSERVED', 'RESULT'], rows)}</div>`;
   }
-  async function showInspector(ref, stillCurrent) {
+  async function showInspector(ref, stillCurrent, { retryConfigChange = true, retired = false } = {}) {
     const token = ++detailGeneration, scope = currentWorkspaceId;
     historyController = new AbortController();
     const signal = historyController.signal;
@@ -497,7 +504,13 @@ window.NRCMonitoring = (() => {
     const record = host.firstElementChild;
     try {
       if (!ready()) throw new Error('Offline. Reconnect to read this record.');
-      const asset = await assetRead(ref.id);
+      // Independent NRC reads share the first round trip. Capture failures now:
+      // the asset may still be pending when the instance read is rejected.
+      const assetRequest = assetRead(ref.id);
+      let initialInstances = ref.type === 'monitor'
+        ? statusQuery(String(ref.id), null, retired).then(page => ({ page }), error => ({ error }))
+        : null;
+      const asset = await assetRequest;
       if (!valid()) return;
       if (asset.assetType !== (ref.type === 'monitor' ? 15 : 16)) throw new Error('Record type changed.');
       const config = metadata(asset);
@@ -531,6 +544,7 @@ window.NRCMonitoring = (() => {
         ${section(victoria ? 'VALUE & THRESHOLDS' : definition.conditions?.length ? 'CONDITIONS · ALL MUST PASS' : 'EVALUATION RESULT', `<div id="monitorHistory"><p class="customer-empty">Select an instance.</p></div><h3 class="monitor-subheading">ALARM THRESHOLDS</h3><dl class="monitor-thresholds"><div><dt>TRIGGER</dt><dd>${config.failures} failures</dd></div><div><dt>RESOLVE</dt><dd>${config.recoveries} successes</dd></div><div><dt>MISSING</dt><dd>${config.missing} absent evaluations</dd></div></dl>`)}
         ${section('HISTORY & AVAILABILITY', '<p id="monitorHistoryStatus" class="customer-meta" role="status"></p><div id="monitorUptime" hidden></div><div id="monitorHistoryDetails"></div>')}
         <section class="monitor-footer">${facts([['MONITOR ID', String(ref.id)], ['REVISION', String(asset.updatedAt)]])}<p class="customer-meta">CLI MANAGED · WEBHOOK ROUTE IDS: ${esc(config.webhooks?.join(', ') || 'NONE')} · Delivery state is not shown here.</p></section>`;
+      el('monitorRetired').checked = retired;
       let instancePage, instances = [], instanceGeneration = 0, historyGeneration = 0, instancesLoading = false, selectedInstance = null;
       const loadInstances = async (more = false) => {
         if (more && (instancesLoading || !instancePage?.has_more)) return;
@@ -548,8 +562,27 @@ window.NRCMonitoring = (() => {
         }
         el('monitorInstanceStatus').textContent = 'Reading NRC…';
         try {
-          const next = await statusQuery(String(ref.id), more ? instancePage : null, el('monitorRetired').checked);
+          const initial = initialInstances;
+          initialInstances = null;
+          const result = initial ? await initial : null;
+          if (result?.error) throw result.error;
+          const readPage = () => statusQuery(String(ref.id), more ? instancePage : null, el('monitorRetired').checked);
+          let next = result ? result.page : await readPage();
           if (!valid() || local !== instanceGeneration) return;
+          let configRevision = next.config_revision;
+          if (configRevision === undefined) {
+            // Older servers omit the fence. Bracket the page read with asset reads.
+            if (result) next = await readPage();
+            if (!valid() || local !== instanceGeneration) return;
+            configRevision = String((await assetRead(ref.id)).updatedAt);
+            if (!valid() || local !== instanceGeneration) return;
+          }
+          if (configRevision !== String(asset.updatedAt)) {
+            if (retryConfigChange) return showInspector(ref, stillCurrent, { retryConfigChange: false, retired: el('monitorRetired').checked });
+            historyGeneration++;
+            record.textContent = 'Monitor configuration changed while loading. Refresh to read the current state.';
+            return;
+          }
           instancePage = next; instances = more ? [...instances, ...next.rows] : next.rows;
           const single = instances.length === 1 && !next.has_more;
           el('monitorInstances').hidden = single;
@@ -563,7 +596,7 @@ window.NRCMonitoring = (() => {
           if (single && selectedInstance !== instances[0].id) void selectInstance(0);
         } catch (error) { if (valid() && local === instanceGeneration) el('monitorInstanceStatus').textContent = `${error.message} · DISPLAYED ROWS MAY BE STALE`; }
         finally {
-          if (valid() && local === instanceGeneration) {
+          if (valid() && local === instanceGeneration && el('monitorInstanceMore')) {
             instancesLoading = false;
             el('monitorInstanceMore').disabled = false;
           }
@@ -624,7 +657,7 @@ window.NRCMonitoring = (() => {
         try {
           if (!valid() || local !== historyGeneration) return;
           const to = Date.now(), range = { from: to - hour, to };
-          const result = await history(ref.id, row.identity, signal, range);
+          const result = await history(ref.id, row, asset.updatedAt, victoria, signal, range);
           if (!valid() || local !== historyGeneration) return;
           renderHistory(result);
           el('monitorHistoryStatus').textContent = '';

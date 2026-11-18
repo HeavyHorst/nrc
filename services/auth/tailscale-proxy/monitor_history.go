@@ -59,7 +59,7 @@ func monitorHistoryGateway(backend, workspace, secret string) http.Handler {
 			return
 		}
 		for key, values := range query {
-			if len(values) != 1 || (key != "from" && key != "to" && key != "resolution" && key != "identity" && key != "acceptance" && !(batch && key == "ids")) {
+			if len(values) != 1 || (key != "from" && key != "to" && key != "resolution" && key != "identity" && key != "acceptance" && !(batch && key == "ids") && !(parts[1] == "inspector" && (key == "view" || key == "revision" || key == "sequence"))) {
 				http.Error(w, "invalid history query", http.StatusBadRequest)
 				return
 			}

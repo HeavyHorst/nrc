@@ -377,7 +377,7 @@ func TestHistoryMaintenanceRollbackAndBoundedBacklog(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Fail after aggregation, cleanup and watermark updates have started.
-	if _, err = db.Exec("ALTER TABLE samples RENAME TO saved_samples; CREATE VIEW samples AS SELECT * FROM saved_samples"); err != nil {
+	if _, err = db.Exec("DROP INDEX samples_run; ALTER TABLE samples RENAME TO saved_samples; CREATE VIEW samples AS SELECT * FROM saved_samples"); err != nil {
 		t.Fatal(err)
 	}
 	if err = maintainHistory(ctx, db, base.Add(15*24*time.Hour)); err == nil {
@@ -387,7 +387,7 @@ func TestHistoryMaintenanceRollbackAndBoundedBacklog(t *testing.T) {
 	if err = db.QueryRow(`SELECT (SELECT count(*) FROM runs),(SELECT count(*) FROM history_dirty_hours),(SELECT count(*) FROM sample_buckets),(SELECT value FROM history_meta WHERE key='raw_floor')`).Scan(&raw, &dirty, &buckets, &floor); err != nil || raw != 2 || dirty != 2 || buckets != 0 || floor != 0 {
 		t.Fatalf("rollback %d/%d/%d/%d: %v", raw, dirty, buckets, floor, err)
 	}
-	if _, err = db.Exec("DROP VIEW samples; ALTER TABLE saved_samples RENAME TO samples"); err != nil {
+	if _, err = db.Exec("DROP VIEW samples; ALTER TABLE saved_samples RENAME TO samples; CREATE INDEX samples_run ON samples(run_id)"); err != nil {
 		t.Fatal(err)
 	}
 	if err = maintainHistory(ctx, db, base.Add(15*24*time.Hour)); err != nil {
