@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	p "github.com/heavyhorst/nrc/protocol-go"
@@ -17,11 +18,13 @@ type storedAvailabilitySource struct {
 	sync.Mutex
 	pages     map[uint64]p.MonitorSnapshotPage
 	failReads int
+	polls     int
 }
 
 func (s *storedAvailabilitySource) pendingSnapshot(_ context.Context, id uint64) (p.MonitorSnapshotPage, bool, error) {
 	s.Lock()
 	defer s.Unlock()
+	s.polls++
 	if s.failReads > 0 {
 		s.failReads--
 		return p.MonitorSnapshotPage{}, false, errRejected
@@ -35,6 +38,49 @@ func (s *storedAvailabilitySource) acknowledgeSnapshot(_ context.Context, page p
 	defer s.Unlock()
 	delete(s.pages, page.MonitorID)
 	return nil
+}
+
+func TestAvailabilityIdlePollingAndImmediateDrain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		h := newHistoryWriter()
+		source := &storedAvailabilitySource{pages: map[uint64]p.MonitorSnapshotPage{}}
+		go collectStoredAvailability(ctx, h, newMonitorSet([]uint64{7}), source, "ops", 1)
+		synctest.Wait()
+		time.Sleep(9 * time.Second)
+		synctest.Wait()
+		source.Lock()
+		if source.polls != 1 {
+			t.Errorf("empty outbox polled %d times before the idle delay", source.polls)
+		}
+		source.pages[7] = p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: 7}, SnapshotID: 19}
+		source.Unlock()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		select {
+		case snapshot := <-h.snapshots:
+			if snapshot.SnapshotID != 19 {
+				t.Fatal("wrong snapshot", snapshot)
+			}
+			snapshot.committed <- nil
+		default:
+			t.Fatal("new evidence not collected after the bounded idle delay")
+		}
+		synctest.Wait()
+		source.Lock()
+		if source.polls != 3 || len(source.pages) != 0 {
+			t.Errorf("snapshot not acknowledged and next page probed immediately: polls=%d pending=%d", source.polls, len(source.pages))
+		}
+		source.Unlock()
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		source.Lock()
+		if source.polls != 4 {
+			t.Errorf("idle polling did not resume at ten seconds: %d", source.polls)
+		}
+		source.Unlock()
+	})
 }
 
 func TestAvailabilityCollectionBackpressure(t *testing.T) {

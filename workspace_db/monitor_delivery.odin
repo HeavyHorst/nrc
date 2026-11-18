@@ -105,7 +105,7 @@ act_on_monitor_delivery :: proc(
 	state: u8,
 	rc: c.int,
 ) {
-	if store.read_only || sql.get_autocommit(store.db) != 0 do return {}, 0, sql.MISUSE
+	if (store.read_only && action != 0) || sql.get_autocommit(store.db) != 0 do return {}, 0, sql.MISUSE
 	if action > 5 || at <= 0 || at > max(i64) - 3600_000_000_000 || len(actor) == 0 do return {}, 0, sql.CONSTRAINT
 	if action >= 2 {
 		s, status := prepare(
@@ -194,7 +194,12 @@ act_on_monitor_delivery :: proc(
 	defer sql.finalize(s)
 	if rc = bind_monitor_delivery(s, workspace, monitor_id, stream, route); rc != sql.OK do return
 	if rc = sql.bind_id(s, 5, row.id); rc != sql.OK do return
-	for value, i in ([4]i64{row.available_at, row.lease_until, row.generation, row.attempts}) {if rc = sql.bind_int64(s, c.int(6 + i), value); rc != sql.OK do return}
+	for value, i in ([4]i64 {
+			row.available_at,
+			row.lease_until,
+			row.generation,
+			row.attempts,
+		}) {if rc = sql.bind_int64(s, c.int(6 + i), value); rc != sql.OK do return}
 	if rc = sql.bind_bytes(s, 10, transmute([]byte)row.actor); rc != sql.OK do return
 	if rc = sql.bind_bytes(s, 11, transmute([]byte)row.subject); rc != sql.OK do return
 	if rc = sql.bind_int64(s, 12, i64(row.dead)); rc != sql.OK do return

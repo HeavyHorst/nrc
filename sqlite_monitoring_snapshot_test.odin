@@ -4,6 +4,7 @@ import "core:encoding/endian"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:sys/linux"
 import "core:testing"
 import "core:time"
 import pr "protocol"
@@ -225,6 +226,84 @@ test_sqlite_monitor_availability_snapshot :: proc(t: ^testing.T) {
 	endian.put_u64(history[12:], .Big, saved_id)
 	endian.put_u64(history[20:], .Big, next_cursor)
 	endian.put_u64(history[28:], .Big, u64(captured))
+	// Exercise the real executor's read-only handles and published lane counters.
+	// Initial history polls/ACKs and delivery mutations must retain the writer.
+	{
+		paths := [1]cstring{path}
+		executor, start_err := db.start_executor(
+			paths[:],
+			1,
+			8,
+			4 * 1024 * 1024,
+			1024 * 1024,
+			context.allocator,
+			command_handler = sqlite_execute_task_command,
+		)
+		if !testing.expect_value(t, start_err, .None) do return
+		defer {db.finish_submissions(&executor.ports[0]); db.join_executor(executor); db.destroy_executor(executor)}
+		port := &executor.ports[0]
+		for which in 0 ..< 9 {
+			query := r
+			query.operation = .Command
+			query.request_id = u64(which + 1)
+			query.timestamp = nrc_time_unix_nanos()
+			reader := which == 0 || which == 4 || which == 5 || which == 6
+			expected := sql.OK
+			history_body := history
+			delivery_wire: [128]byte
+			if which <= 3 {
+				if which == 1 {history_body = {}; endian.put_u64(history_body[4:], .Big, 1)}
+				if which == 2 {
+					endian.put_u64(history_body[12:], .Big, max(u64))
+					endian.put_u64(history_body[20:], .Big, 0)
+					history_body[36] = 1
+				}
+				query.body = history_body[:]
+				if which == 3 {query.body = history_body[:36]; expected = sql.CONSTRAINT}
+			} else {
+				actions := [5]u8{0, 6, 7, 1, 2}
+				action := actions[which - 4]
+				delivery_size := pr.serializeMonitorDeliveryRequest(
+					{
+						monitor_id = 1,
+						stream = 1,
+						action = action,
+						route = action == 6 ? "" : "missing",
+						id = action == 2 ? 1 : 0,
+						generation = action == 7 || action == 2 ? 1 : 0,
+					},
+					delivery_wire[:],
+				)
+				if !testing.expect(t, delivery_size > 2) do return
+				query.opcode = .C_MonitorDelivery
+				query.body = delivery_wire[2:delivery_size]
+				if action == 7 || action == 2 do expected = sql.CONSTRAINT
+			}
+			before := db.metrics_snapshot(port)
+			if !testing.expect(t, db.submit(port, query)) do return
+			job: ^db.Completion
+			for {
+				if result, ok := db.receive(port); ok {job = result; break}
+				db.rearm_completions(port)
+				fds := [1]linux.Poll_Fd{{fd = port.wake.fd, events = {.IN}}}
+				ready, err := linux.poll(fds[:], 5000)
+				if err == .EINTR do continue
+				assert(err == .NONE && ready == 1, "monitor completion timed out")
+			}
+			testing.expect_value(t, job.result.status, expected)
+			if which == 0 && job.result.status == sql.OK {
+				page := job.result.command.frames[0].payload
+				page_count, _ := endian.get_u16(page[54:], .Big)
+				page_at, _ := endian.get_i64(page[30:], .Big)
+				testing.expect(t, page_count == 2 && page_at == captured)
+			}
+			db.release_completion(port, job)
+			after := db.metrics_snapshot(port)
+			testing.expect_value(t, after.counters[.Completed_Read] - before.counters[.Completed_Read], reader ? u64(1) : 0)
+			testing.expect_value(t, after.counters[.Completed_Write] - before.counters[.Completed_Write], reader ? u64(0) : 1)
+			if reader do testing.expect_value(t, after.counters[.Group_Transactions], before.counters[.Group_Transactions])
+		}
+	}
 	when NRC_SIMULATION {
 		sim: Sim_Runtime
 		nrc_sim_runtime_init(&sim)

@@ -40,7 +40,10 @@ func collectStoredAvailability(ctx context.Context, h *historyWriter, ids *monit
 				return time.Second
 			}
 			if !found {
-				return time.Second
+				// Empty outboxes need no per-second writer transaction. New evidence
+				// remains durable until this bounded idle delay ends; known backlog
+				// still drains immediately within this loop.
+				return 10 * time.Second
 			}
 			done := make(chan error, 1)
 			snapshot := historySnapshot{workspace, page, done}

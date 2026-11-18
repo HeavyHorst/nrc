@@ -98,6 +98,11 @@ samples from other connections are suppressed until a new poll arrives.
 `nrc_db_metrics_available` is zero during that gap; counters and histograms are
 absent. A new process can restart its sequence and counters at lower values.
 
+The dashboard labels executor throughput as reader/writer **jobs/s**, not reads
+or writes to disk. Writer jobs include background maintenance, polling and jobs
+that change no data. Completed jobs include failures. The separate **SQLite page
+activity** panel counts pages; its page writes are not physical IOPS or fsyncs.
+
 | Series | Meaning |
 | --- | --- |
 | `nrc_db_in_flight`, `charged_bytes`, `capacity`, `byte_budget` | Credits held by admitted jobs, including completed results not yet released, and their limits. Each name has the `nrc_db_` prefix. |

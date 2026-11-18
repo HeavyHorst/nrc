@@ -506,8 +506,8 @@
     {
       "id": 7,
       "type": "stat",
-      "title": "Completed reads / s",
-      "description": "First completion publications. Streamed chunks are not additional jobs.",
+      "title": "Reader jobs completed / s",
+      "description": "Completed jobs on the reader lane, including non-OK results. Counts jobs, not SQL statements, rows or physical IOPS. Streamed chunks are not additional jobs.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -520,7 +520,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "suffix:jobs/s",
           "color": {
             "mode": "fixed",
             "fixedColor": "blue"
@@ -613,8 +613,8 @@
     {
       "id": 8,
       "type": "stat",
-      "title": "Completed writes / s",
-      "description": "First completion publications, including non-OK results. Not a count of SQL statements.",
+      "title": "Writer jobs completed / s",
+      "description": "Completed jobs on the writer lane, including background maintenance, polling, jobs with no data changes and non-OK results. Not changed rows, SQLite page writes, fsyncs or physical IOPS. See SQLite page activity for pager counters.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -627,7 +627,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "suffix:jobs/s",
           "color": {
             "mode": "fixed",
             "fixedColor": "blue"
@@ -937,8 +937,8 @@
     {
       "id": 11,
       "type": "timeseries",
-      "title": "Database throughput",
-      "description": "Admitted jobs and first completion publications. Gaps are not filled with zero.",
+      "title": "DB jobs by executor lane",
+      "description": "Jobs admitted to each lane and their first completion publications, including non-OK results. Writer jobs include background maintenance and polling even when no data changes. These are not SQL statements, changed rows, page writes, fsyncs or physical IOPS. See SQLite page activity for pager counters. Gaps are not filled with zero.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -951,7 +951,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "suffix:jobs/s",
           "color": {
             "mode": "palette-classic"
           },
@@ -1030,7 +1030,7 @@
           },
           "refId": "A",
           "expr": "sum(rate(nrc_db_admitted_read_total{job=\"$job\",instance=\"$instance\",thread_id=~\"$thread_id\"}[$__rate_interval]))",
-          "legendFormat": "Reads admitted",
+          "legendFormat": "Reader admitted",
           "range": true,
           "instant": false,
           "editorMode": "code"
@@ -1042,7 +1042,7 @@
           },
           "refId": "B",
           "expr": "sum(rate(nrc_db_completed_read_total{job=\"$job\",instance=\"$instance\",thread_id=~\"$thread_id\"}[$__rate_interval]))",
-          "legendFormat": "Reads completed",
+          "legendFormat": "Reader completed",
           "range": true,
           "instant": false,
           "editorMode": "code"
@@ -1054,7 +1054,7 @@
           },
           "refId": "C",
           "expr": "sum(rate(nrc_db_admitted_write_total{job=\"$job\",instance=\"$instance\",thread_id=~\"$thread_id\"}[$__rate_interval]))",
-          "legendFormat": "Writes admitted",
+          "legendFormat": "Writer admitted",
           "range": true,
           "instant": false,
           "editorMode": "code"
@@ -1066,7 +1066,7 @@
           },
           "refId": "D",
           "expr": "sum(rate(nrc_db_completed_write_total{job=\"$job\",instance=\"$instance\",thread_id=~\"$thread_id\"}[$__rate_interval]))",
-          "legendFormat": "Writes completed",
+          "legendFormat": "Writer completed",
           "range": true,
           "instant": false,
           "editorMode": "code"
@@ -2520,8 +2520,8 @@
     {
       "id": 26,
       "type": "timeseries",
-      "title": "Pager operations",
-      "description": "Page operations, not disk bytes or physical IOPS. Includes lazy connection initialization. Writes are cache writes, not fsyncs.",
+      "title": "SQLite page activity",
+      "description": "SQLite pager counters, separate from executor job counts. Page writes count pages written from SQLite's cache, not physical IOPS, disk bytes or fsyncs. Cache misses are not necessarily physical disk reads. Includes lazy connection initialization.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2534,7 +2534,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "suffix:pages/s",
           "color": {
             "mode": "palette-classic"
           },
@@ -2613,7 +2613,7 @@
           },
           "refId": "A",
           "expr": "sum(rate(nrc_db_cache_hits_total{job=\"$job\",instance=\"$instance\",thread_id=~\"$thread_id\"}[$__rate_interval]))",
-          "legendFormat": "hits",
+          "legendFormat": "Page cache hits",
           "range": true,
           "instant": false,
           "editorMode": "code"
@@ -2625,7 +2625,7 @@
           },
           "refId": "B",
           "expr": "sum(rate(nrc_db_cache_misses_total{job=\"$job\",instance=\"$instance\",thread_id=~\"$thread_id\"}[$__rate_interval]))",
-          "legendFormat": "misses",
+          "legendFormat": "Page cache misses",
           "range": true,
           "instant": false,
           "editorMode": "code"
@@ -2637,7 +2637,7 @@
           },
           "refId": "C",
           "expr": "sum(rate(nrc_db_cache_writes_total{job=\"$job\",instance=\"$instance\",thread_id=~\"$thread_id\"}[$__rate_interval]))",
-          "legendFormat": "writes",
+          "legendFormat": "Page writes",
           "range": true,
           "instant": false,
           "editorMode": "code"
@@ -4056,7 +4056,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**Unavailable telemetry ≠ zero load.** Histograms need observations; idle periods can have no percentile. Scrape health, worker coverage and SQLite availability are separate signals.\n\n**Not instrumented here:** SQLite WAL bytes, separate checkpoint backlog/duration, isolated fsync time, query-level timings, client retry exhaustion and retained-chat storage. Legacy entity-WAL and compaction panels were removed because their compatibility fields are always zero.\n\n**Memory:** process RSS is shown once; buffer utilization covers transient sends only. **Latency:** DB publication stops before full streamed delivery and WebSocket ACK. Cache counters count pages, not disk bytes."
+        "content": "**DB jobs ≠ disk writes.** Reader/writer rates count executor jobs. Background maintenance, polling, jobs with no data changes and failed jobs all count. SQLite page activity is separate; page writes are not physical IOPS or fsyncs.\n\n**Unavailable telemetry ≠ zero load.** Histograms need observations; idle periods can have no percentile. Scrape health, worker coverage and SQLite availability are separate signals.\n\n**Not instrumented here:** SQLite WAL bytes, separate checkpoint backlog/duration, isolated fsync time, query-level timings, client retry exhaustion and retained-chat storage. Legacy entity-WAL and compaction panels were removed because their compatibility fields are always zero.\n\n**Memory:** process RSS is shown once; buffer utilization covers transient sends only. **Latency:** DB publication stops before full streamed delivery and WebSocket ACK. Cache counters count pages, not disk bytes."
       }
     }
   ],

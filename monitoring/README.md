@@ -263,6 +263,17 @@ The sidecar sends evaluations over the NRC protocol; it never opens NRC SQLite.
 SQLite remains authoritative for rules, current instance state, Incident lifecycle
 and human actions. Its record history remains intact.
 
+Availability snapshot collection waits ten seconds after an empty outbox. Known
+backlog drains without that delay; read failures retry after one second, and
+disabled-monitor pause evidence keeps its thirty-second interval. The idle delay
+can add up to ten seconds before new evidence reaches DuckDB, plus queue and sink
+time; it does not delay evaluations or Incident transitions.
+
+Webhook peeks, route discovery and resync page reads use the SQLite reader lane,
+as do immutable history continuation pages. Initial history polls stay on the
+writer because they can capture disabled-monitor pause evidence. History ACKs,
+webhook claims and settlements also remain writer jobs.
+
 DuckDB observations must be correlated by workspace, monitor, revision, run
 sequence and canonical instance identity. Retries must not duplicate samples.
 Keep NRC acceptance separate: confirmed, rejected or unknown. A timeout or lost

@@ -300,7 +300,15 @@ submit :: proc(port: ^Worker_Port, request: Request, rejection: ^Admission_Rejec
 	remaining -= len(request.ticket_reads) * size_of(Ticket_Read_Cursor)
 	if (request.operation == .Get_Task || request.operation == .Command || request.operation == .Monitor_Maintenance) && !take_credit(&remaining, e.max_result_bytes) do return false
 	if request.operation == .Put_Task || request.operation == .Create_Task {
-		for bytes in ([7][]byte{request.task.title, request.task.description, request.task.assignee, request.task.created_by, request.task.external_ref, request.task.completed_by, request.task.project}) {
+		for bytes in ([7][]byte {
+				request.task.title,
+				request.task.description,
+				request.task.assignee,
+				request.task.created_by,
+				request.task.external_ref,
+				request.task.completed_by,
+				request.task.project,
+			}) {
 			if !take_credit(&remaining, len(bytes)) do return false
 		}
 		for attachment in request.task.attachments {
@@ -771,6 +779,14 @@ chronicle_request_allowed :: proc(request: Request) -> bool {
 read_eligible :: proc(request: Request) -> bool {
 	if request.operation != .Command do return request.operation == .Get_Task
 	#partial switch request.opcode {
+	case .C_MonitorDelivery:
+		r, err := pr.parseMonitorDeliveryRequest(request.body)
+		return err == nil && (r.action == 0 || r.action == 6 || r.action == 7)
+	case .C_MonitorHistory:
+		r, err := pr.parseMonitorHistoryRequest(request.body)
+		// Initial polls can capture disabled-monitor pause evidence; ACKs delete it.
+		// Only immutable continuation pages are unconditionally read-only.
+		return err == nil && !r.acknowledge && r.cursor != 0
 	case .C_GetTasks,
 	     .C_GetTasksByIDs,
 	     .C_GetAsset,
@@ -813,6 +829,7 @@ read_eligible :: proc(request: Request) -> bool {
 
 @(private)
 group_commit_eligible :: proc(request: Request) -> bool {
+	if read_eligible(request) do return false
 	if request.operation != .Command do return request.operation != .Get_Task
 	#partial switch request.opcode {
 	case .C_CreateTask,
