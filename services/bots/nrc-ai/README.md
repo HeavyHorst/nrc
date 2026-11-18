@@ -51,7 +51,7 @@ The API key file must be regular, private (0600), at most 8192 bytes and contain
 one nonempty ASCII key; a trailing newline is allowed. The worker loads it once
 at startup. There is no fallback to Sullivan's key, model or base URL. Terra mode
 uses only `gpt-6.1-terra` at `https://api.openai.com/v1/responses`, with the versioned
-`chronicle-p9` prompt, `chronicle-s1` output, reasoning `none`, strict JSON schema,
+`chronicle-p11` prompt, `chronicle-s1` output, reasoning `none`, strict JSON schema,
 `store=false`, truncation disabled and no tools. HTTP redirects are refused.
 `store=false` is an API setting, not a zero-retention or regional-processing
 guarantee. The existing OpenAI approval covers automatic note-change processing;
@@ -59,9 +59,17 @@ workspace selection and operational activation remain separate approvals. See th
 [Chronicle operations runbook](../../../docs/CHRONICLE_OPERATIONS.md) for the
 default-off Compose overlay, schema upgrade, rotation and read-only checks.
 
-The German summary targets one or two sentences, at most three for multiple
-relevant changes. It starts with the change and mentions unchanged content only
-when needed to avoid a misleading explanation. Relevant numbers, negations,
+The German summary uses controlled technical language inspired by ASD-STE100,
+without claiming compliance with that English-language standard: short main
+clauses, one change topic per sentence, consistent terminology, and active voice
+when the source names the actor. Necessary technical terms and exact names stay.
+Related details are grouped by their substantive change; refinements are explained
+by their effect instead of listing each edited passage. Statements and restrictions
+are not repeated just because several source passages mention them. One or two
+sentences normally suffice; more are allowed when needed to explain relevant changes.
+Independent changes get separate sentences instead of semicolon chains or long
+subordinate clauses. It starts with the change and mentions unchanged content
+only when needed to avoid a misleading explanation. Relevant numbers, negations,
 conditions and intermediate changes/reversals take priority over terseness.
 This is a prompt requirement, not a sentence-count validator or automatic
 truncation; the existing byte/token limits and empty no-change acknowledgements
