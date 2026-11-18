@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -45,6 +46,26 @@ func (c *NRCClient) handleDataRead(opcode uint16, payload []byte) {
 	var value any
 	var err error
 	switch opcode {
+	case sHistoryPage:
+		origin = cListHistory
+		if len(payload) < 6 || len(payload)+2 > protocol.MaxProtocolPayloadSize {
+			return
+		}
+		p := &historyReadPage{}
+		err = json.Unmarshal(payload[4:], p)
+		if err == nil {
+			id, value = binary.BigEndian.Uint32(payload), p
+			if p.Error != "" {
+				err = fmt.Errorf("history read failed: %s", p.Error)
+			}
+		}
+	case protocol.S_Chronicle:
+		origin = protocol.C_Chronicle
+		var p *protocol.ChronicleResponse
+		p, err = protocol.DecodeChronicleResponse(payload)
+		if err == nil {
+			id, value = p.CorrelationID, p
+		}
 	case protocol.S_TicketPage:
 		origin = protocol.C_QueryTickets
 		var p *protocol.TicketPage

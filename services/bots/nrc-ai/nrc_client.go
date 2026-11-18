@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -27,6 +31,9 @@ type NRCClient struct {
 	workspace        string
 	nickname         string
 	botSecret        string
+	jwtSecret        string
+	jwtIssuer        string
+	jwtAudience      string
 	filesURL         string
 	cancel           context.CancelFunc
 	ticketClassifier *ticketClassifier
@@ -182,6 +189,9 @@ func NewNRCClient(cfg Config, workspace string) *NRCClient {
 		workspace:           workspace,
 		nickname:            cfg.NRCNickname,
 		botSecret:           cfg.NRCBotSecret,
+		jwtSecret:           cfg.NRCJWTSecret,
+		jwtIssuer:           cfg.NRCJWTIssuer,
+		jwtAudience:         cfg.NRCJWTAudience,
 		filesURL:            cfg.FilesURL,
 		subscribedRooms:     make(map[uint64]bool),
 		taskCache:           make(map[uint64]map[uint64]*protocol.Task),
@@ -314,6 +324,26 @@ func (c *NRCClient) connect(ctx context.Context) error {
 			"X-NRC-Bot-Secret":   []string{c.botSecret},
 			"X-NRC-Bot-Nickname": []string{c.nickname},
 		}
+	}
+	if c.jwtSecret != "" {
+		// Regenerate on each connection. This ordinary bot identity grants read
+		// access, never Chronicle worker capability or human deletion authority.
+		now := time.Now()
+		claims, err := json.Marshal(map[string]any{
+			"sub": "service:nrc-ai", "username": c.nickname, "user_type": "bot",
+			"workspace": c.workspace, "iss": c.jwtIssuer, "aud": c.jwtAudience,
+			"nbf": now.Add(-30 * time.Second).Unix(), "exp": now.Add(5 * time.Minute).Unix(),
+		})
+		if err != nil {
+			return fmt.Errorf("encode bot identity: %w", err)
+		}
+		unsigned := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`)) + "." + base64.RawURLEncoding.EncodeToString(claims)
+		mac := hmac.New(sha256.New, []byte(c.jwtSecret))
+		mac.Write([]byte(unsigned))
+		if headers == nil {
+			headers = make(http.Header)
+		}
+		headers.Set("X-NRC-Auth", unsigned+"."+base64.RawURLEncoding.EncodeToString(mac.Sum(nil)))
 	}
 
 	conn, _, err := dialer.DialContext(ctx, url, headers)
@@ -450,7 +480,7 @@ func (c *NRCClient) readPump(ctx context.Context) {
 			c.handleTaskListResponse(msg.Data)
 		case protocol.S_TaskListPage:
 			c.handleTaskListPage(msg.Data)
-		case protocol.S_TicketPage, protocol.S_TransactionResult, protocol.S_TaskFull, protocol.S_CalendarPage, protocol.S_TaskSliceList, protocol.S_EdgeListPage:
+		case sHistoryPage, protocol.S_Chronicle, protocol.S_TicketPage, protocol.S_TransactionResult, protocol.S_TaskFull, protocol.S_CalendarPage, protocol.S_TaskSliceList, protocol.S_EdgeListPage:
 			c.handleDataRead(msg.Opcode, msg.Data)
 		case protocol.S_EdgeCreated:
 			c.handleEdgeCreated(msg.Data)
