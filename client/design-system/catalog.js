@@ -75,6 +75,18 @@
     setTheme(themes[(currentIndex + 1) % themes.length]);
   });
 
+  document.querySelectorAll(".monitor-history-cell").forEach((cell) => {
+    cell.addEventListener("click", (event) => {
+      const button = event.target.closest("button.monitor-history-bar");
+      if (!button) return;
+      const selected = button.getAttribute("aria-pressed") !== "true";
+      cell.querySelectorAll(".monitor-history-bar").forEach((bar) => bar.setAttribute("aria-pressed", String(selected && bar === button)));
+      const detail = cell.querySelector(".monitor-history-detail");
+      detail.hidden = !selected;
+      detail.replaceChildren(button.querySelector(".monitor-history-fill").cloneNode(true), document.createTextNode(`${button.getAttribute("aria-label")} · INSTANCE TIME · TIME SHARES, NOT EVENT ORDER`));
+    });
+  });
+
   document.querySelectorAll("[data-mobile-filters]").forEach((button) => {
     button.addEventListener("click", () => {
       const open = button.closest(".panel-header").classList.toggle("mobile-filters-open");

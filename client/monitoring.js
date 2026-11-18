@@ -53,13 +53,22 @@ window.NRCMonitoring = (() => {
     const bars = buckets.map((b, i) => {
       healthy += b.healthy; failing += b.failing; paused += b.paused;
       const known = b.healthy + b.failing;
-      const state = b.failing > 0n ? 'failing' : capacity > 0n && b.paused === capacity ? 'paused' : known > 0n && known + b.paused === capacity ? 'healthy' : 'unknown';
-      const label = `${new Date(range.from + i * width).toLocaleString()} – ${new Date(range.from + (i + 1) * width).toLocaleString()}: ${state.toUpperCase()} · uptime / satisfaction ${percent(b.healthy, known)} · coverage ${percent(known, capacity - b.paused)}`;
-      return `<span class="monitor-history-bar" data-state="${state}" role="img" aria-label="${esc(label)}" title="${esc(label)}"></span>`;
+      const unknown = capacity - known - b.paused;
+      const state = b.failing > 0n ? 'failing' : capacity > 0n && b.paused === capacity ? 'paused' : known > 0n && unknown === 0n ? 'healthy' : known + b.paused > 0n ? 'partial' : 'unknown';
+      const duration = ns => `${(Number(ns) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 2 })} s`;
+      const label = `${new Date(range.from + i * width).toLocaleString()} – ${new Date(range.from + (i + 1) * width).toLocaleString()}: ${state.toUpperCase()} · uptime / satisfaction ${percent(b.healthy, known)} · coverage ${percent(known, capacity - b.paused)} · INSTANCE TIME: healthy ${duration(b.healthy)} · failing ${duration(b.failing)} · unknown ${capacity > 0n ? duration(unknown) : 'UNKNOWN'} · paused ${duration(b.paused)}`;
+      // Fractions are durations, not an inferred event order. Keep subpixel gaps
+      // proportional; the separate marker makes them discoverable at any width.
+      const parts = ['healthy', 'failing', 'unknown', 'paused'].map(part => {
+        const value = part === 'unknown' ? unknown : b[part];
+        const share = capacity > 0n ? Number(value) / Number(capacity) * 100 : part === 'unknown' ? 100 : 0;
+        return `<span class="monitor-history-part monitor-history-${part}" style="width:${share}%"></span>`;
+      }).join('');
+      return `<button type="button" class="monitor-history-bar" data-state="${state}" data-gap="${unknown > 0n || capacity === 0n}" aria-pressed="false" aria-label="${esc(label)}" title="${esc(label)}"><span class="monitor-history-fill" aria-hidden="true">${parts}</span></button>`;
     }).join('');
     const pending = result.pending_rollup_hours_global !== '0';
     return {
-      trail: `<div class="monitor-history-bars" style="--monitor-bars:${count}" aria-label="${count} completed ${width === hour ? 'hours' : '24-hour periods'}, oldest first">${bars}</div><span class="customer-meta">${esc(new Date(range.from).toLocaleString())} – ${esc(new Date(range.to).toLocaleString())}${pending ? ' · ROLLUPS PENDING (GLOBAL)' : ''}</span>`,
+      trail: `<div class="monitor-history-bars" style="--monitor-bars:${count}" role="group" aria-label="${count} completed ${width === hour ? 'hours' : '24-hour periods'}, oldest first; select a period for instance-time durations">${bars}</div><span class="customer-meta">${esc(new Date(range.from).toLocaleString())} – ${esc(new Date(range.to).toLocaleString())}${pending ? ' · ROLLUPS PENDING (GLOBAL)' : ''}</span><p class="monitor-history-detail customer-meta" hidden></p>`,
       metrics: `<strong>${percent(healthy, healthy + failing)}</strong><span class="customer-meta">COVERAGE ${percent(healthy + failing, BigInt(count) * capacity - paused)}</span><span class="customer-meta">${identities.size ? `${identities.size} observed identities` : 'NO HISTORY'} · current revision</span>`,
     };
   }
@@ -682,6 +691,16 @@ window.NRCMonitoring = (() => {
       if (ready() && tab === 'status') void loadRegisterHistory(token, currentWorkspaceId, rows, registerController);
     };
     el('monitorList').onclick = event => {
+      const period = event.target.closest('button.monitor-history-bar');
+      if (period) {
+        const cell = period.closest('.monitor-history-cell');
+        const selected = period.getAttribute('aria-pressed') !== 'true';
+        for (const bar of cell.querySelectorAll('.monitor-history-bar')) bar.setAttribute('aria-pressed', String(selected && bar === period));
+        const detail = cell.querySelector('.monitor-history-detail');
+        detail.hidden = !selected;
+        detail.replaceChildren(period.querySelector('.monitor-history-fill').cloneNode(true), document.createTextNode(`${period.getAttribute('aria-label')} · TIME SHARES, NOT EVENT ORDER`));
+        return;
+      }
       if (event.target.closest('button, input, select, textarea, a') && !event.target.closest('.task-row-open')) return;
       const button = event.target.closest('tbody tr')?.querySelector('[data-monitor], [data-incident]');
       if (button) open(button.dataset.monitor ? 'monitor' : 'incident', button.dataset.monitor || button.dataset.incident);
