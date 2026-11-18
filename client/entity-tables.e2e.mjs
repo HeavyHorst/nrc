@@ -177,6 +177,13 @@ try {
         const selector = { tasks: "#taskListBody tr[data-task-id]", notes: "#notesList .note-card", reminders: "#reminderQueueBody .reminder-row" }[view];
         await page.locator(selector).first().waitFor({ state: "visible" });
         assert.equal(await page.locator(selector).count(), 3);
+        if (view === 'reminders' && width === 1600) {
+          const reset = await page.locator('#reminderColumnsReset').boundingBox();
+          const create = await page.locator('#createReminderBtn').boundingBox();
+          const gap = create.x - reset.x - reset.width;
+          assert.ok(gap >= 0 && gap < 24, 'reminder table actions stay grouped on the right');
+          assert.ok(Math.abs(reset.y - create.y) < 1, 'reminder table actions share one baseline');
+        }
         if (theme === 'lupine' && width === 1600) {
           const host = page.locator({ tasks: '#taskListView', notes: '#notesPanel .notes-container', reminders: '#reminderQueueBody' }[view]);
           const key = { tasks: 'nrc.task.columns.v2', notes: 'nrc.note.columns.v4', reminders: 'nrc.reminder.columns.v1' }[view];

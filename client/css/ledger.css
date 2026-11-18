@@ -1110,8 +1110,12 @@ body.sullivan-workbench .sullivan-submit-controls:has(#sullivanStop:not([hidden]
     flex: 0 0 auto;
 }
 
-.reminder-header-controls > .header-filter-toggle {
-    margin-right: auto;
+.reminder-header-controls > .header-operation:not(.header-create-action) {
+    margin-left: auto;
+}
+
+.reminder-header-controls > .header-operation.header-create-action {
+    margin-left: 0.25rem;
 }
 
 .reminder-header-controls .header-register-control {
