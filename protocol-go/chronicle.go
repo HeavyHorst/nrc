@@ -23,6 +23,7 @@ type ChronicleRequest struct {
 	Consumer      string   `json:"consumer,omitempty"`
 	NoteID        string   `json:"note_id,omitempty"`
 	Cursor        string   `json:"cursor,omitempty"`
+	NewestFirst   bool     `json:"newest_first,omitempty"`
 	Epoch         string   `json:"epoch,omitempty"`
 	Generation    string   `json:"generation,omitempty"`
 	Limit         uint16   `json:"limit,omitempty"`

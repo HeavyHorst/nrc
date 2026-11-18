@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -83,6 +84,49 @@ func TestHistoryChronicleCLIEndToEnd(t *testing.T) {
 					if note == "6" {
 						body = `{"status":"ok"}`
 					} // Old server: fail closed.
+				} else if (q.Op == "history" || q.Op == "gaps") && note == "8" {
+					// Read the wire field independently of the Go request type.
+					var wire struct {
+						NewestFirst bool `json:"newest_first"`
+					}
+					if err := json.Unmarshal(message.Data[:len(message.Data)-4], &wire); err != nil {
+						t.Error(err)
+						return
+					}
+					ids := []uint64{7, 12, 9007199254740993}
+					if wire.NewestFirst {
+						ids = []uint64{9007199254740993, 12, 7}
+					}
+					cursor, err := strconv.ParseUint(q.Cursor, 10, 64)
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					page := protocol.ChronicleResponse{Status: "ok"}
+					count := 0
+					for _, id := range ids {
+						if (wire.NewestFirst && cursor != 0 && id >= cursor) || (!wire.NewestFirst && id <= cursor) {
+							continue
+						}
+						if count == int(q.Limit) {
+							page.More = true
+							break
+						}
+						value := strconv.FormatUint(id, 10)
+						if q.Op == "history" {
+							page.Entries = append(page.Entries, protocol.ChronicleEntry{Generation: value, NoteID: note})
+						} else {
+							page.Gaps = append(page.Gaps, protocol.ChronicleGap{FirstSource: value, NoteID: note})
+						}
+						page.Cursor = value
+						count++
+					}
+					encoded, err := json.Marshal(page)
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					body = string(encoded)
 				} else if q.Op == "history" {
 					if q.Limit < 1 || q.Limit > 16 {
 						t.Error("unbounded history request")
@@ -190,6 +234,48 @@ func TestHistoryChronicleCLIEndToEnd(t *testing.T) {
 	assertContains(run(true, "chronicle", "gaps", "--note", huge, "--limit", "1", "--fields", "first_source,reason"), `"first_source":"`+huge+`"`, `"reason":"expired"`, `"more":true`)
 	assertContains(run(true, "chronicle", "gaps", "--note", huge, "--limit", "1", "--cursor", huge, "--fields", "reason"), `"gaps":[]`, `"more":false`)
 	assertContains(run(true, "chronicle", "gaps", "--note", huge, "--limit", "1", "--human"), "expired", "inputs=12", "source_available=false")
+	for _, op := range []string{"history", "gaps"} {
+		for _, tc := range []struct {
+			flags  []string
+			ids    string
+			cursor string
+			more   bool
+		}{
+			{nil, huge + ",12", "12", true},
+			{[]string{"--before", "0"}, huge + ",12", "12", true},
+			{[]string{"--before", huge}, "12,7", "7", false},
+			{[]string{"--before", "12"}, "7", "7", false},
+			{[]string{"--before", "7"}, "", "7", false},
+			{[]string{"--cursor", "0"}, "7,12", "12", true},
+			{[]string{"--cursor", "12"}, huge, huge, false},
+			{[]string{"--cursor", huge}, "", huge, false},
+		} {
+			args := append([]string{"chronicle", op, "--note", "8", "--limit", "2"}, tc.flags...)
+			data := run(true, args...)
+			var page protocol.ChronicleResponse
+			if err := json.Unmarshal([]byte(data), &page); err != nil {
+				t.Fatal(err)
+			}
+			var ids []string
+			for _, entry := range page.Entries {
+				ids = append(ids, entry.Generation)
+			}
+			for _, gap := range page.Gaps {
+				ids = append(ids, gap.FirstSource)
+			}
+			if strings.Join(ids, ",") != tc.ids || page.Cursor != tc.cursor || page.More != tc.more {
+				t.Fatalf("%v: got %s; want IDs %s, cursor %s, more %t", args, data, tc.ids, tc.cursor, tc.more)
+			}
+		}
+		for _, flags := range [][]string{
+			{"--before", "0", "--cursor", "0"},
+			{"--before", "18446744073709551616"},
+			{"--before", "-1"},
+			{"--before", "01"},
+		} {
+			assertContains(run(false, append([]string{"chronicle", op}, flags...)...), `"code":"invalid_argument"`)
+		}
+	}
 	assertContains(run(true, "chronicle", "status", "--note", huge, "--fields", "can_delete,pending,processing,failed,acknowledged,gap_count,expired,raw_bytes"), `"can_delete":true`, `"processing":2`, `"gap_count":5`, `"expired":6`, `"raw_bytes":18446744073709551615`)
 	assertContains(run(true, "chronicle", "status", "--note", huge, "--human"), "Workspace totals", "can_delete=true", "processing=2")
 	assertContains(run(true, "chronicle", "status", "--note", "5"), `"status":"ok"`)

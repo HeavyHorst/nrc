@@ -98,7 +98,14 @@ func validateChroniclePage(q protocol.ChronicleRequest, r *protocol.ChronicleRes
 			id, note = r.Entries[i].Generation, r.Entries[i].NoteID
 		}
 		n, err := historyDecimal(id, true)
-		if err != nil || n <= previous {
+		if err != nil {
+			return fmt.Errorf("Chronicle page has invalid ID")
+		}
+		if q.NewestFirst {
+			if (i > 0 || previous != 0) && n >= previous {
+				return fmt.Errorf("Chronicle page is not descending exclusive IDs")
+			}
+		} else if n <= previous {
 			return fmt.Errorf("Chronicle page is not ascending exclusive IDs")
 		}
 		if _, err := historyDecimal(note, true); err != nil || (q.NoteID != "" && note != q.NoteID) {
@@ -145,7 +152,7 @@ var chronicleCmd = &cobra.Command{Use: "chronicle", Short: "Read AI note summari
 func newChronicleRead(op string) *cobra.Command {
 	c := &cobra.Command{
 		Use: op, Args: cobra.NoArgs,
-		Short: map[string]string{"history": "Read result-only AI summaries, oldest generation first", "gaps": "Read input gaps, oldest first_source first", "status": "Read processing counts, workspace budgets and server deletion permission"}[op],
+		Short: map[string]string{"history": "Read result-only AI summaries, newest generation first", "gaps": "Read input gaps, newest first_source first", "status": "Read processing counts, workspace budgets and server deletion permission"}[op],
 		Run: func(cmd *cobra.Command, args []string) {
 			note, _ := cmd.Flags().GetString("note")
 			if note != "" {
@@ -156,7 +163,16 @@ func newChronicleRead(op string) *cobra.Command {
 			}
 			q := protocol.ChronicleRequest{Op: op, NoteID: note}
 			if op != "status" {
-				cursor, _ := cmd.Flags().GetString("cursor")
+				if cmd.Flags().Changed("before") && cmd.Flags().Changed("cursor") {
+					conn.FatalInvalid("--before and --cursor are mutually exclusive")
+					return
+				}
+				q.NewestFirst = !cmd.Flags().Changed("cursor")
+				cursorFlag := "cursor"
+				if q.NewestFirst {
+					cursorFlag = "before"
+				}
+				cursor, _ := cmd.Flags().GetString(cursorFlag)
 				limit, _ := cmd.Flags().GetInt("limit")
 				if _, err := historyDecimal(cursor, false); err != nil {
 					conn.Fail(err)
@@ -215,8 +231,9 @@ func newChronicleRead(op string) *cobra.Command {
 	}
 	c.Flags().String("note", "", "Optional note ID; status counts are note-scoped but raw bytes/day budgets remain workspace totals")
 	if op != "status" {
-		c.Flags().String("cursor", "0", "Exclusive ascending cursor (generation for history; first_source for gaps)")
-		c.Flags().Int("limit", 16, "Maximum entries in one page (1..16); use returned cursor/more for the next page")
+		c.Flags().String("before", "0", "Exclusive descending ID cursor (generation for history; first_source for gaps); 0 starts at newest")
+		c.Flags().String("cursor", "0", "Select ascending order with an exclusive ID cursor; 0 starts at oldest; cannot combine with --before")
+		c.Flags().Int("limit", 16, "Maximum entries in one page (1..16); pass returned cursor to --before (descending) or --cursor (ascending) when more=true")
 	}
 	return c
 }
