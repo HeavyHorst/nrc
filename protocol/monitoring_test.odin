@@ -4,6 +4,45 @@ import "core:encoding/endian"
 import "core:testing"
 
 @(test)
+test_monitor_history_wire_contract :: proc(t: ^testing.T) {
+	// Same independent continuation fixture as protocol-go/monitoring_test.go.
+	fixture := transmute([]byte)string(
+		"\x00\x4b\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x07\x00\x00\x00\x00\x00\x00\x00\x0b\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x64\x00",
+	)
+	r, err := parseMonitorHistoryRequest(fixture[2:])
+	testing.expect(t, get_opcode(fixture) == .C_MonitorHistory && err == nil && r == MonitorHistoryRequest{1, 7, 11, 16, 100, false})
+	for cut in 0 ..< 37 {
+		_, err = parseMonitorHistoryRequest(fixture[2:2 + cut])
+		testing.expect(t, err != nil)
+	}
+	for invalid in 0 ..< 5 {
+		bad: [37]byte
+		copy(bad[:], fixture[2:])
+		switch invalid {
+		case 0:
+			endian.put_u64(bad[4:], .Big, 0)
+		case 1:
+			endian.put_u64(bad[28:], .Big, 0)
+		case 2:
+			bad[36] = 2
+		case 3:
+			bad[36] = 1 // An acknowledgment cannot contain a page cursor.
+		case 4:
+			endian.put_u64(bad[20:], .Big, 0) // Initial reads cannot invent a snapshot.
+		}
+		_, err = parseMonitorHistoryRequest(bad[:])
+		testing.expect(t, err != nil)
+	}
+	initial: [37]byte
+	endian.put_u64(initial[4:], .Big, 7)
+	_, err = parseMonitorHistoryRequest(initial[:]); testing.expect(t, err == nil)
+	endian.put_u64(initial[28:], .Big, 100); initial[36] = 1
+	_, err = parseMonitorHistoryRequest(initial[:]); testing.expect(t, err != nil)
+	endian.put_u64(initial[12:], .Big, 1)
+	_, err = parseMonitorHistoryRequest(initial[:]); testing.expect(t, err == nil) // Run sequence may be zero; capture ID cannot.
+}
+
+@(test)
 test_monitor_status_wire_contract :: proc(t: ^testing.T) {
 	// Same independent bytes as protocol-go/monitor_status_test.go.
 	fixture := transmute([]byte)string(

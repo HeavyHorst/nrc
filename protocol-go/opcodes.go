@@ -56,6 +56,7 @@ const (
 	C_GetMonitorState        uint16 = 72
 	C_QueryMonitorStatus     uint16 = 73
 	C_Chronicle              uint16 = 74
+	C_MonitorHistory         uint16 = 75
 
 	// Assets (Client -> Server)
 	C_CreateAsset              uint16 = 30

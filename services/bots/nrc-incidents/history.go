@@ -22,16 +22,14 @@ type historyRun struct {
 	Diagnostics               *checkDiagnostics
 }
 
-// This queue is only a bounded, disposable in-process handoff to the analytical
-// writer. NRC acceptance and sequence allocation never depend on it or DuckDB.
+// Raw runs use a disposable handoff. Availability snapshots remain in NRC's
+// durable outbox until this writer reports a successful DuckDB commit.
 type historyWriter struct {
-	queue        chan historyRun
-	availability chan p.MonitorState
-	snapshots    chan historySnapshot
-	dropped      atomic.Uint64
-	db           atomic.Pointer[sql.DB]
+	queue     chan historyRun
+	snapshots chan historySnapshot
+	dropped   atomic.Uint64
+	db        atomic.Pointer[sql.DB]
 
-	availabilityRequestDrops  atomic.Uint64
 	availabilityReadFailures  atomic.Uint64
 	availabilityWriteFailures atomic.Uint64
 	availabilityWaits         atomic.Uint64
@@ -39,18 +37,18 @@ type historyWriter struct {
 }
 
 func newHistoryWriter() *historyWriter {
-	return &historyWriter{queue: make(chan historyRun, 256), availability: make(chan p.MonitorState, 256), snapshots: make(chan historySnapshot, 8)}
+	return &historyWriter{queue: make(chan historyRun, 256), snapshots: make(chan historySnapshot, 8)}
 }
 
 // Process-local diagnostics, not a completeness watermark or per-monitor counts.
 func (h *historyWriter) availabilityDiagnostics() map[string]string {
 	return map[string]string{
-		"request_drops_total":           strconv.FormatUint(h.availabilityRequestDrops.Load(), 10),
+		"request_drops_total":           "0", // Legacy keys: no disposable request queue remains.
 		"snapshot_read_failures_total":  strconv.FormatUint(h.availabilityReadFailures.Load(), 10),
 		"snapshot_write_failures_total": strconv.FormatUint(h.availabilityWriteFailures.Load(), 10),
 		"backpressure_total":            strconv.FormatUint(h.availabilityWaits.Load(), 10),
 		"backpressure_ns_total":         strconv.FormatUint(h.availabilityWaitNS.Load(), 10),
-		"requests_pending":              strconv.Itoa(len(h.availability)),
+		"requests_pending":              "0",
 		"snapshots_pending":             strconv.Itoa(len(h.snapshots)),
 	}
 }
@@ -94,54 +92,107 @@ func openHistory(ctx context.Context, path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func writeHistory(ctx context.Context, db *sql.DB, r historyRun) error {
-	if r.ID == "" || r.Workspace == "" {
-		return errors.New("invalid history identity")
-	}
-	if _, err := p.EncodeApplyMonitorRun(r.Run); err != nil {
-		return err
+func writeHistory(ctx context.Context, db *sql.DB, runs ...historyRun) error {
+	for _, r := range runs {
+		if r.ID == "" || r.Workspace == "" {
+			return errors.New("invalid history identity")
+		}
+		if _, err := p.EncodeApplyMonitorRun(r.Run); err != nil {
+			return err
+		}
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var exists bool
-	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM runs WHERE run_id=?)", r.ID).Scan(&exists); err != nil {
-		return err
-	}
-	if exists {
-		return tx.Commit()
-	}
 	var floor int64
 	if err = tx.QueryRowContext(ctx, "SELECT value FROM history_meta WHERE key='raw_floor'").Scan(&floor); err != nil {
 		return err
 	}
-	if r.ObservedAt < floor {
-		return errors.New("history observation predates retained raw window")
-	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?)", r.ID, r.Workspace, r.Run.MonitorID, r.Run.Revision, r.Run.Sequence, r.ObservedAt, r.Duration, r.Run.Failed, r.Acceptance)
-	if err != nil {
-		return err
-	}
-	for _, row := range r.Run.Observations {
-		if _, err = tx.ExecContext(ctx, "INSERT INTO samples VALUES(?,?,?,?)", r.ID, row.Identity, row.Condition, row.Value); err != nil {
+	hours := make(map[int64]struct{})
+	for _, r := range runs {
+		var exists bool
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM runs WHERE run_id=?)", r.ID).Scan(&exists); err != nil {
 			return err
 		}
-	}
-	if r.Diagnostics != nil {
-		body, err := json.Marshal(r.Diagnostics)
-		if err != nil {
+		if exists {
+			continue
+		}
+		if r.ObservedAt < floor {
+			return errors.New("history observation predates retained raw window")
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?)", r.ID, r.Workspace, r.Run.MonitorID, r.Run.Revision, r.Run.Sequence, r.ObservedAt, r.Duration, r.Run.Failed, r.Acceptance); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO check_diagnostics VALUES (?,?)", r.ID, string(body)); err != nil {
+		for _, row := range r.Run.Observations {
+			if _, err = tx.ExecContext(ctx, "INSERT INTO samples VALUES(?,?,?,?)", r.ID, row.Identity, row.Condition, row.Value); err != nil {
+				return err
+			}
+		}
+		if r.Diagnostics != nil {
+			body, err := json.Marshal(r.Diagnostics)
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO check_diagnostics VALUES (?,?)", r.ID, string(body)); err != nil {
+				return err
+			}
+		}
+		hours[r.ObservedAt/historyHour*historyHour] = struct{}{}
+	}
+	for hour := range hours {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO history_dirty_hours VALUES (?) ON CONFLICT DO NOTHING", hour); err != nil {
 			return err
 		}
-	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO history_dirty_hours VALUES (?) ON CONFLICT DO NOTHING", r.ObservedAt/historyHour*historyHour); err != nil {
-		return err
 	}
 	return tx.Commit()
+}
+
+// Drain only work that is already queued: no batching delay, larger admission
+// buffers, or unbounded batch allocations. Isolate failed records after rollback
+// so one rejected write cannot discard its otherwise valid batch neighbours.
+func (h *historyWriter) writeBatch(ctx context.Context, db *sql.DB, runs []historyRun, snapshots []historySnapshot) error {
+	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	var err error
+	if len(runs) > 0 {
+		err = writeHistory(writeCtx, db, runs...)
+	} else {
+		err = writeAvailability(writeCtx, db, snapshots...)
+	}
+	cancel()
+	if err == nil {
+		for _, snapshot := range snapshots {
+			if snapshot.committed != nil {
+				snapshot.committed <- nil
+			}
+		}
+		return nil
+	}
+	if len(runs)+len(snapshots) > 1 {
+		var failures error
+		for i := range runs {
+			failures = errors.Join(failures, h.writeBatch(ctx, db, runs[i:i+1], nil))
+		}
+		for i := range snapshots {
+			failures = errors.Join(failures, h.writeBatch(ctx, db, nil, snapshots[i:i+1]))
+		}
+		return failures
+	}
+	if len(runs) > 0 {
+		h.dropped.Add(1)
+		slog.Warn("history gap: DuckDB write failed", "monitor_id", runs[0].Run.MonitorID)
+	} else {
+		h.availabilityWriteFailures.Add(1)
+		if snapshots[0].committed != nil {
+			snapshots[0].committed <- err
+			slog.Warn("availability write failed; durable snapshot retained", "monitor_id", snapshots[0].MonitorID)
+		} else {
+			h.dropped.Add(1)
+			slog.Warn("history gap: availability write failed", "monitor_id", snapshots[0].MonitorID)
+		}
+	}
+	return err
 }
 
 func (h *historyWriter) serve(ctx context.Context, path string) {
@@ -155,45 +206,69 @@ func (h *historyWriter) serve(ctx context.Context, path string) {
 		}
 	}()
 	for {
-		var run *historyRun
-		var snapshot *historySnapshot
+		var runs [32]historyRun
+		var snapshots [8]historySnapshot
+		var runCount, snapshotCount int
 		select {
 		case <-ctx.Done():
 			return
 		case r := <-h.queue:
-			run = &r
+			runs[0], runCount = r, 1
+		drainRuns:
+			for runCount < len(runs) {
+				select {
+				case runs[runCount] = <-h.queue:
+					runCount++
+				default:
+					break drainRuns
+				}
+			}
 		case s := <-h.snapshots:
-			snapshot = &s
+			snapshots[0], snapshotCount = s, 1
+		drainSnapshots:
+			for snapshotCount < len(snapshots) {
+				select {
+				case snapshots[snapshotCount] = <-h.snapshots:
+					snapshotCount++
+				default:
+					break drainSnapshots
+				}
+			}
 		case <-maintenance.C:
 			maintenance.Reset(time.Minute)
 		}
-		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		var err error
 		if db == nil {
-			db, err = openHistory(writeCtx, path)
+			// First open may atomically adopt a large existing availability
+			// table. Keep it cancelable, without the per-batch five-second cap.
+			db, err = openHistory(ctx, path)
 			if err == nil {
 				h.db.Store(db)
 			}
 		}
+		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		if err == nil {
-			if run != nil {
-				err = writeHistory(writeCtx, db, *run)
-			} else if snapshot != nil {
-				err = writeAvailability(writeCtx, db, *snapshot)
+			if runCount+snapshotCount > 0 {
+				err = h.writeBatch(ctx, db, runs[:runCount], snapshots[:snapshotCount])
 			} else {
 				err = maintainHistory(writeCtx, db, time.Now())
 			}
+		} else {
+			// Opening the database failed before any batch was attempted.
+			h.dropped.Add(uint64(runCount))
+			h.availabilityWriteFailures.Add(uint64(snapshotCount))
+			for _, snapshot := range snapshots[:snapshotCount] {
+				if snapshot.committed != nil {
+					snapshot.committed <- err
+				} else {
+					h.dropped.Add(1)
+				}
+			}
+			slog.Warn("history gap: DuckDB open failed", "runs", runCount, "snapshots", snapshotCount)
 		}
 		cancel()
 		if err != nil {
-			if run != nil {
-				h.dropped.Add(1)
-				slog.Warn("history gap: DuckDB write failed", "monitor_id", run.Run.MonitorID)
-			} else if snapshot != nil {
-				h.dropped.Add(1)
-				h.availabilityWriteFailures.Add(1)
-				slog.Warn("history gap: availability write failed", "monitor_id", snapshot.MonitorID)
-			} else {
+			if runCount+snapshotCount == 0 {
 				slog.Warn("DuckDB history maintenance failed; retained data will be retried")
 			}
 			if db != nil {

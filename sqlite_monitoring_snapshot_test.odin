@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:testing"
+import "core:time"
 import pr "protocol"
 import sql "sqlite"
 import db "workspace_db"
@@ -19,7 +20,7 @@ test_sqlite_monitor_availability_snapshot :: proc(t: ^testing.T) {
 	store, rc := db.open(path, true)
 	if !testing.expect_value(t, rc, sql.OK) do return
 	defer db.close(&store)
-	base := nrc_time_unix_nanos() - 200_000_000_000
+	base := nrc_time_unix_nanos() - i64(200 * time.Second)
 	preview := `{"version":1,"name":"Disk","evaluator":"checker","enabled":true,"interval_ns":60000000000,"timeout_ns":10000000000,"failures":2,"recoveries":2,"missing":3,"webhooks":[]}`
 	payload := `{"kind":"tcp"}`
 	wire: [16384]byte
@@ -198,5 +199,219 @@ test_sqlite_monitor_availability_snapshot :: proc(t: ^testing.T) {
 			position += 9
 		}
 		testing.expect(t, found)
+	}
+	// The oldest accepted snapshot survives later runs, controls, process
+	// restart and clock changes. Its second page contains the original rows.
+	testing.expect_value(t, db.close(&store), sql.OK)
+	store, rc = db.open(path)
+	if !testing.expect_value(t, rc, sql.OK) do return
+	history: [37]byte
+	endian.put_u32(history[:], .Big, 9)
+	endian.put_u64(history[4:], .Big, 1)
+	r = {
+		opcode    = .C_MonitorHistory,
+		workspace = "w",
+		actor     = "checker",
+		body      = history[:],
+	}
+	db.destroy_command_output(&output); output.limit = 1024 * 1024
+	if !testing.expect_value(t, sqlite_execute_task_command(&store, &r, &output), sql.OK) do return
+	first := output.frames[0].payload
+	captured, _ := endian.get_i64(first[30:], .Big)
+	next_cursor, _ := endian.get_u64(first[46:], .Big)
+	saved_sequence, _ := endian.get_u64(first[22:], .Big)
+	saved_id, _ := endian.get_u64(first[len(first) - 9:], .Big)
+	testing.expect(t, captured == base && next_cursor == 16 && saved_sequence == 1)
+	endian.put_u64(history[12:], .Big, saved_id)
+	endian.put_u64(history[20:], .Big, next_cursor)
+	endian.put_u64(history[28:], .Big, u64(captured))
+	when NRC_SIMULATION {
+		sim: Sim_Runtime
+		nrc_sim_runtime_init(&sim)
+		defer nrc_sim_runtime_destroy(&sim)
+		for reversal in ([3]i64{1, 255_477, 304_914}) {
+			sim.world.now = time.Duration(captured - NRC_SIM_TIME_EPOCH_NANOS - reversal)
+			db.destroy_command_output(&output); output.limit = 1024 * 1024
+			testing.expect_value(t, sqlite_execute_task_command(&store, &r, &output), sql.OK)
+		}
+		sim.world.now = time.Duration(captured - NRC_SIM_TIME_EPOCH_NANOS + 600_000_000_000)
+		db.destroy_command_output(&output); output.limit = 1024 * 1024
+		testing.expect_value(t, sqlite_execute_task_command(&store, &r, &output), sql.OK)
+	}
+	db.destroy_command_output(&output); output.limit = 1024 * 1024
+	if !testing.expect_value(t, sqlite_execute_task_command(&store, &r, &output), sql.OK) do return
+	last := output.frames[0].payload
+	last_at, _ := endian.get_i64(last[30:], .Big)
+	last_count, _ := endian.get_u16(last[54:], .Big)
+	testing.expect(t, last_at == captured && last_count == 2)
+	pos := 56
+	for expected_id in ([2]u64{17, 18}) {
+		instance_id, _ := endian.get_u64(last[pos:], .Big)
+		size, _ := endian.get_u16(last[pos + 8:], .Big)
+		pos += 10 + int(size)
+		until, _ := endian.get_i64(last[pos + 1:], .Big)
+		testing.expect(t, instance_id == expected_id && last[pos] == 0 && until == base + 190_000_000_000)
+		pos += 9
+	}
+	for invalid in 0 ..< 4 {
+		query := r
+		switch invalid {
+		case 0:
+			query.actor = "intruder"
+		case 1:
+			query.workspace = "other"
+		case 2:
+			endian.put_u64(history[28:], .Big, u64(captured + 1))
+		case 3:
+			endian.put_u64(history[28:], .Big, u64(captured)); endian.put_u64(history[12:], .Big, 999)
+		}
+		db.destroy_command_output(&output); output.limit = 1024 * 1024
+		testing.expect_value(t, sqlite_execute_task_command(&store, &query, &output), sql.CONSTRAINT)
+		testing.expect_value(t, output.count, 0)
+	}
+	endian.put_u64(history[12:], .Big, saved_id)
+	endian.put_u64(history[20:], .Big, 0)
+	history[36] = 1
+	// A lost ACK response may be retried without deleting the following run.
+	for _ in 0 ..< 2 {
+		db.destroy_command_output(&output); output.limit = 1024 * 1024
+		testing.expect_value(t, db.begin(&store), sql.OK)
+		if !testing.expect_value(t, sqlite_execute_task_command(&store, &r, &output), sql.OK) {db.rollback(&store); return}
+		testing.expect_value(t, db.commit(&store), sql.OK)
+	}
+	endian.put_u64(history[12:], .Big, 0)
+	endian.put_u64(history[28:], .Big, 0)
+	history[36] = 0
+	db.destroy_command_output(&output); output.limit = 1024 * 1024
+	if !testing.expect_value(t, sqlite_execute_task_command(&store, &r, &output), sql.OK) do return
+	remaining, _ := endian.get_u64(output.frames[0].payload[22:], .Big)
+	testing.expect_value(t, remaining, 2)
+	// Reject a capture on its second page, after earlier page/state writes.
+	// Retrying the exact run after rollback must succeed, not replay a receipt.
+	testing.expect_value(
+		t,
+		sql.exec(
+			store.db,
+			"CREATE TEMP TRIGGER reject_snapshot BEFORE INSERT ON monitor_snapshots WHEN NEW.cursor!=zeroblob(8) BEGIN SELECT RAISE(ABORT,'injected'); END",
+			nil,
+			nil,
+			nil,
+		),
+		sql.OK,
+	)
+	n = pr.serializeApplyMonitorRunRequest({monitor_id = 1, revision = revision, sequence = 3, observations = rows[:]}, wire[:])
+	mutation := db.Request {
+		opcode    = .C_ApplyMonitorRun,
+		workspace = "w",
+		actor     = "checker",
+		timestamp = base + 198_000_000_000,
+		body      = wire[2:n],
+	}
+	db.destroy_command_output(&output); output.limit = 1024 * 1024
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	testing.expect_value(t, sqlite_execute_task_command(&store, &mutation, &output), sql.CONSTRAINT)
+	testing.expect_value(t, db.rollback(&store), sql.OK)
+	db.destroy_command_output(&output); output.limit = 1024 * 1024
+	state_body := history[:12]
+	state_request := db.Request {
+		opcode    = .C_GetMonitorState,
+		workspace = "w",
+		actor     = "checker",
+		body      = state_body,
+	}
+	if !testing.expect_value(t, sqlite_execute_task_command(&store, &state_request, &output), sql.OK) do return
+	remaining, _ = endian.get_u64(output.frames[0].payload[22:], .Big)
+	testing.expect_value(t, remaining, 2)
+	testing.expect_value(t, sql.exec(store.db, "DROP TRIGGER reject_snapshot", nil, nil, nil), sql.OK)
+	db.destroy_command_output(&output); output.limit = 1024 * 1024
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	if !testing.expect_value(t, sqlite_execute_task_command(&store, &mutation, &output), sql.OK) {db.rollback(&store); return}
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	ack := output.frames[output.count - 1].payload
+	testing.expect(t, pr.get_opcode(ack) == .S_MonitorRunApplied && ack[22] == 0)
+}
+
+when NRC_SIMULATION {
+	@(test)
+	test_sqlite_monitor_pause_identity_with_repeated_wall_time :: proc(t: ^testing.T) {
+		sim: Sim_Runtime
+		nrc_sim_runtime_init(&sim)
+		defer nrc_sim_runtime_destroy(&sim)
+		dir, err := os.make_directory_temp("", "nrc-pause-id-*", context.allocator)
+		if !testing.expect(t, err == nil) do return
+		defer {os.remove_all(dir); delete(dir)}
+		name := fmt.aprintf("%s/model.db", dir); defer delete(name)
+		path := strings.clone_to_cstring(name); defer delete(path)
+		store, rc := db.open(path, true)
+		if !testing.expect_value(t, rc, sql.OK) do return
+		defer db.close(&store)
+		at := nrc_time_unix_nanos()
+		preview := `{"version":1,"name":"Disk","evaluator":"checker","enabled":false,"interval_ns":60000000000,"timeout_ns":10000000000,"failures":2,"recoveries":2,"missing":3,"webhooks":[]}`
+		payload := `{"kind":"tcp"}`
+		wire: [2048]byte
+		n := pr.serializeCreateAssetRequest(
+			{asset_type = .Monitor, preview = transmute([]byte)preview, payload = transmute([]byte)payload, payload_raw_len = u32(len(payload))},
+			wire[:],
+		)
+		output := db.Command_Output {
+			limit = 1024 * 1024,
+		}
+		defer db.destroy_command_output(&output)
+		r := db.Request {
+			opcode    = .C_CreateAsset,
+			workspace = "w",
+			actor     = "alice",
+			timestamp = at - 1,
+			body      = wire[2:n],
+		}
+		testing.expect_value(t, db.begin(&store), sql.OK)
+		if !testing.expect_value(t, sqlite_execute_task_command(&store, &r, &output), sql.OK) {db.rollback(&store); return}
+		testing.expect_value(t, db.commit(&store), sql.OK)
+		history: [37]byte
+		endian.put_u64(history[4:], .Big, 1)
+		r = {
+			opcode    = .C_MonitorHistory,
+			workspace = "w",
+			actor     = "checker",
+			body      = history[:],
+		}
+		previous: u64
+		for capture in 0 ..< 3 {
+			// Keep the simulation wall clock exactly fixed, including across reopen.
+			testing.expect_value(t, nrc_time_unix_nanos(), at)
+			db.destroy_command_output(&output); output.limit = 1024 * 1024
+			testing.expect_value(t, db.begin(&store), sql.OK)
+			if !testing.expect_value(t, sqlite_execute_task_command(&store, &r, &output), sql.OK) {db.rollback(&store); return}
+			testing.expect_value(t, db.commit(&store), sql.OK)
+			body := output.frames[0].payload
+			id, _ := endian.get_u64(body[len(body) - 9:], .Big)
+			captured_at, _ := endian.get_i64(body[30:], .Big)
+			testing.expect(t, id > previous && captured_at == at && body[len(body) - 1] == 1)
+			if previous != 0 {
+				endian.put_u64(history[12:], .Big, previous)
+				endian.put_u64(history[28:], .Big, u64(at)); history[36] = 1
+				db.destroy_command_output(&output); output.limit = 1024 * 1024
+				testing.expect_value(t, db.begin(&store), sql.OK)
+				if !testing.expect_value(t, sqlite_execute_task_command(&store, &r, &output), sql.OK) {db.rollback(&store); return}
+				testing.expect_value(t, db.commit(&store), sql.OK)
+				endian.put_u64(history[12:], .Big, 0); endian.put_u64(history[28:], .Big, 0); history[36] = 0
+				db.destroy_command_output(&output); output.limit = 1024 * 1024
+				if !testing.expect_value(t, sqlite_execute_task_command(&store, &r, &output), sql.OK) do return
+				retained, _ := endian.get_u64(output.frames[0].payload[len(output.frames[0].payload) - 9:], .Big)
+				testing.expect_value(t, retained, id)
+			}
+			endian.put_u64(history[12:], .Big, id); endian.put_u64(history[28:], .Big, u64(at)); history[36] = 1
+			db.destroy_command_output(&output); output.limit = 1024 * 1024
+			testing.expect_value(t, db.begin(&store), sql.OK)
+			if !testing.expect_value(t, sqlite_execute_task_command(&store, &r, &output), sql.OK) {db.rollback(&store); return}
+			testing.expect_value(t, db.commit(&store), sql.OK)
+			endian.put_u64(history[12:], .Big, 0); endian.put_u64(history[28:], .Big, 0); history[36] = 0
+			previous = id
+			if capture == 1 {
+				testing.expect_value(t, db.close(&store), sql.OK)
+				store, rc = db.open(path)
+				if !testing.expect_value(t, rc, sql.OK) do return
+			}
+		}
 	}
 }

@@ -48,7 +48,22 @@ sqlite_task_update_history :: proc(store: ^db.Store, request: ^db.Request, befor
 	for field in ([?]struct {
 			name:    string,
 			changed: bool,
-		}{{"title", string(before.title) != string(after.title)}, {"description", string(before.description) != string(after.description)}, {"status", before.status != after.status}, {"order_index", before.order_index != after.order_index}, {"assignee", string(before.assignee) != string(after.assignee)}, {"priority", before.priority != after.priority}, {"color", before.color != after.color}, {"external_ref", string(before.external_ref) != string(after.external_ref)}, {"due_at", before.due_at != after.due_at}, {"blocked_by", before.blocked_by != after.blocked_by}, {"completed_at", before.completed_at != after.completed_at}, {"completed_by", string(before.completed_by) != string(after.completed_by)}, {"project", string(before.project) != string(after.project)}, {"attachments", !history_attachment_equal(before.attachments, after.attachments)}}) {if field.changed {fields[n] = field.name; n += 1}}
+		} {
+			{"title", string(before.title) != string(after.title)},
+			{"description", string(before.description) != string(after.description)},
+			{"status", before.status != after.status},
+			{"order_index", before.order_index != after.order_index},
+			{"assignee", string(before.assignee) != string(after.assignee)},
+			{"priority", before.priority != after.priority},
+			{"color", before.color != after.color},
+			{"external_ref", string(before.external_ref) != string(after.external_ref)},
+			{"due_at", before.due_at != after.due_at},
+			{"blocked_by", before.blocked_by != after.blocked_by},
+			{"completed_at", before.completed_at != after.completed_at},
+			{"completed_by", string(before.completed_by) != string(after.completed_by)},
+			{"project", string(before.project) != string(after.project)},
+			{"attachments", !history_attachment_equal(before.attachments, after.attachments)},
+		}) {if field.changed {fields[n] = field.name; n += 1}}
 	split_unblock := false
 	if system_unblock {
 		for field, i in fields[:n] {if field == "blocked_by" {copy(fields[i:], fields[i + 1:n]); n -= 1; split_unblock = true; break}}
@@ -172,6 +187,7 @@ sqlite_execute_task_command :: proc(store: ^db.Store, request: ^db.Request, outp
 	if request.opcode == .C_ApplyTransaction do return sqlite_apply_transaction(store, request, output)
 	if request.opcode == .C_ApplyMonitorRun do return sqlite_apply_monitor_run(store, request, output)
 	if request.opcode == .C_GetMonitorState do return sqlite_get_monitor_state(store, request, output)
+	if request.opcode == .C_MonitorHistory do return sqlite_monitor_history(store, request, output)
 	if request.opcode == .C_QueryMonitorStatus do return sqlite_query_monitor_status(store, request, output)
 	if request.opcode == .C_ControlMonitorInstance do return sqlite_control_monitor_instance(store, request, output)
 	if request.opcode == .C_ActOnIncident do return sqlite_act_on_incident(store, request, output)
@@ -326,6 +342,7 @@ worker_db_command_error :: proc(c: ^NRC_Connection, opcode: pr.Opcode, correlati
 		send_error_response(c, opcode, text, correlation)
 	case .C_ControlMonitorInstance,
 	     .C_GetMonitorState,
+	     .C_MonitorHistory,
 	     .C_QueryMonitorStatus,
 	     .C_MonitorDelivery,
 	     .C_ActOnIncident,

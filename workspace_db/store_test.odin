@@ -127,7 +127,10 @@ test_history_batch_unsigned_boundary_and_rollback :: proc(t: ^testing.T) {
 		_, overflow := begin_history_batch(&store, "w", 3); testing.expect_value(t, overflow, sql.FULL)
 		batch, status := begin_history_batch(&store, "w", 2); testing.expect_value(t, status, sql.OK)
 		if status == sql.OK {
-			for id in ([2]u64{1, 2}) {testing.expect_value(t, append_history_event(&store, "w", {entity_type = "edge", action = "deleted"}, {3, id}, batch = &batch), sql.OK)}
+			for id in ([2]u64 {
+					1,
+					2,
+				}) {testing.expect_value(t, append_history_event(&store, "w", {entity_type = "edge", action = "deleted"}, {3, id}, batch = &batch), sql.OK)}
 			sql.finalize(batch.insert)
 		}
 		if persist {testing.expect_value(t, commit(&store), sql.OK)} else {testing.expect_value(t, rollback(&store), sql.OK)}
@@ -492,6 +495,19 @@ PRAGMA foreign_keys=ON;`,
 	testing.expect(t, jobs_rc == sql.OK && preserved_jobs == 4)
 	orphans, orphans_rc := scalar(&store, "SELECT count(*) FROM pragma_foreign_key_check")
 	testing.expect(t, orphans_rc == sql.OK && orphans == 0)
+	// Availability export is an explicit additive migration; rollback and a
+	// repeated application must not silently adopt another schema version.
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect_value(t, execute(&store, #load("monitor_snapshots.sql", string)), sql.OK)
+	testing.expect_value(t, rollback(&store), sql.OK)
+	version, version_rc = scalar(&store, "PRAGMA user_version")
+	testing.expect(t, version_rc == sql.OK && version == 7)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect_value(t, execute(&store, #load("monitor_snapshots.sql", string)), sql.OK)
+	testing.expect_value(t, commit(&store), sql.OK)
+	testing.expect_value(t, begin(&store), sql.OK)
+	testing.expect(t, execute(&store, #load("monitor_snapshots.sql", string)) != sql.OK)
+	testing.expect_value(t, rollback(&store), sql.OK)
 	testing.expect_value(t, close(&store), sql.OK)
 	store, rc = open(path)
 	if !testing.expect_value(t, rc, sql.OK) do return

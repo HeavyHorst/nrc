@@ -20,7 +20,8 @@ import legacy as old
 CANONICAL = ("sequences", "tasks", "task_attachments", "assets", "asset_attachments",
              "edges", "dm_conversations", "history_sequences", "history",
              "monitor_instances", "monitor_episodes", "monitor_runs", "monitor_actions", "incident_actions",
-             "monitor_queue_usage", "monitor_deliveries", "monitor_delivery_receipts", "monitor_delivery_lanes")
+             "monitor_queue_usage", "monitor_deliveries", "monitor_delivery_receipts", "monitor_delivery_lanes",
+             "monitor_snapshots")
 SCHEMA = Path(__file__).with_name("schema.sql")
 SLICE_SCHEMA = Path(__file__).with_name("slice_summaries.sql")
 INCREMENTAL_SCHEMA = Path(__file__).with_name("slice_incremental.sql")
@@ -28,13 +29,14 @@ PAGINATION_SCHEMA = Path(__file__).with_name("slice_pagination.sql")
 MONITORING_SCHEMA = Path(__file__).with_name("monitoring.sql")
 CHRONICLE_SCHEMA = Path(__file__).with_name("chronicle.sql")
 CHRONICLE_INPUT_BUDGET_SCHEMA = Path(__file__).with_name("chronicle_input_budget.sql")
-SCHEMA_VERSION = 7
+MONITOR_SNAPSHOTS_SCHEMA = Path(__file__).with_name("monitor_snapshots.sql")
+SCHEMA_VERSION = 8
 
 
 def schema_text():
     return (SCHEMA.read_text() + SLICE_SCHEMA.read_text() + INCREMENTAL_SCHEMA.read_text()
             + PAGINATION_SCHEMA.read_text() + MONITORING_SCHEMA.read_text() + CHRONICLE_SCHEMA.read_text()
-            + CHRONICLE_INPUT_BUDGET_SCHEMA.read_text())
+            + CHRONICLE_INPUT_BUDGET_SCHEMA.read_text() + MONITOR_SNAPSHOTS_SCHEMA.read_text())
 
 
 def schema_hash():

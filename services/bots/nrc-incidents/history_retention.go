@@ -33,8 +33,28 @@ func initializeHistoryRollups(ctx context.Context, db *sql.DB) error {
 	if _, err = tx.ExecContext(ctx, historyRollupSchema); err != nil {
 		return err
 	}
+	// Adopt the timestamp-keyed availability schema atomically. Legacy evidence
+	// retains identity zero; new server capture IDs never use that namespace.
+	var legacyAvailability bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='uptime_snapshots')
+ AND NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='uptime_snapshots' AND column_name='snapshot_id')`).Scan(&legacyAvailability); err != nil {
+		return err
+	}
+	if legacyAvailability {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE uptime_snapshots RENAME TO uptime_snapshots_legacy;
+ ALTER TABLE uptime_states RENAME TO uptime_states_legacy`); err != nil {
+			return err
+		}
+	}
 	if _, err = tx.ExecContext(ctx, historyAvailabilitySchema); err != nil {
 		return err
+	}
+	if legacyAvailability {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO uptime_snapshots SELECT *,0,'' FROM uptime_snapshots_legacy;
+ INSERT INTO uptime_states SELECT *,0 FROM uptime_states_legacy;
+ DROP TABLE uptime_states_legacy; DROP TABLE uptime_snapshots_legacy`); err != nil {
+			return err
+		}
 	}
 	// One-time adoption of files from the raw-only writer. Reopening must not
 	// scan every retained sample or reset the late-arrival watermark.

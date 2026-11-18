@@ -124,7 +124,7 @@ its own cursor and the client asks for the next one when it needs it.
 invalid before any payload parsing happens, so a new opcode must be added to both
 the enum and the range check in `protocol/protocol.odin`.
 
-- Client to server: `1-3`, `8`, `16-74`
+- Client to server: `1-3`, `8`, `16-75`
 - Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-180`
 
 ### Client to Server
@@ -183,6 +183,7 @@ the enum and the range check in `protocol/protocol.odin`.
 | 72 | `C_GetMonitorState` | Read current revision and committed sequence as the configured evaluator |
 | 73 | `C_QueryMonitorStatus` | Workspace monitor summaries or instance status, problem-first live pagination |
 | 74 | `C_Chronicle` | Multiplexed JSON chronicle request with trailing correlation |
+| 75 | `C_MonitorHistory` | Read immutable pending availability pages or acknowledge a stored snapshot |
 
 #### Assets
 
@@ -1377,6 +1378,39 @@ i64, last committed run sequence u64 (zero before the first run). Both values ar
 read in one executor snapshot. This request never changes state. A sidecar reads
 the asset separately and requires matching revisions before evaluating; apply's
 revision and sequence checks still decide acceptance if a concurrent write occurs.
+
+### Durable monitor availability history
+
+`C_MonitorHistory` (75) body: correlation u32, Monitor ID u64, snapshot ID u64,
+cursor u64, capture time i64, acknowledge u8 (0 or 1). Only the Monitor's
+current evaluator in the authenticated workspace may use it.
+
+An initial read has snapshot ID, cursor and capture time zero. It returns the oldest
+pending snapshot. Continue with its exact snapshot ID and capture time and the
+returned cursor. Each `S_MonitorState` (178) page contains correlation u32,
+Monitor ID u64, captured revision i64, sequence u64, capture time i64, freshness
+horizon i64, next cursor u64 and row count u16, followed by at most 16 rows.
+Each row contains instance ID u64, identity byte length u16, UTF-8 identity,
+state u8 (0 healthy, 1 failing, 2 unknown, 3 paused), and valid-until i64.
+A snapshot ID u64 and final capture-kind u8 follow the rows. The kind is 0 for an accepted run or 1 for an on-demand
+disabled-monitor pause observation. The next cursor is the last returned
+instance ID, or zero on the final page.
+
+The accepted run and every snapshot page commit in one SQLite transaction.
+Later runs and wall-clock changes do not invalidate stored continuations.
+Delivery never extends the captured evidence's validity. A disabled Monitor
+with no pending snapshot captures bounded pause evidence on demand, including
+sequence zero before its first run. An enabled Monitor with no pending snapshot
+returns the ordinary short `S_MonitorState`, with sequence zero.
+
+Snapshot IDs come from a durable sequence independent of wall time, including
+pause captures. They are never reused after acknowledgment or restart.
+After the sink commits the complete snapshot, acknowledge with its exact
+snapshot ID and capture time, cursor zero and acknowledge 1. This deletes only
+that snapshot; repeating the acknowledgment is harmless. The response is the
+ordinary short `S_MonitorState`, with the acknowledged snapshot ID in its sequence field. Missing or
+mismatched continuation pages fail explicitly rather than returning live state.
+Errors use `S_ErrorResponse` with origin opcode 75 and the request correlation.
 
 ## Chronicle interface
 

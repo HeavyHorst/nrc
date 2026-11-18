@@ -463,6 +463,13 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte, dm_auth
 		} else {
 			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		}
+	case .C_MonitorHistory:
+		req, parse_err := pr.parseMonitorHistoryRequest(frame_data[2:])
+		if parse_err != nil {
+			send_error_response(c, opcode, "Invalid monitor history request", req.correlation_id)
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
 	case .C_GetMonitorState:
 		req, parse_err := pr.parseGetMonitorStateRequest(frame_data[2:])
 		if parse_err != nil {

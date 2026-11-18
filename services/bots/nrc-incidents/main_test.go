@@ -172,18 +172,6 @@ func TestCycleDoesNotConfirmFreshMeasurementOnReplay(t *testing.T) {
 		if r.Acceptance != want {
 			t.Fatalf("cycle %d stored %s, want %s", i, r.Acceptance, want)
 		}
-		if want == "confirmed" {
-			select {
-			case state := <-history.availability:
-				if state.MonitorID != 2 || state.Sequence != 42 || state.Revision != 3 {
-					t.Fatalf("availability fence %+v", state)
-				}
-			default:
-				t.Fatal("confirmed run missing availability capture")
-			}
-		} else if len(history.availability) != 0 {
-			t.Fatal("uncertain run used as availability evidence")
-		}
 		if err := writeHistory(context.Background(), db, r); err != nil {
 			t.Fatal(err)
 		}

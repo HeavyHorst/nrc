@@ -44,7 +44,6 @@ func cycle(ctx context.Context, source runtimeSource, history *historyWriter, wo
 		return 30 * time.Second, monitorError(id, "different evaluator")
 	}
 	if !c.Enabled {
-		history.requestAvailability(state)
 		return min(interval, 30*time.Second), nil
 	}
 	if state.Sequence == math.MaxUint64 {
@@ -89,9 +88,6 @@ func cycle(ctx context.Context, source runtimeSource, history *historyWriter, wo
 	run := p.ApplyMonitorRun{CorrelationID: 1, MonitorID: id, Revision: a.UpdatedAt, Sequence: state.Sequence + 1, Failed: queryErr != nil, Observations: observations}
 	acceptance, submitErr := source.apply(ctx, run)
 	history.offer(historyRun{ID: hex.EncodeToString(uuid[:]), Workspace: workspace, Acceptance: acceptance, Run: run, ObservedAt: observedAt, Duration: duration, Diagnostics: diagnostics})
-	if acceptance == "confirmed" {
-		history.requestAvailability(p.MonitorState{MonitorID: id, Revision: a.UpdatedAt, Sequence: run.Sequence})
-	}
 	slog.Info("monitor evaluated", "monitor_id", id, "sequence", run.Sequence, "instances", len(observations), "failed", run.Failed, "acceptance", acceptance)
 	return interval, errors.Join(submitErr, queryErr)
 }
@@ -103,7 +99,7 @@ func schedule(ctx context.Context, ids *monitorSet, workers int, source runtimeS
 		if err != nil && ctx.Err() == nil {
 			slog.Warn("monitor cycle failed", "monitor_id", id)
 		}
-		return interval - time.Since(start)
+		return max(interval-time.Since(start), time.Second)
 	})
 }
 
@@ -194,7 +190,10 @@ func run() error {
 		go func() { defer writer.Done(); refreshMonitors(ctx, monitorIDs, source.discover, 30*time.Second) }()
 	}
 	go func() { defer writer.Done(); dispatchWebhooks(ctx, monitorIDs, *workers, source, *workspace) }()
-	go func() { defer writer.Done(); collectAvailability(ctx, history, source, *workspace, *workers) }()
+	go func() {
+		defer writer.Done()
+		collectStoredAvailability(ctx, history, monitorIDs, source, *workspace, *workers)
+	}()
 	schedule(ctx, monitorIDs, *workers, source, history, *workspace, *nickname)
 	if historyServer != nil {
 		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
@@ -204,7 +203,7 @@ func run() error {
 		stop()
 	}
 	writer.Wait()
-	slog.Info("sidecar stopped", "history_dropped", history.dropped.Load(), "history_pending", len(history.queue)+len(history.snapshots)+len(history.availability))
+	slog.Info("sidecar stopped", "history_dropped", history.dropped.Load(), "history_pending", len(history.queue)+len(history.snapshots))
 	if historyDone != nil {
 		return <-historyDone
 	}

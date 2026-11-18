@@ -1,24 +1,40 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"log/slog"
 	"math"
 	"path/filepath"
 	"reflect"
-	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	p "github.com/heavyhorst/nrc/protocol-go"
 )
 
-type availabilitySourceFunc func(context.Context, p.MonitorState) (p.MonitorSnapshotPage, error)
+type storedAvailabilitySource struct {
+	sync.Mutex
+	pages     map[uint64]p.MonitorSnapshotPage
+	failReads int
+}
 
-func (f availabilitySourceFunc) snapshot(ctx context.Context, state p.MonitorState) (p.MonitorSnapshotPage, error) {
-	return f(ctx, state)
+func (s *storedAvailabilitySource) pendingSnapshot(_ context.Context, id uint64) (p.MonitorSnapshotPage, bool, error) {
+	s.Lock()
+	defer s.Unlock()
+	if s.failReads > 0 {
+		s.failReads--
+		return p.MonitorSnapshotPage{}, false, errRejected
+	}
+	page, found := s.pages[id]
+	return page, found, nil
+}
+
+func (s *storedAvailabilitySource) acknowledgeSnapshot(_ context.Context, page p.MonitorSnapshotPage) error {
+	s.Lock()
+	defer s.Unlock()
+	delete(s.pages, page.MonitorID)
+	return nil
 }
 
 func TestAvailabilityCollectionBackpressure(t *testing.T) {
@@ -29,15 +45,18 @@ func TestAvailabilityCollectionBackpressure(t *testing.T) {
 			defer cancel()
 			base := time.Now().UnixNano()
 			const count = 40
+			source := &storedAvailabilitySource{pages: map[uint64]p.MonitorSnapshotPage{}}
+			ids := &monitorSet{}
+			var monitors []uint64
 			for i := range count {
-				h.requestAvailability(p.MonitorState{MonitorID: uint64(i + 1), Revision: 1, Sequence: uint64(i + 101)})
+				id := uint64(i + 1)
+				at := base + int64(id)
+				monitors = append(monitors, id)
+				source.pages[id] = p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: id, Revision: 1, Sequence: id + 100}, At: at, Horizon: int64(time.Minute), Instances: []p.MonitorAvailability{{ID: 1, Identity: "target", State: 0, ValidUntil: at + int64(time.Minute)}}}
 			}
-			source := availabilitySourceFunc(func(_ context.Context, state p.MonitorState) (p.MonitorSnapshotPage, error) {
-				at := base + int64(state.MonitorID)
-				return p.MonitorSnapshotPage{MonitorState: state, At: at, Horizon: int64(time.Minute), Instances: []p.MonitorAvailability{{ID: 1, Identity: "target", State: 0, ValidUntil: at + int64(time.Minute)}}}, nil
-			})
+			ids.replace(monitors)
 			done := make(chan struct{})
-			go func() { collectAvailability(ctx, h, source, "ops", 8); close(done) }()
+			go func() { collectStoredAvailability(ctx, h, ids, source, "ops", 16); close(done) }()
 			t.Cleanup(func() {
 				cancel()
 				select {
@@ -82,6 +101,7 @@ func TestAvailabilityCollectionBackpressure(t *testing.T) {
 						if err := writeAvailability(ctx, db, snapshot); err != nil {
 							t.Fatal(err)
 						}
+						snapshot.committed <- nil
 					case <-time.After(5 * time.Second):
 						t.Fatalf("only %d/%d snapshots delivered", len(seen), count)
 					}
@@ -99,74 +119,48 @@ func TestAvailabilityCollectionBackpressure(t *testing.T) {
 }
 
 func TestAvailabilityReadFailureContinuesCollection(t *testing.T) {
-	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
-	defer slog.SetDefault(previous)
 	h := newHistoryWriter()
-	h.requestAvailability(p.MonitorState{MonitorID: 7, Revision: 9, Sequence: 11})
-	h.requestAvailability(p.MonitorState{MonitorID: 7, Revision: 9, Sequence: 12})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	source := availabilitySourceFunc(func(_ context.Context, state p.MonitorState) (p.MonitorSnapshotPage, error) {
-		if state.Sequence == 11 {
-			return p.MonitorSnapshotPage{}, errRejected
-		}
-		return p.MonitorSnapshotPage{MonitorState: state}, nil
-	})
+	source := &storedAvailabilitySource{failReads: 1, pages: map[uint64]p.MonitorSnapshotPage{7: {MonitorState: p.MonitorState{MonitorID: 7, Revision: 9, Sequence: 11}}}}
+	ids := &monitorSet{}
+	ids.replace([]uint64{7})
 	done := make(chan struct{})
-	go func() { collectAvailability(ctx, h, source, "ops", 1); close(done) }()
+	go func() { collectStoredAvailability(ctx, h, ids, source, "ops", 1); close(done) }()
 	defer func() { cancel(); <-done }()
 	select {
 	case snapshot := <-h.snapshots:
-		if snapshot.Sequence != 12 {
-			t.Fatal("failed snapshot published", snapshot)
+		if snapshot.Sequence != 11 {
+			t.Fatal("retry lost the original snapshot", snapshot)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("collector did not recover after a rejected fence")
+		t.Fatal("collector did not recover after a failed read")
 	}
-	if h.dropped.Load() != 1 || h.availabilityReadFailures.Load() != 1 || h.availabilityWaits.Load() != 0 {
+	if h.dropped.Load() != 0 || h.availabilityReadFailures.Load() != 1 || h.availabilityWaits.Load() != 0 {
 		t.Fatalf("unexpected diagnostics: %v", h.availabilityDiagnostics())
-	}
-	if !strings.Contains(logs.String(), `"error":"NRC rejected the request"`) || !strings.Contains(logs.String(), `"sequence":11`) {
-		t.Fatalf("missing read failure diagnosis: %s", logs.String())
 	}
 }
 
-func TestAvailabilityLossCounters(t *testing.T) {
-	for _, kind := range []string{"request", "write"} {
-		t.Run(kind, func(t *testing.T) {
-			h := newHistoryWriter()
-			if kind == "request" {
-				for range cap(h.availability) + 1 {
-					h.requestAvailability(p.MonitorState{MonitorID: 7, Revision: 9, Sequence: 11})
-				}
-			} else {
-				// Invalid snapshot exercises a real writer rejection, not a seeded counter.
-				h.snapshots <- historySnapshot{Workspace: "ops"}
-				ctx, cancel := context.WithCancel(context.Background())
-				done := make(chan struct{})
-				path := filepath.Join(t.TempDir(), "failed-write.duckdb")
-				go func() { h.serve(ctx, path); close(done) }()
-				defer func() { cancel(); <-done }()
-				deadline := time.Now().Add(5 * time.Second)
-				for h.availabilityWriteFailures.Load() == 0 {
-					if time.Now().After(deadline) {
-						t.Fatal("writer did not report the rejected snapshot")
-					}
-					time.Sleep(time.Millisecond)
-				}
-			}
-			wantRequests, wantWrites := uint64(0), uint64(0)
-			if kind == "request" {
-				wantRequests = 1
-			} else {
-				wantWrites = 1
-			}
-			if h.dropped.Load() != 1 || h.availabilityRequestDrops.Load() != wantRequests || h.availabilityWriteFailures.Load() != wantWrites || h.availabilityReadFailures.Load() != 0 || h.availabilityWaits.Load() != 0 {
-				t.Fatalf("misclassified %s failure: dropped=%d availability=%v", kind, h.dropped.Load(), h.availabilityDiagnostics())
-			}
-		})
+func TestAvailabilityFailedWriteReportsRetryableFailure(t *testing.T) {
+	h := newHistoryWriter()
+	// Invalid snapshot exercises a real writer rejection, not a seeded counter.
+	done := make(chan error, 1)
+	h.snapshots <- historySnapshot{Workspace: "ops", committed: done}
+	ctx, cancel := context.WithCancel(context.Background())
+	written := make(chan struct{})
+	path := filepath.Join(t.TempDir(), "failed-write.duckdb")
+	go func() { h.serve(ctx, path); close(written) }()
+	defer func() { cancel(); <-written }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("failed snapshot was reported as committed")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("writer did not report the rejected snapshot")
+	}
+	if h.dropped.Load() != 0 || h.availabilityWriteFailures.Load() != 1 {
+		t.Fatalf("retryable failure counted as loss: %v", h.availabilityDiagnostics())
 	}
 }
 
@@ -181,28 +175,25 @@ func TestAvailabilityDurationsPauseLateArrivalAndRetirement(t *testing.T) {
 	base := time.Date(2026, 11, 15, 12, 58, 0, 0, time.UTC)
 	snapshot := func(offset int64, state uint8, validFor int64) historySnapshot {
 		at := base.Add(time.Duration(offset) * time.Second).UnixNano()
-		return historySnapshot{"ops", p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: 2, Revision: 3, Sequence: 1}, At: at, Horizon: int64(5 * time.Minute), Instances: []p.MonitorAvailability{
+		return historySnapshot{Workspace: "ops", MonitorSnapshotPage: p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: 2, Revision: 3, Sequence: 1}, At: at, Horizon: int64(5 * time.Minute), Instances: []p.MonitorAvailability{
 			{ID: 1, Identity: "host-a:/", State: state, ValidUntil: at + validFor*int64(time.Second)},
 			{ID: 2, Identity: "host-b:/data", State: 2, ValidUntil: at},
 		}}}
 	}
-	put := func(s historySnapshot) {
+	put := func(s ...historySnapshot) {
 		t.Helper()
-		if err := writeAvailability(ctx, db, s); err != nil {
+		if err := writeAvailability(ctx, db, s...); err != nil {
 			t.Fatal(err)
 		}
 	}
 	first := snapshot(0, 0, 190)
 	first.Instances[1].State = 0
 	first.Instances[1].ValidUntil = first.At + int64(10*time.Second)
-	put(first)
-	put(snapshot(30, 1, 100))
-	put(snapshot(50, 3, 200))
-	put(snapshot(90, 2, 0))
-	put(snapshot(130, 0, 40))
 	retired := snapshot(200, 2, 0)
 	retired.Instances = nil
-	put(retired)
+	// A batch crosses an hour boundary, arrives out of order and repeats one
+	// snapshot. None of those may change the measured durations or erase gaps.
+	put(snapshot(130, 0, 40), first, snapshot(30, 1, 100), snapshot(90, 2, 0), snapshot(50, 3, 200), first, retired)
 	maintain := func() {
 		t.Helper()
 		if err := maintainHistory(ctx, db, base.Add(220*time.Second)); err != nil {
@@ -233,8 +224,7 @@ func TestAvailabilityDurationsPauseLateArrivalAndRetirement(t *testing.T) {
 		t.Fatalf("other instance %d/%d: %v", up, unknown, err)
 	}
 	late := snapshot(40, 0, 100)
-	put(late)
-	put(late)
+	put(late, late)
 	db.Close()
 	db, err = openHistory(ctx, path)
 	if err != nil {
@@ -265,7 +255,7 @@ func TestAvailabilityIdleGapAndExpiredPause(t *testing.T) {
 	}
 	defer db.Close()
 	base := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
-	s := historySnapshot{"ops", p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: 2, Revision: 3}, At: base.UnixNano(), Horizon: int64(30 * time.Second), Instances: []p.MonitorAvailability{
+	s := historySnapshot{Workspace: "ops", MonitorSnapshotPage: p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: 2, Revision: 3}, At: base.UnixNano(), Horizon: int64(30 * time.Second), Instances: []p.MonitorAvailability{
 		{ID: 1, Identity: "up", State: 0, ValidUntil: base.Add(30 * time.Second).UnixNano()},
 		{ID: 2, Identity: "paused", State: 3, ValidUntil: base.Add(30 * time.Second).UnixNano()},
 		{ID: 3, Identity: "unknown", State: 2, ValidUntil: base.UnixNano()},
@@ -300,7 +290,7 @@ func TestAvailabilityRetentionKeepsGapAnchorAndRollsBack(t *testing.T) {
 	}
 	defer func() { db.Close() }()
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	s := historySnapshot{"ops", p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: 2, Revision: 3}, Horizon: int64(time.Minute)}}
+	s := historySnapshot{Workspace: "ops", MonitorSnapshotPage: p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: 2, Revision: 3}, Horizon: int64(time.Minute)}}
 	// Collector workers may finish out of order, even before the first rollup.
 	for _, offset := range []time.Duration{48 * time.Hour, 10 * time.Second, 0} {
 		s.At = base.Add(offset).UnixNano()
@@ -362,7 +352,7 @@ func TestAvailabilityCatchupWithLiveInputAndLateCorrectionAfterCleanup(t *testin
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	put := func(at time.Time, state uint8, lifetime time.Duration) {
 		t.Helper()
-		s := historySnapshot{"ops", p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: 2, Revision: 3}, At: at.UnixNano(), Horizon: int64(time.Minute), Instances: []p.MonitorAvailability{{ID: 1, Identity: "disk", State: state, ValidUntil: at.Add(lifetime).UnixNano()}}}}
+		s := historySnapshot{Workspace: "ops", MonitorSnapshotPage: p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: 2, Revision: 3}, At: at.UnixNano(), Horizon: int64(time.Minute), Instances: []p.MonitorAvailability{{ID: 1, Identity: "disk", State: state, ValidUntil: at.Add(lifetime).UnixNano()}}}}
 		if err := writeAvailability(ctx, db, s); err != nil {
 			t.Fatal(err)
 		}
@@ -438,5 +428,82 @@ func TestAvailabilityCatchupWithLiveInputAndLateCorrectionAfterCleanup(t *testin
 	}
 	if !reflect.DeepEqual(before, older()) {
 		t.Fatal("late correction changed completed buckets outside the retained raw window")
+	}
+}
+
+func TestAvailabilityCaptureIdentitySurvivesRepeatedWallTime(t *testing.T) {
+	ctx := context.Background()
+	db, err := openHistory(ctx, filepath.Join(t.TempDir(), "identity.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	at := time.Date(2026, 11, 18, 8, 0, 0, 0, time.UTC).UnixNano()
+	first := historySnapshot{Workspace: "ops", MonitorSnapshotPage: p.MonitorSnapshotPage{
+		MonitorState: p.MonitorState{MonitorID: 2, Revision: 3, Sequence: 9}, SnapshotID: 41,
+		At: at, Horizon: int64(time.Minute), PauseObservation: true,
+		Instances: []p.MonitorAvailability{{ID: 1, Identity: "disk", State: 3, ValidUntil: at + int64(time.Minute)}},
+	}}
+	second := first
+	second.SnapshotID, second.Sequence, second.PauseObservation = 42, 10, false
+	second.Instances = []p.MonitorAvailability{{ID: 1, Identity: "disk", State: 1, ValidUntil: at + int64(time.Minute)}}
+	if err := writeAvailability(ctx, db, first, second, first, second); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM uptime_snapshots").Scan(&count); err != nil || count != 2 {
+		t.Fatalf("equal timestamps lost an independent capture: count=%d err=%v", count, err)
+	}
+	changed := second
+	changed.Instances = []p.MonitorAvailability{{ID: 1, Identity: "disk", State: 0, ValidUntil: at + int64(time.Minute)}}
+	if err := writeAvailability(ctx, db, changed); err == nil {
+		t.Fatal("changed evidence acknowledged as replay")
+	}
+	if err := maintainHistory(ctx, db, time.Unix(0, at).Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var failing, paused int64
+	if err := db.QueryRow("SELECT failing_ns,paused_ns FROM uptime_buckets WHERE resolution_ns=?", historyHour).Scan(&failing, &paused); err != nil || failing != int64(30*time.Second) || paused != 0 {
+		t.Fatalf("same-time evidence cross-joined or extended: failing=%d paused=%d err=%v", failing, paused, err)
+	}
+}
+
+func TestAvailabilityAdoptsTimestampKeyedHistory(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.duckdb")
+	db, err := sql.Open("duckdb", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE uptime_snapshots(workspace VARCHAR,monitor_id UBIGINT,observed_at BIGINT,revision BIGINT,sequence UBIGINT,PRIMARY KEY(workspace,monitor_id,observed_at));
+ CREATE TABLE uptime_states(workspace VARCHAR,monitor_id UBIGINT,observed_at BIGINT,identity VARCHAR,state UTINYINT,valid_until BIGINT);
+ INSERT INTO uptime_snapshots VALUES('ops',2,100,3,9);
+ INSERT INTO uptime_states VALUES('ops',2,100,'disk',1,200)`)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+	for range 2 {
+		db, err = openHistory(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		if err = db.QueryRow(`SELECT count(*) FROM uptime_snapshots s JOIN uptime_states u USING(workspace,monitor_id,observed_at,snapshot_id)
+ WHERE s.snapshot_id=0 AND s.sequence=9 AND s.revision=3 AND u.state=1 AND u.valid_until=200`).Scan(&count); err != nil || count != 1 {
+			db.Close()
+			t.Fatalf("legacy evidence changed on adoption/reopen: count=%d err=%v", count, err)
+		}
+		s := historySnapshot{Workspace: "ops", MonitorSnapshotPage: p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: 2, Revision: 4, Sequence: 10}, SnapshotID: 1, At: 100, Horizon: 100}}
+		if err = writeAvailability(ctx, db, s); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		if err = db.QueryRow("SELECT count(*) FROM uptime_snapshots").Scan(&count); err != nil || count != 2 {
+			db.Close()
+			t.Fatalf("adoption lost a capture: count=%d err=%v", count, err)
+		}
+		db.Close()
 	}
 }

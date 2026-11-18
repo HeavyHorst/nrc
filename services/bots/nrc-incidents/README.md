@@ -19,6 +19,19 @@ go build -o nrc-incidents .
   -nickname nrc-incidents -history /private/data/history.duckdb
 ```
 
+The real-server snapshot regression is opt-in. Build the matching NRC server
+first, then run from this directory:
+
+```sh
+NRC_HISTORY_TEST_SERVER=/absolute/path/to/server NRC_HISTORY_LOAD_TEST=1 \
+  go test -run '^TestHistorySnapshotOutboxIntegration$' -count=1 -timeout=12m -v
+```
+
+It uses isolated temporary databases and authenticated WebSockets. The load flag
+enables two 90-second cases at 25 accepted runs/second, including concurrent
+delivery of a 17-instance hot monitor. Without the flag, backlog, lost-ACK and
+disabled-monitor controls still run. Without the server path, this test skips.
+
 Provide `NRC_BOT_SECRET` through the process environment, not a command-line flag.
 The evaluator name must match each Monitor's preview. By default, the sidecar
 discovers assigned monitors at startup and 30 seconds after each discovery pass,
@@ -237,9 +250,15 @@ one second before retrying. Shutdown cancellation is not submitted as a target f
 After submission, measurements enter a disposable 256-run RAM buffer for the
 DuckDB writer. A full buffer or failed DuckDB write loses history and logs a gap;
 it never rejects an NRC evaluation. Shutdown can discard buffered history and
-reports the remaining count. There is no durable exportqueue or crash-atomic
-commit across NRC and DuckDB. A crash between submission and writing can leave
-an accepted run without history.
+reports the remaining count. This applies to raw runs, samples and diagnostics;
+availability snapshots have a separate durable NRC outbox described below.
+
+The writer drains up to 32 already queued runs or eight completed snapshots into
+one transaction, without waiting for more work. Retention metadata is read once
+per batch and each affected hour is marked once. A failed batch rolls back and
+its records are retried individually, so one rejected record does not discard
+valid neighbours. Loss counters count failed records, not failed batch attempts.
+Batching does not change observation times, sequence fences or gap accounting.
 
 DuckDB stores each run's random attempt ID, workspace, Monitor revision/sequence,
 observation time, duration, acceptance (`confirmed`, `rejected`, `unknown`) and
@@ -287,29 +306,46 @@ bucket from only part of its source data. Existing raw-only files are adopted on
 on open. Back up sidecar files before upgrading; this does not migrate NRC SQLite.
 
 Deleting rows makes space eligible for DuckDB reuse after checkpointing; it does
-not promise an immediately smaller file. Retention adds no exportqueue and no
-dependency from NRC evaluation admission to DuckDB availability.
+not promise an immediately smaller file. DuckDB retention does not delete
+unacknowledged NRC availability snapshots.
 
 ## Observed uptime and coverage
 
 Availability uses NRC's observed instance states, not Incident lifetime or the
-fraction of successful checks. Independent read workers request complete,
-revision/sequence-fenced snapshots after confirmed runs and while a monitor is
-disabled. Queries page through non-retired instances, including paused ones.
-Sixteen rows per page fit the protocol limit even with maximum-length identities.
-The legacy monitor-state request and response remain unchanged; the optional
-detailed request uses the same opcode and evaluator authorization.
+fraction of successful checks. The schema-8 server captures complete immutable
+pages in the same SQLite transaction as each accepted run. A capture failure
+rejects the transaction instead of acknowledging a run without its snapshot.
+Each snapshot includes non-retired instances, including paused ones. Sixteen
+rows per page fit the protocol limit even with maximum-length identities.
 
-Collection has a ten-second budget, a 4 MiB complete-snapshot limit, 256 pending
-request slots and eight completed-snapshot slots. When the completed queue is
-full, collectors retain their snapshots and wait for the writer, or stop on
-shutdown. This wait is separate from the ten-second read budget. At most one
-complete snapshot per collector is held outside the queue; the buffer sizes are
-unchanged. Check workers never wait for history. A full request queue, failed
-page, changed fence or failed write still loses that observation and logs a gap.
-Long backlogs can invalidate queued sequence fences as evaluations advance.
-Partial sets are never published. An old server can reject the extended read
-while ordinary evaluations continue.
+Independent collectors use `C_MonitorHistory` (75) to read the oldest pending
+snapshot and acknowledge its exact monitor/snapshot-ID/capture-time identity only
+after the DuckDB transaction commits. Continuations read stored evidence, not
+live rows; new runs, changed revisions and backward clock steps cannot invalidate
+them. Disabled monitors capture bounded pause evidence on demand when the outbox
+is empty. The existing live monitor-state API remains unchanged.
+
+Each read has a ten-second budget and stages at most 4 MiB. The 1,024-instance
+admission limit applies to active instances; snapshots also include paused ones.
+The eight-slot completed-snapshot queue and collector count bound RAM use; the
+writer batches up to eight snapshots. Read, write and acknowledgment failures
+leave evidence pending for retry, including after restart. A lost acknowledgment
+can replay an already committed snapshot; sink writes deduplicate it. Original
+observation times and expiry deadlines never advance during retry.
+
+Capture IDs come from a durable server sequence, not the wall clock. Equal
+timestamps remain distinct captures; conflicting reuse of an ID fails instead
+of acknowledging different evidence as a replay. On open, the sidecar atomically
+adopts the old timestamp-keyed availability tables, preserving their rows under
+legacy ID zero. Back up the DuckDB file before upgrading; this changes its schema.
+
+Unacknowledged snapshots have no automatic TTL or overflow discard. An unavailable
+sink therefore grows NRC's SQLite outbox on disk; exhausting storage can reject
+new evaluations atomically. Operate disk capacity accordingly. Snapshots older
+than DuckDB's retained raw window need operator attention rather than silent
+acknowledgment. Raw run/sample/diagnostic buffering remains best-effort. Upgrade
+server and sidecar together after the explicit
+[schema migration](../../../docs/DEVELOPMENT.md#sqlite-schema-8).
 
 Each instance contributes healthy, failing, unknown or paused nanoseconds to UTC
 buckets. Passing/failing observations contribute directly; 5/5 qualification only
@@ -465,11 +501,14 @@ Database metadata and rows come from one DuckDB transaction. Responses also repo
   `snapshot_write_failures_total`, `backpressure_total` and
   `backpressure_ns_total`, plus current queue depths `requests_pending` and
   `snapshots_pending`. Backpressure counts waits, not losses; elapsed wait time
-  is added when each wait ends, including cancellation. These process-local
+  is added when a queue wait ends. These process-local
   readings are independent of the database transaction and are not an atomic
   snapshot or completeness watermark. Pending depths exclude active collectors
-  and the writer. Read failures log the monitor, sequence and sanitized source
-  error; debug logs on resumed delivery include wait time and snapshot age.
+  and the writer. The legacy `request_drops_total` and `requests_pending` keys
+  are zero because no disposable availability-request queue remains. Read/write
+  failures count retryable attempts, not lost snapshots. They do not measure
+  the durable server backlog. Logs identify the affected monitor without source
+  response bodies.
 
 Rollups can lag writes or late corrections. Zero pending hours does not prove
 complete history: collection gaps, retention, unscheduled availability catch-up

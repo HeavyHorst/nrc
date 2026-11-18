@@ -16,7 +16,7 @@ Store :: struct {
 	slice_statement_count: int,
 }
 
-SCHEMA_VERSION :: 7
+SCHEMA_VERSION :: 8
 APPLICATION_ID :: 0x4e524351
 SCHEMA ::
 	#load("schema.sql", string) +
@@ -25,7 +25,8 @@ SCHEMA ::
 	#load("slice_pagination.sql", string) +
 	#load("monitoring.sql", string) +
 	#load("chronicle.sql", string) +
-	#load("chronicle_input_budget.sql", string)
+	#load("chronicle_input_budget.sql", string) +
+	#load("monitor_snapshots.sql", string)
 
 // create permits initialization of an empty database only. Existing NRC files
 // must match the schema version; other databases are never adopted or migrated.
@@ -206,6 +207,7 @@ ID_Domain :: enum {
 	Edge,
 	Monitor_Instance,
 	Monitor_Delivery,
+	Monitor_Snapshot,
 }
 
 // Durable floors are independent of live rows and include referenced IDs.
@@ -218,6 +220,7 @@ advance_floor :: proc(store: ^Store, floor: u64, domain := ID_Domain.Task) -> c.
 		.Edge             = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'edge'",
 		.Monitor_Instance = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'monitor_instance'",
 		.Monitor_Delivery = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'monitor_delivery'",
+		.Monitor_Snapshot = "UPDATE sequences SET high_water = max(high_water, ?1) WHERE domain = 'monitor_snapshot'",
 	}
 	statement, rc := prepare(store, queries[domain])
 	if rc != sql.OK do return rc
@@ -235,6 +238,7 @@ next_id :: proc(store: ^Store, domain := ID_Domain.Task) -> (id: u64, status: c.
 		.Edge             = "SELECT high_water FROM sequences WHERE domain = 'edge'",
 		.Monitor_Instance = "SELECT high_water FROM sequences WHERE domain = 'monitor_instance'",
 		.Monitor_Delivery = "SELECT high_water FROM sequences WHERE domain = 'monitor_delivery'",
+		.Monitor_Snapshot = "SELECT high_water FROM sequences WHERE domain = 'monitor_snapshot'",
 	}
 	statement, rc := prepare(store, queries[domain])
 	if rc != sql.OK do return 0, rc

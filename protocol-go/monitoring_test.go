@@ -9,6 +9,37 @@ import (
 	"testing"
 )
 
+func TestMonitorHistoryWireContract(t *testing.T) {
+	// Same independent continuation fixture as protocol/monitoring_test.odin.
+	want, _ := hex.DecodeString("004b000000010000000000000007000000000000000b0000000000000010000000000000006400")
+	got, err := EncodeMonitorHistory(7, 11, 16, 100, false)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("history wire mismatch: %x %v", got, err)
+	}
+	for _, tc := range []struct {
+		id, sequence, cursor uint64
+		at                   int64
+		ack                  bool
+		valid                bool
+	}{
+		{7, 0, 0, 0, false, true},
+		{7, 0, 16, 100, false, false}, // Even a sequence-zero pause needs a capture ID.
+		{7, 0, 0, 100, true, false},
+		{7, 11, 0, 100, true, true},
+		{0, 0, 0, 0, false, false},
+		{7, 11, 0, 0, false, false},
+		{7, 0, 0, 100, false, false},
+		{7, 11, 16, 0, false, false},
+		{7, 11, 16, 100, true, false},
+		{7, 11, 0, 0, true, false},
+		{7, 11, 0, -1, true, false},
+	} {
+		if _, err := EncodeMonitorHistory(tc.id, tc.sequence, tc.cursor, tc.at, tc.ack); (err == nil) != tc.valid {
+			t.Fatalf("history request %+v: %v", tc, err)
+		}
+	}
+}
+
 func TestMonitorDeliveryWireContract(t *testing.T) {
 	want, _ := hex.DecodeString("004712345678000000000000000701020000000000000009000000000000000b066f70732d7631")
 	r := MonitorDelivery{0x12345678, 7, 1, 2, 9, 11, "ops-v1"}

@@ -172,6 +172,7 @@ sqlite_apply_monitor_run :: proc(store: ^db.Store, request: ^db.Request, output:
 	}
 	if rc = sqlite_projection_write(store, `INSERT INTO monitor_runs VALUES(?1,?2,?3,?4,?5,?6)
  ON CONFLICT(workspace,monitor_id) DO UPDATE SET sequence=excluded.sequence,revision=excluded.revision,evaluated_at=excluded.evaluated_at,receipt=excluded.receipt`, request.workspace, &monitor, {r.sequence, r.revision, at, string(request.body[4:])}); rc != sql.OK do return rc
+	if rc = sqlite_capture_monitor_snapshot(store, request, r.monitor_id, r.sequence, r.revision, at, policy); rc != sql.OK do return rc
 	context.allocator = backing
 	return sqlite_monitor_ack(output, r, false)
 }

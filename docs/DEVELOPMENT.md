@@ -85,13 +85,44 @@ Use the [Compose deployment](../README.md#quickstart) for the complete web appli
 Production serves the complete generated `client/dist/`, not the source directory.
 After frontend changes, rebuild the Nginx image and reload open browser tabs.
 
+## SQLite schema 8
+
+Server and importer require schema 8. New databases append
+`workspace_db/monitor_snapshots.sql` after schema 7. It adds the immutable
+availability outbox: accepted evaluations and their complete snapshot pages
+commit together. History acknowledges a snapshot only after its DuckDB commit.
+No old history is reconstructed. Startup rejects older schemas without changing them.
+
+Stop all writers, take a quiesced backup and rehearse on an isolated copy first.
+For every schema-7 shard in the selected generation, run from the repository root:
+
+```sh
+sqlite3 -bail /absolute/offline-copy/shard_000/workspace.sqlite3 <<'SQL'
+PRAGMA foreign_keys=ON;
+BEGIN IMMEDIATE;
+.read workspace_db/monitor_snapshots.sql
+COMMIT;
+PRAGMA integrity_check;
+PRAGMA foreign_key_check;
+PRAGMA user_version;
+SELECT count(*) FROM monitor_snapshots;
+SQL
+```
+
+Require exit 0, integrity `ok`, no foreign-key violations, version 8, an empty
+outbox and unchanged existing records on every shard. The guard rejects foreign
+application IDs, wrong versions and repeated upgrades. Keep writers stopped on
+failure. Upgrade the server and incidents sidecar together; do not deploy the
+schema-8 server against schema-7 data. The migration is additive, but a rollback
+to the old server requires an explicit storage rollback while all writers are stopped.
+
 ## SQLite schema 7
 
-Server and importer now require schema 7. New databases append
+Schema 7 appends
 `workspace_db/chronicle_input_budget.sql` to the schema-6 initialization below.
 It raises only the per-call Chronicle input-token constraint from 16,000 to
 128,000; daily budgets, output allowance and existing records remain unchanged.
-Startup rejects schema 6 rather than silently migrating it.
+This upgrade does not replace the schema-8 step above.
 
 Stop all writers, take a quiesced backup and rehearse on an isolated copy first.
 For every schema-6 shard in the selected generation, run:

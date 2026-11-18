@@ -55,6 +55,38 @@ GetMonitorStateRequest :: struct {
 	at:             i64,
 }
 
+// Read the oldest unacknowledged snapshot (snapshot_id=cursor=0), continue its
+// immutable pages, or acknowledge one complete snapshot after sink commit.
+// A page response is S_MonitorState's detailed layout plus snapshot_id u64 and a capture-kind byte:
+// accepted run=0, on-demand disabled-monitor pause=1. Empty/ACK responses keep
+// the short MonitorState layout.
+MonitorHistoryRequest :: struct {
+	correlation_id: u32,
+	monitor_id:     u64,
+	snapshot_id:    u64,
+	cursor:         u64,
+	at:             i64,
+	acknowledge:    bool,
+}
+
+parseMonitorHistoryRequest :: proc(data: []byte) -> (r: MonitorHistoryRequest, err: ProtocolParseError) {
+	if len(data) >= 4 do r.correlation_id, _ = endian.get_u32(data, .Big)
+	if len(data) != 37 do return r, .InvalidValue
+	r.monitor_id, _ = endian.get_u64(data[4:], .Big)
+	r.snapshot_id, _ = endian.get_u64(data[12:], .Big)
+	r.cursor, _ = endian.get_u64(data[20:], .Big)
+	r.at, _ = endian.get_i64(data[28:], .Big)
+	r.acknowledge = data[36] == 1
+	if r.monitor_id == 0 ||
+	   data[36] > 1 ||
+	   r.at < 0 ||
+	   (r.acknowledge && (r.snapshot_id == 0 || r.at == 0 || r.cursor != 0)) ||
+	   (!r.acknowledge && ((r.cursor == 0 && (r.snapshot_id != 0 || r.at != 0)) || (r.cursor != 0 && (r.snapshot_id == 0 || r.at == 0)))) {
+		return r, .InvalidValue
+	}
+	return
+}
+
 parseGetMonitorStateRequest :: proc(data: []byte) -> (r: GetMonitorStateRequest, err: ProtocolParseError) {
 	if len(data) >= 4 do r.correlation_id, _ = endian.get_u32(data, .Big)
 	if len(data) < 12 do return r, .TooShort

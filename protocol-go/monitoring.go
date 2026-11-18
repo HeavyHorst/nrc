@@ -29,6 +29,25 @@ func EncodeGetMonitorState(id uint64, correlation uint32) ([]byte, error) {
 	return b, nil
 }
 
+// An initial read has snapshotID=cursor=at=0. Continuations identify immutable
+// stored evidence; acknowledgment removes only that snapshot after sink commit.
+func EncodeMonitorHistory(id, snapshotID, cursor uint64, at int64, acknowledge bool) ([]byte, error) {
+	if id == 0 || at < 0 || acknowledge && (snapshotID == 0 || at == 0 || cursor != 0) || !acknowledge && (cursor == 0 && (snapshotID != 0 || at != 0) || cursor != 0 && (snapshotID == 0 || at == 0)) {
+		return nil, fmt.Errorf("invalid monitor history request")
+	}
+	b := make([]byte, 39)
+	binary.BigEndian.PutUint16(b, C_MonitorHistory)
+	binary.BigEndian.PutUint32(b[2:], 1)
+	binary.BigEndian.PutUint64(b[6:], id)
+	binary.BigEndian.PutUint64(b[14:], snapshotID)
+	binary.BigEndian.PutUint64(b[22:], cursor)
+	binary.BigEndian.PutUint64(b[30:], uint64(at))
+	if acknowledge {
+		b[38] = 1
+	}
+	return b, nil
+}
+
 func DecodeMonitorState(b []byte) (MonitorState, error) {
 	if len(b) != 28 {
 		return MonitorState{}, fmt.Errorf("invalid monitor state length")
@@ -47,6 +66,9 @@ type MonitorSnapshotPage struct {
 	At, Horizon int64
 	Next        uint64
 	Instances   []MonitorAvailability
+	// Only C_MonitorHistory marks on-demand disabled-monitor observations.
+	PauseObservation bool
+	SnapshotID       uint64 // Durable capture identity, independent of wall time and run sequence.
 }
 
 type MonitorAvailability struct {
@@ -69,6 +91,17 @@ func EncodeGetMonitorSnapshot(state MonitorState, cursor uint64, at int64) ([]by
 	binary.BigEndian.PutUint64(b[30:], state.Sequence)
 	binary.BigEndian.PutUint64(b[38:], uint64(at))
 	return b, nil
+}
+
+// History pages append a durable capture ID and kind byte to the live page format.
+func DecodeMonitorHistoryPage(b []byte) (MonitorSnapshotPage, error) {
+	if len(b) < 63 || b[len(b)-1] > 1 || binary.BigEndian.Uint64(b[len(b)-9:]) == 0 {
+		return MonitorSnapshotPage{}, fmt.Errorf("invalid monitor history page")
+	}
+	r, err := DecodeMonitorSnapshotPage(b[:len(b)-9])
+	r.SnapshotID = binary.BigEndian.Uint64(b[len(b)-9:])
+	r.PauseObservation = b[len(b)-1] == 1
+	return r, err
 }
 
 func DecodeMonitorSnapshotPage(b []byte) (MonitorSnapshotPage, error) {

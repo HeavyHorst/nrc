@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func TestHistoryPersistsAcceptanceAndMultipleInstances(t *testing.T) {
 	}
 	t.Log("real DuckDB", version)
 	r := historyRun{ID: "attempt1", Workspace: "test", Acceptance: "unknown", ObservedAt: 123, Duration: 456, Run: p.ApplyMonitorRun{CorrelationID: 1, MonitorID: 2, Revision: 3, Sequence: 4, Observations: []p.MonitorObservation{{Identity: "host-a:/", Condition: 1, Value: 97.5}, {Identity: "host-b:/data", Condition: 0, Value: 21.25}}}}
-	if err = writeHistory(ctx, db, r); err != nil {
+	if err = writeHistory(ctx, db, r, r); err != nil {
 		t.Fatal(err)
 	}
 	if err = writeHistory(ctx, db, r); err != nil {
@@ -33,7 +34,9 @@ func TestHistoryPersistsAcceptanceAndMultipleInstances(t *testing.T) {
 	bad := r
 	bad.ID = "bad"
 	bad.Acceptance = "invalid"
-	if err = writeHistory(ctx, db, bad); err == nil {
+	rolledBack := r
+	rolledBack.ID = "rolled-back"
+	if err = writeHistory(ctx, db, rolledBack, bad); err == nil {
 		t.Fatal("invalid acceptance stored")
 	}
 	db.Close()
@@ -63,6 +66,122 @@ func TestHistoryBacklogDoesNotBlock(t *testing.T) {
 	}
 	if h.dropped.Load() != 1 || len(h.queue) != 256 {
 		t.Fatal("incorrect bounded overflow")
+	}
+}
+
+func TestHistoryWriterBatchIsolation(t *testing.T) {
+	for _, kind := range []string{"run", "snapshot"} {
+		t.Run(kind, func(t *testing.T) {
+			h := newHistoryWriter()
+			path := filepath.Join(t.TempDir(), "history.duckdb")
+			base := time.Now().Add(-time.Hour).UnixNano()
+			ctx := context.Background()
+			db, err := openHistory(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { db.Close() }()
+			if err := maintainHistory(ctx, db, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			var writeErr error
+			if kind == "run" {
+				first := historyRun{ID: "first", Workspace: "ops", Acceptance: "confirmed", ObservedAt: base, Run: p.ApplyMonitorRun{CorrelationID: 1, MonitorID: 7, Revision: 9, Sequence: 11, Observations: []p.MonitorObservation{{Identity: "target", Value: 13}}}}
+				bad := first
+				bad.ID, bad.Acceptance = "bad", "invalid"
+				last := first
+				last.ID, last.Run.Sequence = "last", 12
+				last.Run.Observations = []p.MonitorObservation{{Identity: "target", Condition: 1, Value: 29}}
+				writeErr = h.writeBatch(ctx, db, []historyRun{first, bad, last, first}, nil)
+			} else {
+				first := historySnapshot{Workspace: "ops", MonitorSnapshotPage: p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: 7, Revision: 9, Sequence: 11}, At: base, Horizon: int64(time.Minute), Instances: []p.MonitorAvailability{{ID: 1, Identity: "target", ValidUntil: base + int64(time.Minute)}}}}
+				bad := first
+				bad.At -= int64(15 * 24 * time.Hour)
+				bad.Instances = nil
+				last := first
+				last.At, last.Sequence = base+int64(time.Minute), 12
+				last.Instances = []p.MonitorAvailability{{ID: 1, Identity: "target", State: 1, ValidUntil: last.At + int64(time.Minute)}}
+				writeErr = h.writeBatch(ctx, db, nil, []historySnapshot{first, bad, last, first})
+			}
+			if writeErr == nil {
+				t.Fatal("bad record was not rejected")
+			}
+			db.Close()
+			db, err = openHistory(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var count, sum int
+			if kind == "run" {
+				if err := db.QueryRow("SELECT count(*),sum(value)::BIGINT FROM samples").Scan(&count, &sum); err != nil || count != 2 || sum != 42 {
+					t.Fatalf("partial or duplicate samples: %d/%d: %v", count, sum, err)
+				}
+			} else {
+				if err := db.QueryRow("SELECT count(*),sum(state) FROM uptime_states").Scan(&count, &sum); err != nil || count != 2 || sum != 1 {
+					t.Fatalf("partial or duplicate states: %d/%d: %v", count, sum, err)
+				}
+			}
+			wantFailures := uint64(0)
+			if kind == "snapshot" {
+				wantFailures = 1
+			}
+			if h.dropped.Load() != 1 || h.availabilityWriteFailures.Load() != wantFailures {
+				t.Fatalf("incorrect loss accounting: %d, %v", h.dropped.Load(), h.availabilityDiagnostics())
+			}
+		})
+	}
+}
+
+func TestHistoryWriterBurst(t *testing.T) {
+	h := newHistoryWriter()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	base := time.Now().Add(-time.Hour).UnixNano()
+	const count = 93
+	source := &storedAvailabilitySource{pages: map[uint64]p.MonitorSnapshotPage{}}
+	var monitors []uint64
+	for i := 1; i <= count; i++ {
+		h.offer(historyRun{ID: strconv.Itoa(i), Workspace: "ops", Acceptance: "confirmed", ObservedAt: base, Run: p.ApplyMonitorRun{CorrelationID: 1, MonitorID: uint64(i), Revision: 9, Sequence: uint64(i + 100), Observations: []p.MonitorObservation{{Identity: "target", Value: float64(i)}}}})
+		id := uint64(i)
+		monitors = append(monitors, id)
+		source.pages[id] = p.MonitorSnapshotPage{MonitorState: p.MonitorState{MonitorID: id, Revision: 9, Sequence: id + 100}, At: base, Horizon: int64(time.Minute), Instances: []p.MonitorAvailability{{ID: 1, Identity: "target", State: uint8(id % 2), ValidUntil: base + int64(time.Minute)}}}
+	}
+	path := filepath.Join(t.TempDir(), "burst.duckdb")
+	written, collected := make(chan struct{}), make(chan struct{})
+	go func() { h.serve(ctx, path); close(written) }()
+	go func() { collectStoredAvailability(ctx, h, newMonitorSet(monitors), source, "ops", 8); close(collected) }()
+	defer func() { cancel(); <-written; <-collected }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if db := h.db.Load(); db != nil {
+			var runs, snapshots int
+			if err := db.QueryRow("SELECT (SELECT count(*) FROM runs),(SELECT count(*) FROM uptime_snapshots)").Scan(&runs, &snapshots); err != nil {
+				t.Fatal(err)
+			} else if runs == count && snapshots == count {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("writer did not persist the complete burst")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-written
+	<-collected
+	db, err := openHistory(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var samples, sum, states, failing, badFences int
+	if err := db.QueryRow(`SELECT (SELECT count(*) FROM samples),(SELECT sum(value)::BIGINT FROM samples),
+ (SELECT count(*) FROM uptime_states),(SELECT sum(state) FROM uptime_states),
+ (SELECT count(*) FROM uptime_snapshots WHERE revision<>9 OR sequence<>monitor_id+100 OR observed_at<>?)`, base).Scan(&samples, &sum, &states, &failing, &badFences); err != nil || samples != 93 || sum != 4371 || states != 93 || failing != 47 || badFences != 0 {
+		t.Fatalf("burst data changed: samples=%d sum=%d states=%d failing=%d bad_fences=%d: %v", samples, sum, states, failing, badFences, err)
+	}
+	if h.dropped.Load() != 0 {
+		t.Fatalf("burst lost %d entries", h.dropped.Load())
 	}
 }
 

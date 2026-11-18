@@ -108,41 +108,66 @@ func (s nrcSource) asset(ctx context.Context, id uint64) (p.Asset, error) {
 	return asset.Asset, nil
 }
 
-func (s nrcSource) snapshot(ctx context.Context, state p.MonitorState) (p.MonitorSnapshotPage, error) {
+func (s nrcSource) pendingSnapshot(ctx context.Context, id uint64) (p.MonitorSnapshotPage, bool, error) {
 	var result p.MonitorSnapshotPage
 	var cursor uint64
 	bytes := 0
 	identities := map[string]bool{}
 	for {
-		wire, err := p.EncodeGetMonitorSnapshot(state, cursor, result.At)
+		wire, err := p.EncodeMonitorHistory(id, result.SnapshotID, cursor, result.At, false)
 		if err != nil {
-			return result, err
+			return result, false, err
 		}
-		b, err := s.request(ctx, wire, p.S_MonitorState, state.CorrelationID)
+		body, err := s.request(ctx, wire, p.S_MonitorState, 1)
 		if err != nil {
-			return result, err
+			return result, false, err
 		}
-		page, err := p.DecodeMonitorSnapshotPage(b)
-		if err != nil || page.MonitorState != state || result.At != 0 && (page.At != result.At || page.Horizon != result.Horizon) {
-			return result, errors.New("inconsistent availability snapshot")
+		if cursor == 0 && len(body) == 28 {
+			state, err := p.DecodeMonitorState(body)
+			if err != nil || state.CorrelationID != 1 || state.MonitorID != id || state.Sequence != 0 {
+				return result, false, errors.New("invalid empty history response")
+			}
+			return result, false, nil
 		}
-		bytes += len(b)
+		page, err := p.DecodeMonitorHistoryPage(body)
+		if err != nil || page.CorrelationID != 1 || page.MonitorID != id || result.At != 0 && (page.MonitorState != result.MonitorState || page.SnapshotID != result.SnapshotID || page.At != result.At || page.Horizon != result.Horizon || page.PauseObservation != result.PauseObservation) {
+			return result, false, errors.New("inconsistent stored availability snapshot")
+		}
+		bytes += len(body)
 		if bytes > 4<<20 {
-			return result, errors.New("availability snapshot exceeds staging budget")
+			return result, false, errors.New("availability snapshot exceeds staging budget")
 		}
 		for _, row := range page.Instances {
 			if row.ID <= cursor || identities[row.Identity] {
-				return result, errors.New("repeated availability instance")
+				return result, false, errors.New("repeated availability instance")
 			}
 			identities[row.Identity] = true
 			cursor = row.ID
 		}
-		result.MonitorState, result.At, result.Horizon = state, page.At, page.Horizon
+		result.MonitorState, result.At, result.Horizon = page.MonitorState, page.At, page.Horizon
+		result.PauseObservation = page.PauseObservation
+		result.SnapshotID = page.SnapshotID
 		result.Instances = append(result.Instances, page.Instances...)
 		if page.Next == 0 {
-			return result, nil
+			return result, true, nil
 		}
 	}
+}
+
+func (s nrcSource) acknowledgeSnapshot(ctx context.Context, page p.MonitorSnapshotPage) error {
+	wire, err := p.EncodeMonitorHistory(page.MonitorID, page.SnapshotID, 0, page.At, true)
+	if err != nil {
+		return err
+	}
+	body, err := s.request(ctx, wire, p.S_MonitorState, 1)
+	if err != nil {
+		return err
+	}
+	state, err := p.DecodeMonitorState(body)
+	if err != nil || state.CorrelationID != 1 || state.MonitorID != page.MonitorID || state.Sequence != page.SnapshotID {
+		return errors.New("invalid history acknowledgment")
+	}
+	return nil
 }
 
 func (s nrcSource) apply(ctx context.Context, run p.ApplyMonitorRun) (string, error) {

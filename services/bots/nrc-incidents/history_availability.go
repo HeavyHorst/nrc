@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
-	"sync"
 	"time"
 
 	p "github.com/heavyhorst/nrc/protocol-go"
@@ -15,81 +17,79 @@ import (
 type historySnapshot struct {
 	Workspace string
 	p.MonitorSnapshotPage
+	committed chan error
 }
 
-func (h *historyWriter) requestAvailability(state p.MonitorState) {
-	state.CorrelationID = 1
-	select {
-	case h.availability <- state:
-	default:
-		h.dropped.Add(1)
-		h.availabilityRequestDrops.Add(1)
-		slog.Warn("history gap: availability requests full", "monitor_id", state.MonitorID)
-	}
-}
-
-// Read-only collection has its own workers; slow history requests never hold a
-// check worker, delay its submission, or publish a partial instance snapshot.
-func collectAvailability(ctx context.Context, h *historyWriter, source interface {
-	snapshot(context.Context, p.MonitorState) (p.MonitorSnapshotPage, error)
+// A bounded in-memory handoff is only a cache of durable NRC evidence. No read
+// or write failure acknowledges the outbox; retries preserve original expiry.
+func collectStoredAvailability(ctx context.Context, h *historyWriter, ids *monitorSet, source interface {
+	pendingSnapshot(context.Context, uint64) (p.MonitorSnapshotPage, bool, error)
+	acknowledgeSnapshot(context.Context, p.MonitorSnapshotPage) error
 }, workspace string, workers int) {
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
+	runMonitorLoops(ctx, ids, workers, func(ctx context.Context, id uint64) time.Duration {
+		for range 32 {
+			readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			page, found, err := source.pendingSnapshot(readCtx, id)
+			cancel()
+			if ctx.Err() != nil {
+				return time.Second
+			}
+			if err != nil {
+				h.availabilityReadFailures.Add(1)
+				slog.Warn("availability read failed; durable snapshot retained", "monitor_id", id)
+				return time.Second
+			}
+			if !found {
+				return time.Second
+			}
+			done := make(chan error, 1)
+			snapshot := historySnapshot{workspace, page, done}
+			start := time.Now()
+			select {
+			case h.snapshots <- snapshot:
+			default:
+				h.availabilityWaits.Add(1)
 				select {
 				case <-ctx.Done():
-					return
-				case state := <-h.availability:
-					readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-					page, err := source.snapshot(readCtx, state)
-					if readCtx.Err() != nil {
-						err = readCtx.Err()
-					}
-					cancel()
-					if ctx.Err() != nil {
-						return
-					}
-					if err != nil {
-						h.dropped.Add(1)
-						h.availabilityReadFailures.Add(1)
-						slog.Warn("history gap: availability snapshot read failed", "monitor_id", state.MonitorID, "sequence", state.Sequence, "error", err)
-						continue
-					}
-					// Keep the complete snapshot until the writer accepts it. Only these
-					// bounded collectors wait; check workers still enqueue without blocking.
-					snapshot := historySnapshot{workspace, page}
-					select {
-					case h.snapshots <- snapshot:
-						continue
-					default:
-					}
-					h.availabilityWaits.Add(1)
-					start := time.Now()
-					select {
-					case <-ctx.Done():
-						h.availabilityWaitNS.Add(uint64(time.Since(start)))
-						return
-					case h.snapshots <- snapshot:
-					}
-					wait := time.Since(start)
-					h.availabilityWaitNS.Add(uint64(wait))
-					slog.Debug("availability snapshot backpressure relieved", "monitor_id", state.MonitorID, "sequence", state.Sequence, "wait_ns", int64(wait), "snapshot_age_ns", time.Now().UnixNano()-page.At)
+					h.availabilityWaitNS.Add(uint64(time.Since(start)))
+					return time.Second
+				case h.snapshots <- snapshot:
 				}
+				h.availabilityWaitNS.Add(uint64(time.Since(start)))
 			}
-		}()
-	}
-	wg.Wait()
+			select {
+			case <-ctx.Done():
+				return time.Second
+			case err = <-done:
+			}
+			if err != nil {
+				return time.Second
+			}
+			ackCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err = source.acknowledgeSnapshot(ackCtx, page)
+			cancel()
+			if err != nil {
+				slog.Warn("availability acknowledgment failed; snapshot may be replayed", "monitor_id", id)
+				return time.Second
+			}
+			// Disabled monitors receive another immutable bounded pause observation
+			// on demand, not an unbounded stream inside this drain loop.
+			if page.PauseObservation {
+				return 30 * time.Second
+			}
+		}
+		return 0 // Yield to other monitors without throttling a known backlog.
+	})
 }
 
 const historyAvailabilitySchema = `
 CREATE TABLE IF NOT EXISTS uptime_snapshots (
  workspace VARCHAR, monitor_id UBIGINT, observed_at BIGINT, revision BIGINT, sequence UBIGINT,
- PRIMARY KEY(workspace,monitor_id,observed_at));
+ snapshot_id UBIGINT, evidence_hash VARCHAR,
+ PRIMARY KEY(workspace,monitor_id,observed_at,snapshot_id));
+CREATE INDEX IF NOT EXISTS uptime_capture ON uptime_snapshots(workspace,monitor_id,snapshot_id);
 CREATE TABLE IF NOT EXISTS uptime_states (
- workspace VARCHAR, monitor_id UBIGINT, observed_at BIGINT, identity VARCHAR, state UTINYINT, valid_until BIGINT);
+ workspace VARCHAR, monitor_id UBIGINT, observed_at BIGINT, identity VARCHAR, state UTINYINT, valid_until BIGINT, snapshot_id UBIGINT);
 CREATE TABLE IF NOT EXISTS uptime_dirty_hours (hour_ns BIGINT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS uptime_buckets (
  resolution_ns BIGINT,bucket_ns BIGINT,workspace VARCHAR,monitor_id UBIGINT,revision BIGINT,identity VARCHAR,
@@ -101,18 +101,20 @@ CREATE OR REPLACE VIEW uptime_summary AS SELECT *,
 INSERT INTO history_meta VALUES ('uptime_tail',0),('uptime_now',0) ON CONFLICT DO NOTHING;
 `
 
-func writeAvailability(ctx context.Context, db *sql.DB, s historySnapshot) error {
-	if s.Workspace == "" || s.MonitorID == 0 || s.Revision <= 0 || s.At <= 0 || s.Horizon <= 0 || s.At > math.MaxInt64-s.Horizon || s.Next != 0 {
-		return errors.New("invalid availability snapshot")
-	}
-	seen := map[string]bool{}
-	bytes := 0
-	for _, r := range s.Instances {
-		bytes += len(r.Identity) + 19
-		if len(r.Identity) == 0 || len(r.Identity) > 4096 || seen[r.Identity] || r.State > 3 || r.ValidUntil < s.At || r.ValidUntil > s.At+s.Horizon || r.State == 2 && r.ValidUntil != s.At || bytes > 4<<20 {
-			return errors.New("invalid availability instance")
+func writeAvailability(ctx context.Context, db *sql.DB, snapshots ...historySnapshot) error {
+	for _, s := range snapshots {
+		if s.Workspace == "" || s.MonitorID == 0 || s.Revision <= 0 || s.At <= 0 || s.Horizon <= 0 || s.At > math.MaxInt64-s.Horizon || s.Next != 0 {
+			return errors.New("invalid availability snapshot")
 		}
-		seen[r.Identity] = true
+		seen := map[string]bool{}
+		bytes := 0
+		for _, r := range s.Instances {
+			bytes += len(r.Identity) + 19
+			if len(r.Identity) == 0 || len(r.Identity) > 4096 || seen[r.Identity] || r.State > 3 || r.ValidUntil < s.At || r.ValidUntil > s.At+s.Horizon || r.State == 2 && r.ValidUntil != s.At || bytes > 4<<20 {
+				return errors.New("invalid availability instance")
+			}
+			seen[r.Identity] = true
+		}
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -123,32 +125,54 @@ func writeAvailability(ctx context.Context, db *sql.DB, s historySnapshot) error
 	if err = tx.QueryRowContext(ctx, "SELECT (SELECT value FROM history_meta WHERE key='raw_floor'),(SELECT value FROM history_meta WHERE key='uptime_now')").Scan(&floor, &through); err != nil {
 		return err
 	}
-	if s.At < floor {
-		return errors.New("availability snapshot predates retained raw window")
+	firstHour := int64(math.MaxInt64)
+	hours := make(map[int64]struct{})
+	for _, s := range snapshots {
+		if s.At < floor {
+			return errors.New("availability snapshot predates retained raw window")
+		}
+		// Correlation IDs are transport metadata, not captured evidence. The
+		// digest rejects conflicting reuse rather than acknowledging lost data.
+		body, marshalErr := json.Marshal([]any{s.Revision, s.Sequence, s.At, s.Horizon, s.PauseObservation, s.Instances})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		digest := fmt.Sprintf("%x", sha256.Sum256(body))
+		var previous string
+		err = tx.QueryRowContext(ctx, `SELECT evidence_hash FROM uptime_snapshots
+ WHERE workspace=? AND monitor_id=? AND snapshot_id=? AND (snapshot_id<>0 OR observed_at=?)`, s.Workspace, s.MonitorID, s.SnapshotID, s.At).Scan(&previous)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			if previous != digest {
+				return errors.New("conflicting availability capture identity")
+			}
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO uptime_snapshots VALUES(?,?,?,?,?,?,?)", s.Workspace, s.MonitorID, s.At, s.Revision, s.Sequence, s.SnapshotID, digest); err != nil {
+			return err
+		}
+		for _, r := range s.Instances {
+			if _, err = tx.ExecContext(ctx, "INSERT INTO uptime_states VALUES(?,?,?,?,?,?,?)", s.Workspace, s.MonitorID, s.At, r.Identity, r.State, r.ValidUntil, s.SnapshotID); err != nil {
+				return err
+			}
+		}
+		hour := s.At / historyHour * historyHour
+		firstHour = min(firstHour, hour)
+		hours[hour] = struct{}{}
 	}
-	var exists bool
-	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM uptime_snapshots WHERE workspace=? AND monitor_id=? AND observed_at=?)", s.Workspace, s.MonitorID, s.At).Scan(&exists); err != nil {
-		return err
-	}
-	if exists {
-		return tx.Commit()
-	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO uptime_snapshots VALUES(?,?,?,?,?)", s.Workspace, s.MonitorID, s.At, s.Revision, s.Sequence); err != nil {
-		return err
-	}
-	for _, r := range s.Instances {
-		if _, err = tx.ExecContext(ctx, "INSERT INTO uptime_states VALUES(?,?,?,?,?,?)", s.Workspace, s.MonitorID, s.At, r.Identity, r.State, r.ValidUntil); err != nil {
+	for hour := range hours {
+		// An out-of-order complete snapshot can change every subsequent interval up
+		// to the already aggregated frontier, never an interval preceding its time.
+		if _, err = tx.ExecContext(ctx, `INSERT INTO uptime_dirty_hours SELECT range FROM range(?,?,?) ON CONFLICT DO NOTHING`, hour, max(hour, through/historyHour*historyHour)+historyHour, historyHour); err != nil {
 			return err
 		}
 	}
-	hour := s.At / historyHour * historyHour
-	// An out-of-order complete snapshot can change every subsequent interval up
-	// to the already aggregated frontier, never an interval preceding its time.
-	if _, err = tx.ExecContext(ctx, `INSERT INTO uptime_dirty_hours SELECT range FROM range(?,?,?) ON CONFLICT DO NOTHING`, hour, max(hour, through/historyHour*historyHour)+historyHour, historyHour); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "UPDATE history_meta SET value=CASE WHEN value=0 THEN ? ELSE least(value,?) END WHERE key='uptime_tail'", hour, hour); err != nil {
-		return err
+	if firstHour != math.MaxInt64 {
+		if _, err = tx.ExecContext(ctx, "UPDATE history_meta SET value=CASE WHEN value=0 THEN ? ELSE least(value,?) END WHERE key='uptime_tail'", firstHour, firstHour); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -211,15 +235,16 @@ func maintainAvailability(ctx context.Context, tx *sql.Tx, now, rawFloor, fiveFl
 func aggregateAvailabilityHour(ctx context.Context, tx *sql.Tx, hour, now, fiveFloor, hourFloor int64) error {
 	_, err := tx.ExecContext(ctx, `CREATE OR REPLACE TEMP TABLE uptime_stage AS
  WITH points AS (
- SELECT workspace,monitor_id,max(observed_at) observed_at,arg_max(revision,observed_at) revision
- FROM uptime_snapshots WHERE observed_at<? GROUP BY workspace,monitor_id
- UNION ALL SELECT workspace,monitor_id,observed_at,revision
+ SELECT workspace,monitor_id,observed_at,revision,snapshot_id
+ FROM uptime_snapshots WHERE observed_at<?
+ QUALIFY row_number() OVER(PARTITION BY workspace,monitor_id ORDER BY observed_at DESC,snapshot_id DESC)=1
+ UNION ALL SELECT workspace,monitor_id,observed_at,revision,snapshot_id
  FROM uptime_snapshots WHERE observed_at>=? AND observed_at<?), timeline AS (
- SELECT *,lead(observed_at,1,?) OVER(PARTITION BY workspace,monitor_id ORDER BY observed_at) next_at
+ SELECT *,lead(observed_at,1,?) OVER(PARTITION BY workspace,monitor_id ORDER BY observed_at,snapshot_id) next_at
  FROM points), segments AS (
  SELECT t.workspace,t.monitor_id,t.revision,s.identity,s.state,s.valid_until,
  greatest(t.observed_at,?) start_at,least(t.next_at,?,?) end_at
- FROM timeline t JOIN uptime_states s USING(workspace,monitor_id,observed_at)
+ FROM timeline t JOIN uptime_states s USING(workspace,monitor_id,observed_at,snapshot_id)
  WHERE t.next_at>? AND t.observed_at<?), pieces AS (
  SELECT segments.*,b.range bucket_start,greatest(start_at,b.range) lo,least(end_at,b.range+?) hi
  FROM segments,range(?,?,?) b WHERE start_at<b.range+? AND end_at>b.range)

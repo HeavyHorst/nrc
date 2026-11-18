@@ -123,7 +123,7 @@ func TestApplyDistinguishesRejectionFromLostAcknowledgement(t *testing.T) {
 }
 
 func TestAvailabilitySnapshotPagingAndFences(t *testing.T) {
-	for _, mode := range []string{"complete", "revision", "time", "lost-page", "duplicate", "budget"} {
+	for _, mode := range []string{"complete", "pause", "revision", "time", "capture-kind", "lost-page", "duplicate", "budget"} {
 		t.Run(mode, func(t *testing.T) {
 			var calls atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -142,12 +142,12 @@ func TestAvailabilitySnapshotPagingAndFences(t *testing.T) {
 					return
 				}
 				calls.Add(1)
-				if len(wire) != 46 || binary.BigEndian.Uint16(wire) != p.C_GetMonitorState || binary.BigEndian.Uint64(wire[6:]) != 7 || binary.BigEndian.Uint64(wire[22:]) != 9 || binary.BigEndian.Uint64(wire[30:]) != 11 {
+				if len(wire) != 39 || binary.BigEndian.Uint16(wire) != p.C_MonitorHistory || binary.BigEndian.Uint64(wire[6:]) != 7 || wire[38] != 0 {
 					t.Error("invalid snapshot request")
 					return
 				}
-				cursor := binary.BigEndian.Uint64(wire[14:])
-				if binary.BigEndian.Uint64(wire[38:]) != 0 && cursor == 0 || cursor != 0 && binary.BigEndian.Uint64(wire[38:]) != 100 {
+				cursor := binary.BigEndian.Uint64(wire[22:])
+				if cursor == 0 && (binary.BigEndian.Uint64(wire[14:]) != 0 || binary.BigEndian.Uint64(wire[30:]) != 0) || cursor != 0 && (binary.BigEndian.Uint64(wire[14:]) != 11 || binary.BigEndian.Uint64(wire[30:]) != 100) {
 					t.Error("missing fixed snapshot time")
 					return
 				}
@@ -185,17 +185,26 @@ func TestAvailabilitySnapshotPagingAndFences(t *testing.T) {
 					binary.BigEndian.PutUint64(row, id)
 					binary.BigEndian.PutUint16(row[8:], uint16(len(identity)))
 					copy(row[10:], identity)
+					if mode == "pause" {
+						row[10+len(identity)] = 3
+					}
 					binary.BigEndian.PutUint64(row[11+len(identity):], 200)
 					body = append(body, row...)
 				}
+				var kind byte
+				if mode == "pause" || mode == "capture-kind" && cursor != 0 {
+					kind = 1
+				}
+				body = binary.BigEndian.AppendUint64(body, 11)
+				body = append(body, kind)
 				response, _ := (&p.Message{Opcode: p.S_MonitorState, Data: body}).Write()
 				ws.WriteMessage(websocket.BinaryMessage, response)
 			}))
 			defer server.Close()
 			source := nrcSource{"ws" + strings.TrimPrefix(server.URL, "http"), "ops", "checker", "test-secret"}
-			snapshot, err := source.snapshot(context.Background(), p.MonitorState{CorrelationID: 1, MonitorID: 7, Revision: 9, Sequence: 11})
-			if mode == "complete" {
-				if err != nil || len(snapshot.Instances) != 17 || snapshot.Instances[16].Identity != "disk-17" || snapshot.At != 100 || calls.Load() != 2 {
+			snapshot, found, err := source.pendingSnapshot(context.Background(), 7)
+			if mode == "complete" || mode == "pause" {
+				if err != nil || !found || len(snapshot.Instances) != 17 || snapshot.Instances[16].Identity != "disk-17" || snapshot.At != 100 || snapshot.PauseObservation != (mode == "pause") || calls.Load() != 2 {
 					t.Fatalf("snapshot %+v calls %d: %v", snapshot, calls.Load(), err)
 				}
 			} else if err == nil {

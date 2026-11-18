@@ -180,7 +180,9 @@ func runMonitorLoops(ctx context.Context, set *monitorSet, workers int, run func
 					}
 					delay := run(child, id)
 					<-semaphore
-					timer := time.NewTimer(max(delay, time.Second))
+					// A zero delay yields the worker slot, then continues known
+					// backlog. Polling/retry intervals belong to the caller.
+					timer := time.NewTimer(max(delay, 0))
 					select {
 					case <-child.Done():
 						timer.Stop()
