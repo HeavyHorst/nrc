@@ -292,7 +292,7 @@ func TestChronicleProviderFailuresNeverPublish(t *testing.T) {
 	}
 }
 
-func TestChronicleTerraHTTPWorker(t *testing.T) {
+func TestChronicleOpenAIHTTPWorker(t *testing.T) {
 	for _, scenario := range []string{"result", "ack", "rate-limit", "billing", "quota", "server", "timeout-http", "unauthorized", "bad-request", "redirect", "network", "deadline", "malformed", "incomplete", "wrong-source", "duplicate-answer", "refusal", "tool", "oversized", "usage-missing", "usage-input", "usage-output", "budget", "token-limit", "long-note", "count-budget", "count-error", "count-malformed", "count-zero", "count-mismatch"} {
 		t.Run(scenario, func(t *testing.T) {
 			now := time.Now()
@@ -388,7 +388,7 @@ func TestChronicleTerraHTTPWorker(t *testing.T) {
 						}
 					}
 				}
-				if json.Unmarshal(data, &request) != nil || request.Model != "gpt-6.1-terra" || request.Instructions != chronicleInstructions || request.Store == nil || *request.Store || request.Truncation != "disabled" || request.MaxOutput != 1000 || request.Reasoning.Effort != "none" || request.Text.Format.Type != "json_schema" || !request.Text.Format.Strict || request.Text.Format.Schema.Additional == nil || *request.Text.Format.Schema.Additional {
+				if json.Unmarshal(data, &request) != nil || request.Model != "gpt-6-luna" || request.Instructions != chronicleInstructions || request.Store == nil || *request.Store || request.Truncation != "disabled" || request.MaxOutput != 1000 || request.Reasoning.Effort != "none" || request.Text.Format.Type != "json_schema" || !request.Text.Format.Strict || request.Text.Format.Schema.Additional == nil || *request.Text.Format.Schema.Additional {
 					t.Fatalf("unsafe provider profile: %s", data)
 				}
 				var envelope chroniclePrompt
@@ -491,7 +491,7 @@ func TestChronicleTerraHTTPWorker(t *testing.T) {
 				t.Fatalf("HTTP retries bypassed reservation: %d", calls)
 			}
 			if scenario == "result" || scenario == "ack" || scenario == "long-note" {
-				if f.commit.Model != "gpt-6.1-terra" || f.commit.PromptVersion != chroniclePromptVersion || f.commit.SchemaVersion != chronicleSchemaVersion || f.commit.Summary == "" && scenario == "result" {
+				if f.commit.Model != "gpt-6-luna" || f.commit.PromptVersion != chroniclePromptVersion || f.commit.SchemaVersion != chronicleSchemaVersion || f.commit.Summary == "" && scenario == "result" {
 					t.Fatalf("lost result provenance: %+v", f.commit)
 				}
 			} else if scenario != "token-limit" && f.commit.Op != "" {
@@ -520,7 +520,7 @@ func TestChronicleProviderConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider, err := loadChronicleProvider("terra", path)
-	if err != nil || provider.Model() != "gpt-6.1-terra" {
+	if err != nil || provider.Model() != "gpt-6-luna" {
 		t.Fatalf("valid profile rejected: %v", err)
 	}
 	if _, err := loadChronicleProvider("fake", "/nonexistent-key"); err != nil {

@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 )
 
-const chronicleTerraModel = "gpt-6.1-terra"
+const chronicleModel = "gpt-6-luna"
 
 // Separate profile in the existing sidecar, not Sullivan's chat model/client.
 // Fixed endpoint and private credential prevent other provider keys/base URLs
@@ -51,7 +51,7 @@ func loadChronicleProvider(mode, keyFile string) (chronicleProvider, error) {
 	}
 }
 
-func (*chronicleOpenAIProvider) Model() string { return chronicleTerraModel }
+func (*chronicleOpenAIProvider) Model() string { return chronicleModel }
 
 // Identical text-only Responses profile to the synthetic p5 evaluation. Keep
 // request construction shared by admission and send; schema, escaping, repeated
@@ -68,7 +68,7 @@ func (*chronicleOpenAIProvider) request(payload []byte) []byte {
 	}
 	// Only strings, booleans, integers and JSON-shaped constants are marshalled.
 	data, _ := json.Marshal(map[string]any{
-		"model": chronicleTerraModel, "instructions": chronicleInstructions, "input": string(payload),
+		"model": chronicleModel, "instructions": chronicleInstructions, "input": string(payload),
 		"reasoning": map[string]any{"effort": "none"}, "max_output_tokens": 1000,
 		"store": false, "truncation": "disabled",
 		"text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "chronicle", "strict": true, "schema": schema}},

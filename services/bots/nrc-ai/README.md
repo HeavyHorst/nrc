@@ -49,8 +49,9 @@ For an explicitly approved real-provider run, set `NRC_CHRONICLE_MODE=terra` and
 `NRC_CHRONICLE_API_KEY_FILE=/private/chronicle-api-key` in that separate process.
 The API key file must be regular, private (0600), at most 8192 bytes and contain
 one nonempty ASCII key; a trailing newline is allowed. The worker loads it once
-at startup. There is no fallback to Sullivan's key, model or base URL. Terra mode
-uses only `gpt-6.1-terra` at `https://api.openai.com/v1/responses`, with the versioned
+at startup. There is no fallback to Sullivan's key, model or base URL. The legacy
+mode name `terra` stays unchanged; it now uses only `gpt-6-luna` at
+`https://api.openai.com/v1/responses`, with the versioned
 `chronicle-p11` prompt, `chronicle-s1` output, reasoning `none`, strict JSON schema,
 `store=false`, truncation disabled and no tools. HTTP redirects are refused.
 `store=false` is an API setting, not a zero-retention or regional-processing
@@ -143,7 +144,7 @@ retry path; response bodies and transport error details are never logged.
 
 Run `go test -race ./...` in this directory. The root server E2E
 `TestChronicleFakeWorkerProcess` builds this binary and runs it against disposable
-SQLite state, without any LLM credentials. `TestChronicleTerraHTTPWorker` checks
+SQLite state, without any LLM credentials. `TestChronicleOpenAIHTTPWorker` checks
 the actual adapter/worker path with a simulated HTTP transport, including budget
 admission, Result/Ack, provider failures and secret isolation. Neither suite is a
 joint real-provider/SQLite end-to-end test.
