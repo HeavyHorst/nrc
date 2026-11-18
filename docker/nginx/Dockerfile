@@ -5,9 +5,10 @@ RUN npm ci --no-audit --no-fund
 COPY client/ ./
 RUN npm run build
 
-FROM alpine:3.23
+FROM alpine:3.24
 # Install Nginx and its ABI-matched Brotli module from the same repository.
-RUN apk add --no-cache nginx nginx-mod-http-brotli \
+# Keep the minimum at the patched stable release from nginx.org/en/security_advisories.html.
+RUN apk add --no-cache 'nginx>=1.30.7' nginx-mod-http-brotli \
     && mkdir -p /run/nginx \
     && ln -sf /dev/stdout /var/log/nginx/access.log \
     && ln -sf /dev/stderr /var/log/nginx/error.log
