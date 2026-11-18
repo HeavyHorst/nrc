@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	protocol "github.com/heavyhorst/nrc/protocol-go"
@@ -307,6 +308,71 @@ func TestTaskSearchHTTPReturnsCachedResultsWhileDisconnected(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("shutdown did not cancel background reconciliation")
 	}
+}
+
+func TestSearchHTTPRecoversMissedNotesAfterLongBackgroundReconciliation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		storage := newTestStorage(t)
+		embedder := &recordingEmbedder{}
+		index := NewIndex()
+		cfg := Config{EmbedAssetTypes: []uint16{protocol.AssetTypeNote}, ReconcileInterval: time.Hour}
+		client, err := NewNRCClient(cfg, "ws", storage, embedder, index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler := taskSearchTestHandler(t, cfg, storage, embedder, index, client)
+		defer handler.manager.Close()
+		client.mu.Lock()
+		client.roomSyncTimes[0] = time.Time{}
+		client.mu.Unlock()
+
+		page := 0
+		client.sendMessage = func(opcode uint16, _ []byte) error {
+			if opcode != protocol.C_ListAssetsPaged {
+				return errors.New("unexpected reconciliation opcode")
+			}
+			page++
+			response := &protocol.AssetListPageResponse{
+				HasMore: page == 1, NextCursorUpdatedAt: int64(page), NextCursorAssetID: uint64(page),
+				Assets: []protocol.Asset{{AssetID: uint64(page), AssetType: protocol.AssetTypeNote,
+					Preview: "Recovered note", Payload: "Previously missed while disconnected", UpdatedAt: int64(page)}},
+			}
+			client.pendingReconcilePageMu.Lock()
+			ch := client.pendingReconcilePage[0]
+			client.pendingReconcilePageMu.Unlock()
+			go func() {
+				// Each page is within its 30s deadline, but the full scan takes 40s.
+				time.Sleep(20 * time.Second)
+				ch <- response
+			}()
+			return nil
+		}
+		handler.manager.workers.Add(1)
+		go func() {
+			defer handler.manager.workers.Done()
+			client.DrainEmbedQueue(handler.manager.ctx)
+		}()
+
+		const request = `{"workspace":"ws","query":"Recovered note","filters":{"asset_types":[5]}}`
+		start := time.Now()
+		response, _ := postTaskSearch(t, handler, request)
+		if !response.Stale || len(response.Results) != 0 || time.Since(start) != 0 {
+			t.Fatalf("search should return immediately before catch-up: %+v", response)
+		}
+		time.Sleep(41 * time.Second)
+		synctest.Wait()
+		response, _ = postTaskSearch(t, handler, request)
+		if response.Stale || len(response.Results) != 2 {
+			t.Fatalf("long reconciliation did not recover both notes: %+v", response)
+		}
+		seen := make(map[uint64]bool)
+		for _, result := range response.Results {
+			seen[result.Entity.EntityID] = true
+		}
+		if !seen[1] || !seen[2] {
+			t.Fatalf("recovered the wrong notes: %+v", response.Results)
+		}
+	})
 }
 
 func TestTaskSearchHTTPReturnsCachedResultsDuringSingleBackgroundReconciliation(t *testing.T) {

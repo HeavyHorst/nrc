@@ -427,11 +427,11 @@ func (wm *WorkspaceManager) reconcileInBackground(client *NRCClient) {
 			delete(wm.reconciling, client.workspace)
 			wm.mu.Unlock()
 		}()
-		ctx, cancel := context.WithTimeout(wm.ctx, 30*time.Second)
-		defer cancel()
-		err := waitForClientReady(ctx, client, clientReadyTimeout, client.workspace)
+		// Bound readiness and individual page requests, not the full inventory:
+		// large workspaces need many pages. Shutdown still cancels the scan.
+		err := waitForClientReady(wm.ctx, client, clientReadyTimeout, client.workspace)
 		if err == nil {
-			err = client.SubscribeAndReconcile(ctx, protocol.WorkspaceDataConvID)
+			err = client.SubscribeAndReconcile(wm.ctx, protocol.WorkspaceDataConvID)
 		}
 		if err != nil {
 			slog.Warn("background reconciliation failed", "workspace", client.workspace, "error", err)
