@@ -642,6 +642,24 @@ sqlite_chronicle_gaps :: proc(store: ^db.Store, workspace: string, q: pr.Chronic
  WHERE workspace=?1 AND first_source>?2 AND note_id=?4 ORDER BY first_source LIMIT ?3`
 		value_count = 3
 	}
+	if q.newest_first {
+		query = `SELECT first_source,last_source,note_id,first_at,last_at,reason,input_count
+ FROM chronicle_gaps WHERE workspace=?1 AND first_source<?2 ORDER BY first_source DESC LIMIT ?3`
+		if cursor == 0 {
+			query = `SELECT first_source,last_source,note_id,first_at,last_at,reason,input_count
+ FROM chronicle_gaps WHERE workspace=?1 ORDER BY first_source DESC LIMIT ?3`
+		}
+		if note != 0 {
+			query = `SELECT first_source,last_source,note_id,first_at,last_at,reason,input_count
+ FROM chronicle_gaps INDEXED BY chronicle_gap_note_order
+ WHERE workspace=?1 AND first_source<?2 AND note_id=?4 ORDER BY first_source DESC LIMIT ?3`
+			if cursor == 0 {
+				query = `SELECT first_source,last_source,note_id,first_at,last_at,reason,input_count
+ FROM chronicle_gaps INDEXED BY chronicle_gap_note_order
+ WHERE workspace=?1 AND note_id=?4 ORDER BY first_source DESC LIMIT ?3`
+			}
+		}
+	}
 	s, rc := sqlite_chronicle_statement(store, query, workspace, values[:value_count])
 	if rc != sql.OK do return rc
 	defer sql.finalize(s)
@@ -681,6 +699,22 @@ sqlite_chronicle_history :: proc(store: ^db.Store, workspace: string, q: pr.Chro
 		query = `SELECT generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version
  FROM chronicle_jobs INDEXED BY chronicle_result_note WHERE workspace=?1 AND state=1 AND generation>?2 AND note_id=?4 ORDER BY generation LIMIT ?3`
 		value_count = 3
+	}
+	if q.newest_first {
+		query = `SELECT generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version
+ FROM chronicle_jobs INDEXED BY chronicle_result_order WHERE workspace=?1 AND state=1 AND generation<?2 ORDER BY generation DESC LIMIT ?3`
+		if cursor == 0 {
+			query = `SELECT generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version
+ FROM chronicle_jobs INDEXED BY chronicle_result_order WHERE workspace=?1 AND state=1 ORDER BY generation DESC LIMIT ?3`
+		}
+		if note != 0 {
+			query = `SELECT generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version
+ FROM chronicle_jobs INDEXED BY chronicle_result_note WHERE workspace=?1 AND state=1 AND generation<?2 AND note_id=?4 ORDER BY generation DESC LIMIT ?3`
+			if cursor == 0 {
+				query = `SELECT generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version
+ FROM chronicle_jobs INDEXED BY chronicle_result_note WHERE workspace=?1 AND state=1 AND note_id=?4 ORDER BY generation DESC LIMIT ?3`
+			}
+		}
 	}
 	s, rc := sqlite_chronicle_statement(store, query, workspace, values[:value_count]); if rc != sql.OK do return rc
 	defer sql.finalize(s)

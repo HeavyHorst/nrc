@@ -717,9 +717,21 @@ func TestAskStartsWithRetrieveAndLoadsOnlyRequestedTask(t *testing.T) {
 						Role    string
 						Content json.RawMessage
 					}
+					Tools []struct {
+						Function struct{ Name string }
+					}
 				}
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Error(err)
+				}
+				for _, name := range []string{"read_history", "read_chronicle"} {
+					found := false
+					for _, tool := range request.Tools {
+						found = found || tool.Function.Name == name
+					}
+					if !found {
+						t.Errorf("model has no %s tool in %s execution", name, policy)
+					}
 				}
 				if private {
 					if call == 22 || call == 33 {

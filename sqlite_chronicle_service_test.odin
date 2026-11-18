@@ -592,6 +592,31 @@ test_chronicle_service_byte_bounded_pages_and_unsigned_identity :: proc(t: ^test
 		q.cursor = page.cursor
 	}
 	testing.expect_value(t, count, 8)
+	// Newest-first is opt-in; page boundaries stay exclusive in both scopes.
+	for note in ([2]string{"", "9223372036854775812"}) {
+		q = {
+			op           = "history",
+			limit        = 2,
+			newest_first = true,
+			note_id      = note,
+		}
+		seen := 0
+		for _ in 0 ..< 8 {
+			page, page_rc := sqlite_chronicle_service_call(t, &store, q)
+			if !testing.expect_value(t, page_rc, sql.OK) || !testing.expect_value(t, page.status, "ok") do return
+			for entry in page.entries {
+				expected := note == "" ? 8 - seen : 4
+				testing.expect_value(t, entry.generation, fmt.aprintf("%d", u64(9007199254740992) + u64(expected)))
+				seen += 1
+			}
+			q.cursor = page.cursor
+			if !page.more do break
+		}
+		testing.expect_value(t, seen, note == "" ? 8 : 1)
+		page, _ := sqlite_chronicle_service_call(t, &store, q)
+		testing.expect_value(t, len(page.entries), 0)
+		testing.expect_value(t, page.cursor, q.cursor)
+	}
 }
 
 @(test)
@@ -744,6 +769,29 @@ test_chronicle_service_gaps_read_paging_and_loss_accounting :: proc(t: ^testing.
 	q.limit = 16
 	denied, _ := sqlite_chronicle_service_call(t, &store, q, access = pr.CHRONICLE_ACCESS_SERVICE)
 	testing.expect_value(t, denied.status, "forbidden")
+	for note in ([2]string{"", "2"}) {
+		desc := pr.Chronicle_Request {
+			op           = "gaps",
+			limit        = 4,
+			note_id      = note,
+			newest_first = true,
+		}
+		seen := 0
+		for _ in 0 ..< 6 {
+			result, _ := sqlite_chronicle_service_call(t, &store, desc)
+			for row in result.gaps {
+				index := note == "" ? 17 - seen : 17 - seen * 2
+				testing.expect_value(t, row.first_source, fmt.aprintf("%d", u64(9223372036854775808) + u64(index * 8)))
+				seen += 1
+			}
+			desc.cursor = result.cursor
+			if !result.more do break
+		}
+		testing.expect_value(t, seen, note == "" ? 18 : 9)
+		result, _ := sqlite_chronicle_service_call(t, &store, desc)
+		testing.expect_value(t, len(result.gaps), 0)
+		testing.expect_value(t, result.cursor, desc.cursor)
+	}
 	// Canonical deletion changes the link, never the durable loss receipt.
 	n = pr.serializeDeleteAssetRequest(0, 2, wire[:])
 	testing.expect_value(t, sqlite_chronicle_test_apply(&store, "service", nrc_time_unix_nanos(), wire[:n]), sql.OK)

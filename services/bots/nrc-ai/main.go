@@ -39,6 +39,9 @@ type Config struct {
 	SourcebotRepos     string
 	NRCNickname        string
 	NRCBotSecret       string
+	NRCJWTSecret       string
+	NRCJWTIssuer       string
+	NRCJWTAudience     string
 	MaxContextTokens   int
 	LLMMaxOutputTokens int
 	KnowledgeGapSlices map[string]string
@@ -60,6 +63,9 @@ func loadConfig() Config {
 		SourcebotBearer: os.Getenv("SOURCEBOT_BEARER_TOKEN"),
 		SourcebotRepos:  os.Getenv("SOURCEBOT_ALLOWED_REPOS"),
 		NRCBotSecret:    os.Getenv("NRC_BOT_SECRET"),
+		NRCJWTSecret:    os.Getenv("NRC_JWT_SECRET"),
+		NRCJWTIssuer:    envOrDefault("NRC_JWT_ISSUER", "nrc-tailscale-proxy"),
+		NRCJWTAudience:  envOrDefault("NRC_JWT_AUDIENCE", "nrc"),
 	}
 
 	cfg.NRCNickname = envOrDefault("NRC_NICKNAME", "")
@@ -305,11 +311,7 @@ func main() {
 	}
 	cfg := loadConfig()
 	startTime := time.Now()
-	issuer := os.Getenv("NRC_JWT_ISSUER")
-	if issuer == "" {
-		issuer = "nrc-tailscale-proxy"
-	}
-	authenticate, err := newAIAuthentication(os.Getenv("NRC_JWT_SECRET"), issuer)
+	authenticate, err := newAIAuthentication(cfg.NRCJWTSecret, cfg.NRCJWTIssuer)
 	if err != nil {
 		slog.Error("failed to initialize AI authentication", "error", err)
 		os.Exit(1)

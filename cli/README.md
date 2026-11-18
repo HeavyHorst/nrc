@@ -680,9 +680,12 @@ nrc history list --kind asset --id 9007199254740993 --fields id,action,fields
 nrc history list --before 9007199254740993 --limit 50
 
 nrc chronicle history --note 9007199254740993 --limit 16
+nrc chronicle history --before 9007199254740993 --limit 16
+nrc chronicle history --cursor 0 --limit 16
 nrc chronicle history --cursor 9007199254740993 --limit 16
 nrc chronicle status --note 9007199254740993 --human
 nrc chronicle gaps --note 9007199254740993 --limit 16 --fields first_source,last_source,reason
+nrc chronicle gaps --before 9007199254740993 --limit 16
 ```
 
 `history list` reads the existing technical change log, newest event first.
@@ -693,15 +696,24 @@ returns one page of 1..100 events (default 50), with the existing wire names
 next page; `"0"` means the end. Event fields retain the technical protocol's
 camelCase names, such as `entityId` and `actorName`.
 
-`chronicle history` reads AI results only, oldest generation first. Acknowledged
+`chronicle history` reads AI results only, newest generation first. Acknowledged
 inputs without a relevant change are not summary entries. `chronicle gaps`
-reads ranges of inputs that could not produce results, oldest `first_source`
+reads ranges of inputs that could not produce results, newest `first_source`
 first. These reads need the same permission as status, not service rights.
-Both accept an optional `--note`, an exclusive ascending `--cursor` (default
-`0`), and `--limit` 1..16 (default 16). They return `entries` or `gaps`, plus
-`cursor` and `more`. Pass the returned cursor to the same command and filters
-while `more` is true. Empty terminal pages retain the requested cursor if the
-server omits it. There is no unbounded automatic page collection.
+Both accept an optional `--note` and `--limit` 1..16 (default 16). Without a
+paging flag, or with `--before 0`, they start at the newest IDs. `--before <id>`
+reads IDs strictly below that ID in descending order. Explicit `--cursor <id>`
+keeps the ascending behavior: `--cursor 0` starts at the oldest IDs, and later
+pages contain IDs strictly above the cursor. The two flags cannot be combined.
+Scripts that previously omitted `--cursor` must now pass `--cursor 0` to keep
+ascending order. Ordering is by ID, not timestamp, and uses server-side index
+seeks rather than collecting all pages.
+
+Both return `entries` or `gaps`, plus `cursor` and `more`. While `more` is true,
+pass the returned cursor as `--before` for descending reads or `--cursor` for
+ascending reads, keeping the same command and filters. Empty terminal pages
+retain the requested cursor if the server omits it. There is no unbounded
+automatic page collection.
 
 Gap fields are `first_source`, `last_source`, `note_id`, `first_at`, `last_at`,
 `reason`, `input_count`, and `source_available`. IDs and timestamps remain

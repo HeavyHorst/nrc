@@ -126,7 +126,7 @@ test("AI mode separates successful Ack, partial coverage and exact high-ID resul
   assert.match(html, /&lt;img src=x/); assert.doesNotMatch(html, /<img|data-chronicle-delete=/);
   assert.match(html, /chronicle-p5/); assert.match(html, /CREATED/); assert.match(html, /CHANGES/);
   f.nodes.get("historyMore").onclick(); f.replyChronicle(chronicleStatus); await settle();
-  assert.deepEqual(query(f.requests.at(-1)), { op: "history", note_id: chronicleEntry.note_id, limit: 16, cursor: chronicleEntry.generation });
+  assert.deepEqual(query(f.requests.at(-1)), { op: "history", note_id: chronicleEntry.note_id, limit: 16, cursor: chronicleEntry.generation, newest_first: true });
   // A duplicate generation is not silently appended, even if its sources look valid.
   f.replyChronicle({ status: "ok", entries: [chronicleEntry], cursor: chronicleEntry.generation, more: false }); await settle();
   assert.match(f.status(), /FAILED/); assert.doesNotMatch(f.nodes.get("historyBody").innerHTML, /Nicht freigegeben/);

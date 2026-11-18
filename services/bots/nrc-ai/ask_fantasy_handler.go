@@ -1963,7 +1963,7 @@ When mode=plan and you have proposed actions, include a compact PROPOSED ACTIONS
 The only customer-write exception is ticket_group: read_ticket_groups then propose_ticket_group in plan mode with expected_updated_at and explicit approval. Disclose sensitive mutual read/reply access to all existing/future tickets including public attachments for direct fellow-members only, no transitive sharing. Other customer writes remain unsupported.
 
 Always ground your answer in current workspace evidence. INITIAL WORKSPACE CONTEXT is retrieved for this request, not a complete inventory. Use it directly when sufficient; call tools for missing or more precise evidence.
-- For creation/modification date questions, use list_notes/list_assets/list_tasks directly rather than semantic search or dates in content. created_at is creation; updated_at is LAST modification, not an audit history. Resolve calendar dates in the request's timezone (default Europe/Berlin), using an inclusive start and exclusive next-day start, not a rolling 24 hours.
+- For creation/modification date questions, use list_notes/list_assets/list_tasks directly rather than semantic search or dates in content. created_at is creation; updated_at is LAST modification. Use read_history for the change timeline and read_chronicle for AI explanations of note changes, keeping generated summaries distinct from canonical events. Resolve calendar dates in the request's timezone (default Europe/Berlin), using an inclusive start and exclusive next-day start, not a rolling 24 hours.
 - Follow next_cursor with unchanged filters when has_more=true; deduplicate by ID. Assets are updated_at-descending: for today's created/updated records you may stop once updated_at falls before today's start. For older creation periods scan all pages. Tasks use completed_at for Done ordering, so read all task pages for date questions rather than stopping on updated_at. If tool/time/context budgets prevent completing the scan, explicitly say the answer is partial; never describe a limited page or a search complete flag as all matches. Listings are live, not an atomic snapshot.
 - Initial context is already supplied. Call room_context(query=<focused query>) only to refine or broaden retrieval when needed; do not repeat the initial search by default. Do not call room_context without a query.
 - Treat room_context ranking as evidence from the full indexed entity body. Do not dismiss a strong result merely because its static title or teaser looks unrelated to the question.
@@ -2034,6 +2034,7 @@ Sourcebot code research:
 	fantasyTools = append(fantasyTools, newAttachmentTools(wm, search, cfg)...)
 	fantasyTools = append(fantasyTools, newTicketTools(wm, agentSessions)...)
 	fantasyTools = append(fantasyTools, newTicketGroupTools(wm, agentSessions)...)
+	fantasyTools = append(fantasyTools, newHistoryTools(wm)...)
 	fantasyTools = append(fantasyTools, newKnowledgeGapTool())
 	fantasyTools = append(fantasyTools, newResearchContextTool())
 	for i, t := range fantasyTools {

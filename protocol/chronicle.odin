@@ -15,6 +15,7 @@ Chronicle_Request :: struct {
 	consumer:       string `json:"consumer"`,
 	note_id:        string `json:"note_id"`,
 	cursor:         string `json:"cursor"`,
+	newest_first:   bool `json:"newest_first,omitempty"`,
 	epoch:          string `json:"epoch"`,
 	generation:     string `json:"generation"`,
 	limit:          u16 `json:"limit"`,
@@ -115,7 +116,7 @@ parseChronicleRequest :: proc(
 			if depth == 2 {elements += 1; if elements > 32 do return result, correlation, .TooMany}
 		case .Colon:
 			fields += 1
-			if fields > 19 do return result, correlation, .TooMany
+			if fields > 20 do return result, correlation, .TooMany
 		case:
 		}
 	}
@@ -126,6 +127,10 @@ parseChronicleRequest :: proc(
 	if !object do return result, correlation, .InvalidValue
 	for key, value in obj {
 		switch key {
+		case "newest_first":
+			b, ok := value.(json.Boolean)
+			if !ok do return result, correlation, .InvalidValue
+			result.newest_first = bool(b)
 		case "op", "consumer", "note_id", "cursor", "epoch", "generation", "outcome", "summary", "model", "prompt_version", "schema_version", "reason":
 			s, ok := value.(json.String)
 			if !ok do return result, correlation, .InvalidValue

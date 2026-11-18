@@ -7,9 +7,9 @@ follow graph links and propose task, note and edge changes for approval.
 ## Start
 
 First set up the [core deployment](../../../README.md#quickstart).
-Use the same `NRC_BOT_SECRET` for the server and AI. AI also requires the proxy's
-`NRC_JWT_SECRET` (at least 32 bytes). If overriding `NRC_JWT_ISSUER`, use the same
-value on both services; the default is `nrc-tailscale-proxy`. In `.env`, set:
+Use the same `NRC_BOT_SECRET` for the server and AI. AI, proxy and server also share `NRC_JWT_SECRET` (at least 32 bytes). Match `NRC_JWT_ISSUER` across those services (default `nrc-tailscale-proxy`) and `NRC_JWT_AUDIENCE` for server connections (default `nrc`). AI authenticates each server connection with a fresh, five-minute, workspace-bound bot JWT whose subject is `service:nrc-ai`. This gives Chronicle read access without worker capability or human deletion authority. Incoming proxy assertions still use audience `nrc-ai`.
+
+In `.env`, set:
 
 - `LLM_PROVIDER`: the provider to use; the default is `openai`.
 - `LLM_MODEL`: a model supported by that provider; the default is `gpt-4o-mini`.
@@ -147,6 +147,8 @@ SQLite state, without any LLM credentials. `TestChronicleTerraHTTPWorker` checks
 the actual adapter/worker path with a simulated HTTP transport, including budget
 admission, Result/Ack, provider failures and secret isolation. Neither suite is a
 joint real-provider/SQLite end-to-end test.
+
+`TestHistoryToolsRealServer` exercises Sullivan's normal connection, both history tools, record filters, pagination, reconnects and server authorization against a disposable local server. Set `NRC_RECEIPT_E2E_BIN` to an absolute path to an `odin build .` server binary, then run `go test . -run '^TestHistoryToolsRealServer$' -count=1 -v` here. The test writes deterministic Chronicle fixtures through a separate worker identity; it never calls an LLM or uses shared storage.
 
 `TestChronicleTerraWorkerProcess` in `test/e2e` is a separate, paid, synthetic
 end-to-end test. It skips unless `NRC_CHRONICLE_LIVE_TEST_KEY_FILE` names a private
@@ -326,6 +328,8 @@ Additional bounded, read-only tools use the existing server APIs:
   owner/name/include_closed filters, limit 1–100 and server cursor.
 - `list_entity_links`: incident edges of a task/asset, including company and slice
   membership; limit 1–100, `has_more` and `next_edge_id` continuation.
+- `read_history`: canonical change events for the workspace or one task, asset or edge. Returns actors, timestamps and changed field names, not previous document bodies. Newest first; limit 1–100 (default 20). Continue with `nextBefore` as `before` until `nextBefore` is `"0"`.
+- `read_chronicle`: AI summaries of note changes (`operation: "history"`, the default), processing `status`, or coverage `gaps`. Optional `note_id` selects one note. History and gaps are oldest first; limit 1–16 (default 16), with `cursor` continuation while `more` is true. Entries retain source event IDs, model and source availability. No summaries does not mean no changes: inspect status/gaps or canonical history. The tool uses the normal workspace connection and cannot delete results or invoke worker operations; no Chronicle service credential is needed.
 - `list_attachments`: fresh owner metadata; no file download.
 - `read_attachment`: default text mode reads PDF/DOCX/XLSX/UTF-8 text via Search's
   private `/attachment/text` endpoint. Default 16 KiB, max 32 KiB per page; follow
