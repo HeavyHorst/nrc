@@ -46,6 +46,9 @@ exercise :: proc(input: []byte) -> pr.ProtocolParseError {
 	case .C_GetMonitorState:
 		_, err := pr.parseGetMonitorStateRequest(data)
 		return err
+	case .C_MonitorHistory:
+		_, err := pr.parseMonitorHistoryRequest(data)
+		return err
 	case .C_ApplyMonitorRun:
 		rows: [pr.MAX_MONITOR_INSTANCES]pr.Monitor_Observation
 		r, err := pr.parseApplyMonitorRunRequest(data, rows[:])
