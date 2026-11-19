@@ -36,17 +36,21 @@ Ticket_Page_Metadata :: struct {
 	activity:            [dynamic]Ticket_Activity,
 }
 
-ticket_body_matches :: proc(asset: ^pr.Asset, query: string) -> bool {
-	if query == "" do return true
+ticket_search_body :: proc(asset: ^pr.Asset) -> string {
 	decoded: [32000]byte
 	body := asset.payload
 	if asset.payload_encoding == .Zstd {
-		if asset.payload_raw_len > len(decoded) do return false
+		if asset.payload_raw_len > len(decoded) do return ""
 		body = decoded[:int(asset.payload_raw_len)]
 		size := ZSTD_decompress(raw_data(body), uintptr(len(body)), raw_data(asset.payload), uintptr(len(asset.payload)))
-		if ZSTD_isError(size) != 0 || size != uintptr(len(body)) do return false
+		if ZSTD_isError(size) != 0 || size != uintptr(len(body)) do return ""
 	}
-	lower := strings.to_lower(string(body)); defer delete(lower)
+	return strings.to_lower(string(body))
+}
+
+ticket_body_matches :: proc(asset: ^pr.Asset, query: string) -> bool {
+	if query == "" do return true
+	lower := ticket_search_body(asset); defer delete(lower)
 	return strings.contains(lower, query)
 }
 

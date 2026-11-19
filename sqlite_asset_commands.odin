@@ -36,7 +36,9 @@ sqlite_put_asset :: proc(store: ^db.Store, workspace: string, a: ^pr.Asset, inse
 	if a.asset_type == .Monitor {
 		if rc = sqlite_monitor_register_lanes(store, workspace, a); rc != sql.OK do return rc
 	}
-	if rc = sqlite_projection_write(store, "DELETE FROM asset_attachments WHERE workspace=?1 AND asset_id=?2", workspace, a, nil); rc != sql.OK do return rc
+	if !insert_only {
+		if rc = sqlite_projection_write(store, "DELETE FROM asset_attachments WHERE workspace=?1 AND asset_id=?2", workspace, a, nil); rc != sql.OK do return rc
+	}
 	for attachment, i in a.attachments {
 		if rc = sqlite_projection_write(store, "INSERT INTO asset_attachments VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", workspace, a, {i64(i), string(attachment.file_id), string(attachment.filename), attachment.size, string(attachment.mime_type), attachment.uploaded_at}); rc != sql.OK do return rc
 	}
@@ -44,7 +46,7 @@ sqlite_put_asset :: proc(store: ^db.Store, workspace: string, a: ^pr.Asset, inse
 	if a.parent_type != .None {
 		if rc = db.advance_floor(store, a.parent_id, a.parent_type == .Asset ? .Asset : .Task); rc != sql.OK do return rc
 	}
-	return sqlite_project_asset(store, workspace, a)
+	return sqlite_project_asset(store, workspace, a, inserted = insert_only)
 }
 
 sqlite_asset_history :: proc(store: ^db.Store, request: ^db.Request, old, a: ^pr.Asset, created: bool, deleted := false) -> c.int {

@@ -13,11 +13,18 @@ sqlite_search_customers :: proc(store: ^db.Store, request: ^db.Request, output: 
 	if err != nil || req.conv_id != 0 do return sql.CONSTRAINT
 	query := strings.to_lower(string(req.query)); defer delete(query)
 	s: ^sql.Statement
-	// Stream projected metadata in unsigned ID order. The CROSS JOIN keeps the
-	// projection as the ordered outer scan, rather than sorting canonical assets.
+	// Resolve matching contacts once, walking both directions of membership.
+	// IN deduplicates companies even when several contacts match. CASE skips
+	// this lookup entirely for an empty query or a direct company match.
 	rc := sql.prepare_v2(
 		store.db,
-		`SELECT m.asset_id,m.search_text FROM customer_metadata m
+		`WITH contacts AS MATERIALIZED (
+ SELECT m.asset_id FROM customer_metadata m CROSS JOIN assets a ON a.workspace=m.workspace AND a.id=m.asset_id
+ WHERE m.workspace=?1 AND instr(m.search_text,?4)>0 AND a.asset_type=?5)
+ SELECT m.asset_id,CASE WHEN length(?4)=0 OR instr(m.search_text,?4)>0 THEN 1 ELSE m.asset_id IN (
+ SELECT e.target_id FROM contacts c CROSS JOIN edges e INDEXED BY edges_source WHERE e.workspace=?1 AND e.source_type=?6 AND e.source_id=c.asset_id AND e.target_type=?6 AND e.relation=?7
+ UNION ALL SELECT e.source_id FROM contacts c CROSS JOIN edges e INDEXED BY edges_target WHERE e.workspace=?1 AND e.target_type=?6 AND e.target_id=c.asset_id AND e.source_type=?6 AND e.relation=?7) END
+ FROM customer_metadata m
  CROSS JOIN assets a ON a.workspace=m.workspace AND a.id=m.asset_id
  WHERE m.workspace=?1 AND a.asset_type=?2 AND (?3 OR m.archived=0) ORDER BY m.asset_id`,
 		-1,
@@ -29,30 +36,12 @@ sqlite_search_customers :: proc(store: ^db.Store, request: ^db.Request, output: 
 	if rc = sql.bind_bytes(s, 1, transmute([]byte)request.workspace); rc != sql.OK do return rc
 	if rc = sql.bind_int64(s, 2, i64(pr.AssetType.CustomerCompany)); rc != sql.OK do return rc
 	if rc = sql.bind_int64(s, 3, req.include_archived ? 1 : 0); rc != sql.OK do return rc
-	contacts: ^sql.Statement
-	rc = sql.prepare_v2(
-		store.db,
-		`SELECT 1 FROM edges e INDEXED BY edges_source
- JOIN assets a ON a.workspace=e.workspace AND a.id=e.target_id
- JOIN customer_metadata m ON m.workspace=a.workspace AND m.asset_id=a.id
- WHERE e.workspace=?1 AND e.source_type=?3 AND e.source_id=?2 AND e.target_type=?3 AND e.relation=?4
- AND a.asset_type=?5 AND instr(m.search_text,?6)>0
- UNION ALL SELECT 1 FROM edges e INDEXED BY edges_target
- JOIN assets a ON a.workspace=e.workspace AND a.id=e.source_id
- JOIN customer_metadata m ON m.workspace=a.workspace AND m.asset_id=a.id
- WHERE e.workspace=?1 AND e.target_type=?3 AND e.target_id=?2 AND e.source_type=?3 AND e.relation=?4
- AND a.asset_type=?5 AND instr(m.search_text,?6)>0 LIMIT 1`,
-		-1,
-		&contacts,
-		nil,
-	)
-	if rc != sql.OK do return rc
-	defer sql.finalize(contacts)
-	if rc = sql.bind_bytes(contacts, 1, transmute([]byte)request.workspace); rc != sql.OK do return rc
-	if rc = sql.bind_int64(contacts, 3, i64(pr.TargetType.Asset)); rc != sql.OK do return rc
-	if rc = sql.bind_int64(contacts, 4, i64(pr.RelationType.MemberOf)); rc != sql.OK do return rc
-	if rc = sql.bind_int64(contacts, 5, i64(pr.AssetType.CustomerContact)); rc != sql.OK do return rc
-	if rc = sql.bind_bytes(contacts, 6, transmute([]byte)query); rc != sql.OK do return rc
+	if rc = sql.bind_bytes(s, 4, transmute([]byte)query); rc != sql.OK do return rc
+	if rc = sql.bind_int64(s, 5, i64(pr.AssetType.CustomerContact)); rc != sql.OK do return rc
+	if rc = sql.bind_int64(s, 6, i64(pr.TargetType.Asset)); rc != sql.OK do return rc
+	if rc = sql.bind_int64(s, 7, i64(pr.RelationType.MemberOf)); rc != sql.OK do return rc
+	numeric := query != "" && len(query) <= 20
+	for c in query {if c < '0' || c > '9' {numeric = false; break}}
 	backing := context.allocator
 	arena: virtual.Arena
 	if virtual.arena_init_growing(&arena) != nil do return sql.NOMEM
@@ -69,18 +58,11 @@ sqlite_search_customers :: proc(store: ^db.Store, request: ^db.Request, output: 
 		rc = sql.step(s); if rc == sql.DONE do break
 		if rc != sql.ROW do return rc
 		id, id_rc := sql.column_id(s, 0); if id_rc != sql.OK do return id_rc
-		matched := query == "" || strings.contains(string(sql.column_bytes_view(s, 1)), query)
-		if !matched {
+		matched := sql.column_int64(s, 1) != 0
+		if !matched && numeric {
 			// Decimal IDs must retain their unsigned meaning above INT64_MAX.
 			text := fmt.aprint(id)
 			matched = strings.contains(text, query); delete(text)
-		}
-		if !matched {
-			if rc = sql.bind_id(contacts, 2, id); rc != sql.OK do return rc
-			rc = sql.step(contacts)
-			if rc != sql.ROW && rc != sql.DONE do return rc
-			matched = rc == sql.ROW
-			if rc = sql.reset(contacts); rc != sql.OK do return rc
 		}
 		if !matched do continue
 		if msg.total_count == max(u32) do return sql.TOOBIG

@@ -41,10 +41,11 @@ sqlite_projection_write :: proc(store: ^db.Store, query: cstring, workspace: str
 	return rc == sql.DONE ? sql.OK : rc
 }
 
-sqlite_project_asset :: proc(store: ^db.Store, workspace: string, asset: ^pr.Asset) -> c.int {
+sqlite_project_asset :: proc(store: ^db.Store, workspace: string, asset: ^pr.Asset, inserted := false) -> c.int {
 	if sql.get_autocommit(store.db) != 0 do return sql.MISUSE
 	// This also removes projections left by changing an asset's type.
 	for query in ([?]cstring{"DELETE FROM note_metadata WHERE workspace=?1 AND asset_id=?2", "DELETE FROM note_tags WHERE workspace=?1 AND asset_id=?2", "DELETE FROM reminder_metadata WHERE workspace=?1 AND asset_id=?2", "DELETE FROM appointment_metadata WHERE workspace=?1 AND asset_id=?2", "DELETE FROM appointment_people WHERE workspace=?1 AND asset_id=?2", "DELETE FROM slice_metadata WHERE workspace=?1 AND asset_id=?2", "DELETE FROM customer_metadata WHERE workspace=?1 AND asset_id=?2", "DELETE FROM ticket_metadata WHERE workspace=?1 AND asset_id=?2", "DELETE FROM ticket_entry_metadata WHERE workspace=?1 AND asset_id=?2", "DELETE FROM room_mappings WHERE workspace=?1 AND asset_id=?2"}) {
+		if inserted do break // A successful insert cannot have existing child rows.
 		// A metadata edit must not invalidate all memberships of a valid slice.
 		if asset.asset_type == .Slice && string(query) == "DELETE FROM slice_metadata WHERE workspace=?1 AND asset_id=?2" do continue
 		if rc := sqlite_projection_write(store, query, workspace, asset, nil); rc != sql.OK do return rc
@@ -97,6 +98,7 @@ sqlite_project_asset :: proc(store: ^db.Store, workspace: string, asset: ^pr.Ass
 		}
 	case .Slice:
 		m, valid := slice_preview(asset, context.allocator)
+		if !valid && inserted do return sql.OK
 		if !valid do return sqlite_projection_write(store, "DELETE FROM slice_metadata WHERE workspace=?1 AND asset_id=?2", workspace, asset, nil)
 		return sqlite_projection_write(
 			store,
@@ -149,6 +151,8 @@ sqlite_project_asset :: proc(store: ^db.Store, workspace: string, asset: ^pr.Ass
 	case .Ticket:
 		m, valid := parse_ticket_preview(asset.preview, context.allocator)
 		if !valid do return sql.OK
+		fields := strings.to_lower(fmt.aprint(m.title, "\n", m.requester, "\n", m.requester_name, "\n#", asset.asset_id))
+		if rc := sqlite_project_ticket_document(store, workspace, asset, asset.asset_id, fields); rc != sql.OK do return rc
 		follow_up, _ := ticket_follow_up_time(m.follow_up_at)
 		return sqlite_projection_write(
 			store,
@@ -159,6 +163,7 @@ sqlite_project_asset :: proc(store: ^db.Store, workspace: string, asset: ^pr.Ass
 		)
 	case .TicketEntry:
 		if asset.parent_type != .Asset do return sql.OK
+		if rc := sqlite_project_ticket_document(store, workspace, asset, asset.parent_id, ""); rc != sql.OK do return rc
 		m: struct {
 			kind: string `json:"kind"`,
 		}
@@ -188,6 +193,23 @@ sqlite_project_asset :: proc(store: ^db.Store, workspace: string, asset: ^pr.Ass
 	case .Comment, .Document, .File, .Agenda, .Monitor, .Incident, .MonitorSource:
 	}
 	return sql.OK
+}
+
+sqlite_project_ticket_document :: proc(store: ^db.Store, workspace: string, asset: ^pr.Asset, ticket: u64, fields: string) -> c.int {
+	rc := sqlite_projection_write(store, "INSERT INTO ticket_search_docs(workspace,asset_id,ticket_id) VALUES(?1,?2,?3)", workspace, asset, {ticket})
+	if rc != sql.OK do return rc
+	// FTS5 may skip or stop at NUL. Keep a searchable boundary instead;
+	// queries containing this private-use character take the literal scan.
+	index_fields, _ := strings.replace_all(fields, "\x00", TICKET_FTS_NUL)
+	index_body, _ := strings.replace_all(ticket_search_body(asset), "\x00", TICKET_FTS_NUL)
+	return sqlite_projection_write(
+		store,
+		`INSERT INTO ticket_trigrams(rowid,fields,body)
+ SELECT docid,CAST(?3 AS TEXT),CAST(?4 AS TEXT) FROM ticket_search_docs WHERE workspace=?1 AND asset_id=?2`,
+		workspace,
+		asset,
+		{index_fields, index_body},
+	)
 }
 
 // Explicit offline operation. One SQLite row plus one scoped parser arena is
@@ -235,6 +257,7 @@ sqlite_rebuild_projections :: proc(store: ^db.Store) -> c.int {
 		if rc = sqlite_project_asset(store, string(sql.column_bytes_view(statement, 0)), &a); rc != sql.OK do return rc
 	}
 	if rc = db.rebuild_slices(store); rc != sql.OK do return rc
+	if rc = sql.exec(store.db, "DELETE FROM ticket_search_backfill", nil, nil, nil); rc != sql.OK do return rc
 	rc = db.commit(store)
 	committed = rc == sql.OK
 	return rc

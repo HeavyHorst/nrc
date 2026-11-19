@@ -33,8 +33,8 @@ adds schema-4 Slice ordering indexes; `monitoring.sql` adds the schema-5
 monitoring state foundation, followed by `chronicle.sql` for schema-6
 note-chronicle storage. `chronicle_input_budget.sql` then raises the per-call
 input-token constraint to 128,000 in schema 7. `monitor_snapshots.sql` adds the
-schema-8 availability outbox. The import fingerprints all eight files and creates
-schema-8 databases with initially empty monitoring and chronicle tables. Keep all eight
+schema-8 availability outbox. `ticket_trigram.sql` adds the FTS5 ticket index.
+The import fingerprints all nine files and creates schema-9 databases. Keep all nine
 files in the migration bundle. The real Odin projection builder populates the
 derived membership, summary, project and workspace counters before activation.
 
@@ -52,7 +52,7 @@ before commit. Then apply `monitor_snapshots.sql` inside a transaction for schem
 Startup never upgrades old schemas silently.
 For schema 4, apply `monitoring.sql` first; for schemas 1 through 3, also apply
 the preceding Slice migrations in order. See the
-[stopped migration procedure](../../docs/DEVELOPMENT.md#sqlite-schema-8).
+[stopped migration and ticket index backfill procedure](../../docs/DEVELOPMENT.md#sqlite-schema-9).
 
 Decoder references in that snapshot: `storage_layout.odin`,
 `shard_compaction_manifest.odin`, `shard_segment_catalog.odin`,

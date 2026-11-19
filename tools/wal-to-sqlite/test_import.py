@@ -125,8 +125,8 @@ class ImportTests(unittest.TestCase):
         self.assertTrue((self.target / "IMPORT_COMPLETE.json").is_file())
         self.assertFalse((self.target / "storage-layout.manifest").exists())
         self.assertEqual(result["retained_message_generation"], 9)
-        self.assertEqual(result["schema_version"], 8)
-        self.assertEqual(json.loads((self.target / "IMPORT_COMPLETE.json").read_text())["schema_version"], 8)
+        self.assertEqual(result["schema_version"], 9)
+        self.assertEqual(json.loads((self.target / "IMPORT_COMPLETE.json").read_text())["schema_version"], 9)
         return result
 
     def connection(self):
@@ -210,7 +210,7 @@ class ImportTests(unittest.TestCase):
                     mutation(3, 1, edge(19, scope=43)), mutation(4, 1, dm(0))])
         self.run_import()
         db = self.connection()
-        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (8,))
+        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (9,))
         self.assertEqual(db.execute("SELECT count(*) FROM monitor_snapshots").fetchone(), (0,))
         for table in ("tasks", "assets", "edges", "task_attachments", "asset_attachments",
                       "room_mappings", "note_metadata", "note_tags", "reminder_metadata",

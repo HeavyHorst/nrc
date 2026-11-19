@@ -37,6 +37,7 @@ run "$odin_tests" . "${odin_common[@]}" -define:NRC_SIMULATION=true "${odin_hege
 	run cmp workspace_db/monitoring.sql tools/wal-to-sqlite/monitoring.sql
 	run cmp workspace_db/chronicle.sql tools/wal-to-sqlite/chronicle.sql
 	run cmp workspace_db/chronicle_input_budget.sql tools/wal-to-sqlite/chronicle_input_budget.sql
+	run cmp workspace_db/ticket_trigram.sql tools/wal-to-sqlite/ticket_trigram.sql
 	run "$odin_bin" build . -vet -o:speed -define:NRC_SQLITE_PROJECTION_BUILDER=true -out:"$builder_dir/projection-builder"
 	run env NRC_TEST_PROJECTION_BUILDER="$builder_dir/projection-builder" PYTHONDONTWRITEBYTECODE=1 \
 		python3 -W error::ResourceWarning -m unittest discover -s tools/wal-to-sqlite -v

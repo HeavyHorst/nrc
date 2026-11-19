@@ -21,7 +21,7 @@ the affected ownership paths change; it is not a warning-suppression list.
 Install an Odin compiler, Go and Node.js before you build.
 On Debian/Ubuntu, also install `libopus-dev` and `libzstd-dev`.
 The server, SQLite package tests and root worker-integration tests require `libsqlite3-dev`
-(SQLite 3.37.0 or newer for STRICT tables; locally checked with 3.54.0).
+(SQLite 3.37.0 or newer with FTS5 and its trigram tokenizer; locally checked with 3.54.0).
 Workspace handlers use SQLite executors in normal builds.
 Run these commands from the repository root:
 
@@ -85,9 +85,26 @@ Use the [Compose deployment](../README.md#quickstart) for the complete web appli
 Production serves the complete generated `client/dist/`, not the source directory.
 After frontend changes, rebuild the Nginx image and reload open browser tabs.
 
+## SQLite schema 9
+
+Ticket activity searches use a case-sensitive trigram index over text already
+lowercased by NRC. Tickets and entries are separate documents. Substrings of
+fewer than three Unicode code points and terms containing NUL use the scanner.
+The index stores normalized, uncompressed text: allow extra disk space for the
+database, the rebuild transaction and its WAL.
+
+Stop writers, take a quiesced backup, and rehearse on a disposable copy. For
+each schema-8 shard apply `workspace_db/ticket_trigram.sql` with `sqlite3 -bail`
+inside `BEGIN IMMEDIATE` / `COMMIT`. Run the schema-9 `projection-builder`
+on that shard before switching server binaries. A shard with old ticket rows
+uses the scanner until the builder commits. Verify `PRAGMA integrity_check`,
+`PRAGMA foreign_key_check`, `PRAGMA user_version` (9), an empty
+`ticket_search_backfill` and as many `ticket_search_docs` as ticket and entry
+metadata rows combined. Restore the stopped backup to roll back.
+
 ## SQLite schema 8
 
-Server and importer require schema 8. New databases append
+Schema 8 appends
 `workspace_db/monitor_snapshots.sql` after schema 7. It adds the immutable
 availability outbox: accepted evaluations and their complete snapshot pages
 commit together. History acknowledges a snapshot only after its DuckDB commit.
@@ -424,7 +441,7 @@ WAL layouts; no existing data is automatically migrated. The base schema defines
 ordered attachments, history with immutable ACL/endpoint columns, DM membership
 and persistent ID floors. Derived tables cover notes/tags, reminders, appointments,
 customers, tickets, slices and room mappings. Server and importer use
-[schema 7](#sqlite-schema-7), including the Slice migrations, monitoring and chronicle capture tables.
+[schema 9](#sqlite-schema-9), including the Slice migrations, monitoring, chronicle capture and ticket search tables.
 Recreate test databases after schema
 changes during development; there is no automatic migration. Workspace tables and their projections use workspace/ID
 keys without a scope column. Protocol scope fields must still be zero; storage

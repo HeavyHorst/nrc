@@ -16,7 +16,7 @@ Store :: struct {
 	slice_statement_count: int,
 }
 
-SCHEMA_VERSION :: 8
+SCHEMA_VERSION :: 9
 APPLICATION_ID :: 0x4e524351
 SCHEMA ::
 	#load("schema.sql", string) +
@@ -26,7 +26,8 @@ SCHEMA ::
 	#load("monitoring.sql", string) +
 	#load("chronicle.sql", string) +
 	#load("chronicle_input_budget.sql", string) +
-	#load("monitor_snapshots.sql", string)
+	#load("monitor_snapshots.sql", string) +
+	#load("ticket_trigram.sql", string)
 
 // create permits initialization of an empty database only. Existing NRC files
 // must match the schema version; other databases are never adopted or migrated.
@@ -44,6 +45,7 @@ open :: proc(path: cstring, create := false, read_only := false) -> (store: Stor
 	// and shared-memory setup briefly require exclusive locks. Bound that wait
 	// to initialization; ordinary requests retain immediate BUSY errors.
 	if status == sql.OK do status = sql.busy_timeout(store.db, 100)
+	if status == sql.OK do status = sql.register_lower(store.db)
 	if status == sql.OK do status = initialize(&store, create)
 	if status == sql.OK do status = sql.busy_timeout(store.db, 0)
 	if status != sql.OK {

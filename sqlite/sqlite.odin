@@ -2,8 +2,10 @@
 // are synchronous and must never run on a network worker.
 package sqlite
 
+import "base:runtime"
 import "core:c"
 import "core:encoding/endian"
+import "core:strings"
 
 Database :: struct {}
 Statement :: struct {}
@@ -50,6 +52,25 @@ foreign library {
 	column_int64 :: proc(statement: ^Statement, column: c.int) -> i64 ---
 	column_bytes :: proc(statement: ^Statement, column: c.int) -> c.int ---
 	column_blob :: proc(statement: ^Statement, column: c.int) -> rawptr ---
+	create_function_v2 :: proc(db: ^Database, name: cstring, argc, flags: c.int, data: rawptr, func: proc "c" (_: rawptr, _: c.int, _: [^]rawptr), step, final, destroy: rawptr) -> c.int ---
+	value_blob :: proc(value: rawptr) -> rawptr ---
+	value_bytes :: proc(value: rawptr) -> c.int ---
+	result_blob :: proc(ctx, data: rawptr, length: c.int, destroy: Destructor) ---
+	result_error_nomem :: proc(ctx: rawptr) ---
+}
+
+// SQLite's built-in lower() only folds ASCII. Return the same byte key as
+// the Odin cursor, including for empty titles and embedded NULs.
+register_lower :: proc(db: ^Database) -> c.int {
+	lower :: proc "c" (ctx: rawptr, argc: c.int, argv: [^]rawptr) {
+		context = runtime.default_context()
+		p := ([^]byte)(value_blob(argv[0])); n := value_bytes(argv[0])
+		key, err := strings.to_lower(string(p[:n])); if err != nil {result_error_nomem(ctx); return}
+		defer delete(key)
+		empty: byte
+		result_blob(ctx, len(key) == 0 ? rawptr(&empty) : rawptr(raw_data(key)), c.int(len(key)), transmute(Destructor)(uintptr(max(uintptr))))
+	}
+	return create_function_v2(db, "nrc_lower", 1, 1 | 0x800, nil, lower, nil, nil, nil) // UTF8 | DETERMINISTIC
 }
 
 // SQLite copies bindings before returning, including stack-allocated ID bytes.

@@ -21,7 +21,7 @@ RUN curl --fail --location https://www.sqlite.org/2026/sqlite-autoconf-3540100.t
     && echo 'b6ced585c750916b1052667239a12c25a7ff34e7f06e1e6e01ecb0427657d9c4 *sqlite.tar.gz' > sqlite.sha3 \
     && openssl dgst -sha3-256 -r sqlite.tar.gz | diff - sqlite.sha3 \
     && tar -xzf sqlite.tar.gz --strip-components=1 \
-    && ./configure --prefix=/opt/sqlite --disable-static --disable-readline --disable-static-shell \
+    && ./configure --prefix=/opt/sqlite --enable-fts5 --disable-static --disable-readline --disable-static-shell \
     && make -j2 \
     && make install
 RUN echo /opt/sqlite/lib > /etc/ld.so.conf.d/nrc-sqlite.conf && ldconfig

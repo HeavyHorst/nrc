@@ -163,7 +163,7 @@ worker_db_test_tickets :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstring)
 			parent_id = 1,
 			created_at = 80,
 			preview = task_query_test_bytes(`{"kind":"customer_reply"}`),
-			payload = task_query_test_bytes("reply needle"),
+			payload = task_query_test_bytes("reply needle split\x00word afterzero"),
 		},
 		{
 			asset_id = 11,
@@ -216,6 +216,16 @@ worker_db_test_tickets :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstring)
 	testing.expect_value(t, sqlite_put_asset(&store, "foreign-tickets", &fixtures[0]), sql.OK)
 	testing.expect_value(t, db.commit(&store), sql.OK)
 	M :: max(u64)
+	worker_db_test_ticket_pages(t, c, fixtures[:], {search = "splitword", limit = 2}, {})
+	worker_db_test_ticket_pages(t, c, fixtures[:], {search = "afterzero", limit = 2}, {1})
+	worker_db_test_ticket_pages(t, c, fixtures[:], {search = "split\uE000word", limit = 2}, {})
+	worker_db_test_ticket_pages(
+		t,
+		c,
+		fixtures[:],
+		{mode = "attention", sort = "id", search = "afterzero", descending = true, omit_total_count = true, limit = 1, cursor = {"1", "10", ""}},
+		{1},
+	)
 	for f in ([?]struct {
 			sort:                  string,
 			ascending, descending: [5]u64,

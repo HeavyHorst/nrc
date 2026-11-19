@@ -171,10 +171,14 @@ cleanup_chronicle :: proc(store: ^Store, now: i64) -> c.int {
 cleanup_chronicle_batch :: proc(store: ^Store, now: i64) -> c.int {
 	s, prepare_rc := prepare(
 		store,
-		`SELECT workspace,source_id FROM
-   (SELECT i.workspace,i.source_id FROM chronicle_workspaces w
+		`WITH RECURSIVE pending(workspace) AS (
+ SELECT min(workspace) FROM chronicle_inputs INDEXED BY chronicle_pending_epoch WHERE state=0
+ UNION ALL SELECT (SELECT min(i.workspace) FROM chronicle_inputs i INDEXED BY chronicle_pending_epoch
+ WHERE i.state=0 AND i.workspace>p.workspace) FROM pending p WHERE p.workspace IS NOT NULL)
+ SELECT workspace,source_id FROM
+   (SELECT i.workspace,i.source_id FROM pending p CROSS JOIN chronicle_workspaces w
     CROSS JOIN chronicle_inputs i INDEXED BY chronicle_pending_epoch
-    WHERE i.workspace=w.workspace AND i.state=0 AND i.epoch<=w.disabled_through_epoch LIMIT ?2)
+    WHERE w.workspace=p.workspace AND i.workspace=w.workspace AND i.state=0 AND i.epoch<=w.disabled_through_epoch LIMIT ?2)
   UNION ALL SELECT workspace,source_id FROM
    (SELECT workspace,source_id FROM chronicle_inputs INDEXED BY chronicle_expiry
     WHERE state=0 AND expires_at<=?1 ORDER BY expires_at,workspace,source_id LIMIT ?2)
