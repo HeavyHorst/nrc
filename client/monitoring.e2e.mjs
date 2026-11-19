@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { installMonitoringFixture } from './monitoring-fixture.mjs';
 
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2, serviceWorkers: 'block' });
+const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, locale: 'en-US', deviceScaleFactor: 2, serviceWorkers: 'block' });
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
 try {
@@ -533,6 +533,81 @@ try {
   await page.locator('#incidentAssignment button').click();
   await page.waitForFunction(() => document.querySelector('[name=assignee]')?.value === 'oncall' && monitorFixture.actions.length === 2);
   assert.deepEqual(await page.evaluate(() => monitorFixture.actions), [{ action: 0, assignee: '' }, { action: 1, assignee: 'oncall' }]);
+  // Units change presentation, never the raw measurements or threshold positions.
+  await page.evaluate(() => {
+    Object.assign(monitorFixture.definition, { kind: 'victoriametrics', query: 'filesystem query', trigger: { op: '>', value: 90 }, recovery: { op: '<', value: 85 } });
+    delete monitorFixture.definition.conditions;
+    delete monitorFixture.definition.url;
+    Object.assign(monitorFixture, { instancePages: true, instanceLabels: ['{"instance":"cluster01c:9100","mountpoint":"/home/media03"}'], fail: true, old: false });
+  });
+  for (const [unit, value, expected] of [['percent', 92.74672464115285, '92.75 %'], ['bytes', 1536, '1.5 KiB'], ['bytes', 1073741824, '1 GiB'], ['bytes', 1023, '1023 B'], ['number', 0.00000123, '1.23e-6'], ['percent', 0, '0 %'], ['percent', null, '—']]) {
+    await page.evaluate(({ unit, value }) => { monitorFixture.config.unit = unit; monitorFixture.value = value; }, { unit, value });
+    await page.click('[data-monitor="12"]');
+    await page.waitForSelector('#monitorInstances tbody tr');
+    assert.equal(await page.locator('#monitorInstances tbody td:nth-child(3)').first().textContent(), expected);
+    assert.equal(await page.locator('#monitorInstances tbody td:nth-child(3)').first().getAttribute('title'), String(value ?? '—'));
+    assert.equal(await page.locator('#monitorUnit').inputValue(), unit);
+    for (const width of [1600, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.click('[data-monitor="12"]');
+      await page.waitForSelector('#monitorInstances tbody tr');
+      assert.equal(await page.locator('#monitorInstances thead').isVisible(), true);
+      assert.equal(await page.locator('#monitorInstances').evaluate(host => host.scrollWidth <= host.clientWidth), true, `Instance columns fit at ${width}px`);
+      assert.equal(await page.locator('#monitorInstances tbody td:nth-child(3)').first().evaluate(cell => {
+        const range = document.createRange(); range.selectNodeContents(cell);
+        return range.getClientRects().length === 1;
+      }), true, 'A measurement never wraps across lines');
+    }
+    await page.setViewportSize({ width: 1600, height: 1000 });
+  }
+  await page.evaluate(() => {
+    monitorFixture.config.unit = 'bytes';
+    Object.assign(monitorFixture, { value: 1536, fail: false, sampleRows: [{ ago: 60, value: 1536 }] });
+    Object.assign(monitorFixture.definition, { trigger: { op: '>', value: 1024 }, recovery: { op: '<', value: 512 } });
+  });
+  await page.click('[data-monitor="12"]');
+  await page.waitForSelector('[data-instance="0"]');
+  await page.click('[data-instance="0"]');
+  await page.waitForSelector('.monitor-timeseries svg');
+  assert.deepEqual(await page.locator('#monitorHistory td').allTextContents(), ['1.5 KiB', '> 1 KiB', '< 512 B']);
+  assert.match(await page.locator('.monitor-chart-points title').first().textContent(), /1.5 KiB · RAW 1536/);
+  assert.match(await page.locator('.monitor-chart-legend').textContent(), /TRIGGER > 1 KiB.*RECOVERY < 512 B/);
+  assert.deepEqual(await page.locator('.monitor-value-scale [data-scale]').evaluateAll(lanes => lanes.map(g => g.dataset.scale === 'value' ? +g.querySelector('circle').getAttribute('cx') : +g.querySelector('.monitor-scale-marker').getAttribute('d').match(/^M([^,]+)/)[1])), [448, 280, 112], 'IEC formatting does not alter raw-value positions');
+  await page.evaluate(() => {
+    monitorFixture.value = 1536;
+    monitorFixture.fail = true;
+    delete monitorFixture.sampleRows;
+    monitorFixture.config.unit = 'number';
+    monitorFixture.savedUnitPatches = [];
+    monitorFixture.originalPatch = NRCTransactions.sendAssetMetadataPatch;
+    NRCTransactions.sendAssetMetadataPatch = (asset, preview, payload, callbacks) => {
+      monitorFixture.savedUnitPatches.push({ revision: String(asset.updatedAt), preview: JSON.parse(preview), payload });
+      if (monitorFixture.unitConflict) queueMicrotask(() => callbacks.onError({ message: 'Revision conflict' }));
+      else { Object.assign(monitorFixture.config, JSON.parse(preview)); queueMicrotask(callbacks.onSuccess); }
+      return 1;
+    };
+  });
+  await page.click('[data-monitor="12"]');
+  await page.waitForSelector('#monitorUnit');
+  const rawDefinition = await page.evaluate(() => JSON.stringify(monitorFixture.definition));
+  await page.selectOption('#monitorUnit', 'bytes');
+  await page.click('#monitorDisplay button');
+  await page.waitForFunction(() => document.querySelector('#monitorInstances tbody td:nth-child(3)')?.textContent === '1.5 KiB');
+  assert.equal(await page.locator('#monitorUnit').inputValue(), 'bytes', 'Saved unit survives the Inspector reload');
+  assert.deepEqual(await page.evaluate(() => ({ payload: monitorFixture.savedUnitPatches[0].payload, definition: JSON.stringify(monitorFixture.definition), raw: monitorFixture.value })), { payload: null, definition: rawDefinition, raw: 1536 });
+  await page.evaluate(() => { monitorFixture.unitConflict = true; });
+  await page.selectOption('#monitorUnit', 'percent');
+  await page.click('#monitorDisplay button');
+  await page.waitForFunction(() => document.getElementById('monitorUnitStatus').textContent.includes('Revision conflict'));
+  assert.equal(await page.locator('#monitorUnit').inputValue(), 'percent', 'A failed save retains the chosen unit for review');
+  assert.equal(await page.evaluate(() => monitorFixture.config.unit), 'bytes', 'Conflicting save does not overwrite the saved unit');
+  assert.equal(await page.evaluate(() => monitorFixture.savedUnitPatches.length), 2, 'No automatic retry after an uncertain write');
+  await page.evaluate(() => {
+    NRCTransactions.sendAssetMetadataPatch = monitorFixture.originalPatch;
+    delete monitorFixture.config.unit;
+    delete monitorFixture.instanceLabels;
+    monitorFixture.instancePages = false;
+  });
   // Victoria uses the selected NRC snapshot, never HTTP diagnostics or History availability.
   for (const kind of ['victoriametrics', 'victorialogs']) {
     await page.evaluate(kind => {

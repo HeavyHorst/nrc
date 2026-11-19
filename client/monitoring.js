@@ -21,6 +21,24 @@ window.NRCMonitoring = (() => {
   const hour = 3600000;
   const historyMaxAge = 5 * 60000;
   const percent = (n, d) => d > 0n ? `${Number(n * 10000n / d) / 100}%` : 'UNKNOWN';
+  const displayUnits = { number: 'Number', percent: 'Percent (0–100)', bytes: 'Bytes (IEC)' };
+
+  function formatValue(value, unit = 'number') {
+    if (value == null) return '—';
+    let number = Number(value);
+    if (!Number.isFinite(number)) return String(value);
+    let suffix = unit === 'percent' ? ' %' : '';
+    if (unit === 'bytes') {
+      const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'];
+      let index = 0;
+      while (Math.abs(number) >= 1024 && index < units.length - 1) { number /= 1024; index++; }
+      suffix = ` ${units[index]}`;
+    }
+    const magnitude = Math.abs(number);
+    return (magnitude > 0 && (magnitude < 0.01 || magnitude >= 1e6)
+      ? number.toExponential(2)
+      : number.toLocaleString(undefined, { maximumFractionDigits: 2, useGrouping: false })) + suffix;
+  }
 
   function cachedHistory(row) {
     const cached = registerHistory.get(row.id);
@@ -316,7 +334,7 @@ window.NRCMonitoring = (() => {
     }
   }
   function open(type, id) { window.NRCInspector.openEntity({ type, id: BigInt(id) }, { replaceCurrent: window.NRCInspector.current()?.type === type }); }
-  function valueScale(row, definition, revision) {
+  function valueScale(row, definition, revision, unit) {
     if (row.revision !== String(revision) || typeof row.value !== 'number' || !Number.isFinite(row.value)) return '';
     const entries = [{ key: 'value', value: row.value }, ...['trigger', 'recovery'].filter(key => definition[key]).map(key => ({ key, value: Number(definition[key].value) }))];
     if (entries.some(entry => !Number.isFinite(entry.value))) return '<p class="customer-meta">Scale unavailable: threshold outside browser numeric range.</p>';
@@ -328,9 +346,9 @@ window.NRCMonitoring = (() => {
       return `<g data-scale="${entry.key}"><text x="0" y="${y + 4}">${entry.key.toUpperCase()}</text><path class="monitor-scale-track" d="M100,${y}H460"/>${entry.key === 'value' ? `<circle cx="${x}" cy="${y}" r="4"/>` : `<path class="monitor-scale-marker" d="M${x},${y - 6}V${y + 6}"/>`}</g>`;
     }).join('');
     const bottom = entries.length * 24 + 16;
-    return `<svg class="monitor-value-scale" viewBox="0 0 480 ${bottom + 6}" role="img" aria-label="Relative scale: value ${esc(row.value)}, trigger ${esc(definition.trigger.op)} ${esc(definition.trigger.value)}${definition.recovery ? `, recovery ${esc(definition.recovery.op)} ${esc(definition.recovery.value)}` : ''}. Current revision; not a lifecycle status.">${lanes}<text x="112" y="${bottom}" text-anchor="start">${Number(low.toPrecision(4))}</text><text x="448" y="${bottom}" text-anchor="end">${Number(high.toPrecision(4))}</text><text x="280" y="${bottom}" text-anchor="middle">RELATIVE SCALE</text></svg>`;
+    return `<svg class="monitor-value-scale" viewBox="0 0 480 ${bottom + 6}" role="img" aria-label="Relative scale: value ${esc(formatValue(row.value, unit))}, trigger ${esc(definition.trigger.op)} ${esc(formatValue(definition.trigger.value, unit))}${definition.recovery ? `, recovery ${esc(definition.recovery.op)} ${esc(formatValue(definition.recovery.value, unit))}` : ''}. Current revision; not a lifecycle status.">${lanes}<text x="112" y="${bottom}" text-anchor="start">${esc(formatValue(low, unit))}</text><text x="448" y="${bottom}" text-anchor="end">${esc(formatValue(high, unit))}</text><text x="280" y="${bottom}" text-anchor="middle">RELATIVE SCALE</text></svg>`;
   }
-  function sampleChart(rows, definition, revision, interval, range) {
+  function sampleChart(rows, definition, revision, interval, range, unit) {
     const samples = rows.map(row => ({ ...row, at: Number(BigInt(row.observed_at_ns) / 1000000n) })).filter(row => row.at >= range.from && row.at < range.to).sort((a, b) => a.at - b.at);
     const usable = row => row.revision === String(revision) && typeof row.value === 'number' && Number.isFinite(row.value);
     const points = samples.filter(usable);
@@ -359,15 +377,16 @@ window.NRCMonitoring = (() => {
     }
     const markers = points.map((row, index) => {
       const confirmed = row.acceptance === 'confirmed';
-      const label = `${stamp(row.observed_at_ns)} · ${row.value}${confirmed ? '' : ` · NOT CONFIRMED: ${row.acceptance}`}`;
+      const formatted = formatValue(row.value, unit);
+      const label = `${stamp(row.observed_at_ns)} · ${formatted}${formatted === String(row.value) ? '' : ` · RAW ${row.value}`}${confirmed ? '' : ` · NOT CONFIRMED: ${row.acceptance}`}`;
       const attrs = `data-point="${index}" data-x="${x(row.at)}"`;
       return confirmed ? `<circle ${attrs} class="${!connected.has(row) || index === points.length - 1 ? 'monitor-chart-endpoint' : ''}" cx="${x(row.at)}" cy="${y(row.value)}" r="3"><title>${esc(label)}</title></circle>` : `<rect ${attrs} x="${x(row.at) - 3}" y="${y(row.value) - 3}" width="6" height="6" transform="rotate(45 ${x(row.at)} ${y(row.value)})"><title>${esc(label)}</title></rect>`;
     }).join('');
-    const ticks = [low, (low + high) / 2, high].map(v => `<text x="54" y="${y(v * scale) + 4}" text-anchor="end">${Number((v * scale).toPrecision(3))}</text>`).join('');
+    const ticks = [low, (low + high) / 2, high].map(v => `<text x="54" y="${y(v * scale) + 4}" text-anchor="end">${esc(formatValue(v * scale, unit))}</text>`).join('');
     const lines = thresholds.map(t => `<line data-threshold="${t.key}" x1="64" x2="464" y1="${y(Number(t.value))}" y2="${y(Number(t.value))}"/>`).join('');
     const times = [range.from, (range.from + range.to) / 2, range.to].map((at, i) => `<text x="${x(at)}" y="195" text-anchor="${['start', 'middle', 'end'][i]}">${esc(new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</text>`).join('');
     for (const t of omitted) thresholds.push({ ...t, value: 'outside browser numeric range; not plotted' });
-    return `<div class="monitor-timeseries"><p class="monitor-chart-readout" aria-live="polite">Hover or tap for values</p><svg viewBox="0 0 480 210" tabindex="0" role="group" aria-label="Last hour, current revision: ${points.length} samples. Use arrow keys to inspect values, Escape to clear. Hollow diamonds are not confirmed. Gaps are not interpolated."><path class="monitor-chart-axis" d="M64,20V168H464"/>${ticks}${times}${lines}<path class="monitor-chart-trace" d="${trace}"/><path class="monitor-chart-guide"/><g class="monitor-chart-points">${markers}</g></svg><div class="monitor-chart-legend"><span>─ VALUE</span>${thresholds.map(t => `<span data-threshold="${t.key}">┄ ${t.key.toUpperCase()} ${esc(t.op)} ${esc(t.value)}</span>`).join('')}<span>◇ NOT CONFIRMED</span></div><p class="customer-meta">CURRENT REVISION · GAPS &gt; ${Number(interval) / 1e9 * 1.5}s</p></div>`;
+    return `<div class="monitor-timeseries"><p class="monitor-chart-readout" aria-live="polite">Hover or tap for values</p><svg viewBox="0 0 480 210" tabindex="0" role="group" aria-label="Last hour, current revision: ${points.length} samples. Use arrow keys to inspect values, Escape to clear. Hollow diamonds are not confirmed. Gaps are not interpolated."><path class="monitor-chart-axis" d="M64,20V168H464"/>${ticks}${times}${lines}<path class="monitor-chart-trace" d="${trace}"/><path class="monitor-chart-guide"/><g class="monitor-chart-points">${markers}</g></svg><div class="monitor-chart-legend"><span>─ VALUE</span>${thresholds.map(t => `<span data-threshold="${t.key}" title="${esc(t.value)}">┄ ${t.key.toUpperCase()} ${esc(t.op)} ${esc(formatValue(t.value, unit))}</span>`).join('')}<span>◇ NOT CONFIRMED</span></div><p class="customer-meta">CURRENT REVISION · GAPS &gt; ${Number(interval) / 1e9 * 1.5}s</p></div>`;
   }
   function bindSampleChart(host) {
     const svg = host.querySelector('.monitor-timeseries svg');
@@ -539,12 +558,32 @@ window.NRCMonitoring = (() => {
       record.classList.add('monitor-inspector');
       header.querySelector('.identity-reference').textContent = `MONITOR / ${config.name}`;
       record.innerHTML = `<h2>CURRENT STATE: ${esc(config.name)}</h2><p class="customer-meta">${esc(definition.kind.toUpperCase())} · EVERY ${esc(config.interval_ns / 1e9)}s${config.timeout_ns ? ` · TIMEOUT ${esc(config.timeout_ns / 1e9)}s` : ''} · ${config.enabled ? 'ENABLED' : 'DISABLED'}</p><pre class="monitor-rule">${esc(definition.query || definition.url || definition.address)}</pre>
+        ${victoria ? `<form id="monitorDisplay" class="customer-fields"><label class="detail-edit-field">DISPLAY UNIT<select id="monitorUnit" class="task-detail-input">${Object.entries(displayUnits).map(([value, label]) => `<option value="${value}"${(config.unit || 'number') === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label><button class="btn" type="submit">SAVE UNIT</button></form><p class="customer-meta">Display only; queries and thresholds stay in raw units. Saving creates a new monitor revision and restarts qualification.</p><p id="monitorUnitStatus" role="status"></p>` : ''}
         ${section('INSTANCES · CURRENT NRC STATE', '<div class="monitor-instance-toolbar"><span id="monitorInstanceStatus" role="status"></span><label><input id="monitorRetired" type="checkbox"> INCLUDE RETIRED</label></div><div id="monitorInstances"></div><button class="btn" id="monitorInstanceMore" hidden>MORE INSTANCES</button>')}
         <div id="monitorSelection"></div>
         ${section(victoria ? 'VALUE & THRESHOLDS' : definition.conditions?.length ? 'CONDITIONS · ALL MUST PASS' : 'EVALUATION RESULT', `<div id="monitorHistory"><p class="customer-empty">Select an instance.</p></div><h3 class="monitor-subheading">ALARM THRESHOLDS</h3><dl class="monitor-thresholds"><div><dt>TRIGGER</dt><dd>${config.failures} failures</dd></div><div><dt>RESOLVE</dt><dd>${config.recoveries} successes</dd></div><div><dt>MISSING</dt><dd>${config.missing} absent evaluations</dd></div></dl>`)}
         ${section('HISTORY & AVAILABILITY', '<p id="monitorHistoryStatus" class="customer-meta" role="status"></p><div id="monitorUptime" hidden></div><div id="monitorHistoryDetails"></div>')}
         <section class="monitor-footer">${facts([['MONITOR ID', String(ref.id)], ['REVISION', String(asset.updatedAt)]])}<p class="customer-meta">CLI MANAGED · WEBHOOK ROUTE IDS: ${esc(config.webhooks?.join(', ') || 'NONE')} · Delivery state is not shown here.</p></section>`;
       el('monitorRetired').checked = retired;
+      if (victoria) el('monitorDisplay').onsubmit = async event => {
+        event.preventDefault();
+        const unit = el('monitorUnit').value;
+        if (unit === (config.unit || 'number')) return;
+        const form = event.currentTarget;
+        form.inert = true;
+        try {
+          // Preserve exact integer policy fields when changing display metadata.
+          const preview = JSON.parse(asset.preview, (_key, value, context) => typeof value === 'number' ? JSON.rawJSON(context.source) : value);
+          await new Promise((resolve, reject) => {
+            if (!window.NRCTransactions.sendAssetMetadataPatch(asset, JSON.stringify({ ...preview, unit }), null, {
+              onSuccess: resolve, onError: detail => reject(new Error(detail.message || 'Save unconfirmed')),
+            })) reject(new Error('Not connected. Nothing sent.'));
+          });
+          if (valid()) { await showInspector(ref, stillCurrent); refresh(); }
+        } catch (error) {
+          if (valid()) el('monitorUnitStatus').textContent = `${error.message} · Refresh and check the saved unit before retrying.`;
+        } finally { form.inert = false; }
+      };
       let instancePage, instances = [], instanceGeneration = 0, historyGeneration = 0, instancesLoading = false, selectedInstance = null;
       const loadInstances = async (more = false) => {
         if (more && (instancesLoading || !instancePage?.has_more)) return;
@@ -588,7 +627,7 @@ window.NRCMonitoring = (() => {
           el('monitorInstances').hidden = single;
           el('monitorInstances').closest('section').querySelector('header').hidden = single;
           el('monitorInstances').classList.add('monitor-instance-list');
-          el('monitorInstances').innerHTML = table(['INSTANCE', 'STATE', 'VALUE', 'INCIDENT'], instances.map((row, index) => `<tr${selectedInstance === row.id ? ' class="monitor-selected"' : ''}><td><button class="task-row-open" data-instance="${index}" aria-pressed="${selectedInstance === row.id}" title="${esc(row.identity)}">${instanceLabel(row.identity, true)}</button></td><td>${badge(row.status)}</td><td>${esc(row.value ?? '—')}</td><td>${row.incident_id !== '0' ? `<button class="task-row-open monitor-incident-link" data-incident="${esc(row.incident_id)}" aria-label="Open incident #${esc(row.incident_id)}">#${esc(row.incident_id)}</button>` : '—'}</td></tr>`).join(''));
+          el('monitorInstances').innerHTML = table(['INSTANCE', 'STATE', 'VALUE', 'INCIDENT'], instances.map((row, index) => `<tr${selectedInstance === row.id ? ' class="monitor-selected"' : ''}><td><button class="task-row-open" data-instance="${index}" aria-pressed="${selectedInstance === row.id}" title="${esc(row.identity)}">${instanceLabel(row.identity, true)}</button></td><td>${badge(row.status)}</td><td title="${esc(row.value ?? '—')}">${esc(formatValue(row.value, config.unit))}</td><td>${row.incident_id !== '0' ? `<button class="task-row-open monitor-incident-link" data-incident="${esc(row.incident_id)}" aria-label="Open incident #${esc(row.incident_id)}">#${esc(row.incident_id)}</button>` : '—'}</td></tr>`).join(''));
           el('monitorInstanceStatus').textContent = single ? '1 INSTANCE' : `${instances.length} LOADED · ${instances.filter(r => r.status === 'firing').length} FIRING · ${instances.filter(r => r.status === 'failing').length} PENDING${next.has_more ? ' · MORE AVAILABLE' : ''}`;
           el('monitorInstances').querySelector('table').insertAdjacentHTML('afterbegin', '<colgroup><col><col><col><col></colgroup>');
           el('monitorInstanceStatus').title = `AS OF ${stamp(next.at)}`;
@@ -612,10 +651,10 @@ window.NRCMonitoring = (() => {
           item.setAttribute('aria-pressed', String(selected)); item.closest('tr').classList.toggle('monitor-selected', selected);
         }
         const identity = el('monitorInstances').hidden ? `<h3>${instanceLabel(row.identity)}</h3>` : '';
-        el('monitorSelection').innerHTML = `${identity}<p>${badge(row.status)} · ${row.incident_id !== '0' ? `<button class="task-row-open" data-incident="${esc(row.incident_id)}">INCIDENT #${esc(row.incident_id)}</button>` : 'NO ACTIVE INCIDENT'}<span class="customer-meta">VALUE ${esc(row.value ?? '—')} · CURRENT NRC STATE</span></p><div class="monitor-streaks">${streak('FAIL', row.failures, config.failures, 'fail')}${streak('RECOVER', row.recoveries, config.recoveries, 'pass')}</div>`;
+        el('monitorSelection').innerHTML = `${identity}<p>${badge(row.status)} · ${row.incident_id !== '0' ? `<button class="task-row-open" data-incident="${esc(row.incident_id)}">INCIDENT #${esc(row.incident_id)}</button>` : 'NO ACTIVE INCIDENT'}<span class="customer-meta" title="${esc(row.value ?? '—')}">VALUE ${esc(formatValue(row.value, config.unit))} · CURRENT NRC STATE</span></p><div class="monitor-streaks">${streak('FAIL', row.failures, config.failures, 'fail')}${streak('RECOVER', row.recoveries, config.recoveries, 'pass')}</div>`;
         const target = el('monitorHistory');
         if (victoria) {
-          target.innerHTML = `${row.revision !== String(asset.updatedAt) ? '<p class="customer-meta">CONFIGURATION CHANGED · VALUE FROM PREVIOUS REVISION</p>' : ''}${table(['LAST OBSERVED VALUE', 'TRIGGER', 'RECOVERY'], `<tr><td>${esc(row.value ?? '—')}</td><td>${esc(definition.trigger.op)} ${esc(definition.trigger.value)}</td><td>${definition.recovery ? `${esc(definition.recovery.op)} ${esc(definition.recovery.value)}` : 'When trigger no longer matches'}</td></tr>`)}${valueScale(row, definition, asset.updatedAt)}<p class="customer-meta">LAST SEEN ${esc(stamp(row.seen_at))} · CURRENT CONFIGURATION THRESHOLDS</p>`;
+          target.innerHTML = `${row.revision !== String(asset.updatedAt) ? '<p class="customer-meta">CONFIGURATION CHANGED · VALUE FROM PREVIOUS REVISION</p>' : ''}${table(['LAST OBSERVED VALUE', 'TRIGGER', 'RECOVERY'], `<tr><td title="${esc(row.value ?? '—')}">${esc(formatValue(row.value, config.unit))}</td><td title="${esc(definition.trigger.value)}">${esc(definition.trigger.op)} ${esc(formatValue(definition.trigger.value, config.unit))}</td><td${definition.recovery ? ` title="${esc(definition.recovery.value)}"` : ''}>${definition.recovery ? `${esc(definition.recovery.op)} ${esc(formatValue(definition.recovery.value, config.unit))}` : 'When trigger no longer matches'}</td></tr>`)}${valueScale(row, definition, asset.updatedAt, config.unit)}<p class="customer-meta">LAST SEEN ${esc(stamp(row.seen_at))} · CURRENT CONFIGURATION THRESHOLDS</p>`;
         } else target.textContent = 'Reading history…';
         el('monitorUptime').replaceChildren(); el('monitorUptime').hidden = true; el('monitorHistoryDetails').replaceChildren();
         const key = JSON.stringify([scope, String(ref.id), String(asset.updatedAt), row.identity]);
@@ -627,7 +666,7 @@ window.NRCMonitoring = (() => {
           const limit = 'History section exceeds retention or result limits. Use the CLI for a narrower range.';
           const run = attempts.rows.findLast(r => r.acceptance === 'confirmed' && r.revision === String(asset.updatedAt) && r.sequence === row.sequence) || attempts.rows.at(-1);
           if (!victoria) target.innerHTML = attempts.status === 200 ? diagnostics(run, definition, asset.updatedAt, previous ? null : row.sequence, row.revision) : `<p>${limit}</p>`;
-          const observations = sample.status !== 200 ? `<p>${limit}</p>` : victoria ? sampleChart(sample.rows, definition, asset.updatedAt, config.interval_ns, range) : '<div class="monitor-recent-checks"></div>';
+          const observations = sample.status !== 200 ? `<p>${limit}</p>` : victoria ? sampleChart(sample.rows, definition, asset.updatedAt, config.interval_ns, range, config.unit) : '<div class="monitor-recent-checks"></div>';
           el('monitorHistoryDetails').innerHTML = section(victoria ? 'HISTORY · LAST HOUR' : 'RECENT CHECKS · LAST HOUR', `${observations}${result.dropped_process_total !== '0' ? `<p class="customer-meta">PROCESS HISTORY DROPS: ${esc(result.dropped_process_total)}</p>` : ''}`);
           if (victoria) bindSampleChart(el('monitorHistoryDetails'));
           else if (sample.status === 200) recentChecks(el('monitorHistoryDetails').querySelector('.monitor-recent-checks'), sample.rows, attempts.rows, definition, asset.updatedAt, range);

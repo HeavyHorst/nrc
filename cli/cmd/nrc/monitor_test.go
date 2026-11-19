@@ -439,7 +439,7 @@ func TestMonitorCLI(t *testing.T) {
 	if err := os.WriteFile(path, []byte(query), 0600); err != nil {
 		t.Fatal(err)
 	}
-	run("", true, "monitor", "create", "Disk", "--source", "1", "--query-file", path, "--identity", "instance,mountpoint", "--trigger", "<10", "--recovery", ">15", "--interval", "30s", "--failures", "7")
+	run("", true, "monitor", "create", "Disk", "--source", "1", "--query-file", path, "--identity", "instance,mountpoint", "--trigger", "<10", "--recovery", ">15", "--interval", "30s", "--failures", "7", "--unit", "percent")
 	r := get("3")
 	var policy monitorPolicy
 	_ = json.Unmarshal(r.Config, &policy)
@@ -453,18 +453,26 @@ func TestMonitorCLI(t *testing.T) {
 		t.Fatalf("bad defaults/config: %s %s", r.Config, r.Check)
 	}
 	_ = json.Unmarshal(r.Check, &check)
-	if check.Query != query {
-		t.Fatal("query file changed")
+	if check.Query != query || policy.Unit != "percent" || check.Trigger.Value != "10" {
+		t.Fatal("query, display unit or raw trigger changed")
 	}
 	run("", true, "monitor", "source", "update", "1", "--secret-ref", "READ_METRICS", "--retention", "90d")
 	run("", true, "monitor", "update", "3", "--name", "Disk space")
 	r = get("3")
+	_ = json.Unmarshal(r.Config, &policy)
+	if policy.Unit != "percent" {
+		t.Fatal("unrelated update lost display unit")
+	}
 	_ = json.Unmarshal(r.Check, &d)
 	if string(d["source_revision"]) != `"1001"` {
 		t.Fatal("unrelated edit silently repinned source")
 	}
-	run("", true, "monitor", "update", "3", "--refresh-source", "--trigger", ">18446744073709551615", "--recovery", "")
+	run("", true, "monitor", "update", "3", "--refresh-source", "--trigger", ">18446744073709551615", "--recovery", "", "--unit", "bytes")
 	r = get("3")
+	_ = json.Unmarshal(r.Config, &policy)
+	if policy.Unit != "bytes" {
+		t.Fatal("unit update not applied")
+	}
 	_ = json.Unmarshal(r.Check, &d)
 	if string(d["source_revision"]) != `"1004"` || !strings.Contains(string(d["trigger"]), "18446744073709551615") || bytes.Contains(r.Check, []byte(`"recovery"`)) {
 		t.Fatalf("repin/decimal/clear failed: %s", r.Check)
@@ -478,12 +486,26 @@ func TestMonitorCLI(t *testing.T) {
 	mu.Lock()
 	before := writes
 	mu.Unlock()
+	for _, unit := range []string{"", "number", "percent", "bytes"} {
+		var proposed struct {
+			Record monitorRecord `json:"record"`
+		}
+		out := run("", true, "monitor", "update", "3", "--unit", unit, "--dry-run")
+		if err := json.Unmarshal([]byte(out), &proposed); err != nil {
+			t.Fatal(err)
+		}
+		var config monitorPolicy
+		if err := json.Unmarshal(proposed.Record.Config, &config); err != nil || config.Unit != unit || !bytes.Equal(proposed.Record.Check, r.Check) {
+			t.Fatalf("display-only update changed check or lost unit %q: %s", unit, out)
+		}
+	}
 	dry := run("_time:5m | stats by (host) count()", true, "monitor", "create", "Errors", "--source", "2", "--query-file", "-", "--identity", "host", "--trigger", ">0", "--dry-run")
 	if !strings.Contains(dry, `"kind":"victorialogs"`) || !strings.Contains(dry, `"dry_run":true`) {
 		t.Fatal(dry)
 	}
 	for _, args := range [][]string{
 		{"monitor", "update", "3"},
+		{"monitor", "update", "3", "--unit", "kilobytes"},
 		{"monitor", "update", "3", "--trigger", "<=10", "--recovery", ">=10"},
 		{"monitor", "update", "3", "--identity", "host,host"},
 		{"monitor", "update", "3", "--timeout", "2m"},

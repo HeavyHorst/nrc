@@ -22,6 +22,7 @@ import (
 type monitorConfig struct {
 	Version    int      `json:"version"`
 	Name       string   `json:"name"`
+	Unit       string   `json:"unit,omitempty"` // Display metadata only, not used by evaluation.
 	Evaluator  string   `json:"evaluator"`
 	Enabled    bool     `json:"enabled"`
 	Interval   int64    `json:"interval_ns"`
@@ -75,6 +76,16 @@ func parseMonitor(a p.Asset) (monitorConfig, checkDefinition, error) {
 	}
 	if err := decodeStrict(a.Preview, &c); err != nil {
 		return c, d, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(a.Preview), &fields); err != nil {
+		return c, d, err
+	}
+	if unit, present := fields["unit"]; present && bytes.Equal(bytes.TrimSpace(unit), []byte("null")) {
+		return c, d, errors.New("monitor unit must be a string")
+	}
+	if c.Unit != "" && c.Unit != "number" && c.Unit != "percent" && c.Unit != "bytes" {
+		return c, d, errors.New("monitor unit must be empty, number, percent or bytes")
 	}
 	if c.Version != 1 || c.Name == "" || c.Evaluator == "" || c.Interval <= 0 || c.Timeout <= 0 || c.Timeout > c.Interval || c.Failures == 0 || c.Recoveries == 0 || c.Missing == 0 {
 		return c, d, errors.New("invalid monitor policy")

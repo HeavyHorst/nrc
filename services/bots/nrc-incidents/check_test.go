@@ -12,6 +12,38 @@ import (
 	"time"
 )
 
+func TestMonitorDisplayUnit(t *testing.T) {
+	for _, tc := range []struct {
+		field string
+		unit  string
+		valid bool
+	}{
+		{"", "", true},
+		{`,"unit":""`, "", true},
+		{`,"unit":"number"`, "number", true},
+		{`,"unit":"percent"`, "percent", true},
+		{`,"unit":"bytes"`, "bytes", true},
+		{`,"unit":"Bytes"`, "", false},
+		{`,"unit":"kilobytes"`, "", false},
+		{`,"unit":100`, "", false},
+		{`,"unit":null`, "", false},
+		{`,"unit":true`, "", false},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			a := monitorAsset("https://example.com")
+			a.Preview = strings.TrimSuffix(a.Preview, "}") + tc.field + "}"
+			a.Payload = `{"kind":"victoriametrics","source_id":"1","source_revision":"2","query":"disk_free_bytes","identity_labels":["instance"],"trigger":{"op":"<","value":1073741824},"recovery":{"op":">","value":2147483648}}`
+			c, d, err := parseMonitor(a)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, error=%v", tc.valid, err)
+			}
+			if tc.valid && (c.Unit != tc.unit || d.Trigger.Value != "1073741824" || d.Recovery.Value != "2147483648" || d.Query != "disk_free_bytes") {
+				t.Fatalf("unit or raw check values changed: %+v %+v", c, d)
+			}
+		})
+	}
+}
+
 func TestConditionDiagnostics(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(503)

@@ -11,6 +11,7 @@ import pr "protocol"
 Monitor_Config :: struct {
 	version:                       int,
 	name, evaluator:               string,
+	unit:                          string, // Display metadata only; observations and thresholds stay raw.
 	enabled:                       bool,
 	interval_ns, timeout_ns:       i64,
 	failures, recoveries, missing: u32,
@@ -21,11 +22,12 @@ parse_monitor_config :: proc(a: ^pr.Asset, allocator: mem.Allocator) -> (config:
 	if a.asset_type != .Monitor || a.parent_type != .None || a.parent_id != 0 || len(a.attachments) != 0 || a.payload_encoding != .Plain || a.payload_raw_len != u32(len(a.payload)) do return
 	fields, object, ok := json_metadata_fields(
 		a.preview,
-		{"version", "name", "evaluator", "enabled", "interval_ns", "timeout_ns", "failures", "recoveries", "missing", "webhooks"},
+		{"version", "name", "evaluator", "enabled", "interval_ns", "timeout_ns", "failures", "recoveries", "missing", "webhooks", "unit"},
 		allocator,
 		true,
 	)
 	if !object || !ok || (fields[3].kind != .True && fields[3].kind != .False) do return
+	if len(fields[10].text) != 0 && fields[10].kind != .String do return
 	for index in ([6]int{0, 4, 5, 6, 7, 8}) {if fields[index].kind != .Integer do return config, policy, false}
 	// JSON unmarshal casts integers to u32 without checking their range.
 	for index in 6 ..< 9 {
@@ -33,6 +35,7 @@ parse_monitor_config :: proc(a: ^pr.Asset, allocator: mem.Allocator) -> (config:
 		if !integer || value < 1 || value > i64(max(u32)) do return
 	}
 	if json.unmarshal(a.preview, &config, allocator = allocator) != nil do return
+	if config.unit != "" && config.unit != "number" && config.unit != "percent" && config.unit != "bytes" do return
 	if len(config.webhooks) > 8 do return
 	for route, i in config.webhooks {
 		if !pr.valid_monitor_route(route) do return

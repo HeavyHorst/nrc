@@ -25,6 +25,7 @@ import (
 type monitorPolicy struct {
 	Version    int      `json:"version"`
 	Name       string   `json:"name"`
+	Unit       string   `json:"unit,omitempty"` // Display only; never rescale check values.
 	Evaluator  string   `json:"evaluator"`
 	Enabled    bool     `json:"enabled"`
 	Interval   int64    `json:"interval_ns"`
@@ -368,6 +369,7 @@ func monitorWriteCommand(kind uint16, update bool) *cobra.Command {
 		f.StringSlice("identity", nil, "Identity labels, e.g. instance,mountpoint; replaces the entire list")
 		f.String("trigger", "", "Alarm comparison, e.g. '<10' or '>=5' (quote it)")
 		f.String("recovery", "", "Opposite recovery comparison, e.g. '>15'; empty clears hysteresis")
+		f.String("unit", "", "Display unit: number (or empty), percent (raw 0–100), bytes (IEC); never rescales values")
 		f.Duration("interval", time.Minute, "Evaluation interval")
 		f.Duration("timeout", 10*time.Second, "Query timeout, at most the interval")
 		f.Uint32("failures", 5, "Consecutive failures before opening an incident")
@@ -535,6 +537,12 @@ func buildMonitorRule(cmd *cobra.Command, name string, a p.Asset, update bool, l
 	set := func(key string, v any) { d[key], _ = json.Marshal(v) }
 	if f.Changed("name") {
 		c.Name, _ = f.GetString("name")
+	}
+	if f.Changed("unit") {
+		c.Unit, _ = f.GetString("unit")
+	}
+	if c.Unit != "" && c.Unit != "number" && c.Unit != "percent" && c.Unit != "bytes" {
+		return a, fmt.Errorf("--unit must be empty, number, percent or bytes")
 	}
 	if !update || f.Changed("interval") {
 		v, _ := f.GetDuration("interval")

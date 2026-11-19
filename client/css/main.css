@@ -124,13 +124,13 @@ button.monitor-history-bar:is(:hover, :focus-visible, [aria-pressed="true"]) { o
 .monitor-identity-label { display: block; text-align: left; overflow-wrap: anywhere; }
 .monitor-identity-label small { color: var(--text-dim); font-size: inherit; font-weight: 400; }
 .monitor-selected { outline: 1px solid var(--selected-row-accent); outline-offset: -1px; }
-.monitor-instance-list .monitor-table thead { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }
+.monitor-instance-list .monitor-table th { color: var(--text-dim); text-align: left; }
 .monitor-instance-list .monitor-table.task-table tbody tr > td { padding: 0.25rem 0.375rem; vertical-align: middle; }
-.monitor-instance-list col:first-child { width: 54%; }
-.monitor-instance-list col:nth-child(2) { width: 20%; }
-.monitor-instance-list col:nth-child(3) { width: 12%; }
-.monitor-instance-list col:last-child { width: 14%; }
-.monitor-instance-list .monitor-table.task-table tbody tr > td:nth-child(n+3) { text-align: right; }
+.monitor-instance-list col:first-child { width: 44%; }
+.monitor-instance-list col:nth-child(2) { width: 18%; }
+.monitor-instance-list col:nth-child(3) { width: 18%; }
+.monitor-instance-list col:last-child { width: 20%; }
+.monitor-instance-list .monitor-table.task-table :is(th, td):nth-child(n+3) { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .monitor-instance-list .task-row-open { font: inherit; }
 .monitor-instance-list [data-instance] { display: flex; flex-wrap: wrap; gap: 0 0.5rem; width: 100%; text-align: left; }
 .monitor-instance-list .monitor-identity-label { display: inline; min-width: 0; }

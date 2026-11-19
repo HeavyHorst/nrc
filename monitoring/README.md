@@ -45,6 +45,26 @@ Server maintenance persists staleness independently of the sidecar. New
 observations also break expired streaks even if maintenance did not run during
 an outage.
 
+### Display units
+
+Monitor preview JSON accepts an optional `unit`: omitted, empty or `number` means
+unitless; `percent` displays raw 0–100 values with `%`; `bytes` displays raw bytes
+in IEC units (KiB, MiB, GiB, and so on). This is display metadata only. Stored
+observations, queries, trigger values and recovery values are never rescaled.
+For example, a 1 GiB threshold is still `1073741824` with `--unit bytes`.
+
+Set it on create or update:
+
+```sh
+nrc monitor update 456 --unit bytes
+nrc monitor update 456 --unit percent
+nrc monitor update 456 --unit '' # Return to unitless display
+```
+
+Unrelated updates preserve the unit. Existing configurations without `unit` remain
+valid. Upgrade the server and incident sidecar before writing the new field;
+older versions reject it as an unknown configuration field.
+
 ## Initial choices for previously open cases
 
 - Between trigger and recovery thresholds, reset both consecutive streaks while

@@ -337,6 +337,39 @@ test_sqlite_monitor_route_discovery :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_monitor_config_display_unit :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	if !testing.expect(t, virtual.arena_init_growing(&arena) == nil) do return
+	defer virtual.arena_destroy(&arena)
+	expected_units := [5]string{"", "", "number", "percent", "bytes"}
+	for field, i in ([]string{
+		``, `,"unit":""`, `,"unit":"number"`, `,"unit":"percent"`, `,"unit":"bytes"`,
+		`,"unit":"Bytes"`, `,"unit":"kilobytes"`, `,"unit":100`, `,"unit":null`, `,"unit":true`,
+	}) {
+		virtual.arena_free_all(&arena)
+		preview := fmt.aprintf(
+			"%s%s%s",
+			`{"version":1,"name":"Disk","evaluator":"checker","enabled":true,"interval_ns":60,"timeout_ns":10,"failures":5,"recoveries":2,"missing":3`,
+			field,
+			"}",
+		)
+		defer delete(preview)
+		payload := `{"kind":"tcp"}`
+		asset := pr.Asset {
+			asset_type      = .Monitor,
+			preview         = transmute([]byte)preview,
+			payload         = transmute([]byte)payload,
+			payload_raw_len = u32(len(payload)),
+		}
+		config, policy, valid := parse_monitor_config(&asset, virtual.arena_allocator(&arena))
+		testing.expect(t, valid == (i < 5), preview)
+		if valid && i < len(expected_units) {
+			testing.expect(t, config.unit == expected_units[i] && policy.failures == 5 && policy.recoveries == 2 && policy.missing == 3)
+		}
+	}
+}
+
+@(test)
 test_monitor_config_threshold_bounds :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	if !testing.expect(t, virtual.arena_init_growing(&arena) == nil) do return
