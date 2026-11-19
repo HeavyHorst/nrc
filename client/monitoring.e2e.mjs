@@ -81,8 +81,8 @@ try {
     return colors;
   });
   for (const color of healthyColors) assert.ok(['rgb(0, 166, 81)', 'rgb(64, 200, 112)'].includes(color), `Healthy must stay green: ${color}`);
-  // A subpixel gap stays proportional and marked; failure, pause and unknown
-  // shares coexist without coloring the whole hour red or inventing event order.
+  // A failure colors the entire hour, but gaps stay marked and the detail
+  // keeps the actual proportions of healthy, failing, unknown and paused time.
   await page.evaluate(() => { monitorFixture.registerRows = [
     { hour: 0, identity: 'a', healthy: 3558, unknown: 42 },
     { hour: 1, identity: 'a', healthy: 900, failing: 1800, unknown: 450, paused: 450 },
@@ -92,21 +92,36 @@ try {
   await page.waitForSelector('[data-history-monitor="12"] button[aria-label*="unknown 42 s"]');
   for (const width of [1600, 390]) {
     await page.setViewportSize({ width, height: 1000 });
-    for (const [index, shares] of [[0, [98.833333, 0, 1.166667, 0]], [1, [25, 50, 12.5, 12.5]], [2, [0, 0, 0, 100]], [3, [0, 0, 100, 0]]]) {
+    for (const [index, shares] of [[0, [98.833333, 0, 1.166667, 0]], [2, [0, 0, 0, 100]], [3, [0, 0, 100, 0]]]) {
       const bar = trail.locator('.monitor-history-bar').nth(index);
       const rendered = await bar.evaluate(b => [...b.querySelectorAll('.monitor-history-part')].map(p => p.getBoundingClientRect().width / b.getBoundingClientRect().width * 100));
       rendered.forEach((value, i) => assert.ok(Math.abs(value - shares[i]) < 0.3, `Rendered share ${value} matches ${shares[i]} at width ${width}`));
       assert.equal(await bar.getAttribute('data-gap'), String(index !== 2));
     }
+    const failing = trail.locator('.monitor-history-bar').nth(1);
+    for (const theme of await page.evaluate(() => THEMES)) {
+      await page.evaluate(theme => setTheme(theme, false), theme);
+      const paint = await failing.evaluate(button => ({
+        color: getComputedStyle(button).backgroundColor,
+        legend: getComputedStyle(document.querySelector('#monitorHistoryLegend [data-state="failing"]')).backgroundColor,
+        gap: getComputedStyle(button, '::after').borderBottomWidth,
+      }));
+      assert.equal(paint.color, paint.legend, 'The entire hour uses the failing color');
+      assert.equal(await failing.locator('.monitor-history-fill').isVisible(), false, 'Time shares do not cover the red bar');
+      assert.equal(paint.gap, '3px', 'Failure does not hide the gap marker');
+    }
+    await page.evaluate(() => setTheme('lupine', false));
     const bar = trail.locator('.monitor-history-bar').first();
     await bar.press('Enter');
     assert.equal(await bar.getAttribute('aria-pressed'), 'true');
     assert.match(await trail.locator('.monitor-history-detail').textContent(), /coverage 98.83%.*unknown 42 s.*TIME SHARES, NOT EVENT ORDER/);
     assert.equal(await page.locator('#monitorDetailRefresh').isVisible(), false, 'Period activation does not open the monitor Inspector');
-    await trail.locator('.monitor-history-bar').nth(1).click();
+    await failing.click();
     assert.equal(await bar.getAttribute('aria-pressed'), 'false');
     assert.match(await trail.locator('.monitor-history-detail').textContent(), /coverage 85.71%.*failing 1[,.]800 s.*unknown 450 s.*paused 450 s/);
-    await trail.locator('.monitor-history-bar').nth(1).press('Space');
+    assert.deepEqual(await trail.locator('.monitor-history-detail .monitor-history-part').evaluateAll(parts => parts.map(part => part.style.width)), ['25%', '50%', '12.5%', '12.5%']);
+    assert.equal(await trail.locator('.monitor-history-detail .monitor-history-fill').isVisible(), true);
+    await failing.press('Space');
     assert.equal(await trail.locator('.monitor-history-detail').isVisible(), false);
     assert.equal(await page.locator('#monitorRegisterScroll').evaluate(e => e.scrollWidth <= e.clientWidth), true);
   }
