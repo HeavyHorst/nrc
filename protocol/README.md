@@ -124,8 +124,8 @@ its own cursor and the client asks for the next one when it needs it.
 invalid before any payload parsing happens, so a new opcode must be added to both
 the enum and the range check in `protocol/protocol.odin`.
 
-- Client to server: `1-3`, `8`, `16-75`
-- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-180`
+- Client to server: `1-3`, `8`, `16-76`
+- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-181`
 
 ### Client to Server
 
@@ -184,6 +184,7 @@ the enum and the range check in `protocol/protocol.odin`.
 | 73 | `C_QueryMonitorStatus` | Workspace monitor summaries or instance status, problem-first live pagination |
 | 74 | `C_Chronicle` | Multiplexed JSON chronicle request with trailing correlation |
 | 75 | `C_MonitorHistory` | Read immutable pending availability pages or acknowledge a stored snapshot |
+| 76 | `C_ListOpenIncidents` | Workspace-wide open incidents, paginated by instance ID |
 
 #### Assets
 
@@ -290,6 +291,7 @@ them.
 | 178 | `S_MonitorState` | Current Monitor revision and last committed run sequence |
 | 179 | `S_MonitorStatusPage` | Correlation u32 followed by bounded version-1 status JSON; [wire contract](../services/bots/nrc-incidents/README.md#current-status-reads-nrc-protocol) |
 | 180 | `S_Chronicle` | Multiplexed JSON chronicle response with leading correlation |
+| 181 | `S_OpenIncidentPage` | Correlation u32 followed by bounded version-1 open-incident JSON |
 
 #### Assets
 
@@ -1411,6 +1413,24 @@ that snapshot; repeating the acknowledgment is harmless. The response is the
 ordinary short `S_MonitorState`, with the acknowledged snapshot ID in its sequence field. Missing or
 mismatched continuation pages fail explicitly rather than returning live state.
 Errors use `S_ErrorResponse` with origin opcode 75 and the request correlation.
+
+### Workspace open incidents
+
+`C_ListOpenIncidents` (76) body: correlation u32, cursor instance ID u64,
+limit u8 (1–16). Start with cursor zero. The authenticated workspace determines
+the scope; incidents are included regardless of assignee or acknowledgement.
+
+`S_OpenIncidentPage` (181) body: correlation u32 followed by UTF-8 JSON:
+`{ "version": 1, "cursor_id": "240", "has_more": true, "rows": [{ "id": "6140", "preview": "..." }] }`.
+Each row contains an Incident asset ID and its canonical JSON preview as a string.
+IDs are decimal strings. The cursor is the last returned **instance ID**, not
+the Incident asset ID. Continue with that cursor while `has_more` is true.
+Pages contain at most the requested number of rows and at most 120,000 JSON bytes.
+
+This is a live keyset read over the workspace's indexed open episodes, not a
+historical snapshot. Clients reconcile concurrent asset events with paged data
+and refresh periodically. Closed episodes are neither scanned nor returned.
+Errors use `S_ErrorResponse` with origin opcode 76 and the request correlation.
 
 ## Chronicle interface
 

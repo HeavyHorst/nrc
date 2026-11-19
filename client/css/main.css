@@ -5,6 +5,16 @@
 @import url("mobile-tasks.css?v=20261019registers1");
 @import url("mobile.css?v=20261102gap1");
 
+.app-sidebar .sidebar-unread-count[data-incidents="true"] {
+    color: var(--accent-danger);
+}
+
+.attention-row[data-kind="incident"] .attention-title,
+.attention-row[data-kind="incident"] .attention-context-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
 /* Monitoring composes the existing register and universal Inspector. */
 #monitoringPanel, .monitor-record { font-size: var(--font-base); }
 #monitoringPanel [hidden], .monitor-record [hidden] { display: none !important; }

@@ -15,11 +15,14 @@
 //   timer reports from.
 // - dependencies: all pages of open blocked tasks, including other assignees.
 //   Only actionable prerequisites owned by the reader become UNBLOCKS rows.
+// - incidents: a complete workspace preview snapshot, live asset mutations and
+//   periodic refresh; acknowledgement never clears a firing incident.
 window.NRCAttention = (() => {
-  const FILTERS = ["all", "task", "ticket", "reminder", "message"];
+  const FILTERS = ["all", "incident", "task", "ticket", "reminder", "message"];
   // One primary reason per row. Overdue wins over unblocks for actionable tasks; kind
   // filters still operate independently of the reason sections.
   const REASONS = [
+    ["incident", "FIRING / INCIDENTS"],
     ["overdue", "OVERDUE / MY WORK"],
     ["waiting", "OVERDUE / WAITING"],
     ["ticket_follow_up", "FOLLOW-UP DUE / TICKETS"],
@@ -60,8 +63,14 @@ window.NRCAttention = (() => {
     reminders: { due: 0, total: 0 },
     dependencies: [],
     dependenciesIncomplete: true,
+    incidents: [],
+    incidentError: "",
   };
 
+  let incidentGeneration = 0;
+  let incidentLoading = false;
+  let incidentTimer = null;
+  const incidentMutations = new Map();
   let countController = null;
   let countFilters = null;
   let countQuery = null;
@@ -337,6 +346,20 @@ window.NRCAttention = (() => {
     }));
   }
 
+  function incidentRows() {
+    return state.incidents.map(asset => {
+      const m = JSON.parse(asset.preview);
+      const opened = BigInt(m.opened_at);
+      return {
+        kind: "INCIDENT", group: "incident", reason: "incident", id: asset.assetId, title: m.title,
+        detail: `MONITOR #${m.monitor_id} · ${m.assigned_to ? `ASSIGNED TO ${m.assigned_to}` : "UNASSIGNED"}${m.acknowledged_by ? ` · ACKNOWLEDGED BY ${m.acknowledged_by}` : " · NOT ACKNOWLEDGED"}`,
+        chip: { label: m.acknowledged_by ? "ACKNOWLEDGED" : "FIRING", tone: "danger" },
+        age: formatAge(opened), sortKey: Number(opened),
+        open: () => window.NRCInspector?.openEntity?.({ roomId: 0n, type: "incident", id: asset.assetId }),
+      };
+    });
+  }
+
   // The order follows the same vocabulary as the chips: what is due now, then
   // what has a deadline, then blocked work, then everything else. Sorting by a
   // raw timestamp would put an overdue task behind a task without a due date.
@@ -356,6 +379,7 @@ window.NRCAttention = (() => {
       dependents.get(task.blockedBy).push(task);
     }
     const rows = [
+      ...incidentRows(),
       ...state.tasks.map(task => taskRow(task, dependents.get(task.id) || [], tasksById.get(task.blockedBy))),
       ...reminderRows(),
       ...messageRows(),
@@ -405,6 +429,13 @@ window.NRCAttention = (() => {
     if (overdue) overdue.textContent = state.counts.overdue;
     const messages = el("attentionMessageCount");
     if (messages) messages.textContent = state.rows.filter((row) => row.group === "message").length;
+    const incidents = el("attentionIncidentCount");
+    if (incidents) incidents.textContent = state.rows.filter((row) => row.group === "incident").length;
+    const incidentStatus = el("attentionIncidentStatus");
+    if (incidentStatus) {
+      incidentStatus.hidden = !state.incidentError;
+      incidentStatus.textContent = state.incidentError;
+    }
 
     document.querySelectorAll("[data-attention-filter]").forEach((button) => {
       const value = button.dataset.attentionFilter;
@@ -416,7 +447,7 @@ window.NRCAttention = (() => {
           ? state.rows.length
           : state.rows.filter((row) => row.group === value).length;
       }
-      if (label) label.textContent = value.toUpperCase();
+      if (label) label.textContent = value === "incident" ? "INCIDENTS" : value.toUpperCase();
       button.classList.toggle("active", active);
       button.setAttribute("aria-pressed", String(active));
     });
@@ -508,6 +539,7 @@ window.NRCAttention = (() => {
     const total = state.rows.length;
     badge.textContent = total > 0 ? String(total).padStart(2, "0") : "";
     badge.hidden = total === 0;
+    badge.setAttribute("data-incidents", String(state.rows.some(row => row.group === "incident")));
     badge.setAttribute("aria-label", `${total} item${total === 1 ? "" : "s"} need attention`);
   }
 
@@ -523,7 +555,7 @@ window.NRCAttention = (() => {
 
   function refreshDerived() {
     buildRows();
-    state.mode = "ready";
+    if (!countQuery && state.mode !== "error") state.mode = "ready";
     // The count is navigation state and has to be right before the view was ever
     // opened — a reload in another view must not hide what is waiting. Only the
     // register itself is painted while it is on screen.
@@ -535,6 +567,46 @@ window.NRCAttention = (() => {
     state.mode = "loading";
     state.dependenciesIncomplete = true;
     runCountQuery("mine");
+  }
+
+  async function refreshIncidents() {
+    if (!ready() || incidentLoading || !window.NRCMonitoring?.readOpenIncidents) return;
+    const token = ++incidentGeneration;
+    incidentLoading = true;
+    incidentMutations.clear();
+    try {
+      const result = await window.NRCMonitoring.readOpenIncidents({ isCancelled: () => token !== incidentGeneration });
+      if (token !== incidentGeneration) return;
+      const snapshot = new Map(result.assets.map(asset => [asset.assetId, asset]));
+      for (const [id, asset] of incidentMutations) {
+        if (asset) snapshot.set(id, asset);
+        else snapshot.delete(id);
+      }
+      state.incidents = [...snapshot.values()].filter(asset => JSON.parse(asset.preview).status === "firing");
+      state.incidentError = "";
+    } catch {
+      if (token !== incidentGeneration) return;
+      state.incidentError = "INCIDENT READ FAILED · INCIDENT COUNT MAY BE STALE";
+    } finally {
+      if (token === incidentGeneration) {
+        incidentLoading = false;
+        incidentMutations.clear();
+        refreshDerived();
+      }
+    }
+  }
+
+  function incidentChanged(event) {
+    const { asset, assetId, convId } = event.detail || {};
+    const unknownDeletion = event.type === "nrc:asset-deleted" && !asset && convId === 0n && incidentLoading;
+    if (asset?.assetType !== 16 && !unknownDeletion && !state.incidents.some(item => item.assetId === assetId)) return;
+    const id = asset?.assetId ?? assetId;
+    const current = event.type !== "nrc:asset-deleted" && asset && JSON.parse(asset.preview).status === "firing" ? asset : null;
+    // Live changes win over older pages without cancelling a complete snapshot.
+    if (incidentLoading) incidentMutations.set(id, current);
+    state.incidents = state.incidents.filter(item => item.assetId !== id);
+    if (current) state.incidents.push(current);
+    refreshDerived();
   }
 
   // Work changes arrive in bursts (a drag writes many task updates), so the
@@ -559,6 +631,12 @@ window.NRCAttention = (() => {
   // A dropped connection abandons the count walk; the next view entry starts a
   // fresh one instead of answering a request that no longer exists.
   function disconnect() {
+    incidentGeneration++;
+    incidentLoading = false;
+    incidentMutations.clear();
+    state.incidents = [];
+    state.incidentError = "OFFLINE · INCIDENT STATE UNAVAILABLE";
+    refreshDerived();
     countQuery = null;
     countFilters = null;
     taskPages = 0;
@@ -573,6 +651,7 @@ window.NRCAttention = (() => {
   // session-scoped, so the register starts a fresh walk for the sidebar count.
   function onSessionStarted() {
     refresh();
+    void refreshIncidents();
   }
 
   function onViewChanged(view) {
@@ -581,6 +660,8 @@ window.NRCAttention = (() => {
   }
 
   function init() {
+    clearInterval(incidentTimer);
+    incidentTimer = setInterval(() => void refreshIncidents(), 30000);
     document.querySelectorAll("[data-attention-filter]").forEach((button) => {
       button.addEventListener("click", () => setFilter(button.dataset.attentionFilter));
     });
@@ -609,9 +690,14 @@ window.NRCAttention = (() => {
     }
     document.addEventListener("keydown", handleKeyboardNavigation);
     document.addEventListener("nrc:task-changed", refreshSoon);
-    document.addEventListener("nrc:asset-created", refreshSoon);
+    document.addEventListener("nrc:asset-created", event => {
+      if (event.detail?.asset?.assetType !== 16) refreshSoon();
+    });
     document.addEventListener("nrc:tickets-activity", refreshDerived);
     document.addEventListener("nrc:record-activity", refreshDerived);
+    for (const type of ["nrc:asset-created", "nrc:asset-updated", "nrc:asset-deleted"]) {
+      document.addEventListener(type, incidentChanged);
+    }
   }
 
   function isActive() {

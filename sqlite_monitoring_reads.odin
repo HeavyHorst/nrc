@@ -11,6 +11,73 @@ import pr "protocol"
 import sql "sqlite"
 import db "workspace_db"
 
+Open_Incident_Row :: struct {
+	id, preview: string,
+}
+Open_Incident_Page :: struct {
+	version:   int,
+	cursor_id: string,
+	has_more:  bool,
+	rows:      [dynamic]Open_Incident_Row,
+}
+
+sqlite_list_open_incidents :: proc(store: ^db.Store, request: ^db.Request, output: ^db.Command_Output) -> c.int {
+	r, err := pr.parseListOpenIncidentsRequest(request.body)
+	if err != nil do return sql.CONSTRAINT
+	backing := context.allocator
+	arena: virtual.Arena
+	if virtual.arena_init_growing(&arena) != nil do return sql.NOMEM
+	defer virtual.arena_destroy(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	// Seek the existing partial index: work depends on open episodes, not history.
+	s: ^sql.Statement
+	rc := sql.prepare_v2(
+		store.db,
+		`SELECT e.instance_id,a.id,a.preview
+ FROM monitor_episodes e INDEXED BY monitor_open_episode
+ JOIN assets a ON a.workspace=e.workspace AND a.id=e.incident_id
+ WHERE e.workspace=?1 AND e.close_reason=0 AND e.instance_id>?2
+ ORDER BY e.instance_id LIMIT ?3`,
+		-1,
+		&s,
+		nil,
+	)
+	if rc != sql.OK do return rc
+	defer sql.finalize(s)
+	if rc = sql.bind_bytes(s, 1, transmute([]byte)request.workspace); rc != sql.OK do return rc
+	if rc = sql.bind_id(s, 2, r.cursor_id); rc != sql.OK do return rc
+	if rc = sql.bind_int64(s, 3, i64(r.limit) + 1); rc != sql.OK do return rc
+	page := Open_Incident_Page {
+		version   = 1,
+		cursor_id = fmt.aprintf("%d", r.cursor_id),
+	}
+	page.rows = make([dynamic]Open_Incident_Row, 0, int(r.limit))
+	size := 512
+	for {
+		rc = sql.step(s); if rc == sql.DONE do break
+		if rc != sql.ROW do return rc
+		if len(page.rows) == int(r.limit) {page.has_more = true; break}
+		instance, instance_rc := sql.column_id(s, 0); if instance_rc != sql.OK do return instance_rc
+		id, id_rc := sql.column_id(s, 1); if id_rc != sql.OK do return id_rc
+		row := Open_Incident_Row{fmt.aprintf("%d", id), strings.clone(string(sql.column_bytes_view(s, 2)))}
+		encoded, encode_err := json.marshal(row); if encode_err != nil do return sql.CONSTRAINT
+		if size + len(encoded) + 1 > 120000 {
+			if len(page.rows) == 0 do return sql.TOOBIG
+			page.has_more = true; break
+		}
+		size += len(encoded) + 1
+		append(&page.rows, row)
+		page.cursor_id = fmt.aprintf("%d", instance)
+	}
+	encoded, encode_err := json.marshal(page); if encode_err != nil do return sql.CONSTRAINT
+	context.allocator = backing
+	buf, frame_rc := db.command_frame(output, 6 + len(encoded)); if frame_rc != sql.OK do return frame_rc
+	endian.put_u16(buf, .Big, u16(pr.Opcode.S_OpenIncidentPage))
+	endian.put_u32(buf[2:], .Big, r.correlation_id)
+	copy(buf[6:], encoded)
+	return sql.OK
+}
+
 MONITOR_STATUS_NAMES :: [9]string{"firing", "failing", "error", "no_data", "unknown", "between", "healthy", "paused", "retired"}
 Monitor_Status_Row :: struct {
 	id, monitor_id, name, identity, status:                     string,
@@ -97,7 +164,9 @@ sqlite_query_monitor_status :: proc(store: ^db.Store, request: ^db.Request, outp
 		config_revision = fmt.aprintf("%d", sql.column_int64(rev, 0))
 	}
 	query :=
-		MONITOR_STATUS_CFG + MONITOR_STATUS_INSTANCES + MONITOR_STATUS_SUMMARY +
+		MONITOR_STATUS_CFG +
+		MONITOR_STATUS_INSTANCES +
+		MONITOR_STATUS_SUMMARY +
 		`SELECT id,rank,name,revision,run_sequence,run_at,n0,n1,n2,n3,n4,n5,n6,n7,n8
  FROM summary WHERE (?4=zeroblob(8) OR rank>?5 OR (rank=?5 AND id>?4))
  AND (?9=0 OR (?9=1 AND rank<6) OR (?9=2 AND rank=6) OR (?9=3 AND rank=7))
@@ -107,7 +176,10 @@ sqlite_query_monitor_status :: proc(store: ^db.Store, request: ^db.Request, outp
 		// Without ANALYZE statistics SQLite otherwise prefers a workspace-wide
 		// primary-key scan over the selective (workspace,monitor_id,identity) index.
 		query =
-			MONITOR_STATUS_CFG + " AND a.id=?2" + MONITOR_STATUS_INSTANCES + " AND unlikely(i.monitor_id=?2)) " +
+			MONITOR_STATUS_CFG +
+			" AND a.id=?2" +
+			MONITOR_STATUS_INSTANCES +
+			" AND unlikely(i.monitor_id=?2)) " +
 			`SELECT i.id,i.rank,i.identity,i.revision,i.sequence,i.evaluated_at,i.seen_at,
  i.value_bits,i.has_value,i.paused,i.retired,i.incident_open,i.observation,i.freshness,i.failures,i.recoveries,i.missing,
  coalesce(e.incident_id,zeroblob(8)),coalesce(json_extract(CAST(a.preview AS TEXT),'$.acknowledged_by'),''),
@@ -141,10 +213,10 @@ sqlite_query_monitor_status :: proc(store: ^db.Store, request: ^db.Request, outp
 	}
 	page := Monitor_Status_Page {
 		config_revision = config_revision,
-		version    = 1,
-		monitor_id = fmt.aprintf("%d", r.monitor_id),
-		at         = fmt.aprintf("%d", at),
-		cursor_id  = "0",
+		version         = 1,
+		monitor_id      = fmt.aprintf("%d", r.monitor_id),
+		at              = fmt.aprintf("%d", at),
+		cursor_id       = "0",
 	}
 	page.rows = make([dynamic]Monitor_Status_Row, 0, int(r.limit))
 	status_names := MONITOR_STATUS_NAMES

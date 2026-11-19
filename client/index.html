@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20261013fold1">
     <link rel="icon" type="image/png" href="favicon.png?v=20261013fold1">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=20261013fold1">
-    <link rel="stylesheet" href="css/main.css?v=20261119units1">
+    <link rel="stylesheet" href="css/main.css?v=20261119incidents1">
     <link rel="stylesheet" href="css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="css/voice.css?v=20261105voice12">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -247,6 +247,7 @@
                             <span class="header-text header-register-title">ATTENTION</span>
                             <span class="header-count header-register-state" id="attentionCount" aria-live="polite">0 ITEMS · BY REASON</span>
                             <span class="header-register-alerts">
+                                <span class="header-register-alert header-register-alert--danger">INCIDENTS <b id="attentionIncidentCount">0</b></span>
                                 <span class="header-register-alert">MINE <b id="attentionMineCount">0</b></span>
                                 <span class="header-register-alert">BLOCKED <b id="attentionBlockedCount">0</b></span>
                                 <span class="header-register-alert header-register-alert--danger">OVERDUE <b id="attentionOverdueCount">0</b></span>
@@ -258,6 +259,7 @@
                                 <span class="filter-label">SHOW</span>
                                 <div class="tab-group" role="group" aria-label="Attention kind filter">
                                     <button class="btn nav-tab active" type="button" data-attention-filter="all" aria-pressed="true"><span>ALL</span><b class="tab-count">0</b></button>
+                                    <button class="btn nav-tab" type="button" data-attention-filter="incident" aria-pressed="false"><span>INCIDENTS</span><b class="tab-count">0</b></button>
                                     <button class="btn nav-tab" type="button" data-attention-filter="task" aria-pressed="false"><span>TASKS</span><b class="tab-count">0</b></button>
                                     <button class="btn nav-tab" type="button" data-attention-filter="ticket" aria-pressed="false"><span>TICKETS</span><b class="tab-count">0</b></button>
                                     <button class="btn nav-tab" type="button" data-attention-filter="reminder" aria-pressed="false"><span>REMINDERS</span><b class="tab-count">0</b></button>
@@ -271,6 +273,7 @@
                         </div>
                     </div>
                     <div id="attentionDependencyStatus" class="attention-dependency-status" role="status" hidden></div>
+                    <div id="attentionIncidentStatus" class="attention-dependency-status" role="status" hidden></div>
                     <div id="attentionBody" class="attention-body"></div>
                 </div>
                 <div id="calendarPanel" class="calendar-panel" style="display: none;">
@@ -733,7 +736,7 @@
     <script src="column-resize.js?v=20261028fit2"></script>
     <script src="record-activity.js?v=20261019ticketpages1"></script>
     <script src="tasks.js?v=20261114overload3"></script>
-    <script src="attention.js?v=20261114overload1"></script>
+    <script src="attention.js?v=20261119incidents1"></script>
     <script src="calendar.js?v=20261114overload1"></script>
     <script src="appointments.js?v=20261022cancel1"></script>
     <script src="appointment-notify.js?v=20261114overload1"></script>
@@ -751,8 +754,8 @@
     <script src="voice.js?v=20261108memory8"></script>
     <script src="retained-messages.js?v=20261023protocol2"></script>
     <script src="chat.js?v=20261020composer1"></script>
-    <script src="monitoring.js?v=20261119units1"></script>
-    <script src="app.js?v=20261117monitorchronicle1"></script>
+    <script src="monitoring.js?v=20261119incidents1"></script>
+    <script src="app.js?v=20261119incidents1"></script>
     <section id="callPanel" class="call-panel" aria-label="Video call" hidden>
         <header class="panel-header"><div><span id="callPeer">VIDEO INVITATION</span><button id="callDismiss" class="btn btn--danger task-detail-close" type="button" aria-label="Hide panel" title="Hide · reopen from Conferences">×</button></div></header>
         <p id="callInvitationPeer" class="call-invitation-peer"></p>

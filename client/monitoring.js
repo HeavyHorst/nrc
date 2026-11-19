@@ -160,7 +160,10 @@ window.NRCMonitoring = (() => {
         request.resolve(null);
       } else {
         const page = JSON.parse(new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset + 6, view.byteLength - 6)));
-        if (page.version !== 1 || page.monitor_id !== request.subject || !Array.isArray(page.rows) || page.rows.length > 16) throw new Error('Invalid status page.');
+        if (page.version !== 1 || !Array.isArray(page.rows) || page.rows.length > 16) throw new Error('Invalid status page.');
+        if (request.response === 181) {
+          if (typeof page.has_more !== 'boolean' || !/^\d+$/.test(page.cursor_id) || page.rows.some(row => !/^[1-9]\d*$/.test(row.id) || typeof row.preview !== 'string')) throw new Error('Invalid open incident page.');
+        } else if (page.monitor_id !== request.subject) throw new Error('Status scope mismatch.');
         request.resolve(page);
       }
     } catch (error) { request.reject(error); }
@@ -170,6 +173,25 @@ window.NRCMonitoring = (() => {
     if (!request) return false;
     pending.delete(error.correlationId); clearTimeout(request.timeout);
     request.reject(new Error(error.errorMsg)); return true;
+  }
+  async function readOpenIncidents({ isCancelled = () => false } = {}) {
+    const assets = new Map();
+    let cursor = 0n;
+    do {
+      if (isCancelled()) throw new Error('Incident read cancelled.');
+      const view = new DataView(new ArrayBuffer(15));
+      view.setUint16(0, 76); view.setBigUint64(6, cursor); view.setUint8(14, 16);
+      const page = await rpc(view.buffer, 181);
+      if (isCancelled()) throw new Error('Incident read cancelled.');
+      for (const row of page.rows) {
+        const assetId = BigInt(row.id);
+        assets.set(assetId, { assetId, assetType: 16, preview: row.preview });
+      }
+      if (!page.has_more) return { assets: [...assets.values()] };
+      const next = BigInt(page.cursor_id);
+      if (next <= cursor) throw new Error('Incident cursor did not advance.');
+      cursor = next;
+    } while (true);
   }
   function statusQuery(id = '0', cursor = null, retired = false) {
     const search = new TextEncoder().encode(id === '0' ? el('monitorSearch').value.trim() : '');
@@ -778,7 +800,7 @@ window.NRCMonitoring = (() => {
       if (button) open(button.dataset.monitor ? 'monitor' : 'incident', button.dataset.monitor || button.dataset.incident);
     };
   }
-  return { init, refresh, handlePage, handleError, showInspector, disconnect,
+  return { init, refresh, handlePage, handleError, showInspector, disconnect, readOpenIncidents,
     onViewChanged(view) { if (view === 'monitoring') refresh(); else { generation++; loading = false; } },
   };
 })();

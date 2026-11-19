@@ -106,6 +106,8 @@ Opcode :: enum u16 {
 	S_MonitorStatusPage = 179,
 	C_Chronicle = 74,
 	C_MonitorHistory = 75,
+	C_ListOpenIncidents = 76,
+	S_OpenIncidentPage = 181,
 
 	// Tasks/Kanban (Server -> Client)
 	S_TaskCreated = 130,

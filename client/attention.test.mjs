@@ -61,6 +61,7 @@ function harness({ tasks = [], counts = {}, taskPages = null, dependencyPages = 
   const scrolls = [];
   const targetRows = new Map();
   const timers = [];
+  let incidentPoll;
   const KIND_ORDER = ["mine", "blocked", "overdue"];
   const pageSets = {
     // The `mine` query is walked page by page; the two count-only queries are one
@@ -141,7 +142,10 @@ function harness({ tasks = [], counts = {}, taskPages = null, dependencyPages = 
   };
 
   const document = {
-    addEventListener: (name, callback) => { listeners[name] = callback; },
+    addEventListener: (name, callback) => {
+      const previous = listeners[name];
+      listeners[name] = event => { previous?.(event); callback(event); };
+    },
     querySelectorAll: (selector) => {
       if (selector === "[data-attention-filter]") return [];
       if (selector === "#attentionBody .attention-row .attention-title") {
@@ -186,6 +190,8 @@ function harness({ tasks = [], counts = {}, taskPages = null, dependencyPages = 
     logSystem: (message) => logLines.push(message),
     setTimeout: (callback, ms) => { timers.push({ callback, ms }); return timers.length; },
     clearTimeout: (id) => { if (id > 0) timers[id - 1] = null; },
+    setInterval: callback => { incidentPoll = callback; return 1; },
+    clearInterval() {},
   };
   // The register walks rows with the shared list-navigation contract, which
   // index.html loads before it, so the harness runs the real module too.
@@ -208,9 +214,103 @@ function harness({ tasks = [], counts = {}, taskPages = null, dependencyPages = 
 
   return { attention: window.NRCAttention, opened, listeners, elements, sentQueries, pageLoads,
     openedRooms, historyRequests, logLines, flashes, scrolls, targetRows, document, focused, rowScrolls, viewState, press,
+    setIncidentSource: read => { window.NRCMonitoring = { readOpenIncidents: read }; },
+    pollIncidents: () => incidentPoll(),
     runTimers: () => { for (const timer of timers.splice(0)) timer?.callback(); },
     timerCount: () => timers.length };
 }
+
+test("workspace incidents stay urgent after acknowledgement and clear only when closed", async () => {
+  const h = harness({ tasks: [task(1)], activeView: "tasks" });
+  let assets = [];
+  const incident = (id, status, overrides = {}) => ({ assetId: BigInt(id), assetType: 16,
+    preview: JSON.stringify({ title: `Disk usage · host-${id} /`, status, monitor_id: "42",
+      opened_at: String(nanos(now - 2 * DAY)), assigned_to: "", acknowledged_by: "", ...overrides }) });
+  // The source is independent of the monitoring register.
+  h.setIncidentSource(async () => ({ assets }));
+  assets = [incident(10, "firing"), incident(11, "firing", { assigned_to: "mara", acknowledged_by: "alex" }),
+    incident(12, "recovered"), incident(13, "removed")];
+  const badge = { setAttribute(name, value) { this[name] = value; } };
+  h.elements.attentionViewCount = badge;
+  h.attention.init();
+  h.attention.onSessionStarted();
+  await new Promise(setImmediate);
+  assert.equal(badge.textContent, "03");
+  assert.equal(badge["data-incidents"], "true");
+  const rows = h.attention.getState().rows;
+  assert.deepEqual(Array.from(rows, row => row.id), [10n, 11n, 1n]);
+  assert.match(rows[1].detail, /ASSIGNED TO mara.*ACKNOWLEDGED BY alex/);
+  assert.equal(rows[1].chip.tone, "danger");
+  assert.equal(rows[0].age, "2D");
+  rows[0].open();
+  assert.equal(h.opened[0].type, "incident");
+  assert.equal(h.opened[0].id, 10n);
+  h.attention.setFilter("incident");
+  assert.equal(h.attention.getState().filter, "incident");
+  assets = [incident(10, "recovered"), incident(11, "removed")];
+  for (const asset of assets) h.listeners["nrc:asset-updated"]({ type: "nrc:asset-updated", detail: { asset } });
+  await new Promise(setImmediate);
+  assert.equal(badge.textContent, "01");
+  assert.equal(badge["data-incidents"], "false");
+  h.attention.disconnect();
+  assert.equal(h.attention.getState().incidents.length, 0);
+});
+
+test("incident read failures retain urgency and disconnected snapshots cannot restore old incidents", async () => {
+  const h = harness({ activeView: "tasks" });
+  const asset = { assetId: 10n, assetType: 16, preview: JSON.stringify({ title: "Disk /", status: "firing", monitor_id: "2", opened_at: String(nanos(now)) }) };
+  h.setIncidentSource(async () => ({ assets: [asset] }));
+  h.elements.attentionViewCount = { setAttribute(name, value) { this[name] = value; } };
+  h.attention.onSessionStarted();
+  await new Promise(setImmediate);
+  h.setIncidentSource(async () => { throw new Error("Unavailable"); });
+  h.attention.onSessionStarted();
+  await new Promise(setImmediate);
+  assert.equal(h.elements.attentionViewCount["data-incidents"], "true");
+  assert.match(h.attention.getState().incidentError, /COUNT MAY BE STALE/);
+  let resolve;
+  h.setIncidentSource(() => new Promise(done => { resolve = done; }));
+  h.attention.onSessionStarted();
+  h.attention.disconnect();
+  resolve({ assets: [asset] });
+  await new Promise(setImmediate);
+  assert.equal(h.attention.getState().incidents.length, 0);
+  assert.equal(h.elements.attentionViewCount["data-incidents"], "false");
+});
+
+test("incident polling ignores unrelated activity and live mutations do not starve its snapshot", async () => {
+  const h = harness({ activeView: "tasks" });
+  const asset = (id, status = "firing") => ({ assetId: BigInt(id), assetType: 16,
+    preview: JSON.stringify({ title: `Disk ${id}`, status, monitor_id: "2", opened_at: String(nanos(now)) }) });
+  let reads = 0, resolve, cancelled;
+  h.setIncidentSource(options => { reads++; cancelled = options.isCancelled; return new Promise(done => { resolve = done; }); });
+  h.attention.init();
+  h.attention.onSessionStarted();
+  h.pollIncidents();
+  h.attention.refresh();
+  h.listeners["nrc:task-changed"]({});
+  h.listeners["nrc:asset-created"]({ type: "nrc:asset-created", detail: { asset: { assetType: 1 } } });
+  h.runTimers();
+  assert.equal(reads, 1, "one in-flight walk, no reads from task/chat/general refreshes");
+  const taskQueries = h.sentQueries.length;
+  const mutate = (type, item) => h.listeners[type]({ type, detail: { asset: item } });
+  mutate("nrc:asset-created", asset(14));
+  mutate("nrc:asset-updated", asset(11, "recovered"));
+  h.listeners["nrc:asset-deleted"]({ type: "nrc:asset-deleted", detail: { convId: 0n, assetId: 12n } });
+  mutate("nrc:asset-updated", { ...asset(13), preview: JSON.stringify({ ...JSON.parse(asset(13).preview), assigned_to: "mara", acknowledged_by: "alex" }) });
+  assert.equal(cancelled(), false, "live traffic must not cancel the baseline");
+  resolve({ assets: [asset(10), asset(11), asset(12), asset(13)] });
+  await new Promise(setImmediate);
+  assert.deepEqual(Array.from(h.attention.getState().rows, row => row.id), [10n, 13n, 14n]);
+  assert.match(h.attention.getState().rows.find(row => row.id === 13n).detail, /mara.*alex/);
+  h.runTimers();
+  assert.equal(reads, 1, "live events reconcile locally, without extra incident reads");
+  assert.equal(h.sentQueries.length, taskQueries, "incident events do not reload unrelated task queries");
+  h.pollIncidents();
+  assert.equal(reads, 2, "the independent repair timer starts the next walk");
+  resolve({ assets: [] });
+  await new Promise(setImmediate);
+});
 
 test("due ticket follow-ups win the single row reason without hiding reply debt or unread", () => {
   const item = (id, overrides = {}) => ({ asset: { assetId: BigInt(id), preview: JSON.stringify({ title: `Ticket ${id}`, assignee: 'rene', requester: 'ada@example.test', follow_up_at: String(now - DAY) }) }, followUpDue: true, waiting: false, unread: 0, timestamp: nanos(now), ...overrides });

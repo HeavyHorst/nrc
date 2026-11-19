@@ -110,6 +110,8 @@ const Opcode = {
   C_ListTicketAssignees: 66,
   C_ListCalendarPeople: 67,
   C_QueryMonitorStatus: 73,
+  C_ListOpenIncidents: 76,
+  S_OpenIncidentPage: 181,
   C_ActOnIncident: 70,
   S_MonitorStatusPage: 179,
   S_IncidentActionApplied: 176,
@@ -1951,6 +1953,7 @@ function handleBinaryMessage(arrayBuffer) {
         window.NRCOverview?.handlePage(dataView);
         break;
       case Opcode.S_MonitorStatusPage:
+      case Opcode.S_OpenIncidentPage:
       case Opcode.S_IncidentActionApplied:
         window.NRCMonitoring?.handlePage(dataView);
         break;

@@ -792,6 +792,7 @@ read_eligible :: proc(request: Request) -> bool {
 	     .C_GetAsset,
 	     .C_GetMonitorState,
 	     .C_QueryMonitorStatus,
+	     .C_ListOpenIncidents,
 	     .C_GetAssetsByIDs,
 	     .C_ListTasksPaged,
 	     .C_QueryTasks,

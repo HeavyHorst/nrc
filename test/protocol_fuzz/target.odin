@@ -40,6 +40,9 @@ exercise :: proc(input: []byte) -> pr.ProtocolParseError {
 	data := input[2:]
 	attachments: [pr.MAX_ATTACHMENTS_PER_TASK]pr.Attachment
 	#partial switch pr.get_opcode(input) {
+	case .C_ListOpenIncidents:
+		_, err := pr.parseListOpenIncidentsRequest(data)
+		return err
 	case .C_QueryMonitorStatus:
 		_, err := pr.parseQueryMonitorStatusRequest(data)
 		return err

@@ -242,4 +242,49 @@ test_sqlite_monitor_status_reads :: proc(t: ^testing.T) {
 	if !testing.expect_value(t, db.commit(&store), sql.OK) do return
 	continued, continued_rc := query(&store, &output, 1, at, 1, 1, 6)
 	testing.expect(t, continued_rc == sql.OK && len(continued.rows) == 1 && continued.rows[0].id == "2" && continued.rows[0].status == "healthy")
+
+	// The Attention read seeks only open episodes, keeps acknowledged incidents
+	// visible across actors, and pages by stable instance ID rather than updates.
+	query_open :: proc(store: ^db.Store, output: ^db.Command_Output, cursor: u64 = 0, workspace := "w") -> (Open_Incident_Page, c.int) {
+		wire: [15]byte
+		endian.put_u16(wire[:], .Big, u16(pr.Opcode.C_ListOpenIncidents))
+		endian.put_u32(wire[2:], .Big, 456)
+		endian.put_u64(wire[6:], .Big, cursor); wire[14] = 1
+		rc := execute(store, output, wire[:], 1, "reader", workspace)
+		if rc != sql.OK do return {}, rc
+		if len(output.frames) != 1 do return {}, sql.CORRUPT
+		frame := output.frames[0].payload
+		correlation, _ := endian.get_u32(frame[2:], .Big)
+		if pr.get_opcode(frame) != .S_OpenIncidentPage || correlation != 456 do return {}, sql.CORRUPT
+		page: Open_Incident_Page
+		if json.unmarshal(frame[6:], &page) != nil do return {}, sql.CORRUPT
+		return page, sql.OK
+	}
+	new_rows := [3]pr.Monitor_Observation{{"disk", 1, 99}, {"diskB", 1, 98}, {"diskC", 1, 97}}
+	for sequence in 3 ..< 5 {
+		n = pr.serializeApplyMonitorRunRequest({monitor_id = 2, revision = base, sequence = u64(sequence), observations = new_rows[:]}, wire[:])
+		if !testing.expect_value(t, execute(&store, &output, wire[:n], base + 12_000_000_000 + i64(sequence), "checker"), sql.OK) do return
+	}
+	open_seen := make(map[string]bool)
+	open_cursor: u64
+	for i in 0 ..< 3 {
+		page, open_rc := query_open(&store, &output, open_cursor)
+		if !testing.expect(t, open_rc == sql.OK && page.version == 1 && len(page.rows) == 1 && page.has_more == (i < 2)) do return
+		testing.expect(t, !open_seen[page.rows[0].id]); open_seen[page.rows[0].id] = true
+		record: Incident_Record
+		if !testing.expect(t, json.unmarshal(transmute([]byte)page.rows[0].preview, &record) == nil && record.status == "firing") do return
+		if i == 0 do testing.expect(t, page.rows[0].id == "10" && record.acknowledged_by == "alice" && record.assigned_to == "bob")
+		next, valid := strconv.parse_u64(page.cursor_id)
+		if !testing.expect(t, valid && next > open_cursor) do return
+		open_cursor = next
+	}
+	empty, empty_rc := query_open(&store, &output, workspace = "other")
+	testing.expect(t, empty_rc == sql.OK && len(empty.rows) == 0 && !empty.has_more)
+	for &row in new_rows do row.condition = 0
+	for sequence in 5 ..< 7 {
+		n = pr.serializeApplyMonitorRunRequest({monitor_id = 2, revision = base, sequence = u64(sequence), observations = new_rows[:]}, wire[:])
+		if !testing.expect_value(t, execute(&store, &output, wire[:n], base + 12_000_000_000 + i64(sequence), "checker"), sql.OK) do return
+	}
+	empty, empty_rc = query_open(&store, &output)
+	testing.expect(t, empty_rc == sql.OK && len(empty.rows) == 0 && !empty.has_more, "closed incident assets remain history, not Attention rows")
 }

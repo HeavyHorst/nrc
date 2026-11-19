@@ -57,6 +57,7 @@ const (
 	C_QueryMonitorStatus     uint16 = 73
 	C_Chronicle              uint16 = 74
 	C_MonitorHistory         uint16 = 75
+	C_ListOpenIncidents      uint16 = 76
 
 	// Assets (Client -> Server)
 	C_CreateAsset              uint16 = 30
@@ -152,6 +153,7 @@ const (
 	S_MonitorState              uint16 = 178
 	S_MonitorStatusPage         uint16 = 179
 	S_Chronicle                 uint16 = 180
+	S_OpenIncidentPage          uint16 = 181
 
 	// Assets (Server -> Client)
 	S_AssetCreated    uint16 = 140

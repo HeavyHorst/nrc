@@ -4,6 +4,22 @@ import "core:encoding/endian"
 import "core:testing"
 
 @(test)
+test_open_incident_wire_contract :: proc(t: ^testing.T) {
+	fixture := transmute([]byte)string("\x00\x4c\x12\x34\x56\x78\x80\x00\x00\x00\x00\x00\x00\x07\x10")
+	r, err := parseListOpenIncidentsRequest(fixture[2:])
+	testing.expect(t, get_opcode(fixture) == .C_ListOpenIncidents && err == nil && r == ListOpenIncidentsRequest{0x12345678, 0x8000000000000007, 16})
+	testing.expect_value(t, get_opcode({0, 181}), .S_OpenIncidentPage)
+	for cut in 0 ..< 13 {_, e := parseListOpenIncidentsRequest(fixture[2:2 + cut]); testing.expect(t, e != nil)}
+	bad: [14]byte
+	copy(bad[:], fixture[2:])
+	_, e := parseListOpenIncidentsRequest(bad[:]); testing.expect(t, e != nil)
+	for limit in ([2]u8{0, 17}) {
+		bad[12] = limit
+		_, e = parseListOpenIncidentsRequest(bad[:13]); testing.expect(t, e != nil)
+	}
+}
+
+@(test)
 test_monitor_history_wire_contract :: proc(t: ^testing.T) {
 	// Same independent continuation fixture as protocol-go/monitoring_test.go.
 	fixture := transmute([]byte)string(

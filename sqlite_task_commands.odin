@@ -189,6 +189,7 @@ sqlite_execute_task_command :: proc(store: ^db.Store, request: ^db.Request, outp
 	if request.opcode == .C_GetMonitorState do return sqlite_get_monitor_state(store, request, output)
 	if request.opcode == .C_MonitorHistory do return sqlite_monitor_history(store, request, output)
 	if request.opcode == .C_QueryMonitorStatus do return sqlite_query_monitor_status(store, request, output)
+	if request.opcode == .C_ListOpenIncidents do return sqlite_list_open_incidents(store, request, output)
 	if request.opcode == .C_ControlMonitorInstance do return sqlite_control_monitor_instance(store, request, output)
 	if request.opcode == .C_ActOnIncident do return sqlite_act_on_incident(store, request, output)
 	if request.opcode == .C_MonitorDelivery do return sqlite_monitor_delivery(store, request, output)
@@ -344,6 +345,7 @@ worker_db_command_error :: proc(c: ^NRC_Connection, opcode: pr.Opcode, correlati
 	     .C_GetMonitorState,
 	     .C_MonitorHistory,
 	     .C_QueryMonitorStatus,
+	     .C_ListOpenIncidents,
 	     .C_MonitorDelivery,
 	     .C_ActOnIncident,
 	     .C_ApplyMonitorRun,

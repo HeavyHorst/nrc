@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { fileURLToPath } from "node:url";
+import { mkdir } from "node:fs/promises";
 
 const browser = await chromium.launch();
 try {
@@ -194,10 +195,24 @@ try {
 
     window.sentQueries = [];
     window.allQueries = [];
+    window.attentionIncidents = [];
+    window.incidentRequests = [];
     ws = {
       readyState: WebSocket.OPEN,
       send(buffer) {
         const frame = new DataView(buffer);
+        if (frame.getUint16(0) === 76) {
+          const cursor = frame.getBigUint64(6);
+          window.incidentRequests.push(String(cursor));
+          const matching = window.attentionIncidents.filter(a => a.instanceId > cursor && JSON.parse(a.preview).status === 'firing');
+          const selected = matching.slice(0, 1);
+          const body = encoder.encode(JSON.stringify({ version: 1, cursor_id: String(selected.at(-1)?.instanceId ?? cursor),
+            has_more: matching.length > 1, rows: selected.map(a => ({ id: String(a.assetId), preview: a.preview })) }));
+          const reply = new DataView(new ArrayBuffer(6 + body.length));
+          reply.setUint16(0, 181); reply.setUint32(2, frame.getUint32(2)); new Uint8Array(reply.buffer, 6).set(body);
+          queueMicrotask(() => handleBinaryMessage(reply.buffer));
+          return;
+        }
         if (frame.getUint16(0, false) === 56) { sendSliceList(frame); return; }
         if (frame.getUint16(0, false) !== 28) return;
         const projectFilter = readProjectFilter(frame);
@@ -550,6 +565,59 @@ try {
     handleBinaryMessage(left.buffer);
     if (retainedRoomStates.has(window.dmFixtureID) || pendingMessages.size) throw new Error("leave kept retained DM state");
   });
+
+  // Incidents are read even when neither Attention nor Monitoring is open.
+  await page.evaluate(() => {
+    const now = BigInt(Date.now()) * 1000000n;
+    window.attentionIncidents = [
+      { instanceId: 240n, assetId: 6140n, assetType: 16, preview: JSON.stringify({ title: 'Festplattenbelegung · cluster01c:9100 /', status: 'firing', monitor_id: '42', opened_at: String(now - 7200000000000n), assigned_to: '', acknowledged_by: '' }) },
+      { instanceId: 390n, assetId: 6141n, assetType: 16, preview: JSON.stringify({ title: 'Festplattenbelegung · cluster01c:9100 /home/media03', status: 'firing', monitor_id: '42', opened_at: String(now - 3600000000000n), assigned_to: 'mara', acknowledged_by: 'alex' }) },
+      { instanceId: 450n, assetId: 6142n, assetType: 16, preview: JSON.stringify({ title: 'Recovered incident', status: 'recovered' }) },
+    ];
+    NRCAssets.sendGetAsset = (_room, id, callbacks) => {
+      queueMicrotask(() => callbacks.onSuccess({ asset: { ...window.attentionIncidents.find(a => a.assetId === id),
+        updatedAt: now, payload: '', owner: 'monitoring', createdAt: now } }));
+      return 1;
+    };
+    NRCViewManager.setActiveView('tasks');
+    window.incidentRequests.length = 0;
+    NRCAttention.onSessionStarted();
+  });
+  await page.waitForFunction(() => document.getElementById('attentionViewCount').dataset.incidents === 'true');
+  assert.deepEqual(await page.evaluate(() => window.incidentRequests), ['0', '240'], 'walks open incidents by instance cursor, not asset ID');
+  await page.evaluate(() => NRCViewManager.setActiveView('attention'));
+  await page.locator('[data-attention-filter="all"]').click();
+  await page.waitForFunction(() => document.getElementById('attentionIncidentCount').textContent === '2');
+  assert.match(await page.locator('.attention-group-heading').first().textContent(), /FIRING \/ INCIDENTS/);
+  assert.equal(await page.locator('[data-kind="incident"]').count(), 2);
+  assert.equal(await page.locator('[data-kind="incident"] .attention-state--danger').count(), 2);
+  await page.locator('.toast').waitFor({ state: 'hidden' });
+  await mkdir('.amp/in/artifacts', { recursive: true });
+  for (const theme of ['lupine', 'dark']) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'no page overflow');
+      assert.equal(await page.locator('[data-kind="incident"] .attention-context-text').last().evaluate(el => el.scrollWidth > el.clientWidth), false, 'assignee remains readable');
+      await page.screenshot({ path: `.amp/in/artifacts/attention-incidents-${theme}-${width}.png` });
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.locator('[data-attention-filter="incident"]').click();
+  assert.equal(await page.locator('#attentionBody .attention-row').count(), 2);
+  await page.locator('[data-kind="incident"] .attention-title').first().click();
+  await page.waitForFunction(() => NRCInspector.current()?.type === 'incident');
+  await page.waitForSelector('#incidentAck');
+  assert.match(await page.locator('#inspectorEntityHost').textContent(), /Festplattenbelegung/);
+  await page.evaluate(() => {
+    for (const asset of window.attentionIncidents.filter(a => JSON.parse(a.preview).status === 'firing')) {
+      asset.preview = JSON.stringify({ ...JSON.parse(asset.preview), status: 'recovered' });
+      document.dispatchEvent(new CustomEvent('nrc:asset-updated', { detail: { asset } }));
+    }
+  });
+  await page.waitForFunction(() => document.getElementById('attentionViewCount').dataset.incidents === 'false');
+  assert.equal(await page.locator('[data-kind="incident"]').count(), 0);
+  assert.equal(await page.locator('#attentionIncidentCount').textContent(), '0');
 
   assert.deepEqual(errors, [], "no page errors");
   console.log("attention e2e passed");

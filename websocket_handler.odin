@@ -456,6 +456,13 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte, dm_auth
 		} else {
 			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
 		}
+	case .C_ListOpenIncidents:
+		req, parse_err := pr.parseListOpenIncidentsRequest(frame_data[2:])
+		if parse_err != nil {
+			send_error_response(c, opcode, "Invalid open incident request", req.correlation_id)
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], req.correlation_id)
+		}
 	case .C_QueryMonitorStatus:
 		req, parse_err := pr.parseQueryMonitorStatusRequest(frame_data[2:])
 		if parse_err != nil {

@@ -4,6 +4,23 @@ import "core:encoding/endian"
 import "core:unicode/utf8"
 
 MAX_MONITOR_INSTANCES :: 1024
+
+// Workspace-wide open episodes, ordered by stable instance ID. No history scan.
+ListOpenIncidentsRequest :: struct {
+	correlation_id: u32,
+	cursor_id:      u64,
+	limit:          u8,
+}
+
+parseListOpenIncidentsRequest :: proc(data: []byte) -> (r: ListOpenIncidentsRequest, err: ProtocolParseError) {
+	if len(data) >= 4 do r.correlation_id, _ = endian.get_u32(data, .Big)
+	if len(data) != 13 do return r, .InvalidValue
+	r.cursor_id, _ = endian.get_u64(data[4:], .Big)
+	r.limit = data[12]
+	if r.limit == 0 || r.limit > 16 do return r, .InvalidValue
+	return
+}
+
 // monitor_id=0 lists monitors; otherwise lists that monitor's instances.
 QueryMonitorStatusRequest :: struct {
 	correlation_id:        u32,
