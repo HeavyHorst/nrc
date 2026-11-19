@@ -36,6 +36,12 @@ window.NRCDBRetry = {
     function receive(view) {
       if (!pending.size || view.byteLength < 2) return false;
       const opcode = view.getUint16(0);
+      // Open incident pages put the correlation ID before the JSON body.
+      if (opcode === 181 && view.byteLength >= 6) {
+        const id = view.getUint32(2), entry = pending.get(id);
+        if (entry && new DataView(entry.packet).getUint16(0) === 76) remove(id);
+        return false;
+      }
       // Mutation replies end in their correlation ID; transaction results put
       // it after the version. Clear before normal dispatch, even for large bodies.
       const mutationRequests = {121:16, 122:17, 124:18, 130:20, 131:21, 132:22, 133:23, 140:30, 141:31, 142:32, 150:40, 151:41, 137:27};

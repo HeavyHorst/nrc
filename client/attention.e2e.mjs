@@ -203,13 +203,23 @@ try {
         const frame = new DataView(buffer);
         if (frame.getUint16(0) === 76) {
           const cursor = frame.getBigUint64(6);
-          window.incidentRequests.push(String(cursor));
+          const correlation = frame.getUint32(2);
+          window.incidentRequests.push({ cursor: String(cursor), correlation });
+          if (window.refuseNextIncidentRead) {
+            window.refuseNextIncidentRead = false;
+            const code = 'db_connection_overloaded';
+            const reply = new DataView(new ArrayBuffer(10 + code.length));
+            reply.setUint16(0, 104); reply.setUint16(2, 76);
+            reply.setUint32(text(reply, 4, code), correlation);
+            queueMicrotask(() => handleBinaryMessage(reply.buffer));
+            return;
+          }
           const matching = window.attentionIncidents.filter(a => a.instanceId > cursor && JSON.parse(a.preview).status === 'firing');
           const selected = matching.slice(0, 1);
           const body = encoder.encode(JSON.stringify({ version: 1, cursor_id: String(selected.at(-1)?.instanceId ?? cursor),
             has_more: matching.length > 1, rows: selected.map(a => ({ id: String(a.assetId), preview: a.preview })) }));
           const reply = new DataView(new ArrayBuffer(6 + body.length));
-          reply.setUint16(0, 181); reply.setUint32(2, frame.getUint32(2)); new Uint8Array(reply.buffer, 6).set(body);
+          reply.setUint16(0, 181); reply.setUint32(2, correlation); new Uint8Array(reply.buffer, 6).set(body);
           queueMicrotask(() => handleBinaryMessage(reply.buffer));
           return;
         }
@@ -581,10 +591,13 @@ try {
     };
     NRCViewManager.setActiveView('tasks');
     window.incidentRequests.length = 0;
+    window.refuseNextIncidentRead = true;
     NRCAttention.onSessionStarted();
   });
-  await page.waitForFunction(() => document.getElementById('attentionViewCount').dataset.incidents === 'true');
-  assert.deepEqual(await page.evaluate(() => window.incidentRequests), ['0', '240'], 'walks open incidents by instance cursor, not asset ID');
+  await page.waitForFunction(() => document.getElementById('attentionViewCount').dataset.incidents === 'true', null, { timeout: 5000 });
+  const requests = await page.evaluate(() => window.incidentRequests);
+  assert.deepEqual(requests.map(request => request.cursor), ['0', '0', '240'], 'retries before the next poll, then continues by instance cursor');
+  assert.equal(requests[0].correlation, requests[1].correlation, 'the retry keeps the request correlation');
   await page.evaluate(() => NRCViewManager.setActiveView('attention'));
   await page.locator('[data-attention-filter="all"]').click();
   await page.waitForFunction(() => document.getElementById('attentionIncidentCount').textContent === '2');

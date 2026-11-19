@@ -162,7 +162,7 @@ window.NRCMonitoring = (() => {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => { pending.delete(id); reject(new Error('No response. Refresh before retrying an action.')); }, 15000);
       pending.set(id, { resolve, reject, timeout, response, subject: String(new DataView(buffer).getBigUint64(6)) });
-      sendPacket(buffer);
+      sendPacket(buffer, response === 181 ? id : 0);
     });
   }
   function handlePage(view) {
