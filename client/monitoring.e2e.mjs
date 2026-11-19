@@ -44,6 +44,10 @@ try {
       for (const selector of ['td:first-child .customer-meta', 'td:nth-child(2)', 'td:last-child']) {
         await page.locator(`#monitorList tbody tr:first-child ${selector}`).click({ position: { x: 3, y: 3 } });
         await page.waitForSelector(marker);
+        const controls = await page.locator('#inspectorHeader button').evaluateAll(buttons => buttons.map(button => {
+          const { y, height } = button.getBoundingClientRect(); return { y, height };
+        }));
+        assert.ok(controls.every(control => control.y === controls[0].y && control.height === controls[0].height), 'Header actions share one height and baseline');
         await page.evaluate(() => NRCInspector.close());
         await page.waitForSelector(marker, { state: 'hidden' });
       }
@@ -280,12 +284,14 @@ try {
   await page.click('[data-monitor="12"]');
   await page.waitForSelector('[data-instance="0"]');
   assert.equal(await page.locator('#monitorInstances').isVisible(), true, 'One row with more pages is not a single instance');
-  assert.equal(await page.locator('#monitorSelection').textContent(), '');
+  assert.equal(await page.locator('[data-instance="0"]').getAttribute('aria-pressed'), 'true', 'The first loaded instance is selected even with more pages available');
+  assert.equal(await page.locator('#monitorSelection h3').textContent(), await page.locator('[data-instance="0"]').textContent());
   await page.setViewportSize({ width: 1280, height: 1000 });
   assert.equal(await page.locator('#monitorList thead').isVisible(), false, 'Narrow register beside Inspector must use cards even on desktop');
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.click('#monitorInstanceMore');
   await page.waitForSelector('[data-instance="1"]');
+  assert.equal(await page.locator('[data-instance="0"]').getAttribute('aria-pressed'), 'true', 'Loading another page preserves the selection');
   await page.click('[data-instance="0"]');
   await page.waitForFunction(() => monitorFixture.pendingHistory.length === 1);
   await page.click('[data-monitor-days="7"]');
@@ -309,7 +315,7 @@ try {
   assert.equal(await trail.locator('.monitor-history-bar').count(), 30, 'Only the latest queued period renders');
   await page.click('[data-monitor="12"]');
   await page.waitForSelector('[data-instance="0"]');
-  await page.click('[data-instance="0"]');
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus')?.textContent === '');
   await page.waitForSelector('#monitorUptime .monitor-meter');
   assert.match(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION.*503.*true/s);
   assert.match(await page.locator('#monitorUptime').textContent(), /66.66%.*1.04%/);
@@ -412,7 +418,7 @@ try {
   await page.check('#monitorRetired');
   await page.waitForFunction(() => document.getElementById('monitorInstanceStatus').textContent.includes('LOADED'));
   assert.doesNotMatch(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION/);
-  assert.equal(await page.locator('#monitorSelection').textContent(), '');
+  assert.equal(await page.locator('[data-instance="0"]').getAttribute('aria-pressed'), 'true', 'Replacing the snapshot selects its first instance');
   await page.evaluate(() => { monitorFixture.statusSequence = '17'; monitorFixture.deferHistoryKind = 'inspector'; });
   await page.uncheck('#monitorRetired');
   await page.click('[data-instance="0"]');
@@ -425,7 +431,9 @@ try {
     monitorFixture.pendingHistory.shift()();
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   });
-  assert.doesNotMatch(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION|503|Reading history/);
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus')?.textContent === '');
+  assert.match(await page.locator('#monitorHistory').textContent(), /HISTORICAL \/ NOT CURRENT/);
+  assert.doesNotMatch(await page.locator('#monitorHistory').textContent(), /MATCHES CURRENT EVALUATION|Reading history/);
 
   // A filter reset cannot continue the old cursor, even through a queued click.
   await page.evaluate(() => { monitorFixture.instancePages = true; });
@@ -546,6 +554,72 @@ try {
   await page.locator('#incidentAssignment button').click();
   await page.waitForFunction(() => document.querySelector('[name=assignee]')?.value === 'oncall' && monitorFixture.actions.length === 2);
   assert.deepEqual(await page.evaluate(() => monitorFixture.actions), [{ action: 0, assignee: '' }, { action: 1, assignee: 'oncall' }]);
+  // Display metadata formats each numeric condition, not its neighbors or verdict.
+  await page.evaluate(() => {
+    Object.assign(monitorFixture, { fail: false, old: false, unknown: false });
+    monitorFixture.previousDefinition = structuredClone(monitorFixture.definition);
+    Object.assign(monitorFixture.definition, { kind: 'http', conditions: [{ field: 'json', path: '/n', op: '>', value: 1024 }] });
+    monitorFixture.runRows = [{ diagnostics: { conditions: [{ index: 0, state: 'pass', actual_type: 'number', actual: '1536', expected_number: '1024' }] } }];
+  });
+  for (const [unit, actual, expected, display, threshold] of [
+    ['bytes', '1536', '1024', '1.5 KiB', '1 KiB'],
+    ['bits', '1536', '1024', '1.54 kbit', '1.02 kbit'],
+    ['nanoseconds', '6657382707732876', '1814400000000000', '77.05 d', '21 d'],
+    ['nanoseconds', '999', '1000', '999 ns', '1 µs'],
+    ['microseconds', '1500', '1000', '1.5 ms', '1 ms'],
+    ['milliseconds', '-1500', '0', '-1.5 s', '0 ns'],
+    ['seconds', '3600', '60', '1 h', '1 min'],
+    ['percent', '12.345', '90', '12.35 %', '90 %'],
+    ['percent_ratio', '0.12345', '0.9', '12.35 %', '90 %'],
+  ]) {
+    await page.evaluate(({ unit, actual, expected }) => {
+      monitorFixture.definition.conditions[0].unit = unit;
+      Object.assign(monitorFixture.runRows[0].diagnostics.conditions[0], { actual, expected_number: expected });
+    }, { unit, actual, expected });
+    await page.click('[data-monitor="12"]');
+    await page.waitForFunction(() => document.getElementById('monitorHistoryStatus')?.textContent === '' && document.querySelector('#monitorHistory table'));
+    assert.equal(await page.locator('#monitorHistory tbody td:nth-child(2)').textContent(), display);
+    assert.equal(await page.locator('#monitorHistory tbody td:nth-child(2)').getAttribute('title'), actual);
+    assert.equal(await page.locator('#monitorHistory tbody td:first-child').textContent(), `json/n > ${threshold}`);
+    assert.match(await page.locator('#monitorHistory tbody td:last-child').textContent(), /PASS/);
+  }
+  await page.evaluate(() => { monitorFixture.old = true; });
+  await page.click('[data-monitor="12"]');
+  await page.waitForFunction(() => document.getElementById('monitorHistoryStatus')?.textContent === '' && document.getElementById('monitorHistory').textContent.includes('definition revision unavailable'));
+  assert.equal(await page.locator('#monitorHistory tbody td:nth-child(2)').textContent(), '0.12345 [number]', 'Old diagnostics never borrow current units');
+  await page.evaluate(() => {
+    monitorFixture.old = false;
+    monitorFixture.rawDefinition = '{"kind":"http","url":"https://example.com","conditions":[{"field":"json","path":"/large","op":">","value":9007199254740993},{"field":"json","path":"/healthy","op":"==","value":true}]}';
+    monitorFixture.originalConditionPatch = NRCTransactions.sendAssetMetadataPatch;
+    monitorFixture.conditionPatches = [];
+    NRCTransactions.sendAssetMetadataPatch = (asset, preview, payload, callbacks) => {
+      monitorFixture.conditionPatches.push({ revision: String(asset.updatedAt), preview, payload });
+      if (monitorFixture.conditionConflict) queueMicrotask(() => callbacks.onError({ message: 'Revision conflict' }));
+      else { monitorFixture.rawDefinition = payload; queueMicrotask(callbacks.onSuccess); }
+      return 1;
+    };
+  });
+  await page.click('[data-monitor="12"]');
+  await page.waitForSelector('[data-condition-unit="0"]');
+  assert.equal(await page.locator('[data-condition-unit]').count(), 1, 'Boolean conditions do not receive numeric display controls');
+  await page.selectOption('[data-condition-unit="0"]', 'bytes');
+  await page.click('#monitorConditionDisplay button');
+  await page.waitForFunction(() => document.querySelector('[data-condition-unit="0"]')?.value === 'bytes' && !document.querySelector('#monitorConditionDisplay').inert);
+  const patch = await page.evaluate(() => monitorFixture.conditionPatches[0]);
+  assert.equal(patch.preview, null, 'Condition units only patch the check payload');
+  assert.match(patch.payload, /"value":9007199254740993,"unit":"bytes"/);
+  assert.match(patch.payload, /"path":"\/healthy","op":"==","value":true/);
+  await page.evaluate(() => { monitorFixture.conditionConflict = true; });
+  await page.selectOption('[data-condition-unit="0"]', 'bits');
+  await page.click('#monitorConditionDisplay button');
+  await page.waitForFunction(() => document.getElementById('monitorUnitStatus').textContent.includes('Revision conflict'));
+  assert.equal(await page.locator('[data-condition-unit="0"]').inputValue(), 'bits');
+  assert.equal(await page.evaluate(() => monitorFixture.conditionPatches.length), 2, 'Conflicting saves are not replayed');
+  await page.evaluate(() => {
+    NRCTransactions.sendAssetMetadataPatch = monitorFixture.originalConditionPatch;
+    delete monitorFixture.rawDefinition; delete monitorFixture.runRows;
+    Object.assign(monitorFixture.definition, monitorFixture.previousDefinition);
+  });
   // Units change presentation, never the raw measurements or threshold positions.
   await page.evaluate(() => {
     Object.assign(monitorFixture.definition, { kind: 'victoriametrics', query: 'filesystem query', trigger: { op: '>', value: 90 }, recovery: { op: '<', value: 85 } });

@@ -44,6 +44,37 @@ func TestMonitorDisplayUnit(t *testing.T) {
 	}
 }
 
+func TestConditionDisplayUnits(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"n":1536}`)
+	}))
+	defer s.Close()
+	for _, unit := range []string{"", "number", "bytes", "bits", "nanoseconds", "microseconds", "milliseconds", "seconds", "percent", "percent_ratio", "kilobytes"} {
+		a := monitorAsset(s.URL)
+		a.Payload = fmt.Sprintf(`{"kind":"http","url":%q,"conditions":[{"field":"json","path":"/n","op":">","value":1024,"unit":%q}]}`, s.URL, unit)
+		_, d, err := parseMonitor(a)
+		if unit == "kilobytes" {
+			if err == nil {
+				t.Fatal("unsupported display unit accepted")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(unit, err)
+		}
+		r := runCheck(context.Background(), d)
+		row := r.Diagnostics.Conditions[0]
+		if r.Observation.Condition != 0 || row.State != "pass" || row.Actual != "1536" || row.ExpectedNumber != "1024" {
+			t.Fatalf("%s changed raw evaluation: %+v %+v", unit, r, row)
+		}
+	}
+	a := monitorAsset(s.URL)
+	a.Payload = fmt.Sprintf(`{"kind":"http","url":%q,"conditions":[{"field":"json","path":"/n","op":"==","value":true,"unit":"bytes"}]}`, s.URL)
+	if _, _, err := parseMonitor(a); err == nil {
+		t.Fatal("display unit on boolean accepted")
+	}
+}
+
 func TestConditionDiagnostics(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(503)

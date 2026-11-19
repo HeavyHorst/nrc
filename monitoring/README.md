@@ -65,6 +65,24 @@ Unrelated updates preserve the unit. Existing configurations without `unit` rema
 valid. Upgrade the server and incident sidecar before writing the new field;
 older versions reject it as an unknown configuration field.
 
+HTTP conditions accept their own optional `unit` in the check payload. Set it
+in the Inspector with SAVE UNITS, or through `--conditions-file`. Choices are
+`number`, `bytes` (IEC), `bits` (SI), `nanoseconds`, `microseconds`,
+`milliseconds`, `seconds`, `percent` (raw 0–100), and `percent_ratio` (raw 0–1).
+Duration units describe the input; the client scales the display to ns, µs, ms,
+seconds, minutes, hours or days. Latency and certificate checks already use raw
+nanoseconds, so `latency_ns` and `certificate_remaining_ns` default to that display.
+Other fields default to `number`. Explicit `number` disables automatic formatting.
+
+For example, a condition can be
+`{"field":"json","path":"/free_bytes","op":">","value":1073741824,"unit":"bytes"}`.
+Only numeric conditions accept units. The evaluator still compares the original
+numbers and retains exact decimal observations; the UI keeps raw values in tooltips.
+Formatting is applied only when diagnostics match the loaded definition revision.
+Saving uses the existing revision guard and starts a new monitor revision, just
+like a rule edit. Upgrade the incident sidecar before saving condition units;
+older sidecars reject the new condition field.
+
 ## Initial choices for previously open cases
 
 - Between trigger and recovery thresholds, reset both consecutive streaks while

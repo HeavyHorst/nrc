@@ -638,6 +638,14 @@ func TestMonitorCLI(t *testing.T) {
 	if r := get(httpID); !strings.Contains(string(r.Check), `"path":"/healthy"`) {
 		t.Fatal(string(r.Check))
 	}
+	conditions = `[{"field":"json","path":"/bytes","op":">","value":9007199254740993,"unit":"bytes"}]`
+	run(conditions, true, "monitor", "update", httpID, "--conditions-file", "-")
+	run("", true, "monitor", "update", httpID, "--interval", "30s")
+	if r := get(httpID); !strings.Contains(string(r.Check), `"unit":"bytes"`) || !strings.Contains(string(r.Check), `9007199254740993`) {
+		t.Fatal("condition display metadata or exact threshold lost", string(r.Check))
+	}
+	run(`[{"field":"json","op":"==","value":true,"unit":"bytes"}]`, false, "monitor", "update", httpID, "--conditions-file", "-")
+	run(`[{"field":"json","op":">","value":1,"unit":"kilobytes"}]`, false, "monitor", "update", httpID, "--conditions-file", "-")
 	mu.Lock()
 	tcpID := strconv.Itoa(len(assets) + 1)
 	before = writes

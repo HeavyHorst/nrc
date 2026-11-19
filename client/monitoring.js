@@ -22,17 +22,34 @@ window.NRCMonitoring = (() => {
   const historyMaxAge = 5 * 60000;
   const percent = (n, d) => d > 0n ? `${Number(n * 10000n / d) / 100}%` : 'UNKNOWN';
   const displayUnits = { number: 'Number', percent: 'Percent (0–100)', bytes: 'Bytes (IEC)' };
+  const conditionUnits = { ...displayUnits, bits: 'Bits (SI)', nanoseconds: 'Duration (ns)', microseconds: 'Duration (µs)', milliseconds: 'Duration (ms)', seconds: 'Duration (s)', percent_ratio: 'Percent (0–1)' };
+  const conditionUnit = condition => condition.unit || (['latency_ns', 'certificate_remaining_ns'].includes(condition.field) ? 'nanoseconds' : 'number');
 
   function formatValue(value, unit = 'number') {
     if (value == null) return '—';
     let number = Number(value);
     if (!Number.isFinite(number)) return String(value);
-    let suffix = unit === 'percent' ? ' %' : '';
+    let suffix = unit === 'percent' || unit === 'percent_ratio' ? ' %' : '';
+    if (unit === 'percent_ratio') number *= 100;
     if (unit === 'bytes') {
       const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'];
       let index = 0;
       while (Math.abs(number) >= 1024 && index < units.length - 1) { number /= 1024; index++; }
       suffix = ` ${units[index]}`;
+    }
+    if (unit === 'bits') {
+      const units = ['bit', 'kbit', 'Mbit', 'Gbit', 'Tbit', 'Pbit', 'Ebit'];
+      let index = 0;
+      while (Math.abs(number) >= 1000 && index < units.length - 1) { number /= 1000; index++; }
+      suffix = ` ${units[index]}`;
+    }
+    const durationFactor = { nanoseconds: 1e-9, microseconds: 1e-6, milliseconds: 1e-3, seconds: 1 }[unit];
+    if (durationFactor) {
+      number *= durationFactor;
+      const units = [[86400, 'd'], [3600, 'h'], [60, 'min'], [1, 's'], [1e-3, 'ms'], [1e-6, 'µs'], [1e-9, 'ns']];
+      const [factor, label] = units.find(([factor]) => Math.abs(number) >= factor) || units.at(-1);
+      number /= factor;
+      suffix = ` ${label}`;
     }
     const magnitude = Math.abs(number);
     return (magnitude > 0 && (magnitude < 0.01 || magnitude >= 1e6)
@@ -526,8 +543,11 @@ window.NRCMonitoring = (() => {
     const rows = run.diagnostics.conditions.map(row => {
       const condition = matched ? definition.conditions?.[row.index] : null;
       const expected = row.expected_number ?? (typeof condition?.value === 'number' ? 'numeric threshold (see CLI)' : JSON.stringify(condition?.value));
-      const label = condition ? `${condition.field}${condition.path || ''} ${condition.op} ${expected}` : `Condition ${row.index + 1} (definition revision unavailable)`;
-      return `<tr><td>${esc(label)}</td><td>${esc(row.actual_type ? `${row.actual ?? ''}${row.truncated ? '… (truncated)' : ''} [${row.actual_type}]` : '—')}${row.reason ? `<br>${esc(row.reason)}` : ''}</td><td><span class="monitor-state" data-state="${esc(row.state)}" aria-hidden="true">${row.state === 'pass' ? '✓' : row.state === 'fail' ? '×' : '—'}</span> ${badge(row.state)}</td></tr>`;
+      const unit = condition ? conditionUnit(condition) : 'number';
+      const formatted = unit !== 'number';
+      const label = condition ? `${condition.field}${condition.path || ''} ${condition.op} ${formatted && row.expected_number != null ? formatValue(row.expected_number, unit) : expected}` : `Condition ${row.index + 1} (definition revision unavailable)`;
+      const actual = formatted && row.actual_type === 'number' && !row.truncated ? formatValue(row.actual, unit) : `${row.actual ?? ''}${row.truncated ? '… (truncated)' : ''} [${row.actual_type}]`;
+      return `<tr><td title="${esc(expected)}">${esc(label)}</td><td title="${esc(row.actual ?? '')}">${esc(row.actual_type ? actual : '—')}${row.reason ? `<br>${esc(row.reason)}` : ''}</td><td><span class="monitor-state" data-state="${esc(row.state)}" aria-hidden="true">${row.state === 'pass' ? '✓' : row.state === 'fail' ? '×' : '—'}</span> ${badge(row.state)}</td></tr>`;
     }).join('');
     return `<p class="customer-meta">${current ? 'MATCHES CURRENT EVALUATION' : 'HISTORICAL / NOT CURRENT'}${run.acceptance !== 'confirmed' ? ' · NOT CONFIRMED' : ''}</p>${run.diagnostics.error ? `<p>${esc(run.diagnostics.error)}</p>` : ''}<div class="monitor-conditions">${table(['CONDITION', 'OBSERVED', 'RESULT'], rows)}</div>`;
   }
@@ -537,7 +557,7 @@ window.NRCMonitoring = (() => {
     const signal = historyController.signal;
     const valid = () => token === detailGeneration && scope === currentWorkspaceId && stillCurrent();
     const host = el('inspectorEntityHost'), header = el('inspectorHeader');
-    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">${ref.type.toUpperCase()} #${ref.id}</span><span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">READ</span></div><div class="inspector-mode-row"><button class="btn" id="monitorDetailRefresh">REFRESH</button>${window.NRCDetailUI.renderCloseControl('monitorClose')}</div>`;
+    header.innerHTML = `<div class="inspector-identity-row"><span class="header-text identity-reference">${ref.type.toUpperCase()} #${ref.id}</span><span class="inspector-cell-label">STATE</span><span class="status-value-mono inspector-state-value">READ</span></div><div class="inspector-mode-row">${window.NRCDetailUI.renderHeaderAction({ id: 'monitorDetailRefresh', label: 'REFRESH', command: 'refresh', title: 'Refresh record' })}${window.NRCDetailUI.renderCloseControl('monitorClose')}</div>`;
     el('monitorClose').onclick = () => window.NRCInspector.close();
     el('monitorDetailRefresh').onclick = () => showInspector(ref, stillCurrent);
     host.innerHTML = '<article class="customer-record monitor-record"><p class="customer-empty">Reading NRC…</p></article>';
@@ -576,6 +596,8 @@ window.NRCMonitoring = (() => {
       }
       const definition = JSON.parse(asset.payload);
       const victoria = definition.kind === 'victoriametrics' || definition.kind === 'victorialogs';
+      const numericConditions = (definition.conditions || []).flatMap((condition, index) => typeof condition.value === 'number' ? [{ condition, index }] : []);
+      const conditionDisplay = numericConditions.length ? `<form id="monitorConditionDisplay" class="customer-fields">${numericConditions.map(({ condition, index }) => `<label class="detail-edit-field">${esc(condition.field + (condition.path || ''))}<select class="task-detail-input" data-condition-unit="${index}" aria-label="Display unit for ${esc(condition.field + (condition.path || ''))}">${Object.entries(conditionUnits).map(([value, label]) => `<option value="${value}"${conditionUnit(condition) === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label>`).join('')}<button class="btn" type="submit">SAVE UNITS</button></form><p id="monitorUnitStatus" role="status"></p>` : '';
       const historyPanel = '<div id="monitorHistoryDetails"></div>';
       record.classList.add('monitor-inspector');
       header.querySelector('.identity-reference').textContent = `MONITOR / ${config.name}`;
@@ -584,20 +606,27 @@ window.NRCMonitoring = (() => {
         ${victoria ? `<form id="monitorDisplay" class="customer-fields"><label class="detail-edit-field">DISPLAY UNIT<select id="monitorUnit" class="task-detail-input">${Object.entries(displayUnits).map(([value, label]) => `<option value="${value}"${(config.unit || 'number') === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label><button class="btn" type="submit">SAVE UNIT</button></form><p id="monitorUnitStatus" role="status"></p>` : ''}
         ${section('INSTANCES · CURRENT NRC STATE', '<div class="monitor-instance-toolbar"><span id="monitorInstanceStatus" role="status"></span><label><input id="monitorRetired" type="checkbox"> INCLUDE RETIRED</label></div><div id="monitorInstances"></div><button class="btn" id="monitorInstanceMore" hidden>MORE INSTANCES</button>')}
         ${victoria ? historyPanel : ''}
-        ${section(victoria ? 'VALUE & THRESHOLDS' : definition.conditions?.length ? 'CONDITIONS · ALL MUST PASS' : 'EVALUATION RESULT', `<div id="monitorHistory"><p class="customer-empty">Select an instance.</p></div><h3 class="monitor-subheading">ALARM THRESHOLDS</h3><dl class="monitor-thresholds"><div><dt>TRIGGER</dt><dd>${config.failures} failures</dd></div><div><dt>RESOLVE</dt><dd>${config.recoveries} successes</dd></div><div><dt>MISSING</dt><dd>${config.missing} absent evaluations</dd></div></dl>`)}
+        ${section(victoria ? 'VALUE & THRESHOLDS' : definition.conditions?.length ? 'CONDITIONS · ALL MUST PASS' : 'EVALUATION RESULT', `${conditionDisplay}<div id="monitorHistory"><p class="customer-empty">Select an instance.</p></div><h3 class="monitor-subheading">ALARM THRESHOLDS</h3><dl class="monitor-thresholds"><div><dt>TRIGGER</dt><dd>${config.failures} failures</dd></div><div><dt>RESOLVE</dt><dd>${config.recoveries} successes</dd></div><div><dt>MISSING</dt><dd>${config.missing} absent evaluations</dd></div></dl>`)}
         </div></div>${victoria ? '' : historyPanel}`;
       el('monitorRetired').checked = retired;
-      if (victoria) el('monitorDisplay').onsubmit = async event => {
+      if (victoria || numericConditions.length) el(victoria ? 'monitorDisplay' : 'monitorConditionDisplay').onsubmit = async event => {
         event.preventDefault();
-        const unit = el('monitorUnit').value;
-        if (unit === (config.unit || 'number')) return;
         const form = event.currentTarget;
+        const unit = victoria ? el('monitorUnit').value : null;
+        if (victoria ? unit === (config.unit || 'number') : numericConditions.every(({ condition, index }) => form.querySelector(`[data-condition-unit="${index}"]`).value === conditionUnit(condition))) return;
         form.inert = true;
         try {
-          // Preserve exact integer policy fields when changing display metadata.
-          const preview = JSON.parse(asset.preview, (_key, value, context) => typeof value === 'number' ? JSON.rawJSON(context.source) : value);
+          // Preserve exact decimal tokens in both policy and check definitions.
+          const exact = (_key, value, context) => typeof value === 'number' ? JSON.rawJSON(context.source) : value;
+          const preview = victoria ? JSON.stringify({ ...JSON.parse(asset.preview, exact), unit }) : null;
+          let payload = null;
+          if (!victoria) {
+            const check = JSON.parse(asset.payload, exact);
+            for (const { index } of numericConditions) check.conditions[index].unit = form.querySelector(`[data-condition-unit="${index}"]`).value;
+            payload = JSON.stringify(check);
+          }
           await new Promise((resolve, reject) => {
-            if (!window.NRCTransactions.sendAssetMetadataPatch(asset, JSON.stringify({ ...preview, unit }), null, {
+            if (!window.NRCTransactions.sendAssetMetadataPatch(asset, preview, payload, {
               onSuccess: resolve, onError: detail => reject(new Error(detail.message || 'Save unconfirmed')),
             })) reject(new Error('Not connected. Nothing sent.'));
           });
@@ -654,7 +683,7 @@ window.NRCMonitoring = (() => {
           el('monitorInstances').querySelector('table').insertAdjacentHTML('afterbegin', '<colgroup><col><col><col><col></colgroup>');
           el('monitorInstanceStatus').title = `AS OF ${stamp(next.at)}`;
           el('monitorInstanceMore').hidden = !next.has_more;
-          if (single && selectedInstance !== instances[0].id) void selectInstance(0);
+          if (selectedInstance === null && instances.length) void selectInstance(0);
         } catch (error) { if (valid() && local === instanceGeneration) el('monitorInstanceStatus').textContent = `${error.message} · DISPLAYED ROWS MAY BE STALE`; }
         finally {
           if (valid() && local === instanceGeneration && el('monitorInstanceMore')) {

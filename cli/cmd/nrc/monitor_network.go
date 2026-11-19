@@ -18,6 +18,7 @@ type monitorHTTPCondition struct {
 	Path  string `json:"path,omitempty"`
 	Op    string `json:"op"`
 	Value any    `json:"value"`
+	Unit  string `json:"unit,omitempty"`
 }
 
 func buildNetworkMonitor(cmd *cobra.Command, d map[string]json.RawMessage, kind string, update bool) error {
@@ -132,6 +133,16 @@ func buildNetworkMonitor(cmd *cobra.Command, d map[string]json.RawMessage, kind 
 		return fmt.Errorf("HTTP checks require 1–32 conditions")
 	}
 	for _, c := range conditions {
+		if c.Unit != "" {
+			if _, ok := c.Value.(json.Number); !ok {
+				return fmt.Errorf("condition unit requires a numeric value")
+			}
+			switch c.Unit {
+			case "number", "bytes", "bits", "nanoseconds", "microseconds", "milliseconds", "seconds", "percent", "percent_ratio":
+			default:
+				return fmt.Errorf("unsupported condition display unit %q", c.Unit)
+			}
+		}
 		if c.Op != "==" && c.Op != "!=" && c.Op != "<" && c.Op != ">" && c.Op != "<=" && c.Op != ">=" {
 			return fmt.Errorf("invalid condition operator")
 		}

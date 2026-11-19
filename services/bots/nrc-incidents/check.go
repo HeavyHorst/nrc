@@ -38,6 +38,7 @@ type condition struct {
 	Path  string `json:"path,omitempty"` // RFC 6901 JSON Pointer, for field=json.
 	Op    string `json:"op"`
 	Value any    `json:"value"`
+	Unit  string `json:"unit,omitempty"` // Display only; comparisons always use raw values.
 }
 
 type checkDefinition struct {
@@ -115,6 +116,16 @@ func parseMonitor(a p.Asset) (monitorConfig, checkDefinition, error) {
 		return c, d, errors.New("unsupported check kind")
 	}
 	for _, test := range d.Conditions {
+		if test.Unit != "" {
+			if _, ok := test.Value.(json.Number); !ok {
+				return c, d, errors.New("condition unit requires a numeric value")
+			}
+			switch test.Unit {
+			case "number", "bytes", "bits", "nanoseconds", "microseconds", "milliseconds", "seconds", "percent", "percent_ratio":
+			default:
+				return c, d, errors.New("unsupported condition display unit")
+			}
+		}
 		switch test.Field {
 		case "status", "latency_ns", "certificate_remaining_ns":
 			if _, ok := test.Value.(json.Number); !ok || test.Path != "" {
