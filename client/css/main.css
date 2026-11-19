@@ -66,10 +66,9 @@ button.monitor-history-bar:is(:hover, :focus-visible, [aria-pressed="true"]) { o
 .monitor-inspector .customer-section > .panel-header { background: transparent; border: 0; min-height: 0; padding: 0.375rem 0; font: 600 var(--font-base)/1.4 var(--font-mono); }
 .monitor-inspector #monitorHistoryDetails .panel-header { font-size: var(--font-xs); }
 .monitor-subheading { margin: 0.75rem 0 0; font: 600 var(--font-xs)/1.4 var(--font-mono); }
-.monitor-footer { margin-top: 1.5rem; color: var(--text-dim); }
-.monitor-streaks, .monitor-streak, .monitor-streak-graphic { display: flex; align-items: center; flex-wrap: wrap; gap: 0.375rem; }
-.monitor-streaks { gap: 0.5rem 1.5rem; font: 500 var(--font-xs)/1.4 var(--font-mono); }
-.monitor-streak-graphic { color: var(--accent-danger); }
+.monitor-streaks { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.375rem 0.5rem; font: 500 var(--font-xs)/1.4 var(--font-mono); }
+.monitor-streak { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; }
+.monitor-streak-graphic { display: flex; align-items: center; flex-wrap: wrap; gap: 0.375rem; color: var(--accent-danger); }
 .monitor-streak[data-state="pass"] .monitor-streak-graphic { color: var(--status-done); }
 .monitor-streak-step { width: 0.625rem; height: 0.625rem; border: 1px solid var(--text-dim); }
 .monitor-streak-step.is-filled { background: currentColor; border-color: currentColor; }
@@ -104,13 +103,14 @@ button.monitor-history-bar:is(:hover, :focus-visible, [aria-pressed="true"]) { o
 .monitor-timeseries line { stroke: currentColor; stroke-width: 1; stroke-dasharray: 5 4; }
 .monitor-timeseries line[data-threshold="recovery"] { stroke-dasharray: 2 4; }
 .monitor-chart-legend { display: flex; flex-wrap: wrap; gap: 0.375rem 1rem; font: var(--font-xs)/1.5 var(--font-mono); }
-.monitor-checks { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.5rem 0; }
-.monitor-check { display: inline-flex; align-items: center; justify-content: center; width: 1.75rem; min-height: 2rem; padding: 0; border: 1px solid currentColor; border-radius: 0; background: var(--surface-content); color: var(--text-dim); font: 700 var(--font-base)/1 var(--font-mono); cursor: pointer; }
-.monitor-check[data-state="healthy"] { color: var(--status-done); box-shadow: inset 0 -4px var(--status-done); }
-.monitor-check[data-state="failing"] { color: var(--accent-danger); box-shadow: inset 0 -4px var(--accent-danger); }
+.monitor-checks { display: flex; flex-wrap: wrap; gap: 0.2rem; margin: 0.25rem 0; }
+.monitor-check { display: inline-flex; align-items: center; justify-content: center; width: 1.75rem; min-height: 1.5rem; padding: 0; border: 1px solid currentColor; border-radius: 0; background: var(--surface-content); color: var(--text-dim); font: 700 var(--font-base)/1 var(--font-mono); cursor: pointer; }
+.monitor-check[data-state="healthy"] { color: var(--status-done); }
+.monitor-check[data-state="failing"] { color: var(--accent-danger); }
 .monitor-check[data-state="unknown"] { border-style: dashed; }
 .monitor-check:is(.is-active, :focus-visible) { outline: 2px solid var(--text-primary); outline-offset: 1px; }
 .monitor-check-panels { display: grid; overflow-wrap: anywhere; }
+.monitor-check-panels:has(> .monitor-check-detail:empty) { display: none; }
 .monitor-check-panels > div { grid-area: 1 / 1; min-width: 0; visibility: hidden; }
 .monitor-check-panels > .monitor-check-detail { visibility: visible; }
 @media (pointer: coarse) { .monitor-check { width: 2.75rem; min-height: 2.75rem; } }
@@ -135,7 +135,7 @@ button.monitor-history-bar:is(:hover, :focus-visible, [aria-pressed="true"]) { o
 .monitor-identity-label small { color: var(--text-dim); font-size: inherit; font-weight: 400; }
 .monitor-selected { outline: 1px solid var(--selected-row-accent); outline-offset: -1px; }
 .monitor-instance-list .monitor-table th { color: var(--text-dim); text-align: left; }
-.monitor-instance-list .monitor-table.task-table tbody tr > td { padding: 0.25rem 0.375rem; vertical-align: middle; }
+.monitor-instance-list .monitor-table.task-table tbody tr > td { padding: 0.1rem 0.375rem; line-height: 1.25; vertical-align: middle; }
 .monitor-instance-list col:first-child { width: 44%; }
 .monitor-instance-list col:nth-child(2) { width: 18%; }
 .monitor-instance-list col:nth-child(3) { width: 18%; }
@@ -149,6 +149,62 @@ button.monitor-history-bar:is(:hover, :focus-visible, [aria-pressed="true"]) { o
 .monitor-instance-list .monitor-incident-link { display: inline; width: auto; text-decoration: underline; text-underline-offset: 0.2em; }
 #monitorSelection h3 { margin: 0.5rem 0; font: 600 var(--font-base)/1.4 var(--font-mono); }
 .monitor-state[data-state="pass"] { color: var(--status-done); }
+.monitor-inspector { container-type: inline-size; --console-rule: 1px solid var(--text-primary); }
+.monitor-inspector.monitor-record { padding: 0; overflow-anchor: none; }
+#inspector:has(.monitor-inspector) #inspectorHeader > div { padding-inline: 0.75rem; background: var(--surface-content); border-bottom: 1px solid var(--text-primary); }
+#inspector:has(.monitor-inspector) #inspectorHeader .identity-reference { font-size: var(--font-base); font-weight: 700; }
+#inspector:has(.monitor-inspector) #inspectorHeader .inspector-mode-row { padding-block: 0.2rem; gap: 0.375rem; }
+.monitor-console { display: grid; grid-template-columns: minmax(0, 27fr) minmax(0, 73fr); border-bottom: var(--console-rule); }
+.monitor-console > * { min-width: 0; padding: 0.75rem; overflow-wrap: anywhere; }
+.monitor-rail { border-inline-end: var(--console-rule); background: color-mix(in srgb, var(--surface-content) 96%, var(--text-primary)); }
+.monitor-rail .monitor-subheading, .monitor-rail .monitor-reading .customer-meta, .monitor-rail .monitor-metrics dt { margin: 0; font: 700 var(--font-xs)/1.3 var(--font-sans); color: var(--text-primary); }
+.monitor-rail #monitorSelection > p, .monitor-rail .monitor-streaks { border-top: var(--console-rule); padding-top: 0.4rem; }
+.monitor-rail #monitorSelection h3 { font: 650 var(--font-lg)/1.25 var(--font-sans); }
+.monitor-no-selection:not(#monitorSelection:empty + p) { display: none; }
+.monitor-rail #monitorSelection > p > .monitor-state { display: block; font: 750 clamp(1.65rem, 4.4cqi, 3rem)/1.15 var(--font-sans); letter-spacing: -0.035em; }
+.monitor-reading { margin-block: 0.75rem; padding-top: 0.5rem; border-top: var(--console-rule); }
+.monitor-reading strong { font: 700 clamp(1.5rem, 3.4cqi, 2.5rem)/1.2 var(--font-sans); font-variant-numeric: tabular-nums; }
+.monitor-rail .monitor-state[data-state="healthy"] { color: var(--status-done); }
+.monitor-inspector .monitor-rail .monitor-metrics { grid-template-columns: 1fr; }
+.monitor-rail .monitor-metrics > div { border-top: var(--console-rule); padding-top: 0.4rem; }
+.monitor-rail .monitor-metrics dd { font: 650 1.65rem/1.2 var(--font-sans); }
+.monitor-evidence h2 { margin: 0; font: 700 clamp(1.2rem, 3.6cqi, 2rem)/1.2 var(--font-sans); }
+.monitor-evidence .customer-section { border-top: var(--console-rule); margin-top: 0.75rem; }
+.monitor-evidence .customer-section:has(> #monitorInstances[hidden]) { border-top: 0; margin-top: 0.375rem; }
+.monitor-evidence .customer-section > .panel-header { font: 700 var(--font-base)/1.35 var(--font-sans); padding-block: 0.65rem 0.35rem; }
+.monitor-evidence .monitor-table.task-table :is(td, th) { border-bottom: var(--content-border); }
+.monitor-evidence .monitor-table.task-table th { background: color-mix(in srgb, var(--surface-content) 93%, var(--text-primary)); border-bottom: var(--console-rule); }
+.monitor-query { margin-block: 0.375rem; border: var(--console-rule); padding: 0.125rem 0.375rem; }
+.monitor-query summary { cursor: pointer; font: 650 var(--font-xs)/1.5 var(--font-mono); }
+.monitor-evidence #monitorDisplay { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 0.5rem; }
+.monitor-evidence #monitorDisplay .detail-edit-field { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0.5rem; font: 650 var(--font-xs)/1.3 var(--font-sans); }
+.monitor-inspector #monitorHistoryDetails .panel-header { font: 700 var(--font-base)/1.3 var(--font-sans); }
+.monitor-inspector .monitor-chart-readout { min-height: 1.5em; }
+.monitor-inspector > #monitorHistoryDetails:not(:empty) { padding: 0.45rem 0.75rem; border-bottom: var(--console-rule); }
+.monitor-inspector > #monitorHistoryDetails .customer-section { margin: 0; }
+.monitor-console .monitor-evidence .monitor-conditions { border: var(--console-rule); }
+.monitor-console .monitor-evidence .monitor-conditions :is(th, td) + :is(th, td) { border-inline-start: var(--content-border); }
+@container (min-width: 621px) {
+    .monitor-evidence .customer-section:has(.monitor-value-scale) { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: 0.75rem; }
+    .monitor-evidence .customer-section:has(.monitor-value-scale) > header { grid-column: 1; grid-row: 1; }
+    .monitor-evidence .customer-section:has(.monitor-value-scale) > .monitor-subheading { grid-column: 2; grid-row: 1; align-self: center; margin: 0; }
+    .monitor-evidence .customer-section:has(.monitor-value-scale) > .monitor-thresholds { grid-column: 2; grid-row: 2; margin: 0; }
+    .monitor-evidence .customer-section:has(.monitor-value-scale) .monitor-thresholds > div { grid-template-columns: 40% 1fr; }
+}
+.monitor-evidence .monitor-instance-list { max-height: 17rem; overflow: auto; border: var(--console-rule); }
+.monitor-evidence .monitor-instance-list th + th { border-inline-start: var(--content-border); }
+.monitor-evidence .monitor-instance-list th { padding-block: 0.15rem; }
+.monitor-evidence .monitor-instance-toolbar { margin-bottom: 0.2rem; }
+@media (min-width: 769px) and (pointer: fine) {
+    .monitor-evidence .monitor-instance-list td { height: 24px; }
+    .monitor-evidence .monitor-instance-list .task-row-open { min-height: 0; padding-block: 0; line-height: 1.25; }
+}
+.monitor-evidence .monitor-table thead { position: sticky; top: 0; z-index: 1; background: var(--surface-content); }
+@container (max-width: 620px) {
+    .monitor-console { grid-template-columns: minmax(0, 1fr); }
+    .monitor-rail { border-inline-end: 0; border-bottom: var(--content-border); }
+    .monitor-inspector .monitor-rail .monitor-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 768px) {
     #monitoringPanel > .header-register > .header-register-control-row { display: flex; flex-wrap: wrap; }
     #monitoringPanel, .monitor-record { font-size: var(--mobile-font-base); }

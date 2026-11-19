@@ -459,8 +459,7 @@ window.NRCMonitoring = (() => {
       const conditions = run?.diagnostics && !run.diagnostics.conditions.length ? (run.diagnostics.error ? `<p>${esc(run.diagnostics.error)}</p>` : '') : diagnostics(run, definition, revision, null, null);
       return { state, label, details: `<p>${esc(label)}</p>${duration}${conditions}` };
     });
-    const hint = 'Hover, focus or tap a check for details';
-    host.innerHTML = `<p class="customer-meta">${checks.filter(check => check.state === 'healthy').length} OF ${checks.length} SHOWN CHECKS PASSED · LATEST ${esc(stamp(samples.at(-1).observed_at_ns))}</p><div class="monitor-checks" role="group" aria-label="Recent checks, oldest to newest">${checks.map((check, i) => `<button type="button" class="monitor-check" data-state="${check.state}" data-check="${i}" aria-label="${esc(check.label)}" aria-pressed="false">${check.state === 'healthy' ? '✓' : check.state === 'failing' ? '×' : '—'}</button>`).join('')}</div><p class="customer-meta">OLDEST → NEWEST · LAST ${checks.length} CHECKS · NOT A TIME SCALE</p><div class="monitor-check-detail" aria-live="polite"><p class="customer-meta">${hint}</p></div>`;
+    host.innerHTML = `<p class="customer-meta">${checks.filter(check => check.state === 'healthy').length} OF ${checks.length} SHOWN CHECKS PASSED · LATEST ${esc(stamp(samples.at(-1).observed_at_ns))}</p><div class="monitor-checks" role="group" aria-label="Recent checks, oldest to newest">${checks.map((check, i) => `<button type="button" class="monitor-check" data-state="${check.state}" data-check="${i}" aria-label="${esc(check.label)}" aria-pressed="false">${check.state === 'healthy' ? '✓' : check.state === 'failing' ? '×' : '—'}</button>`).join('')}</div><div class="monitor-check-detail" aria-live="polite"></div>`;
     const buttons = [...host.querySelectorAll('[data-check]')], detail = host.querySelector('.monitor-check-detail');
     // Overlay intrinsic-sized panels so the tallest check reserves space before
     // hovering, including after wrapping at narrow Inspector widths.
@@ -577,15 +576,16 @@ window.NRCMonitoring = (() => {
       }
       const definition = JSON.parse(asset.payload);
       const victoria = definition.kind === 'victoriametrics' || definition.kind === 'victorialogs';
+      const historyPanel = '<div id="monitorHistoryDetails"></div>';
       record.classList.add('monitor-inspector');
       header.querySelector('.identity-reference').textContent = `MONITOR / ${config.name}`;
-      record.innerHTML = `<h2>CURRENT STATE: ${esc(config.name)}</h2><p class="customer-meta">${esc(definition.kind.toUpperCase())} · EVERY ${esc(config.interval_ns / 1e9)}s${config.timeout_ns ? ` · TIMEOUT ${esc(config.timeout_ns / 1e9)}s` : ''} · ${config.enabled ? 'ENABLED' : 'DISABLED'}</p><pre class="monitor-rule">${esc(definition.query || definition.url || definition.address)}</pre>
-        ${victoria ? `<form id="monitorDisplay" class="customer-fields"><label class="detail-edit-field">DISPLAY UNIT<select id="monitorUnit" class="task-detail-input">${Object.entries(displayUnits).map(([value, label]) => `<option value="${value}"${(config.unit || 'number') === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label><button class="btn" type="submit">SAVE UNIT</button></form><p class="customer-meta">Display only; queries and thresholds stay in raw units. Saving creates a new monitor revision and restarts qualification.</p><p id="monitorUnitStatus" role="status"></p>` : ''}
+      record.innerHTML = `<div class="monitor-console"><aside class="monitor-rail" aria-label="Selected instance"><h3 class="monitor-subheading">SELECTED INSTANCE</h3><div id="monitorSelection"></div><p class="monitor-no-selection">Select an instance.</p><p id="monitorHistoryStatus" class="customer-meta" role="status"></p><div id="monitorUptime" hidden></div></aside>
+        <div class="monitor-evidence"><h2>${esc(config.name)}</h2><p class="customer-meta">${esc(definition.kind.toUpperCase())} · EVERY ${esc(config.interval_ns / 1e9)}s${config.timeout_ns ? ` · TIMEOUT ${esc(config.timeout_ns / 1e9)}s` : ''} · ${config.enabled ? 'ENABLED' : 'DISABLED'}</p>${victoria ? `<details class="monitor-query"><summary>QUERY</summary><pre class="monitor-rule">${esc(definition.query)}</pre></details>` : `<pre class="monitor-rule">${esc(definition.url || definition.address)}</pre>`}
+        ${victoria ? `<form id="monitorDisplay" class="customer-fields"><label class="detail-edit-field">DISPLAY UNIT<select id="monitorUnit" class="task-detail-input">${Object.entries(displayUnits).map(([value, label]) => `<option value="${value}"${(config.unit || 'number') === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label><button class="btn" type="submit">SAVE UNIT</button></form><p id="monitorUnitStatus" role="status"></p>` : ''}
         ${section('INSTANCES · CURRENT NRC STATE', '<div class="monitor-instance-toolbar"><span id="monitorInstanceStatus" role="status"></span><label><input id="monitorRetired" type="checkbox"> INCLUDE RETIRED</label></div><div id="monitorInstances"></div><button class="btn" id="monitorInstanceMore" hidden>MORE INSTANCES</button>')}
-        <div id="monitorSelection"></div>
+        ${victoria ? historyPanel : ''}
         ${section(victoria ? 'VALUE & THRESHOLDS' : definition.conditions?.length ? 'CONDITIONS · ALL MUST PASS' : 'EVALUATION RESULT', `<div id="monitorHistory"><p class="customer-empty">Select an instance.</p></div><h3 class="monitor-subheading">ALARM THRESHOLDS</h3><dl class="monitor-thresholds"><div><dt>TRIGGER</dt><dd>${config.failures} failures</dd></div><div><dt>RESOLVE</dt><dd>${config.recoveries} successes</dd></div><div><dt>MISSING</dt><dd>${config.missing} absent evaluations</dd></div></dl>`)}
-        ${section('HISTORY & AVAILABILITY', '<p id="monitorHistoryStatus" class="customer-meta" role="status"></p><div id="monitorUptime" hidden></div><div id="monitorHistoryDetails"></div>')}
-        <section class="monitor-footer">${facts([['MONITOR ID', String(ref.id)], ['REVISION', String(asset.updatedAt)]])}<p class="customer-meta">CLI MANAGED · WEBHOOK ROUTE IDS: ${esc(config.webhooks?.join(', ') || 'NONE')} · Delivery state is not shown here.</p></section>`;
+        </div></div>${victoria ? '' : historyPanel}`;
       el('monitorRetired').checked = retired;
       if (victoria) el('monitorDisplay').onsubmit = async event => {
         event.preventDefault();
@@ -672,11 +672,13 @@ window.NRCMonitoring = (() => {
           const selected = Number(item.dataset.instance) === index;
           item.setAttribute('aria-pressed', String(selected)); item.closest('tr').classList.toggle('monitor-selected', selected);
         }
-        const identity = el('monitorInstances').hidden ? `<h3>${instanceLabel(row.identity)}</h3>` : '';
-        el('monitorSelection').innerHTML = `${identity}<p>${badge(row.status)} · ${row.incident_id !== '0' ? `<button class="task-row-open" data-incident="${esc(row.incident_id)}">INCIDENT #${esc(row.incident_id)}</button>` : 'NO ACTIVE INCIDENT'}<span class="customer-meta" title="${esc(row.value ?? '—')}">VALUE ${esc(formatValue(row.value, config.unit))} · CURRENT NRC STATE</span></p><div class="monitor-streaks">${streak('FAIL', row.failures, config.failures, 'fail')}${streak('RECOVER', row.recoveries, config.recoveries, 'pass')}</div>`;
+        const identity = `<h3>${instanceLabel(row.identity, true)}</h3>`;
+        el('monitorSelection').innerHTML = `${identity}<p>${badge(row.status)}${row.incident_id !== '0' ? `<button class="task-row-open" data-incident="${esc(row.incident_id)}">INCIDENT #${esc(row.incident_id)}</button>` : 'NO ACTIVE INCIDENT'}</p><div class="monitor-reading" title="${esc(row.value ?? '—')}"><span class="customer-meta">LAST OBSERVED VALUE</span><strong>${esc(formatValue(row.value, config.unit))}</strong></div><div class="monitor-streaks">${streak('FAIL', row.failures, config.failures, 'fail')}${streak('RECOVER', row.recoveries, config.recoveries, 'pass')}</div>`;
         const target = el('monitorHistory');
         if (victoria) {
-          target.innerHTML = `${row.revision !== String(asset.updatedAt) ? '<p class="customer-meta">CONFIGURATION CHANGED · VALUE FROM PREVIOUS REVISION</p>' : ''}${table(['LAST OBSERVED VALUE', 'TRIGGER', 'RECOVERY'], `<tr><td title="${esc(row.value ?? '—')}">${esc(formatValue(row.value, config.unit))}</td><td title="${esc(definition.trigger.value)}">${esc(definition.trigger.op)} ${esc(formatValue(definition.trigger.value, config.unit))}</td><td${definition.recovery ? ` title="${esc(definition.recovery.value)}"` : ''}>${definition.recovery ? `${esc(definition.recovery.op)} ${esc(formatValue(definition.recovery.value, config.unit))}` : 'When trigger no longer matches'}</td></tr>`)}${valueScale(row, definition, asset.updatedAt, config.unit)}<p class="customer-meta">LAST SEEN ${esc(stamp(row.seen_at))} · CURRENT CONFIGURATION THRESHOLDS</p>`;
+          const threshold = rule => rule ? `${esc(rule.op)} ${esc(formatValue(rule.value, config.unit))}` : 'When trigger no longer matches';
+          el('monitorSelection').querySelector('.monitor-reading').insertAdjacentHTML('afterend', `<dl class="monitor-thresholds" aria-label="Current configuration thresholds"><div><dt>TRIGGER</dt><dd>${threshold(definition.trigger)}</dd></div><div><dt>RECOVERY</dt><dd>${threshold(definition.recovery)}</dd></div></dl>`);
+          target.innerHTML = `${row.revision !== String(asset.updatedAt) ? '<p class="customer-meta">CONFIGURATION CHANGED · VALUE FROM PREVIOUS REVISION</p>' : ''}${valueScale(row, definition, asset.updatedAt, config.unit)}<p class="customer-meta">LAST SEEN ${esc(stamp(row.seen_at))} · CURRENT CONFIGURATION THRESHOLDS</p>`;
         } else target.textContent = 'Reading history…';
         el('monitorUptime').replaceChildren(); el('monitorUptime').hidden = true; el('monitorHistoryDetails').replaceChildren();
         const key = JSON.stringify([scope, String(ref.id), String(asset.updatedAt), row.identity]);
@@ -703,7 +705,7 @@ window.NRCMonitoring = (() => {
               const value = pct(n, d);
               return `<div><dt>${label}</dt><dd>${value}<div class="monitor-meter" data-kind="${kind}" data-known="${d > 0n}" role="img" aria-label="${label}: ${value}" style="--fill:${d > 0n ? Math.max(0, Math.min(100, Number(n * 10000n / d) / 100)) : 0}%"><span></span></div></dd></div>`;
             };
-            el('monitorUptime').innerHTML = `<dl class="customer-facts monitor-metrics">${meter(`24H ${definition.kind.startsWith('victoria') ? 'CONDITION SATISFACTION' : 'UPTIME'} OF KNOWN TIME`, totals.healthy_ns, known, 'uptime')}${meter('24H COVERAGE', known, 86400000000000n - totals.paused_ns, 'coverage')}</dl><p class="customer-meta">HATCHED: NOT COVERED · PAUSED EXCLUDED</p><p class="customer-meta">CURRENT REVISION ONLY${uptime.pending_rollup_hours_global !== '0' ? ' · ROLLUPS PENDING (GLOBAL)' : ''}</p>`;
+            el('monitorUptime').innerHTML = `<dl class="customer-facts monitor-metrics">${meter(`24H ${definition.kind.startsWith('victoria') ? 'CONDITION SATISFACTION' : 'UPTIME'} OF KNOWN TIME`, totals.healthy_ns, known, 'uptime')}${meter('24H COVERAGE', known, 86400000000000n - totals.paused_ns, 'coverage')}</dl>`;
           }
         };
         if (usable) renderHistory(cached.result, true);
