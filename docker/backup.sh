@@ -36,9 +36,20 @@ fi
 COMPOSE_ARGS+=(--profile '*')
 docker compose "${COMPOSE_ARGS[@]}" config -q
 mapfile -t RUNNING_SERVICES < <(docker compose "${COMPOSE_ARGS[@]}" ps --services --filter status=running)
-mapfile -t VOLUMES < <(docker volume ls \
+# Migrated/external data volumes need not have Compose labels. Include mounts
+# from stopped containers too, without dropping existing labelled backups.
+project_containers=$(docker ps -aq --filter label=com.docker.compose.project=docker)
+mounted_volumes=""
+if [[ -n $project_containers ]]; then
+  mapfile -t container_ids <<< "$project_containers"
+  mounted_volumes=$(docker inspect \
+    --format '{{range .Mounts}}{{if eq .Type "volume"}}{{println .Name}}{{end}}{{end}}' \
+    "${container_ids[@]}")
+fi
+labelled_volumes=$(docker volume ls \
   --filter label=com.docker.compose.project=docker \
-  --format "{{.Name}}" | sort)
+  --format "{{.Name}}")
+mapfile -t VOLUMES < <(printf '%s\n' "$labelled_volumes" "$mounted_volumes" | sed '/^$/d' | sort -u)
 
 if ((${#RUNNING_SERVICES[@]} == 0)); then
   echo "no running NRC services found" >&2
