@@ -41,6 +41,16 @@ args = sys.argv[1:]
 if args[0] == "compose":
     if "ps" in args:
         print("websocket-server" if "--services" in args else "fixture service")
+    elif "stop" in args:
+        (root / "stopped").touch()
+    elif "start" in args:
+        (root / "stopped").unlink()
+        for payload in (root / "volumes").glob("*/payload"):
+            payload.write_text("changed after restart")
+    elif "up" in args:
+        raise SystemExit("backup must not recreate containers")
+elif args[:2] == ["image", "inspect"]:
+    pass
 elif args[0] == "ps":
     if "label=com.docker.compose.service=newsletter" not in args:
         print("running-container")
@@ -60,14 +70,26 @@ elif args[:2] == ["volume", "ls"]:
 elif args[:2] == ["volume", "inspect"]:
     print("volume=" + args[2] + " mountpoint=" + str(root / "volumes" / args[2]))
 elif args[0] == "run":
+    assert (root / "stopped").exists(), "live volumes must only be copied while stopped"
+    if os.environ.get("BACKUP_TEST_FAILURE") == "copy":
+        sys.exit(9)
     volume = next(x.removesuffix(":/volume:ro") for x in args if x.endswith(":/volume:ro"))
     backup = next(x.removesuffix(":/backup") for x in args if x.endswith(":/backup"))
-    subprocess.run(["tar", "-czf", str(pathlib.Path(backup) / (volume + ".tar.gz")),
+    assert "tar -cf " in args[-1], "volume copies must be uncompressed"
+    subprocess.run(["tar", "-cf", str(pathlib.Path(backup) / (volume + ".tar")),
                     "-C", str(root / "volumes" / volume), "."], check=True)
 else:
     raise SystemExit("unsupported fixture command")
 ''')
         docker.chmod(0o755)
+        gzip = bin_dir / "gzip"
+        gzip.write_text('''#!/usr/bin/env bash
+set -euo pipefail
+test ! -f "$BACKUP_TEST_ROOT/stopped"
+if [[ ${BACKUP_TEST_FAILURE:-} == compression ]]; then exit 10; fi
+exec /usr/bin/gzip "$@"
+''')
+        gzip.chmod(0o755)
         self.env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
                     "BACKUP_TEST_ROOT": str(self.root)}
 
@@ -89,6 +111,17 @@ else:
         self.assertEqual(verified.returncode, 0, verified.stderr)
         manifest = dict(line.split("=", 1) for line in (completed / "manifest.txt").read_text().splitlines())
         self.assertEqual(manifest["volumes"].split(), sorted(self.volumes))
+        self.assertFalse((self.root / "stopped").exists())
+        self.assertEqual((self.root / "volumes/active-sqlite/payload").read_text(),
+                         "changed after restart")
+
+    def test_copy_and_compression_failures_leave_services_running_and_no_backup(self):
+        for failure in ("copy", "compression"):
+            with self.subTest(failure=failure):
+                result = self.run_backup(BACKUP_TEST_FAILURE=failure)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.root / "stopped").exists())
+                self.assertEqual(list(self.backups.iterdir()), [])
 
     def test_discovery_failure_cannot_produce_a_successful_incomplete_backup(self):
         for failure in ("inspect", "catalog"):

@@ -347,6 +347,8 @@ if $dry_run; then
 fi
 
 if ! $skip_tests; then
+    # Validate the backup installed below before it can stop production services.
+    python3 test/test_backup.py
     if $server; then
         if [[ ! -x $ODIN_BIN ]]; then
             ODIN_BIN=$(command -v odin || true)

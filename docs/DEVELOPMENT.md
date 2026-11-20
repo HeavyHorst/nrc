@@ -79,6 +79,16 @@ Compose sends `SIGINT` to the server on stop, matching its graceful shutdown
 handler. Keep this setting for quiesced backups; Docker's default `SIGTERM` does
 not request the server's graceful shutdown.
 
+The deployment backup stops the running services only for uncompressed volume
+copies, then starts the same containers without recreating them. Compression,
+checksums and archive verification run after restart against those frozen copies.
+Allow free backup space for all uncompressed archives plus the largest archive's
+compressed output. A failed copy attempts to restart services; any backup failure
+blocks deployment and removes the incomplete backup. Backup logs timestamp the
+stop and container-start boundaries; application readiness can take longer.
+Run `python3 test/test_backup.py` for the isolated backup regression tests; deploy
+runs them automatically unless `--skip-tests` is set.
+
 The standalone server listens on port 8080 and expects authenticated upgrades.
 Serving static `client/` alone does not provide browser authentication.
 Use the [Compose deployment](../README.md#quickstart) for the complete web application.

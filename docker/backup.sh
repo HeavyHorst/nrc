@@ -65,7 +65,7 @@ restart_stack() {
   local status=$?
   trap - EXIT INT TERM
   if ((STACK_STOPPED)); then
-    docker compose "${COMPOSE_ARGS[@]}" up -d "${RUNNING_SERVICES[@]}" || status=1
+    docker compose "${COMPOSE_ARGS[@]}" start "${RUNNING_SERVICES[@]}" || status=1
   fi
   if ((status != 0)); then
     rm -rf -- "$PARTIAL"
@@ -88,7 +88,10 @@ trap restart_stack EXIT INT TERM
 } > "$PARTIAL/manifest.txt"
 docker compose "${COMPOSE_ARGS[@]}" ps > "$PARTIAL/compose-ps-before.txt"
 
+# Fetch the archive helper before entering the downtime window.
+docker image inspect alpine >/dev/null 2>&1 || docker pull alpine
 STACK_STOPPED=1
+echo "Stopping NRC services for the consistent volume copy: $(date -u +%FT%TZ)"
 docker compose "${COMPOSE_ARGS[@]}" stop "${RUNNING_SERVICES[@]}"
 
 for volume in "${VOLUMES[@]}"; do
@@ -98,14 +101,24 @@ for volume in "${VOLUMES[@]}"; do
   docker run --rm \
     -v "$volume:/volume:ro" \
     -v "$PARTIAL:/backup" \
-    alpine sh -c "umask 077; cd /volume && tar -czf /backup/${volume}.tar.gz ."
+    alpine sh -c "umask 077; cd /volume && tar -cf /backup/${volume}.tar ."
 done
 
 # Volume archives include SQLite DB, WAL and SHM together while all writers are
 # stopped. Never restore personal memory by copying only an old DB into service:
 # reconcile current deletion/approval guards with personal_memory/storage_ops.py.
 
+# Restart existing containers, not newly built images or changed Compose config.
+# Compression and verification read only the frozen copies, never live volumes.
+docker compose "${COMPOSE_ARGS[@]}" start "${RUNNING_SERVICES[@]}"
+STACK_STOPPED=0
+echo "NRC containers started; compressing and verifying backup online: $(date -u +%FT%TZ)"
+docker compose "${COMPOSE_ARGS[@]}" ps > "$PARTIAL/compose-ps-after.txt"
+
 cd "$PARTIAL"
+for archive in ./*.tar; do
+  gzip "$archive"
+done
 sha256sum ./*.tar.gz > SHA256SUMS
 sha256sum -c SHA256SUMS
 for archive in ./*.tar.gz; do
@@ -113,10 +126,6 @@ for archive in ./*.tar.gz; do
 done
 
 cd "$COMPOSE_DIR"
-docker compose "${COMPOSE_ARGS[@]}" up -d "${RUNNING_SERVICES[@]}"
-STACK_STOPPED=0
-docker compose "${COMPOSE_ARGS[@]}" ps > "$PARTIAL/compose-ps-after.txt"
-
 mv "$PARTIAL" "$FINAL"
 find "$BACKUP_ROOT" \
   -mindepth 1 -maxdepth 1 -type d \
