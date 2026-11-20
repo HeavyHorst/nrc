@@ -238,7 +238,21 @@ start_executor :: proc(
 submit :: proc(port: ^Worker_Port, request: Request, rejection: ^Admission_Rejection = nil) -> bool {
 	local_rejection: Admission_Rejection
 	rejection := rejection == nil ? &local_rejection : rejection
+	budget_reason := "connection_slots"
 	defer {
+		when #config(NRC_TRACE_DB_ADMISSION, false) {
+			if rejection^ == .Connection_Limit || rejection^ == .Worker_Limit {
+				log.warnf(
+					"DB admission reason=%s port=%p opcode=%v in_flight=%d charged_bytes=%d writer_bytes=%d",
+					budget_reason,
+					port,
+					request.opcode,
+					port.in_flight,
+					port.charged_bytes,
+					port.writer_charged_bytes,
+				)
+			}
+		}
 		#partial switch rejection^ {
 		case .Connection_Limit:
 			sync.atomic_add(&port.metrics.counters[.Rejected_Connection], 1)
@@ -262,24 +276,29 @@ submit :: proc(port: ^Worker_Port, request: Request, rejection: ^Admission_Rejec
 		return false
 	}
 	if rejection != nil do rejection^ = .Worker_Limit
+	budget_reason = "port_slots"
 	if port.in_flight == e.capacity do return false
 	remaining := e.byte_budget - port.charged_bytes
+	budget_reason = "port_bytes"
 	lane := read_eligible(request) ? 1 : 0
 	if lane == 0 {
 		writer_capacity := e.capacity - e.read_reserved_requests
 		writer_bytes := e.byte_budget - e.read_reserved_bytes
-		if port.writer_in_flight >= writer_capacity do return false
+		if port.writer_in_flight >= writer_capacity {budget_reason = "writer_slots"; return false}
+		if writer_bytes - port.writer_charged_bytes < remaining do budget_reason = "writer_bytes"
 		remaining = min(remaining, writer_bytes - port.writer_charged_bytes)
 		// With read isolation enabled, repeated writes cannot take the last
 		// half of the writer budget. Those credits admit first writes from
 		// other connections; there is no unbounded queue of refused requests.
 		if (e.read_reserved_requests > 0 || e.read_reserved_bytes > 0) && request.ordering_key != 0 && exists && order.writes_outstanding > 0 {
 			if port.writer_in_flight >= max(1, writer_capacity / 2) {
+				budget_reason = "repeat_writer_slots"
 				if rejection != nil do rejection^ = .Connection_Limit
 				return false
 			}
 			repeat_remaining := max(0, writer_bytes / 2 - port.writer_charged_bytes)
 			if repeat_remaining <= remaining {
+				budget_reason = "repeat_writer_bytes"
 				remaining = repeat_remaining
 				if rejection != nil do rejection^ = .Connection_Limit
 			}
@@ -288,6 +307,7 @@ submit :: proc(port: ^Worker_Port, request: Request, rejection: ^Admission_Rejec
 	if request.ordering_key != 0 {
 		connection_remaining := CONNECTION_MAX_BYTES - (exists ? order.charged_bytes : 0)
 		if connection_remaining <= remaining {
+			budget_reason = "connection_bytes"
 			remaining = connection_remaining
 			if rejection != nil do rejection^ = .Connection_Limit
 		}
@@ -300,15 +320,7 @@ submit :: proc(port: ^Worker_Port, request: Request, rejection: ^Admission_Rejec
 	remaining -= len(request.ticket_reads) * size_of(Ticket_Read_Cursor)
 	if (request.operation == .Get_Task || request.operation == .Command || request.operation == .Monitor_Maintenance) && !take_credit(&remaining, e.max_result_bytes) do return false
 	if request.operation == .Put_Task || request.operation == .Create_Task {
-		for bytes in ([7][]byte {
-				request.task.title,
-				request.task.description,
-				request.task.assignee,
-				request.task.created_by,
-				request.task.external_ref,
-				request.task.completed_by,
-				request.task.project,
-			}) {
+		for bytes in ([7][]byte{request.task.title, request.task.description, request.task.assignee, request.task.created_by, request.task.external_ref, request.task.completed_by, request.task.project}) {
 			if !take_credit(&remaining, len(bytes)) do return false
 		}
 		for attachment in request.task.attachments {
@@ -859,7 +871,6 @@ group_commit_eligible :: proc(request: Request) -> bool {
 @(private)
 execute_group :: proc(store: ^Store, port: ^Worker_Lane, first: ^Completion) {
 	e := port.owner.executor
-	if port.head == nil && !spsc.can_pop(port.requests) && !sync.atomic_load(&port.owner.closed) do time.sleep(time.Millisecond)
 	jobs: [GROUP_COMMIT_MAX_JOBS]^Completion
 	count, bytes := 0, 0
 	job := first
