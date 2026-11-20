@@ -43,6 +43,63 @@ chronicle_workspace :: proc(store: ^Store, workspace: string) -> (epoch, availab
 CHRONICLE_CLEANUP_BATCH :: 128
 CHRONICLE_CHUNK_BYTES :: 16 * 1024
 CHRONICLE_GAP_RANGE_INPUTS :: 4096
+CHRONICLE_WINDOW :: 10
+
+// Completion and publication share the caller's writer transaction. Accepted
+// results need no raw data, live lease, current claim epoch or enabled capture.
+// Maintenance must publish them too when expiry/disable removes an earlier
+// blocker, even if no sidecar is running. Only the ten-slot ready window is read.
+publish_chronicle :: proc(store: ^Store, workspace: string) -> c.int {
+	if store.read_only || sql.get_autocommit(store.db) != 0 do return sql.MISUSE
+	ready, rc := prepare(
+		store,
+		`SELECT j.generation,ji.source_id,w.publication_generation
+ FROM chronicle_jobs j INDEXED BY chronicle_pending_publication
+ CROSS JOIN chronicle_job_inputs ji USING(workspace,generation)
+ JOIN chronicle_workspaces w USING(workspace)
+ WHERE j.workspace=?1 AND j.state IN(1,2,4) AND j.publication_generation IS NULL AND ji.ordinal=0
+ ORDER BY ji.source_id LIMIT 1`,
+	)
+	if rc != sql.OK do return rc
+	defer sql.finalize(ready)
+	if rc = sql.bind_bytes(ready, 1, transmute([]byte)workspace); rc != sql.OK do return rc
+	head, head_rc := prepare(store, "SELECT 1 FROM chronicle_inputs WHERE workspace=?1 AND state=0 AND source_id<?2 LIMIT 1")
+	if head_rc != sql.OK do return head_rc
+	defer sql.finalize(head)
+	result, result_rc := prepare(store, "UPDATE chronicle_jobs SET publication_generation=?3 WHERE workspace=?1 AND generation=?2")
+	if result_rc != sql.OK do return result_rc
+	defer sql.finalize(result)
+	floor, floor_rc := prepare(store, "UPDATE chronicle_workspaces SET publication_generation=?2 WHERE workspace=?1")
+	if floor_rc != sql.OK do return floor_rc
+	defer sql.finalize(floor)
+	for _ in 0 ..< CHRONICLE_WINDOW {
+		rc = sql.step(ready)
+		if rc == sql.DONE do return sql.OK
+		if rc != sql.ROW do return rc
+		generation, gen_rc := sql.column_id(ready, 0)
+		first, first_rc := sql.column_id(ready, 1)
+		publication, pub_rc := sql.column_id(ready, 2)
+		if gen_rc != sql.OK do return gen_rc
+		if first_rc != sql.OK do return first_rc
+		if pub_rc != sql.OK do return pub_rc
+		if rc = sql.reset(ready); rc != sql.OK do return rc
+		if rc = bind_task_key(head, workspace, first); rc != sql.OK do return rc
+		rc = sql.step(head)
+		if rc == sql.ROW do return sql.OK
+		if rc != sql.DONE do return rc
+		if rc = sql.reset(head); rc != sql.OK do return rc
+		if publication == max(u64) do return sql.FULL
+		publication += 1
+		if rc = bind_task_key(result, workspace, generation); rc != sql.OK do return rc
+		if rc = sql.bind_id(result, 3, publication); rc != sql.OK do return rc
+		if rc = sql.step(result); rc != sql.DONE do return rc
+		if rc = sql.reset(result); rc != sql.OK do return rc
+		if rc = bind_task_key(floor, workspace, publication); rc != sql.OK do return rc
+		if rc = sql.step(floor); rc != sql.DONE do return rc
+		if rc = sql.reset(floor); rc != sql.OK do return rc
+	}
+	return sql.OK
+}
 
 Chronicle_Input_State :: enum i64 {
 	Pending,
@@ -222,6 +279,13 @@ cleanup_chronicle_batch :: proc(store: ^Store, now: i64) -> c.int {
 		if rc := sql.bind_id(update, 2, key.source_id); rc != sql.OK do return rc
 		if rc := sql.step(update); rc != sql.DONE do return rc
 		if rc := compact_chronicle_gap(store, key.workspace, key.source_id); rc != sql.OK do return rc
+	}
+	// Publish once per affected workspace after the whole bounded cleanup. This
+	// also runs during disabled startup; no worker polling is needed for progress.
+	for key, i in keys[:count] {
+		seen := false
+		for previous in keys[:i] do if previous.workspace == key.workspace {seen = true; break}
+		if !seen do if rc := publish_chronicle(store, key.workspace); rc != sql.OK do return rc
 	}
 	return sql.OK
 }

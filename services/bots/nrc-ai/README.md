@@ -88,18 +88,31 @@ bot secret. The server must separately opt the workspace into capture with
 Use synthetic, disposable workspaces for this phase: fake results and token-limit
 gaps are real terminal records, not a dry run and not useful AI history.
 
-Two fixed worker lanes handle the configured workspaces, one claim/provider call
-per workspace and at most two steps globally. Pending work stays in server SQLite,
-not an unbounded sidecar queue. Each pass pages at most 4096 descriptors, retains
-at most 32 head inputs and reads raw fields in chunks of at most 16 KiB, checking
-length, UTF-8 and the server's length-framed SHA-256 before use. At most one bounded
-input is read ahead of the selected model-sized prefix. No raw texts or prompts
-are persisted locally or logged. A full pass is followed by a five-second poll
-delay; unavailable service/capacity can delay progress, so this is not a latency SLA.
+Ten worker lanes admit work round-robin across configured workspaces. One
+workspace can use all ten lanes; counting and inference together have a
+process-wide ten-step limit. Pending work stays in server SQLite, not an
+unbounded sidecar queue. Each step pages at most 4096 descriptors, retains at
+most 32 head inputs and reads raw fields in chunks of at most 16 KiB, checking
+length, UTF-8 and the server's length-framed SHA-256 before use. Each step reads
+at most one bounded input ahead of its model-sized prefix. No raw texts or
+prompts are persisted locally or logged. Successful progress immediately admits
+more work; idle, full-window, budget and failure outcomes wait five seconds.
+
+Schema 10 bounds running jobs plus completed, unpublished results to ten per
+workspace, including across worker processes. A completed result is stored and
+its budget settled atomically before `staged` is returned. Its inputs become
+terminal and release raw storage immediately. Publication waits until all earlier
+sources are terminal. Completed results survive lease expiry, raw TTL and server
+restarts without another inference; explicit Chronicle deletion also removes
+staged prose. History IDs are allocated at publication, independently of immutable
+claim IDs, so retried heads cannot reorder history or pagination. Deploying this
+worker requires the matching server and explicit schema-9-to-10 migration.
 
 The head note becomes eligible after 30 seconds without another captured change
 or five minutes since its oldest pending change. The check includes later pages
-and interleaved notes. Claims still preserve the global pending prefix. All
+and interleaved notes. Claims take the earliest unassigned prefix and never cross
+another job's source range. A stale claim cursor returns `changed` without
+reserving budget. Publication preserves the global source order. All
 intermediate images, including deletion, recreation and reversals, stay in source
 order; they are not reduced to first/last images. Provider timeout is at most 60
 seconds and never exceeds the claim lease; a whole workspace step is bounded to
@@ -135,12 +148,27 @@ invalid result/Ack shapes. Only exact Result/Ack/Gap and reservation requests ma
 be replayed once after a lost transport response; claims are never blindly retried.
 Temporary provider failures use server backoff; deterministic failures use
 `retry/permanent`, which parks the pending input until TTL or authorized deletion,
-without resetting or fabricating attempt counts. No later input may skip it.
+without resetting or fabricating attempt counts. Later in-flight results remain
+staged behind it; an unassigned failing head prevents further lookahead.
 The Terra adapter never retries HTTP calls itself. Transport errors, HTTP 408,
-429 rate limits and 5xx responses use bounded worker/server retries. Quota/billing
-429 responses, other rejected statuses, refusals and usage contradictions park
-the input. Invalid/incomplete/oversized output uses the bounded invalid-output
-retry path; response bodies and transport error details are never logged.
+429 rate limits and 5xx responses use server-paced retries within the input's
+72-hour TTL and daily token budgets. After five reservations, the attempt counter
+saturates and each further retry waits 15 minutes plus jitter instead of stopping
+permanently. The pause is stored before the provider call, so it also applies to
+abandoned calls after restart. No raw input is discarded for retry exhaustion.
+Quota/billing 429 responses, other rejected statuses, refusals and usage
+contradictions park the input. Invalid/incomplete/oversized output uses the same
+paced invalid-output retry path; response bodies and transport error details are
+never logged. Sanitized `chronicle provider failure` diagnostics distinguish HTTP
+rejections, refusals, usage mismatches, invalid response shapes and answer validation
+failures using fixed categories and numeric counts, never source or response text.
+
+Responses may include assistant messages marked `phase: commentary` alongside
+the answer. The decoder requires exactly one non-commentary answer, either
+`final_answer` or a legacy message without a phase. It ignores explicit commentary,
+not arbitrary extra messages. Multiple answers, unknown phases, tool output and
+refusals remain rejected; the selected answer still needs exact source IDs and
+valid result/Ack JSON. Messages are never concatenated.
 
 Run `go test -race ./...` in this directory. The root server E2E
 `TestChronicleFakeWorkerProcess` builds this binary and runs it against disposable

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
@@ -316,6 +317,7 @@ func (w chronicleWorker) step(ctx context.Context) (string, error) {
 	for {
 		q := chronicleRequest("claim")
 		q.Limit, q.NoteID = uint16(limit), inputs[0].NoteID
+		q.Cursor = inputs[0].SourceID
 		claim, err := w.call(ctx, q)
 		if err != nil {
 			return "claim_unknown", err
@@ -403,6 +405,7 @@ func (w chronicleWorker) step(ctx context.Context) (string, error) {
 		cancel()
 		if completion.InputTokens > uint32(tokens) || completion.OutputTokens > 1000 {
 			// A count/profile mismatch must not publish an under-reserved result.
+			slog.Warn("chronicle provider failure", "reason", "usage_reservation", "input_tokens", completion.InputTokens, "output_tokens", completion.OutputTokens, "reserved_input_tokens", tokens)
 			completion = chronicleCompletion{}
 			providerErr = errors.New("chronicle provider usage exceeds reservation")
 		}
@@ -414,6 +417,10 @@ func (w chronicleWorker) step(ctx context.Context) (string, error) {
 			job.InputTokens, job.OutputTokens = completion.InputTokens, completion.OutputTokens
 		}
 		answer, validationErr := validateChronicleAnswer(completion, job.Sources)
+		if validationErr != nil && providerErr == nil && contextErr == nil && !completion.Truncated {
+			// The validator returns fixed local messages, never provider text.
+			slog.Warn("chronicle provider failure", "reason", "invalid_output", "category", validationErr.Error(), "output_bytes", len(completion.JSON))
+		}
 		if providerErr != nil || contextErr != nil || validationErr != nil {
 			job.Op, job.Reason = "retry", "invalid_output"
 			if providerErr != nil {

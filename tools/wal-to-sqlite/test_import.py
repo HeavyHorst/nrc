@@ -91,6 +91,97 @@ def history(identity, entity=17, kind=2, owner=b"alice", **changes):
     return u(identity) + bytes([kind]) + u(entity) + bytes(18) + b(owner) + body
 
 
+class ChronicleParallelMigrationTests(unittest.TestCase):
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        self.addCleanup(self.db.close)
+        self.migration = importer.CHRONICLE_PARALLEL_SCHEMA.read_text()
+        self.db.executescript(importer.schema_text().removesuffix(self.migration))
+        self.db.execute("PRAGMA foreign_keys=ON")
+        for workspace, floor in ((b"w", 3), (b"floor", 2**64 - 1), (b"empty", 0)):
+            self.db.execute("INSERT INTO chronicle_workspaces(workspace,enabled,epoch,claim_generation) VALUES(?,1,1,?)",
+                            (workspace, u(floor)))
+        for state, generation in enumerate((1, 2, 3, 4, 2**63 + 1)):
+            self.db.execute("""INSERT INTO chronicle_jobs(workspace,generation,note_id,epoch,owner,consumer,
+                lease_until,state,reserved,input_tokens,output_tokens,reservation_day,source_key,summary,
+                created_at,first_at,last_at) VALUES(?,?,?,1,x'61',?,99,?,1,128000,1000,7,?,x'6f6b',1,2,3)""",
+                            (b"w", u(generation), u(1), bytes([state]), state, bytes([state]) * 32))
+            self.db.execute("INSERT INTO chronicle_job_inputs VALUES(?,?,0,?,x'',x'')",
+                            (b"w", u(generation), u(generation)))
+        self.db.execute("INSERT INTO chronicle_budgets VALUES(x'77',7,5,640000,5000)")
+        self.db.commit()
+
+    def apply(self, commit=True):
+        # executescript commits an existing transaction; include BEGIN in the
+        # script itself so errors and explicit rollbacks cover every DDL step.
+        self.db.executescript("BEGIN IMMEDIATE;" + self.migration)
+        if commit:
+            self.db.commit()
+
+    def test_preserves_receipts_memberships_and_reservations(self):
+        jobs = self.db.execute("SELECT * FROM chronicle_jobs ORDER BY generation").fetchall()
+        members = self.db.execute("SELECT * FROM chronicle_job_inputs ORDER BY generation").fetchall()
+        budgets = self.db.execute("SELECT * FROM chronicle_budgets").fetchall()
+        self.apply(commit=False)
+        self.db.rollback()
+        self.assertEqual(self.db.execute("PRAGMA user_version").fetchone(), (9,))
+        self.assertEqual(self.db.execute("SELECT * FROM chronicle_jobs ORDER BY generation").fetchall(), jobs)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM sqlite_temp_schema").fetchone(), (0,))
+        self.apply()
+        after = self.db.execute("SELECT * FROM chronicle_jobs ORDER BY generation").fetchall()
+        self.assertEqual([row[:-1] for row in after], jobs)
+        self.assertEqual([row[-1] for row in after], [None, u(2), u(3), None, u(2**63 + 1)])
+        self.assertEqual(self.db.execute("SELECT * FROM chronicle_job_inputs ORDER BY generation").fetchall(), members)
+        self.assertEqual(self.db.execute("SELECT * FROM chronicle_budgets").fetchall(), budgets)
+        self.assertEqual(dict(self.db.execute("SELECT workspace,publication_generation FROM chronicle_workspaces")),
+                         {b"w": u(2**63 + 1), b"floor": u(2**64 - 1), b"empty": u(0)})
+        self.assertEqual(self.db.execute("PRAGMA foreign_key_check").fetchall(), [])
+        self.assertEqual(self.db.execute("PRAGMA integrity_check").fetchall(), [("ok",)])
+        self.assertEqual(self.db.execute("PRAGMA user_version").fetchone(), (10,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.apply()
+        self.db.rollback()
+        self.assertEqual(self.db.execute("SELECT * FROM chronicle_jobs ORDER BY generation").fetchall(), after)
+
+    def test_guards_failure_rollback_and_schema_copies(self):
+        root = Path(__file__).resolve().parents[2]
+        self.assertEqual(self.migration, (root / "workspace_db/chronicle_parallel.sql").read_text())
+        for pragma in ("application_id=0", "user_version=8"):
+            self.db.execute("PRAGMA " + pragma)
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.apply()
+            self.db.rollback()
+            self.db.execute("PRAGMA application_id=0x4e524351")
+            self.db.execute("PRAGMA user_version=9")
+        # Force a late DDL failure, after columns and identities were changed.
+        self.db.execute("CREATE INDEX chronicle_pending_publication ON chronicle_jobs(workspace)")
+        with self.assertRaises(sqlite3.OperationalError):
+            self.apply()
+        self.db.rollback()
+        self.assertEqual(self.db.execute("PRAGMA user_version").fetchone(), (9,))
+        self.assertNotIn("publication_generation", [row[1] for row in self.db.execute("PRAGMA table_info(chronicle_jobs)")])
+        self.assertEqual(self.db.execute("SELECT count(*) FROM sqlite_temp_schema").fetchone(), (0,))
+
+    def test_parallel_active_and_staged_receipts(self):
+        self.apply()
+        self.db.execute("""INSERT INTO chronicle_jobs(workspace,generation,note_id,epoch,owner,consumer,
+            lease_until,source_key,created_at,first_at,last_at)
+            VALUES(x'77',?, ?,1,x'61',x'7a',99,zeroblob(32),1,1,1)""", (u(9), u(1)))
+        self.assertEqual(self.db.execute("SELECT count(*) FROM chronicle_jobs WHERE state=0").fetchone(), (2,))
+        self.db.execute("UPDATE chronicle_jobs SET state=1,summary=x'737461676564' WHERE generation=?", (u(9),))
+        self.assertEqual(self.db.execute("SELECT generation FROM chronicle_jobs INDEXED BY chronicle_pending_publication WHERE state IN (1,2,4) AND publication_generation IS NULL").fetchall(), [(u(9),)])
+        self.assertEqual(self.db.execute("SELECT publication_generation FROM chronicle_jobs INDEXED BY chronicle_result_order WHERE workspace=x'77' AND state=1 AND publication_generation IS NOT NULL").fetchall(), [(u(2),)])
+        for invalid in (u(0), b"short"):
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.db.execute("UPDATE chronicle_jobs SET publication_generation=? WHERE generation=?", (invalid, u(9)))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE chronicle_workspaces SET publication_generation=NULL")
+        self.assertEqual([r[2] for r in self.db.execute("PRAGMA index_info(chronicle_result_note)")],
+                         ["workspace", "note_id", "publication_generation"])
+        self.assertEqual([r[2] for r in self.db.execute("PRAGMA index_info(chronicle_job_input_source)")],
+                         ["workspace", "source_id", "generation"])
+
+
 class ImportTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -125,8 +216,8 @@ class ImportTests(unittest.TestCase):
         self.assertTrue((self.target / "IMPORT_COMPLETE.json").is_file())
         self.assertFalse((self.target / "storage-layout.manifest").exists())
         self.assertEqual(result["retained_message_generation"], 9)
-        self.assertEqual(result["schema_version"], 9)
-        self.assertEqual(json.loads((self.target / "IMPORT_COMPLETE.json").read_text())["schema_version"], 9)
+        self.assertEqual(result["schema_version"], 10)
+        self.assertEqual(json.loads((self.target / "IMPORT_COMPLETE.json").read_text())["schema_version"], 10)
         return result
 
     def connection(self):
@@ -210,7 +301,7 @@ class ImportTests(unittest.TestCase):
                     mutation(3, 1, edge(19, scope=43)), mutation(4, 1, dm(0))])
         self.run_import()
         db = self.connection()
-        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (9,))
+        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (10,))
         self.assertEqual(db.execute("SELECT count(*) FROM monitor_snapshots").fetchone(), (0,))
         for table in ("tasks", "assets", "edges", "task_attachments", "asset_attachments",
                       "room_mappings", "note_metadata", "note_tags", "reminder_metadata",

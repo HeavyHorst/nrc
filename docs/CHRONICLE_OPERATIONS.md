@@ -70,6 +70,32 @@ complete Compose model with `docker compose ... config -q`. Include
 alongside the base and already active overlays. Do not use plain `config` output
 in tickets: it can contain unrelated secrets. Do not start the worker yet.
 
+## Parallel worker and schema 10
+
+The ten-lane worker requires the matching schema-10 server. This feature is
+local and has not been deployed to production. Follow the
+[stopped schema-9-to-10 migration](DEVELOPMENT.md#sqlite-schema-10), with a fresh
+quiesced backup and restore rehearsal, before switching binaries.
+
+The worker admits at most ten steps globally; the server independently limits
+each workspace to ten running jobs plus completed, unpublished receipts.
+Responses can finish out of order. `staged` confirms that the result and budget
+settlement are durable; it must not trigger another provider call. Publication
+waits for earlier sources to finish, expire or be explicitly deleted. A parked
+head can therefore leave nine completed results waiting, but cannot grow an
+unbounded queue behind it. Polling resumes immediately after progress and waits
+five seconds after idle, full-window, budget or failure outcomes.
+
+Completed receipts survive worker/server restarts and raw-input expiry. Accepted
+terminal receipts also survive capture disable, like existing history; disable
+still fences unfinished inputs and old writers. Startup and expiry maintenance
+publish source-ready receipts without a running worker, including after disable.
+Only explicit Chronicle deletion
+removes completed prose, including staged prose. `pending` counts unfinished
+inputs, not staged results; a falling pending count does not imply that every
+finished summary is already visible. Old immutable claim IDs remain valid for
+exact receipt replay; history cursors use separately assigned publication IDs.
+
 ## Schema 6 to 7
 
 The 128,000-token input limit needs the explicit
@@ -144,7 +170,7 @@ Check every minute in the pilot (scheduling/notification is not installed here):
 | --- | --- |
 | Container absent, restarting, or stopped | Inspect Compose state and bounded logs; never infer provider readiness from a running PID. |
 | Status command fails | Check CLI auth, server version and workspace; preserve the nonzero exit code. |
-| Failed/parked inputs | Inspect sanitized `chronicle step` status; check JWT expiry and provider quota. Do not reset attempts in SQL. |
+| Failed/parked inputs | Inspect sanitized `chronicle step` status. `backoff` after five reservations retries automatically after 15 minutes plus jitter; `parked` requires investigation of a permanent provider failure. Check JWT expiry and provider quota. Do not reset attempts in SQL. |
 | Pending with no observed progress for 10 minutes | Check process, service auth, budget and parked global head. This is an investigation threshold, not proof of a dead worker. |
 | New lost-input count | Read paginated `nrc chronicle gaps` privately; distinguish `token_limit`, TTL, disabled capture and quota causes. |
 | Expired inputs | They are already unreadable by the worker; investigate cleaner health if they persist over a full shard sweep plus batch backlog. |
@@ -156,15 +182,42 @@ prove progress, credential validity or provider availability. Gap compaction can
 reduce the count, so use gaps/history inspection to resolve ambiguous comparisons.
 Cross-midnight snapshots are not valid for the simple stall comparison.
 
+For HTTP rejections, refusals, usage failures and invalid responses, the worker
+emits `chronicle provider failure` before releasing the call. Its `reason`
+distinguishes `http`, `refusal`, `missing_usage`, `usage_profile`,
+`usage_reservation`, response encoding/envelope/shape failures and `invalid_output`.
+HTTP diagnostics contain the numeric `http_status` and an allowlisted `category`
+(`other` for unknown provider codes). Invalid-output categories are fixed local
+validator messages. Other diagnostics contain only numeric counts/bounds.
+No provider message, refusal prose,
+request body, note text, transport error or credential is logged. Older worker
+versions did not retain this distinction; a historical `parked` status alone
+cannot establish which failure caused it.
+
+The decoder accepts a unique final answer alongside explicitly marked assistant
+commentary. Multiple unmarked answers or multiple `final_answer` messages remain
+invalid: never recover them by concatenating text or publishing the first/last
+message blindly. Source IDs, JSON validation and usage settlement still apply.
+
 Budgets are 8,000,000 input and 500,000 output tokens per workspace/UTC day, with
 no daily call-count cap. Each call reserves up to 128,000/1,000; confirmed usage
 credits unused reservation in the original day. Unknown outcomes retain the
-reservation. Five attempts per input and backoff survive restart. Oversized
-single inputs can become gaps without inference. Terra first checks oversized
-byte estimates with OpenAI's free input-token counting endpoint, using the full
-request input and output schema. Only counts above 128,000 trigger rebatching or
-a single-input `token_limit` gap. A counting outage creates no gap and consumes
-no attempt or reservation; the claim remains until lease expiry before retry.
+reservation. The per-input attempt counter saturates at five without blocking
+future attempts. At that level, temporary failures, timeouts and invalid output
+retry after 15 minutes plus up to 499 ms of jitter. Reservation persists the pause
+before calling the provider, so an abandoned call also observes it after restart.
+Each later call requires fresh daily budget; calls remain exact telemetry even
+when `attempts` is saturated. The `failed` status count includes these repeatedly
+failing inputs while unleased, not only permanently parked inputs. Previously
+exhausted inputs resume once their stored retry time is due, without a migration
+or manual counter reset. The 72-hour TTL still applies: prolonged outages can
+still expire raw inputs; this is not unlimited retention or a guarantee of
+provider availability. Oversized single inputs can become gaps without inference.
+Terra first checks oversized byte estimates with OpenAI's free input-token
+counting endpoint, using the full request input and output schema. Only counts
+above 128,000 trigger rebatching or a single-input `token_limit` gap.
+A counting outage creates no gap and consumes no attempt or reservation;
+the claim remains until lease expiry before retry.
 The counting request still sends the note text to OpenAI. Daily budgets are
 unchanged; the higher per-call limit requires schema 7 as described above.
 

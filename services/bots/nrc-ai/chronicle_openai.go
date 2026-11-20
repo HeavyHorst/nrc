@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -140,6 +141,14 @@ func (p *chronicleOpenAIProvider) post(ctx context.Context, path string, body []
 		// Only a bounded error code is inspected; bodies/transport errors never
 		// escape into worker logs, which may otherwise expose notes or keys.
 		_ = json.Unmarshal(data, &failure)
+		category := "other"
+		switch failure.Error.Code {
+		case "insufficient_quota", "billing_hard_limit_reached", "rate_limit_exceeded", "invalid_api_key", "model_not_found", "context_length_exceeded":
+			category = failure.Error.Code
+		}
+		// Only allowlisted codes and the numeric status leave this boundary.
+		// An arbitrary provider message/code may contain source text or secrets.
+		slog.Warn("chronicle provider failure", "reason", "http", "http_status", resp.StatusCode, "category", category)
 		if resp.StatusCode == 429 && (failure.Error.Code == "insufficient_quota" || failure.Error.Code == "billing_hard_limit_reached") {
 			return nil, errors.New("chronicle provider quota unavailable")
 		}
@@ -159,6 +168,7 @@ func (p *chronicleOpenAIProvider) Complete(ctx context.Context, payload []byte) 
 	}
 	invalid := chronicleCompletion{Truncated: true}
 	if len(data) > 64<<10 || !utf8.Valid(data) {
+		slog.Warn("chronicle provider failure", "reason", "response_encoding", "response_bytes", len(data))
 		return invalid, nil
 	}
 	var result struct {
@@ -172,6 +182,7 @@ func (p *chronicleOpenAIProvider) Complete(ctx context.Context, payload []byte) 
 			Type    string `json:"type"`
 			Status  string `json:"status"`
 			Role    string `json:"role"`
+			Phase   string `json:"phase"`
 			Content []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -179,11 +190,17 @@ func (p *chronicleOpenAIProvider) Complete(ctx context.Context, payload []byte) 
 		} `json:"output"`
 	}
 	if json.Unmarshal(data, &result) != nil || (result.Status != "completed" && result.Status != "incomplete") || (len(result.Error) != 0 && string(result.Error) != "null") {
+		slog.Warn("chronicle provider failure", "reason", "response_envelope")
 		return invalid, nil
 	}
-	if result.Usage == nil || result.Usage.Input <= 0 || result.Usage.Output <= 0 || result.Usage.Input > len(body)+256 || result.Usage.Output > 1000 {
+	if result.Usage == nil {
+		slog.Warn("chronicle provider failure", "reason", "missing_usage")
+		return chronicleCompletion{}, errors.New("chronicle provider usage violates profile")
+	}
+	if result.Usage.Input <= 0 || result.Usage.Output <= 0 || result.Usage.Input > len(body)+256 || result.Usage.Output > 1000 {
 		// Never publish a response that contradicts the configured accounting
 		// profile. Its reservation remains spent; deterministic failure parks it.
+		slog.Warn("chronicle provider failure", "reason", "usage_profile", "input_tokens", result.Usage.Input, "output_tokens", result.Usage.Output, "input_bound", len(body)+256)
 		return chronicleCompletion{}, errors.New("chronicle provider usage violates profile")
 	}
 	completion := chronicleCompletion{
@@ -191,21 +208,34 @@ func (p *chronicleOpenAIProvider) Complete(ctx context.Context, payload []byte) 
 		InputTokens: uint32(result.Usage.Input), OutputTokens: uint32(result.Usage.Output),
 	}
 	if result.Status != "completed" {
+		slog.Warn("chronicle provider failure", "reason", "response_incomplete")
 		return completion, nil
 	}
-	if len(result.Output) != 1 {
+	// Responses may include commentary alongside the final answer. Never
+	// concatenate messages or choose arbitrarily between multiple answers.
+	answerIndex, answers := 0, 0
+	for i, message := range result.Output {
+		if message.Type != "message" || message.Status != "completed" || message.Role != "assistant" || len(message.Content) != 1 ||
+			(message.Phase != "" && message.Phase != "commentary" && message.Phase != "final_answer") {
+			slog.Warn("chronicle provider failure", "reason", "response_message", "content_count", len(message.Content))
+			return completion, nil
+		}
+		if message.Content[0].Type == "refusal" {
+			slog.Warn("chronicle provider failure", "reason", "refusal")
+			return completion, errors.New("chronicle provider refused request")
+		}
+		if message.Content[0].Type != "output_text" {
+			slog.Warn("chronicle provider failure", "reason", "response_content")
+			return completion, nil
+		}
+		if message.Phase != "commentary" {
+			answerIndex, answers = i, answers+1
+		}
+	}
+	if answers != 1 {
+		slog.Warn("chronicle provider failure", "reason", "response_items", "item_count", len(result.Output), "answer_count", answers)
 		return completion, nil
 	}
-	message := result.Output[0]
-	if message.Type != "message" || message.Status != "completed" || message.Role != "assistant" || len(message.Content) != 1 {
-		return completion, nil
-	}
-	if message.Content[0].Type == "refusal" {
-		return completion, errors.New("chronicle provider refused request")
-	}
-	if message.Content[0].Type != "output_text" {
-		return completion, nil
-	}
-	completion.JSON, completion.Truncated = []byte(message.Content[0].Text), false
+	completion.JSON, completion.Truncated = []byte(result.Output[answerIndex].Content[0].Text), false
 	return completion, nil
 }

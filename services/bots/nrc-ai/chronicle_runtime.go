@@ -12,7 +12,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -170,35 +169,104 @@ func runChronicle(ctx context.Context, server, tokenFile string, provider chroni
 	if err != nil {
 		return err
 	}
-	var lanes sync.WaitGroup
-	for lane := 0; lane < min(2, len(workspaces)); lane++ {
-		lanes.Add(1)
-		go func(lane int) {
-			defer lanes.Done()
-			// Fixed partitioning prevents duplicate scheduling within this process.
-			for ctx.Err() == nil {
-				for i := lane; i < len(workspaces) && ctx.Err() == nil; i += 2 {
-					workspace := workspaces[i]
-					s := chronicleSession{server: server, workspace: workspace.name, token: workspace.token}
-					stepCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
-					worker := chronicleWorker{call: s.call, provider: provider, now: time.Now}
-					status, err := worker.step(stepCtx)
-					cancel()
-					s.close()
-					// Never log provider errors, payloads, summaries, or credentials.
-					if err != nil || status != "waiting" {
-						slog.Info("chronicle step", "workspace", workspace.name, "status", status, "failed", err != nil)
-					}
-				}
-				timer := time.NewTimer(5 * time.Second)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-				case <-timer.C:
+	runChroniclePool(ctx, workspaces, func(ctx context.Context, workspace chronicleWorkspace) (string, error) {
+		s := chronicleSession{server: server, workspace: workspace.name, token: workspace.token}
+		defer s.close()
+		worker := chronicleWorker{call: s.call, provider: provider, now: time.Now}
+		return worker.step(ctx)
+	})
+	return nil
+}
+
+const chronicleLanes = 10
+
+// Bound all active steps (including counting and inference) process-wide, even
+// if more than one runner is started. Each owns its own restricted socket.
+var chronicleSlots = make(chan struct{}, chronicleLanes)
+
+func chronicleProgress(status string) bool {
+	switch status {
+	case "committed", "acknowledged", "gap", "staged", "changed":
+		return true
+	}
+	return false
+}
+
+// Round-robin admission, not fixed workspace partitions: one workspace can use
+// every lane. Only workspace metadata and completion statuses are scheduled;
+// raw inputs remain server-side until an admitted step claims them.
+func runChroniclePool(ctx context.Context, workspaces []chronicleWorkspace, step func(context.Context, chronicleWorkspace) (string, error)) {
+	if len(workspaces) == 0 {
+		return
+	}
+	type completion struct {
+		workspace int
+		status    string
+		err       error
+	}
+	done := make(chan completion, chronicleLanes)
+	readyAt := make([]time.Time, len(workspaces))
+	active, next := 0, 0
+	for {
+		now := time.Now()
+		for ctx.Err() == nil && active < chronicleLanes {
+			chosen := -1
+			for offset := 0; offset < len(workspaces); offset++ {
+				i := (next + offset) % len(workspaces)
+				if !readyAt[i].After(now) {
+					chosen = i
+					break
 				}
 			}
-		}(lane)
+			if chosen < 0 {
+				break
+			}
+			next = (chosen + 1) % len(workspaces)
+			active++
+			go func(i int) {
+				stepCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+				defer cancel()
+				select {
+				case chronicleSlots <- struct{}{}:
+				case <-stepCtx.Done():
+					done <- completion{i, "waiting", stepCtx.Err()}
+					return
+				}
+				status, err := step(stepCtx, workspaces[i])
+				<-chronicleSlots
+				done <- completion{i, status, err}
+			}(chosen)
+		}
+		if ctx.Err() != nil {
+			// The completion channel holds every admitted step; no sender can
+			// be stranded while cancellation closes sockets/provider requests.
+			for ; active > 0; active-- {
+				<-done
+			}
+			return
+		}
+		wait := 5 * time.Second
+		if active < chronicleLanes {
+			for _, at := range readyAt {
+				wait = min(wait, max(0, time.Until(at)))
+			}
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case result := <-done:
+			active--
+			if result.err == nil && chronicleProgress(result.status) {
+				readyAt[result.workspace] = time.Time{}
+			} else {
+				readyAt[result.workspace] = time.Now().Add(5 * time.Second)
+			}
+			// Never log provider errors, payloads, summaries, or credentials.
+			if result.err != nil || result.status != "waiting" {
+				slog.Info("chronicle step", "workspace", workspaces[result.workspace].name, "status", result.status, "failed", result.err != nil)
+			}
+		case <-ctx.Done():
+		case <-timer.C:
+		}
+		timer.Stop()
 	}
-	lanes.Wait()
-	return nil
 }

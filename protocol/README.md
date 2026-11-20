@@ -1497,8 +1497,9 @@ Response objects may contain string fields `status`, `error`, `epoch`,
 `input_tokens`, `output_tokens`, `processing`, `failed`, `acknowledged`, `gap_count`,
 `expired`; `enabled`, `more`, `can_delete` (bool); `sources` (decimal strings);
 `inputs`, `entries`, and `gaps` arrays; and `chunk` (base64 text). Status values include
-`claimed`, `empty`, `busy`, `committed`, `acknowledged`, `gap`, `deleted`,
-`forbidden`, `expired`, `budget`, `backoff`, `parked` and `exhausted`.
+`claimed`, `empty`, `busy`, `changed`, `staged`, `committed`, `acknowledged`, `gap`, `deleted`,
+`forbidden`, `expired`, `budget`, `backoff` and `parked`. Older servers may also
+return `exhausted`; current servers retry after backoff instead.
 
 Each input descriptor has string `source_id`, `note_id`, `captured_at`,
 `expires_at`, `before_version`, `after_version`, hex `before_hash` / `after_hash`,
@@ -1530,12 +1531,16 @@ through float64. Unknown response fields are ignored for forward compatibility.
 ### Implemented operation rules
 
 All service operations require `consumer:"chronicle-v1"`. `list` and `claim`
-require `limit` in 1–32. `list` returns pending descriptors after the exclusive
-source cursor. A claim takes one note's prefix of global pending source order;
-it cannot skip an earlier unresolved note to enlarge its batch. There is one
-active claim per workspace. Its epoch, generation, authenticated subject and
-ordered sources are immutable. `note_id` may restrict the head, not choose a
-later note. The lease is at most five minutes and never exceeds input expiry.
+require `limit` in 1–32. `list` returns unassigned pending descriptors after the
+exclusive source cursor; sources held by a live claim are omitted. A claim takes
+one note's earliest unassigned prefix, stopping at another note or another job's
+source range. Up to ten running jobs plus completed, unpublished receipts may
+occupy a workspace's window. A full window returns `busy`. Epoch, generation,
+authenticated subject and ordered sources remain immutable. `note_id` may
+restrict the unassigned head, not choose a later note. Workers send the first
+listed source ID in claim `cursor`; a mismatched head returns `changed` without
+creating a job or reservation. The cursor remains optional for older consumers.
+The lease is at most five minutes and never exceeds input expiry.
 
 `chunk`, `reserve`, `commit` and `retry` require epoch/generation and the same
 consumer/subject. Except for `chunk`, they require the exact ordered `sources`
@@ -1563,19 +1568,39 @@ and changed usage conflicts. Consumers without usage reporting remain conservati
 and an empty reason. An unreserved singleton may commit `gap` with
 `reason:"token_limit"` and no model metadata or summary. Successful replay
 returns the stored status/summary; changed content returns `conflict`.
+Completion terminalizes inputs, removes raw images, stores the receipt and
+settles confirmed usage in one transaction. If earlier sources remain pending,
+the response is `staged`: durable success, not permission to infer again.
+Staged receipts survive leases, raw TTL, restarts and capture disable. Publication assigns
+a separate monotonic public ID only after earlier sources become terminal;
+`list`, `claim`, successful commits, explicit deletion and expiry/disable
+maintenance drain the ready prefix. Publication does not require an enabled
+workspace or a running sidecar once the result is accepted. A replay can
+therefore change from `staged` to `committed`, `acknowledged` or `gap` without
+another budget charge. Service `generation` always identifies the immutable job;
+history entry `generation` and history `cursor` identify publication order.
+Existing public history IDs are preserved by the schema-10 migration.
 `retry` accepts `rebatch` before reservation, or `temporary`, `timeout`,
 `invalid_output` or `permanent` after reservation. `permanent` returns `parked`
 and persists `retry_at=expires_at`, preventing deterministic provider failures
 from spending more attempts across restart. The input stays pending until TTL or
-authorized deletion; claims return `parked` at that boundary. Attempts survive rebatching and lease expiry.
-After five attempts, claims return `exhausted`. The failed input stays visible
-until TTL or authorized deletion; later pending inputs cannot skip it.
+authorized deletion; claims return `parked` at that boundary. Attempts survive
+rebatching and lease expiry, and saturate at five. They select a backoff level,
+not a lifetime attempt limit. The first four reservations use exponential backoff;
+the fifth and later reservations use 15 minutes, each plus up to 499 ms of jitter.
+Reservation persists the retry time before the call, and retry release renews it.
+Abandoned calls therefore retain their pause across lease expiry and restart.
+Claims return `backoff` until the stored time is due, then retry the same input.
+Each new reservation still charges the daily budget and increments `calls`.
+Inputs are not dropped or converted to gaps because of repeated failures.
+An unassigned failed head blocks further claims, and later in-flight results
+cannot publish past it. The 72-hour raw-input TTL remains unchanged.
 
 `history` requires `limit` in 1–16, pages by exclusive generation cursor, and
 optionally filters by note ID; a response is also bounded to about 60 KB of entry
-JSON. Only results appear, never no-change Acks. Source deletion leaves a result
+JSON. Only published results appear, never staged results or no-change Acks. Source deletion leaves a result
 with `source_available:false`. `delete` requires a nonzero note ID and separate
-human-delete authority. It atomically deletes Chronicle prose and suppresses
+human-delete authority. It atomically deletes published and staged Chronicle prose and suppresses
 all that note's pending inputs through the returned source watermark. Old replay
 then returns `deleted` with no summary. Later mutations remain eligible.
 `gaps` requires `limit` in 1–16 and returns ascending compact receipts after
@@ -1597,12 +1622,14 @@ authenticated DELETE capability. Optional nonzero `note_id` scopes `pending`,
 `processing`, `failed`, `acknowledged`, `gap_count` and `expired`. `pending` is
 the logically live unresolved input total; `processing` and `failed` are
 disjoint subsets of it. Processing requires an active, unexpired current-epoch
-lease. Failed inputs are unleased, permanently parked or have exhausted five
-attempts; a live fifth attempt is still processing. Queued/backoff work is
-pending but neither processing nor failed. `expired` counts pending rows already
-logically expired by TTL or disabled epoch, before physical cleanup; these are
-excluded from pending/processing/failed. `acknowledged` counts successful
-no-change inputs. `gap_count` sums lost inputs, not compact receipt rows.
+lease. Failed inputs are unleased and either permanently parked or at the saturated
+attempt level (five or more reservations); temporary failures at that level still
+retry automatically. A live fifth or later attempt is processing, not failed.
+Queued/backoff work below that level is pending but neither processing nor failed.
+`expired` counts pending rows already logically expired by TTL or disabled epoch,
+before physical cleanup; these are excluded from pending/processing/failed.
+`acknowledged` counts successful no-change inputs. `gap_count` sums lost inputs,
+not compact receipt rows.
 `raw_bytes` and current-day `calls`, `input_tokens`, `output_tokens` remain
 workspace-wide even for note-scoped status. Reads do not trigger cleanup.
 Pending/raw counters on other operations describe the pre-operation snapshot.

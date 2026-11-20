@@ -16,7 +16,7 @@ Store :: struct {
 	slice_statement_count: int,
 }
 
-SCHEMA_VERSION :: 9
+SCHEMA_VERSION :: 10
 APPLICATION_ID :: 0x4e524351
 SCHEMA ::
 	#load("schema.sql", string) +
@@ -27,7 +27,8 @@ SCHEMA ::
 	#load("chronicle.sql", string) +
 	#load("chronicle_input_budget.sql", string) +
 	#load("monitor_snapshots.sql", string) +
-	#load("ticket_trigram.sql", string)
+	#load("ticket_trigram.sql", string) +
+	#load("chronicle_parallel.sql", string)
 
 // create permits initialization of an empty database only. Existing NRC files
 // must match the schema version; other databases are never adopted or migrated.

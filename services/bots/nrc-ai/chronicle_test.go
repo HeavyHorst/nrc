@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -90,6 +92,10 @@ func (f *chronicleFixture) call(_ context.Context, q protocol.ChronicleRequest) 
 			r.Inputs = append(r.Inputs, input)
 		}
 	case "claim":
+		if len(f.inputs) == 0 || q.Cursor != f.inputs[0].SourceID || q.NoteID != f.inputs[0].NoteID {
+			r.Status = "changed"
+			return r, nil
+		}
 		f.gen++
 		r.Status, r.Epoch, r.Generation, r.NoteID = "claimed", "1", fmt.Sprint(f.gen), f.inputs[0].NoteID
 		r.LeaseUntil = fmt.Sprint(time.Now().Add(5 * time.Minute).UnixNano())
@@ -293,8 +299,12 @@ func TestChronicleProviderFailuresNeverPublish(t *testing.T) {
 }
 
 func TestChronicleOpenAIHTTPWorker(t *testing.T) {
-	for _, scenario := range []string{"result", "ack", "rate-limit", "billing", "quota", "server", "timeout-http", "unauthorized", "bad-request", "redirect", "network", "deadline", "malformed", "incomplete", "wrong-source", "duplicate-answer", "refusal", "tool", "oversized", "usage-missing", "usage-input", "usage-output", "budget", "token-limit", "long-note", "count-budget", "count-error", "count-malformed", "count-zero", "count-mismatch"} {
+	for _, scenario := range []string{"result", "ack", "commentary-first", "commentary-last", "two-finals", "two-unphased", "commentary-only", "unknown-phase", "commentary-refusal", "rate-limit", "billing", "quota", "server", "timeout-http", "unauthorized", "bad-request", "unsafe-error-code", "redirect", "network", "deadline", "malformed", "incomplete", "wrong-source", "duplicate-answer", "refusal", "tool", "extra-item", "bad-message", "bad-content", "oversized", "usage-missing", "usage-input", "usage-output", "budget", "token-limit", "long-note", "count-budget", "count-error", "count-malformed", "count-zero", "count-mismatch"} {
 		t.Run(scenario, func(t *testing.T) {
+			var logs bytes.Buffer
+			previousLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previousLogger) })
 			now := time.Now()
 			f := &chronicleFixture{budget: scenario == "budget" || scenario == "count-budget"}
 			before := &chronicleImage{Title: "Änderung", Format: "markdown", Body: "Nicht freigegeben: 17 Geräte.\n\"Quelle\""}
@@ -402,6 +412,31 @@ func TestChronicleOpenAIHTTPWorker(t *testing.T) {
 				status, body := 200, ""
 				result := map[string]any{"status": "completed", "error": nil, "usage": map[string]int{"input_tokens": 64, "output_tokens": 30}, "output": []any{map[string]any{"type": "message", "status": "completed", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": answer}}}}}
 				switch scenario {
+				case "commentary-first", "commentary-last", "two-finals", "two-unphased", "commentary-only", "unknown-phase", "commentary-refusal":
+					final := result["output"].([]any)[0].(map[string]any)
+					final["phase"] = "final_answer"
+					// A plausible but different answer must never displace the final.
+					commentary := map[string]any{"type": "message", "status": "completed", "role": "assistant", "phase": "commentary", "content": []any{map[string]any{"type": "output_text", "text": `{"outcome":"ack","sources":["9007199254740993"],"summary":""}`}}}
+					switch scenario {
+					case "commentary-first":
+						result["output"] = []any{commentary, final}
+					case "commentary-last":
+						result["output"] = []any{final, commentary}
+					case "two-finals":
+						commentary["phase"] = "final_answer"
+						result["output"] = []any{commentary, final}
+					case "two-unphased":
+						delete(commentary, "phase")
+						delete(final, "phase")
+						result["output"] = []any{commentary, final}
+					case "commentary-only":
+						result["output"] = []any{commentary}
+					case "unknown-phase":
+						final["phase"] = "private-provider-body"
+					case "commentary-refusal":
+						commentary["content"] = []any{map[string]any{"type": "refusal", "refusal": "private-provider-body"}}
+						result["output"] = []any{commentary, final}
+					}
 				case "rate-limit":
 					status, body = 429, `{"error":{"code":"rate_limit_exceeded","message":"private-provider-body"}}`
 				case "billing":
@@ -416,6 +451,8 @@ func TestChronicleOpenAIHTTPWorker(t *testing.T) {
 					status, body = 401, "private-provider-body"
 				case "bad-request":
 					status, body = 400, "private-provider-body"
+				case "unsafe-error-code":
+					status, body = 400, `{"error":{"code":"private-provider-code","message":"private-provider-body"}}`
 				case "redirect":
 					status, body = 307, "private-provider-body"
 				case "network":
@@ -434,6 +471,12 @@ func TestChronicleOpenAIHTTPWorker(t *testing.T) {
 					result["output"].([]any)[0].(map[string]any)["content"] = []any{map[string]any{"type": "refusal", "refusal": "private-provider-body"}}
 				case "tool":
 					result["output"] = []any{map[string]any{"type": "function_call", "name": "write_note"}}
+				case "extra-item":
+					result["output"] = append(result["output"].([]any), map[string]any{"type": "private-provider-body"})
+				case "bad-message":
+					result["output"].([]any)[0].(map[string]any)["role"] = "private-provider-body"
+				case "bad-content":
+					result["output"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["type"] = "private-provider-body"
 				case "oversized":
 					body = strings.Repeat(" ", 64<<10) + "{}"
 				case "usage-missing":
@@ -450,9 +493,69 @@ func TestChronicleOpenAIHTTPWorker(t *testing.T) {
 				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 			})}}
 			status, err := (chronicleWorker{call: f.call, provider: provider, now: func() time.Time { return now }}).step(context.Background())
+			for _, forbidden := range []string{"private", "Nicht freigegeben", "Betriebsprüfung", "Erkläre ausschließlich"} {
+				if strings.Contains(logs.String(), forbidden) {
+					t.Fatal("provider diagnostic leaked credentials, source data or response text")
+				}
+			}
+			var diagnostic struct {
+				Reason     string `json:"reason"`
+				HTTPStatus int    `json:"http_status"`
+				Category   string `json:"category"`
+			}
+			wantReason := ""
+			switch scenario {
+			case "rate-limit", "billing", "quota", "server", "timeout-http", "unauthorized", "bad-request", "unsafe-error-code", "redirect", "count-error":
+				wantReason = "http"
+			case "usage-missing":
+				wantReason = "missing_usage"
+			case "usage-input", "usage-output":
+				wantReason = "usage_profile"
+			case "count-mismatch":
+				wantReason = "usage_reservation"
+			case "refusal", "commentary-refusal":
+				wantReason = "refusal"
+			case "malformed":
+				wantReason = "response_envelope"
+			case "oversized":
+				wantReason = "response_encoding"
+			case "incomplete":
+				wantReason = "response_incomplete"
+			case "two-finals", "two-unphased", "commentary-only":
+				wantReason = "response_items"
+			case "tool", "bad-message", "extra-item", "unknown-phase":
+				wantReason = "response_message"
+			case "bad-content":
+				wantReason = "response_content"
+			case "wrong-source", "duplicate-answer":
+				wantReason = "invalid_output"
+			}
+			if wantReason == "" {
+				if logs.Len() != 0 {
+					t.Fatalf("unexpected provider diagnostic: %s", logs.String())
+				}
+			} else if json.Unmarshal(logs.Bytes(), &diagnostic) != nil || diagnostic.Reason != wantReason {
+				t.Fatalf("missing safe failure classification %s: %s", wantReason, logs.String())
+			}
+			if wantReason == "http" {
+				wantHTTP := map[string]int{"rate-limit": 429, "billing": 429, "quota": 429, "server": 503, "timeout-http": 408, "unauthorized": 401, "bad-request": 400, "unsafe-error-code": 400, "redirect": 307, "count-error": 503}[scenario]
+				wantCategory := map[string]string{"rate-limit": "rate_limit_exceeded", "billing": "billing_hard_limit_reached", "quota": "insufficient_quota"}[scenario]
+				if wantCategory == "" {
+					wantCategory = "other"
+				}
+				if diagnostic.HTTPStatus != wantHTTP || diagnostic.Category != wantCategory {
+					t.Fatalf("wrong HTTP failure classification: %+v", diagnostic)
+				}
+			}
+			if wantReason == "invalid_output" {
+				wantCategory := map[string]string{"wrong-source": "invalid output sources or summary", "duplicate-answer": "duplicate output field"}[scenario]
+				if diagnostic.Category != wantCategory {
+					t.Fatalf("wrong answer validation classification: %+v", diagnostic)
+				}
+			}
 			want := "released:invalid_output"
 			switch scenario {
-			case "result", "long-note":
+			case "result", "long-note", "commentary-first", "commentary-last":
 				want = "committed"
 			case "ack":
 				want = "acknowledged"
@@ -460,7 +563,7 @@ func TestChronicleOpenAIHTTPWorker(t *testing.T) {
 				want = "released:temporary"
 			case "deadline":
 				want = "released:timeout"
-			case "billing", "quota", "unauthorized", "bad-request", "redirect", "refusal", "usage-missing", "usage-input", "usage-output", "count-mismatch":
+			case "billing", "quota", "unauthorized", "bad-request", "unsafe-error-code", "redirect", "refusal", "commentary-refusal", "usage-missing", "usage-input", "usage-output", "count-mismatch":
 				want = "parked:permanent"
 			case "budget", "count-budget":
 				want = "budget"
@@ -490,9 +593,12 @@ func TestChronicleOpenAIHTTPWorker(t *testing.T) {
 			} else if calls != 1 {
 				t.Fatalf("HTTP retries bypassed reservation: %d", calls)
 			}
-			if scenario == "result" || scenario == "ack" || scenario == "long-note" {
+			if scenario == "result" || scenario == "ack" || scenario == "long-note" || scenario == "commentary-first" || scenario == "commentary-last" {
 				if f.commit.Model != "gpt-6-luna" || f.commit.PromptVersion != chroniclePromptVersion || f.commit.SchemaVersion != chronicleSchemaVersion || f.commit.Summary == "" && scenario == "result" {
 					t.Fatalf("lost result provenance: %+v", f.commit)
+				}
+				if scenario != "ack" && f.commit.Summary != "Die Zahl wurde von 17 auf 23 korrigiert; die fehlende Freigabe bleibt erhalten." {
+					t.Fatal("published commentary instead of the validated final answer")
 				}
 			} else if scenario != "token-limit" && f.commit.Op != "" {
 				t.Fatal("failed provider output was published")
@@ -503,7 +609,7 @@ func TestChronicleOpenAIHTTPWorker(t *testing.T) {
 				}
 				var input, output uint32
 				switch scenario {
-				case "result", "ack", "long-note", "incomplete", "wrong-source", "duplicate-answer", "refusal", "tool":
+				case "result", "ack", "long-note", "incomplete", "wrong-source", "duplicate-answer", "refusal", "tool", "extra-item", "bad-message", "bad-content", "commentary-first", "commentary-last", "two-finals", "two-unphased", "commentary-only", "unknown-phase", "commentary-refusal":
 					input, output = 64, 30
 				}
 				if request.InputTokens != input || request.OutputTokens != output {
@@ -635,8 +741,7 @@ func TestChronicleCredentialFileValidation(t *testing.T) {
 func TestChroniclePoolBoundsAndCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	arrivals := make(chan string, 8)
-	release := make(chan struct{})
+	arrivals := make(chan string, chronicleLanes)
 	var active, maximum atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -652,12 +757,7 @@ func TestChroniclePoolBoundsAndCancellation(t *testing.T) {
 		for old := maximum.Load(); n > old && !maximum.CompareAndSwap(old, n); old = maximum.Load() {
 		}
 		arrivals <- r.URL.Path
-		select {
-		case <-ctx.Done():
-			active.Add(-1)
-			return
-		case <-release:
-		}
+		<-ctx.Done()
 		active.Add(-1)
 		response := make([]byte, 6)
 		binary.BigEndian.PutUint16(response, protocol.S_Chronicle)
@@ -667,36 +767,207 @@ func TestChroniclePoolBoundsAndCancellation(t *testing.T) {
 	}))
 	defer srv.Close()
 	path := filepath.Join(t.TempDir(), "tokens.json")
-	if err := os.WriteFile(path, []byte(`{"a":"jwt-a","b":"jwt-b","c":"jwt-c","d":"jwt-d"}`), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"a":"jwt-a"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	go func() {
 		done <- runChronicle(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), path, fakeChronicleProvider{})
 	}()
-	seen := map[string]bool{}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < chronicleLanes; i++ {
 		select {
 		case workspace := <-arrivals:
-			if seen[workspace] {
-				t.Errorf("workspace scheduled twice before its peers: %s", workspace)
+			if workspace != "/a" {
+				t.Errorf("unexpected workspace: %s", workspace)
 			}
-			seen[workspace] = true
 		case <-time.After(3 * time.Second):
 			cancel()
 			t.Fatal("pool did not make bounded progress")
-		}
-		if i == 1 {
-			close(release)
 		}
 	}
 	cancel()
 	select {
 	case err := <-done:
-		if err != nil || maximum.Load() != 2 {
+		if err != nil || maximum.Load() != chronicleLanes {
 			t.Fatalf("pool bound/cancellation: max=%d err=%v", maximum.Load(), err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("pool did not stop")
+	}
+}
+
+func TestChroniclePoolFairAdmission(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	workspaces := make([]chronicleWorkspace, 16)
+	for i := range workspaces {
+		workspaces[i].name = fmt.Sprint(i)
+	}
+	arrivals := make(chan string, chronicleLanes)
+	release := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		runChroniclePool(ctx, workspaces, func(ctx context.Context, w chronicleWorkspace) (string, error) {
+			arrivals <- w.name
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return "committed", nil
+		})
+		close(done)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	seen := map[string]bool{}
+	for i := 0; i < len(workspaces); i++ {
+		select {
+		case name := <-arrivals:
+			if seen[name] {
+				t.Fatalf("workspace %s visited again before all peers", name)
+			}
+			seen[name] = true
+		case <-time.After(time.Second):
+			t.Fatal("fair admission stalled")
+		}
+		if i >= chronicleLanes-1 && i < len(workspaces)-1 {
+			release <- struct{}{}
+		}
+	}
+}
+
+func TestChroniclePoolProgressAndBackoff(t *testing.T) {
+	for _, status := range []string{"committed", "acknowledged", "gap", "staged", "changed", "waiting", "busy", "budget", "parked", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			arrivals := make(chan struct{}, chronicleLanes)
+			release := make(chan struct{})
+			done := make(chan struct{})
+			go func() {
+				runChroniclePool(ctx, []chronicleWorkspace{{name: "a"}}, func(ctx context.Context, _ chronicleWorkspace) (string, error) {
+					arrivals <- struct{}{}
+					select {
+					case <-release:
+					case <-ctx.Done():
+					}
+					if status == "failed" {
+						return "changed", errors.New("transport failure")
+					}
+					return status, nil
+				})
+				close(done)
+			}()
+			t.Cleanup(func() { cancel(); <-done })
+			for i := 0; i < chronicleLanes; i++ {
+				select {
+				case <-arrivals:
+				case <-time.After(time.Second):
+					t.Fatal("single workspace did not fill lanes")
+				}
+			}
+			select {
+			case <-arrivals:
+				t.Fatal("more than ten steps active")
+			default:
+			}
+			release <- struct{}{}
+			select {
+			case <-arrivals:
+				if !chronicleProgress(status) {
+					t.Fatal("idle/failure bypassed backoff")
+				}
+			case <-time.After(200 * time.Millisecond):
+				if chronicleProgress(status) {
+					t.Fatal("successful progress was delayed")
+				}
+			}
+		})
+	}
+}
+
+func TestChronicleProviderConcurrencyAcrossRunners(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	arrivals := make(chan struct{}, 2*chronicleLanes)
+	var active, maximum atomic.Int32
+	provider := chronicleTestProvider{complete: func(ctx context.Context, _ []byte) (chronicleCompletion, error) {
+		n := active.Add(1)
+		defer active.Add(-1)
+		for old := maximum.Load(); n > old && !maximum.CompareAndSwap(old, n); old = maximum.Load() {
+		}
+		arrivals <- struct{}{}
+		<-ctx.Done()
+		return chronicleCompletion{}, ctx.Err()
+	}}
+	done := make(chan struct{}, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			runChroniclePool(ctx, []chronicleWorkspace{{name: "a"}}, func(ctx context.Context, _ chronicleWorkspace) (string, error) {
+				now := time.Now()
+				f := &chronicleFixture{}
+				f.add(1, "7", nil, &chronicleImage{Title: "Test"}, now.Add(-time.Minute))
+				return (chronicleWorker{call: f.call, provider: provider, now: func() time.Time { return now }}).step(ctx)
+			})
+			done <- struct{}{}
+		}()
+	}
+	t.Cleanup(func() {
+		cancel()
+		for i := 0; i < 2; i++ {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Error("runner did not cancel")
+			}
+		}
+		if active.Load() != 0 || maximum.Load() != chronicleLanes {
+			t.Errorf("provider concurrency active=%d maximum=%d", active.Load(), maximum.Load())
+		}
+	})
+	for i := 0; i < chronicleLanes; i++ {
+		select {
+		case <-arrivals:
+		case <-time.After(time.Second):
+			t.Fatal("provider lanes not filled")
+		}
+	}
+	select {
+	case <-arrivals:
+		t.Fatal("process-wide provider bound exceeded")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestChronicleClaimCursorAndStagedCommit(t *testing.T) {
+	for _, status := range []string{"changed", "busy", "staged"} {
+		t.Run(status, func(t *testing.T) {
+			now := time.Now()
+			f := &chronicleFixture{}
+			f.add(9007199254740993, "7", nil, &chronicleImage{Title: "Test"}, now.Add(-time.Minute))
+			providerCalls := 0
+			provider := chronicleTestProvider{complete: func(ctx context.Context, payload []byte) (chronicleCompletion, error) {
+				providerCalls++
+				return (fakeChronicleProvider{}).Complete(ctx, payload)
+			}}
+			call := func(ctx context.Context, q protocol.ChronicleRequest) (*protocol.ChronicleResponse, error) {
+				if q.Op == "claim" {
+					if q.Cursor != "9007199254740993" || q.NoteID != "7" || q.Limit != 1 {
+						t.Fatalf("missing claim precondition: %+v", q)
+					}
+					if status != "staged" {
+						return &protocol.ChronicleResponse{Status: status}, nil
+					}
+				}
+				r, err := f.call(ctx, q)
+				if q.Op == "commit" {
+					r.Status = "staged"
+				}
+				return r, err
+			}
+			got, err := (chronicleWorker{call: call, provider: provider, now: func() time.Time { return now }}).step(context.Background())
+			if err != nil || got != status || (providerCalls == 1) != (status == "staged") {
+				t.Fatalf("claim/staged contract: status=%s calls=%d err=%v", got, providerCalls, err)
+			}
+		})
 	}
 }

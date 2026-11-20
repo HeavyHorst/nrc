@@ -440,7 +440,8 @@ test_chronicle_service_order_attempts_budget_and_exact_sources :: proc(t: ^testi
 	testing.expect_value(t, r.note_id, "2")
 	job.epoch = r.epoch; job.generation = r.generation; job.sources = r.sources
 	sqlite_chronicle_service_call(t, &store, job)
-	for _ in 0 ..< 5 {
+	retry_reasons := [3]string{"timeout", "temporary", "invalid_output"}
+	for attempt in 0 ..< 6 {
 		r, _ = sqlite_chronicle_service_call(t, &store, claim)
 		if !testing.expect_value(t, r.status, "claimed") do return
 		job = pr.Chronicle_Request {
@@ -454,18 +455,60 @@ test_chronicle_service_order_attempts_budget_and_exact_sources :: proc(t: ^testi
 		}
 		reserved, _ := sqlite_chronicle_service_call(t, &store, job)
 		testing.expect_value(t, reserved.status, "reserved")
-		job.op = "retry"; job.reason = "timeout"
+		job.op = "retry"; job.reason = retry_reasons[attempt % 3]
+		before_retry := nrc_time_unix_nanos()
 		released, _ := sqlite_chronicle_service_call(t, &store, job)
 		testing.expect_value(t, released.status, "released")
+		waiting, _ := sqlite_chronicle_service_call(t, &store, claim)
+		testing.expect_value(t, waiting.status, "backoff")
+		if attempt >= 4 {
+			sqlite_projection_test_assert(
+				t,
+				&store,
+				strings.clone_to_cstring(
+					fmt.aprintf(
+						"SELECT attempts=5 AND retry_at>=%d AND retry_at<=%d FROM chronicle_inputs",
+						before_retry + 900_000_000_000,
+						nrc_time_unix_nanos() + 900_499_000_000,
+					),
+				),
+			)
+		}
 		testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_inputs SET retry_at=0", nil, nil, nil), sql.OK)
 	}
 	r, _ = sqlite_chronicle_service_call(t, &store, claim)
-	testing.expect_value(t, r.status, "exhausted")
+	if !testing.expect_value(t, r.status, "claimed") do return
 	sqlite_projection_test_assert(t, &store, "SELECT attempts=5 AND state=0 FROM chronicle_inputs")
-	// Failure stays observable and blocks skipping until the real expiry boundary.
-	r, _ = sqlite_chronicle_service_call(t, &store, claim)
-	testing.expect_value(t, r.status, "exhausted")
-	testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_inputs SET captured_at=1,expires_at=2", nil, nil, nil), sql.OK)
+	// Repeated failures must preserve the exact input, not turn it into a gap.
+	job.epoch = r.epoch; job.generation = r.generation; job.sources = r.sources
+	job.op = "chunk"; job.cursor = r.sources[0]; job.field = 5; job.length = 16
+	chunk, _ := sqlite_chronicle_service_call(t, &store, job)
+	testing.expect_value(t, chunk.status, "ok")
+	testing.expect_value(t, chunk.chunk, "Y2hhbmdlZA==") // "changed", captured before all retries.
+	job.op = "reserve"
+	// Even a previously exhausted input still needs fresh daily budget.
+	testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_budgets SET input_tokens=7999901", nil, nil, nil), sql.OK)
+	reserved, _ := sqlite_chronicle_service_call(t, &store, job)
+	testing.expect_value(t, reserved.status, "budget")
+	testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_budgets SET input_tokens=600", nil, nil, nil), sql.OK)
+	reserved, _ = sqlite_chronicle_service_call(t, &store, job)
+	testing.expect_value(t, reserved.status, "reserved")
+	reserved, _ = sqlite_chronicle_service_call(t, &store, job)
+	testing.expect_value(t, reserved.status, "reserved")
+	job.op = "commit"; job.outcome = "ack"; job.reason = ""
+	job.model = "fake"; job.prompt_version = "p"; job.schema_version = "s"
+	finished, _ := sqlite_chronicle_service_call(t, &store, job)
+	testing.expect_value(t, finished.status, "acknowledged")
+	finished, _ = sqlite_chronicle_service_call(t, &store, job)
+	testing.expect_value(t, finished.status, "acknowledged")
+	status, _ := sqlite_chronicle_service_call(t, &store, pr.Chronicle_Request{op = "status"})
+	testing.expect_value(t, status.pending, i64(0)); testing.expect_value(t, status.failed, i64(0))
+	testing.expect_value(t, status.acknowledged, i64(1)); testing.expect_value(t, status.gap_count, i64(2))
+	testing.expect_value(
+		t,
+		status.calls,
+		i64(7),
+	); testing.expect_value(t, status.input_tokens, i64(700)); testing.expect_value(t, status.output_tokens, i64(7000))
 	r, _ = sqlite_chronicle_service_call(t, &store, claim)
 	testing.expect_value(t, r.status, "empty")
 	sqlite_chronicle_service_seed(t, &store)
@@ -482,17 +525,17 @@ test_chronicle_service_order_attempts_budget_and_exact_sources :: proc(t: ^testi
 	job.input_tokens = 128001
 	invalid, _ := sqlite_chronicle_service_call(t, &store, job)
 	testing.expect_value(t, invalid.status, "invalid")
-	sqlite_projection_test_assert(t, &store, "SELECT attempts=0 FROM chronicle_inputs")
+	sqlite_projection_test_assert(t, &store, "SELECT attempts=0 FROM chronicle_inputs WHERE state=0")
 	job.input_tokens = 128000
 	testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_budgets SET input_tokens=7872001", nil, nil, nil), sql.OK)
 	limited, _ := sqlite_chronicle_service_call(t, &store, job)
 	testing.expect_value(t, limited.status, "budget")
-	sqlite_projection_test_assert(t, &store, "SELECT attempts=0 FROM chronicle_inputs")
+	sqlite_projection_test_assert(t, &store, "SELECT attempts=0 FROM chronicle_inputs WHERE state=0")
 	// Calls are telemetry only; both token budgets still fence reservations.
 	testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_budgets SET calls=100,input_tokens=7872000,output_tokens=499001", nil, nil, nil), sql.OK)
 	limited, _ = sqlite_chronicle_service_call(t, &store, job)
 	testing.expect_value(t, limited.status, "budget")
-	sqlite_projection_test_assert(t, &store, "SELECT attempts=0 FROM chronicle_inputs")
+	sqlite_projection_test_assert(t, &store, "SELECT attempts=0 FROM chronicle_inputs WHERE state=0")
 	sqlite_projection_test_assert(t, &store, "SELECT calls=100 AND input_tokens=7872000 AND output_tokens=499001 FROM chronicle_budgets")
 	testing.expect_value(t, sql.exec(store.db, "UPDATE chronicle_budgets SET output_tokens=499000", nil, nil, nil), sql.OK)
 	limited, _ = sqlite_chronicle_service_call(t, &store, job)
@@ -526,6 +569,88 @@ test_chronicle_service_order_attempts_budget_and_exact_sources :: proc(t: ^testi
 }
 
 @(test)
+test_chronicle_parallel_rebatch_stops_at_completed_source :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	if !testing.expect(t, virtual.arena_init_growing(&arena) == nil) do return
+	defer virtual.arena_destroy(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	dir, err := os.make_directory_temp("", "chronicle-parallel-*", context.allocator)
+	if !testing.expect(t, err == nil) do return
+	defer os.remove_all(dir)
+	store, rc := db.open(strings.clone_to_cstring(fmt.aprintf("%s/parallel.db", dir)), create = true)
+	if !testing.expect_value(t, rc, sql.OK) do return
+	defer db.close(&store)
+	db.begin(&store); db.configure_chronicle(&store, {"service"}); db.commit(&store)
+	sqlite_chronicle_service_seed(t, &store)
+	wire: [1024]byte
+	for title in ([2]string{`{"title":"Second"}`, `{"title":"Third"}`}) {
+		n := pr.serializeUpdateAssetRequest(pr.UpdateAssetRequest{asset_id = 1, preview = transmute([]byte)title}, wire[:])
+		testing.expect_value(t, sqlite_chronicle_test_apply(&store, "service", nrc_time_unix_nanos(), wire[:n]), sql.OK)
+	}
+	claim := pr.Chronicle_Request {
+		op       = "claim",
+		consumer = pr.CHRONICLE_CONSUMER_VERSION,
+		limit    = 1,
+		cursor   = "1",
+	}
+	first, _ := sqlite_chronicle_service_call(t, &store, claim)
+	if !testing.expect_value(t, first.status, "claimed") do return
+	stale, _ := sqlite_chronicle_service_call(t, &store, claim)
+	testing.expect_value(t, stale.status, "changed")
+	claim.cursor = "2"
+	second, _ := sqlite_chronicle_service_call(t, &store, claim)
+	if !testing.expect_value(t, second.status, "claimed") do return
+	job := pr.Chronicle_Request {
+		op         = "retry",
+		consumer   = claim.consumer,
+		epoch      = first.epoch,
+		generation = first.generation,
+		sources    = first.sources,
+		reason     = "rebatch",
+	}
+	released, _ := sqlite_chronicle_service_call(t, &store, job)
+	testing.expect_value(t, released.status, "released")
+	// A live later claim is a boundary even when all three changes share a note.
+	claim.cursor = "1"; claim.limit = 32
+	first, _ = sqlite_chronicle_service_call(t, &store, claim)
+	if !testing.expect_value(t, first.status, "claimed") || !testing.expect_value(t, len(first.sources), 1) do return
+	job.generation = first.generation; job.sources = first.sources
+	sqlite_chronicle_service_call(t, &store, job)
+	job = {
+		op            = "reserve",
+		consumer      = claim.consumer,
+		epoch         = second.epoch,
+		generation    = second.generation,
+		sources       = second.sources,
+		input_tokens  = 100,
+		output_tokens = 1000,
+	}
+	reserved, _ := sqlite_chronicle_service_call(t, &store, job)
+	testing.expect_value(t, reserved.status, "reserved")
+	job.op = "commit"; job.outcome = "ack"; job.model = "fake"; job.prompt_version = "p"; job.schema_version = "s"
+	staged, _ := sqlite_chronicle_service_call(t, &store, job)
+	testing.expect_value(t, staged.status, "staged")
+	// Its raw input is gone, but the durable completed range remains a boundary.
+	first, _ = sqlite_chronicle_service_call(t, &store, claim)
+	if !testing.expect_value(t, first.status, "claimed") || !testing.expect_value(t, len(first.sources), 1) do return
+	testing.expect_value(t, first.sources[0], "1")
+	job = {
+		op         = "commit",
+		consumer   = claim.consumer,
+		epoch      = first.epoch,
+		generation = first.generation,
+		sources    = first.sources,
+		outcome    = "gap",
+		reason     = "token_limit",
+	}
+	finished, _ := sqlite_chronicle_service_call(t, &store, job)
+	testing.expect_value(t, finished.status, "gap")
+	claim.cursor = "3"
+	third, _ := sqlite_chronicle_service_call(t, &store, claim)
+	if testing.expect_value(t, third.status, "claimed") && testing.expect_value(t, len(third.sources), 1) do testing.expect_value(t, third.sources[0], "3")
+}
+
+@(test)
 test_chronicle_service_byte_bounded_pages_and_unsigned_identity :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	if !testing.expect(t, virtual.arena_init_growing(&arena) == nil) do return
@@ -543,7 +668,7 @@ test_chronicle_service_byte_bounded_pages_and_unsigned_identity :: proc(t: ^test
 		sql.exec(
 			store.db,
 			`UPDATE sequences SET high_water=x'8000000000000000' WHERE domain='asset';
- UPDATE chronicle_workspaces SET claim_generation=x'0020000000000000'`,
+ UPDATE chronicle_workspaces SET claim_generation=x'0020000000000000',publication_generation=x'0020000000000000'`,
 			nil,
 			nil,
 			nil,

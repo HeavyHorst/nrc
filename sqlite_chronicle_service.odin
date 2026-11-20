@@ -59,6 +59,7 @@ SQLite_Chronicle_Job :: struct {
 	epoch, lease_until, state, reserved, input_tokens, output_tokens: i64,
 	reservation_day:                                                  i64,
 	owner, consumer, result_hash, summary:                            string,
+	published:                                                        bool,
 }
 
 // Only the authenticated worker can supply Request.chronicle_access. The same
@@ -187,6 +188,8 @@ sqlite_execute_chronicle :: proc(store: ^db.Store, request: ^db.Request, output:
 	case "list", "claim":
 		if q.limit == 0 || q.limit > 32 do break
 		if !w.enabled {r.status = "disabled"; break}
+		if rc = db.cleanup_chronicle_batch(store, now); rc != sql.OK do return rc
+		if rc = db.publish_chronicle(store, request.workspace); rc != sql.OK do return rc
 		if q.op ==
 		   "list" {rc = sqlite_chronicle_list(store, request.workspace, q, w, now, &r)} else {rc = sqlite_chronicle_claim(store, request, q, w, now, &r)}
 	case "chunk", "reserve", "commit", "retry":
@@ -212,9 +215,11 @@ sqlite_chronicle_list :: proc(
  length(r.before_title),length(r.before_format),length(r.before_body),length(r.after_title),length(r.after_format),length(r.after_body)
  FROM chronicle_inputs i JOIN chronicle_raw r USING(workspace,source_id)
  WHERE i.workspace=?1 AND i.state=0 AND i.source_id>?2 AND i.expires_at>?3 AND i.epoch>?4
+ AND NOT EXISTS(SELECT 1 FROM chronicle_job_inputs ji JOIN chronicle_jobs j USING(workspace,generation)
+ WHERE ji.workspace=i.workspace AND ji.source_id=i.source_id AND j.state=0 AND j.epoch=?6 AND j.lease_until>?3)
  ORDER BY i.source_id LIMIT ?5`,
 		workspace,
-		{cursor, now, w.disabled, i64(q.limit) + 1},
+		{cursor, now, w.disabled, i64(q.limit) + 1, w.epoch},
 	)
 	if rc != sql.OK do return rc
 	defer sql.finalize(s)
@@ -248,35 +253,60 @@ sqlite_chronicle_claim :: proc(
 	now: i64,
 	r: ^SQLite_Chronicle_Response,
 ) -> c.int {
-	if rc := db.cleanup_chronicle_batch(store, now); rc != sql.OK do return rc
-	active, rc := sqlite_chronicle_statement(store, "SELECT epoch,lease_until FROM chronicle_jobs WHERE workspace=?1 AND state=0", request.workspace, nil)
+	// Only abandoned claims may be removed. Completed, unpublished receipts
+	// survive leases, raw TTL and enabled restarts without a second inference.
+	rc := sqlite_chronicle_execute(
+		store,
+		`DELETE FROM chronicle_jobs WHERE workspace=?1 AND state=0
+ AND (epoch!=?2 OR lease_until<=?3 OR EXISTS(SELECT 1 FROM chronicle_job_inputs ji
+ LEFT JOIN chronicle_inputs i USING(workspace,source_id)
+ WHERE ji.workspace=chronicle_jobs.workspace AND ji.generation=chronicle_jobs.generation AND (i.state!=0 OR i.source_id IS NULL)))`,
+		request.workspace,
+		{w.epoch, now},
+	)
 	if rc != sql.OK do return rc
+	active, active_rc := sqlite_chronicle_statement(
+		store,
+		`SELECT (SELECT count(*) FROM chronicle_jobs WHERE workspace=?1 AND state=0)
+ +(SELECT count(*) FROM chronicle_jobs WHERE workspace=?1 AND state IN(1,2,4) AND publication_generation IS NULL)`,
+		request.workspace,
+		nil,
+	)
+	if active_rc != sql.OK do return active_rc
 	defer sql.finalize(active)
 	rc = sql.step(active)
-	if rc == sql.ROW && sql.column_int64(active, 0) == w.epoch && sql.column_int64(active, 1) > now {r.status = "busy"; return sql.OK}
-	if rc != sql.ROW && rc != sql.DONE do return rc
+	if rc != sql.ROW do return rc
+	occupied := sql.column_int64(active, 0)
+	if occupied >= db.CHRONICLE_WINDOW {r.status = "busy"; return sql.OK}
 	if rc = sql.reset(active); rc != sql.OK do return rc
-	if rc = sqlite_chronicle_execute(store, "DELETE FROM chronicle_jobs WHERE workspace=?1 AND state=0", request.workspace, nil); rc != sql.OK do return rc
 	head, head_rc := sqlite_chronicle_statement(
 		store,
-		"SELECT note_id FROM chronicle_inputs WHERE workspace=?1 AND state=0 ORDER BY source_id LIMIT 1",
+		`SELECT i.note_id,i.source_id FROM chronicle_inputs i WHERE i.workspace=?1 AND i.state=0
+ AND NOT EXISTS(SELECT 1 FROM chronicle_job_inputs ji JOIN chronicle_jobs j USING(workspace,generation)
+ WHERE ji.workspace=i.workspace AND ji.source_id=i.source_id AND j.state=0)
+ ORDER BY i.source_id LIMIT 1`,
 		request.workspace,
 		nil,
 	)
 	if head_rc != sql.OK do return head_rc
 	defer sql.finalize(head)
 	rc = sql.step(head)
-	if rc == sql.DONE {r.status = "empty"; return sql.OK}
+	if rc == sql.DONE {r.status = occupied > 0 ? "busy" : "empty"; return sql.OK}
 	if rc != sql.ROW do return rc
 	note, note_rc := sql.column_id(head, 0); if note_rc != sql.OK do return note_rc
+	first_source, first_rc := sql.column_id(head, 1); if first_rc != sql.OK do return first_rc
+	if q.cursor != "" && q.cursor != fmt.aprintf("%d", first_source) {r.status = "changed"; return sql.OK}
 	if rc = sql.reset(head); rc != sql.OK do return rc
-	if q.note_id != "" && q.note_id != fmt.aprintf("%d", note) do return sql.OK
+	if q.note_id != "" && q.note_id != fmt.aprintf("%d", note) {r.status = "changed"; return sql.OK}
 	s, select_rc := sqlite_chronicle_statement(
 		store,
-		`SELECT source_id,before_hash,after_hash,captured_at,expires_at,epoch,attempts,retry_at,note_id
- FROM chronicle_inputs WHERE workspace=?1 AND state=0 ORDER BY source_id LIMIT ?2`,
+		`SELECT i.source_id,i.before_hash,i.after_hash,i.captured_at,i.expires_at,i.epoch,i.retry_at,i.note_id,
+ EXISTS(SELECT 1 FROM chronicle_job_inputs ji JOIN chronicle_jobs j USING(workspace,generation)
+ WHERE ji.workspace=i.workspace AND ji.source_id>=?3 AND ji.source_id<=i.source_id
+ AND (j.state=0 OR (j.state IN(1,2,4) AND j.publication_generation IS NULL)))
+ FROM chronicle_inputs i WHERE i.workspace=?1 AND i.state=0 AND i.source_id>=?3 ORDER BY i.source_id LIMIT ?2`,
 		request.workspace,
-		{i64(q.limit)},
+		{i64(q.limit), first_source},
 	)
 	if select_rc != sql.OK do return select_rc
 	defer sql.finalize(s)
@@ -290,21 +320,15 @@ sqlite_chronicle_claim :: proc(
 	for {
 		rc = sql.step(s); if rc == sql.DONE do break
 		if rc != sql.ROW do return rc
-		input_note, input_note_rc := sql.column_id(s, 8)
+		input_note, input_note_rc := sql.column_id(s, 7)
 		if input_note_rc != sql.OK do return input_note_rc
-		// A batch is one note's prefix of the global pending order. Never
-		// jump over another note's unresolved input to enlarge this batch.
-		if input_note != note do break
+		// Never merge a retried head across a later live claim: source ranges
+		// must stay disjoint and noninterleaving, even for the same note.
+		if input_note != note || sql.column_int64(s, 8) != 0 do break
 		if sql.column_int64(s, 4) <= now || sql.column_int64(s, 5) <= w.disabled {r.status = "expired"; break}
 		id, id_rc := sql.column_id(s, 0); if id_rc != sql.OK do return id_rc
-		if sql.column_int64(s, 6) >= 5 {
-			// Keep an observable failed input until TTL or authorized deletion;
-			// exhausted attempts alone must not turn coverage into a gap.
-			r.status = "exhausted"
-			break
-		}
-		if sql.column_int64(s, 7) > now {
-			r.status = sql.column_int64(s, 7) == sql.column_int64(s, 4) ? "parked" : "backoff"
+		if sql.column_int64(s, 6) > now {
+			r.status = sql.column_int64(s, 6) == sql.column_int64(s, 4) ? "parked" : "backoff"
 			break
 		}
 		sources[count] = {id, strings.clone(string(sql.column_bytes_view(s, 1))), strings.clone(string(sql.column_bytes_view(s, 2)))}
@@ -343,6 +367,14 @@ sqlite_chronicle_claim :: proc(
 	return sql.OK
 }
 
+sqlite_chronicle_retry_at :: proc(now, attempts: i64, generation: u64) -> i64 {
+	// Five is a saturated backoff level, not a terminal attempt limit. Keep
+	// retrying the same input within its TTL and the durable daily budgets.
+	delay := attempts >= 5 ? i64(15 * 60 * 1_000_000_000) : i64(1 << u64(attempts)) * 1_000_000_000
+	delay += i64(generation % 500) * 1_000_000
+	return min(now, max(i64) - delay) + delay
+}
+
 sqlite_chronicle_job_command :: proc(
 	store: ^db.Store,
 	request: ^db.Request,
@@ -357,7 +389,7 @@ sqlite_chronicle_job_command :: proc(
 	s, rc := sqlite_chronicle_statement(
 		store,
 		`SELECT note_id,epoch,owner,consumer,lease_until,state,reserved,input_tokens,output_tokens,result_hash,summary,reservation_day
- FROM chronicle_jobs WHERE workspace=?1 AND generation=?2`,
+ ,publication_generation IS NOT NULL FROM chronicle_jobs WHERE workspace=?1 AND generation=?2`,
 		request.workspace,
 		{generation},
 	)
@@ -376,6 +408,7 @@ sqlite_chronicle_job_command :: proc(
 	job.input_tokens = sql.column_int64(s, 7); job.output_tokens = sql.column_int64(s, 8)
 	job.result_hash = strings.clone(string(sql.column_bytes_view(s, 9))); job.summary = strings.clone(string(sql.column_bytes_view(s, 10)))
 	job.reservation_day = sql.column_int64(s, 11)
+	job.published = sql.column_int64(s, 12) != 0
 	if rc = sql.reset(s); rc != sql.OK do return rc
 	if job.owner != request.subject || job.consumer != q.consumer || job.epoch != epoch {r.status = "forbidden"; return sql.OK}
 	// Deletion wins over fingerprint comparisons and all success replay. No
@@ -437,7 +470,7 @@ sqlite_chronicle_job_command :: proc(
 		fingerprint = sqlite_chronicle_hash(payload)
 		if job.state != 0 {
 			if job.result_hash != string(fingerprint[:]) {r.status = "conflict"; return sql.OK}
-			r.status = job.state == 1 ? "committed" : (job.state == 2 ? "acknowledged" : "gap")
+			r.status = !job.published ? "staged" : (job.state == 1 ? "committed" : (job.state == 2 ? "acknowledged" : "gap"))
 			r.summary = job.summary; r.generation = q.generation
 			return sql.OK
 		}
@@ -480,7 +513,6 @@ sqlite_chronicle_job_command :: proc(
 			r.status = (job.input_tokens == i64(q.input_tokens) && job.output_tokens == i64(q.output_tokens)) ? "reserved" : "conflict"
 			return sql.OK
 		}
-		if attempts >= 5 {r.status = "backoff"; return sql.OK}
 		day := now / CHRONICLE_DAY
 		if rc = sqlite_chronicle_execute(store, `INSERT INTO chronicle_budgets VALUES(?1,?2,0,0,0)
  ON CONFLICT(workspace) DO UPDATE SET day=excluded.day,calls=0,input_tokens=0,output_tokens=0 WHERE chronicle_budgets.day<excluded.day`, request.workspace, {day}); rc != sql.OK do return rc
@@ -497,8 +529,11 @@ sqlite_chronicle_job_command :: proc(
 		if rc == sql.DONE {r.status = "budget"; return sql.OK}
 		if rc != sql.ROW do return rc
 		if rc = sql.step(budget); rc != sql.DONE do return rc
+		// Persist the pause with the reservation, not only on a retry release:
+		// an abandoned fifth/later call must not buy fast retries on restart.
+		retry_at := sqlite_chronicle_retry_at(now, min(attempts + 1, 5), generation)
 		for id in ids[:count] {
-			if rc = sqlite_chronicle_execute(store, "UPDATE chronicle_inputs SET attempts=attempts+1 WHERE workspace=?1 AND source_id=?2", request.workspace, {id}); rc != sql.OK do return rc
+			if rc = sqlite_chronicle_execute(store, "UPDATE chronicle_inputs SET attempts=min(attempts+1,5),retry_at=max(retry_at,?3) WHERE workspace=?1 AND source_id=?2", request.workspace, {id, retry_at}); rc != sql.OK do return rc
 		}
 		if rc = sqlite_chronicle_execute(store, "UPDATE chronicle_jobs SET reserved=1,input_tokens=?3,output_tokens=?4,reservation_day=?5 WHERE workspace=?1 AND generation=?2", request.workspace, {generation, i64(q.input_tokens), i64(q.output_tokens), day}); rc != sql.OK do return rc
 		r.status = "reserved"
@@ -506,8 +541,7 @@ sqlite_chronicle_job_command :: proc(
 		if job.reserved == 0 && q.reason != "rebatch" do return sql.OK
 		if job.reserved == 1 && q.reason != "temporary" && q.reason != "timeout" && q.reason != "invalid_output" && q.reason != "permanent" do return sql.OK
 		if job.reserved == 1 {
-			delay := i64(1 << u64(min(attempts, 5))) * 1_000_000_000 + i64(generation % 500) * 1_000_000
-			retry_at := min(now, max(i64) - delay) + delay
+			retry_at := sqlite_chronicle_retry_at(now, attempts, generation)
 			if q.reason == "permanent" do retry_at = -1
 			for id in ids[:count] {
 				// Deterministic provider failures remain pending and visible, but
@@ -529,7 +563,18 @@ sqlite_chronicle_job_command :: proc(
 		job_state := q.outcome == "result" ? i64(1) : (q.outcome == "ack" ? i64(2) : i64(4))
 		if rc = sqlite_chronicle_execute(store, `UPDATE chronicle_jobs SET state=?3,result_hash=?4,summary=?5,model=?6,prompt_version=?7,schema_version=?8,created_at=?9
  WHERE workspace=?1 AND generation=?2`, request.workspace, {generation, job_state, string(fingerprint[:]), q.summary, q.model, q.prompt_version, q.schema_version, now}); rc != sql.OK do return rc
-		r.status = job_state == 1 ? "committed" : (job_state == 2 ? "acknowledged" : "gap"); r.summary = q.summary; r.generation = q.generation
+		if rc = db.publish_chronicle(store, request.workspace); rc != sql.OK do return rc
+		published, published_rc := sqlite_chronicle_statement(
+			store,
+			"SELECT publication_generation IS NOT NULL FROM chronicle_jobs WHERE workspace=?1 AND generation=?2",
+			request.workspace,
+			{generation},
+		)
+		if published_rc != sql.OK do return published_rc
+		defer sql.finalize(published)
+		if rc = sql.step(published); rc != sql.ROW do return rc
+		r.status =
+			sql.column_int64(published, 0) == 0 ? "staged" : (job_state == 1 ? "committed" : (job_state == 2 ? "acknowledged" : "gap")); r.summary = q.summary; r.generation = q.generation
 	}
 	if settle {
 		// This transaction also terminalizes/removes the job. Replays return
@@ -691,28 +736,28 @@ sqlite_chronicle_history :: proc(store: ^db.Store, workspace: string, q: pr.Chro
 	r.cursor = q.cursor == "" ? "0" : q.cursor
 	if q.limit == 0 || q.limit > 16 do return sql.OK
 	note, _ := strconv.parse_u64(q.note_id); cursor, _ := strconv.parse_u64(q.cursor)
-	query: cstring = `SELECT generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version
- FROM chronicle_jobs INDEXED BY chronicle_result_order WHERE workspace=?1 AND state=1 AND generation>?2 ORDER BY generation LIMIT ?3`
+	query: cstring = `SELECT publication_generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version,generation
+ FROM chronicle_jobs INDEXED BY chronicle_result_order WHERE workspace=?1 AND state=1 AND publication_generation IS NOT NULL AND publication_generation>?2 ORDER BY publication_generation LIMIT ?3`
 	values := [3]SQLite_Projection_Value{cursor, i64(q.limit) + 1, note}
 	value_count := 2
 	if note != 0 {
-		query = `SELECT generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version
- FROM chronicle_jobs INDEXED BY chronicle_result_note WHERE workspace=?1 AND state=1 AND generation>?2 AND note_id=?4 ORDER BY generation LIMIT ?3`
+		query = `SELECT publication_generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version,generation
+ FROM chronicle_jobs INDEXED BY chronicle_result_note WHERE workspace=?1 AND state=1 AND publication_generation IS NOT NULL AND publication_generation>?2 AND note_id=?4 ORDER BY publication_generation LIMIT ?3`
 		value_count = 3
 	}
 	if q.newest_first {
-		query = `SELECT generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version
- FROM chronicle_jobs INDEXED BY chronicle_result_order WHERE workspace=?1 AND state=1 AND generation<?2 ORDER BY generation DESC LIMIT ?3`
+		query = `SELECT publication_generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version,generation
+ FROM chronicle_jobs INDEXED BY chronicle_result_order WHERE workspace=?1 AND state=1 AND publication_generation IS NOT NULL AND publication_generation<?2 ORDER BY publication_generation DESC LIMIT ?3`
 		if cursor == 0 {
-			query = `SELECT generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version
- FROM chronicle_jobs INDEXED BY chronicle_result_order WHERE workspace=?1 AND state=1 ORDER BY generation DESC LIMIT ?3`
+			query = `SELECT publication_generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version,generation
+ FROM chronicle_jobs INDEXED BY chronicle_result_order WHERE workspace=?1 AND state=1 AND publication_generation IS NOT NULL ORDER BY publication_generation DESC LIMIT ?3`
 		}
 		if note != 0 {
-			query = `SELECT generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version
- FROM chronicle_jobs INDEXED BY chronicle_result_note WHERE workspace=?1 AND state=1 AND generation<?2 AND note_id=?4 ORDER BY generation DESC LIMIT ?3`
+			query = `SELECT publication_generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version,generation
+ FROM chronicle_jobs INDEXED BY chronicle_result_note WHERE workspace=?1 AND state=1 AND publication_generation IS NOT NULL AND publication_generation<?2 AND note_id=?4 ORDER BY publication_generation DESC LIMIT ?3`
 			if cursor == 0 {
-				query = `SELECT generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version
- FROM chronicle_jobs INDEXED BY chronicle_result_note WHERE workspace=?1 AND state=1 AND note_id=?4 ORDER BY generation DESC LIMIT ?3`
+				query = `SELECT publication_generation,note_id,created_at,first_at,last_at,summary,model,prompt_version,schema_version,generation
+ FROM chronicle_jobs INDEXED BY chronicle_result_note WHERE workspace=?1 AND state=1 AND publication_generation IS NOT NULL AND note_id=?4 ORDER BY publication_generation DESC LIMIT ?3`
 			}
 		}
 	}
@@ -726,6 +771,7 @@ sqlite_chronicle_history :: proc(store: ^db.Store, workspace: string, q: pr.Chro
 		if len(rows) == int(q.limit) {r.more = true; break}
 		generation, gen_rc := sql.column_id(s, 0); if gen_rc != sql.OK do return gen_rc
 		note_id, note_rc := sql.column_id(s, 1); if note_rc != sql.OK do return note_rc
+		claim_generation, claim_rc := sql.column_id(s, 9); if claim_rc != sql.OK do return claim_rc
 		entry := SQLite_Chronicle_Entry {
 			generation     = fmt.aprintf("%d", generation),
 			note_id        = fmt.aprintf("%d", note_id),
@@ -741,7 +787,7 @@ sqlite_chronicle_history :: proc(store: ^db.Store, workspace: string, q: pr.Chro
 			store,
 			"SELECT source_id FROM chronicle_job_inputs WHERE workspace=?1 AND generation=?2 ORDER BY ordinal",
 			workspace,
-			{generation},
+			{claim_generation},
 		)
 		if source_rc != sql.OK do return source_rc
 		ids := make([dynamic]string)
@@ -780,5 +826,5 @@ sqlite_chronicle_delete :: proc(store: ^db.Store, workspace: string, q: pr.Chron
 	if rc = sqlite_chronicle_execute(store, "UPDATE chronicle_inputs SET state=4,reason=x'64656c65746564' WHERE workspace=?1 AND note_id=?2 AND state=0 AND source_id<=?3", workspace, {note, watermark}); rc != sql.OK do return rc
 	if rc = sqlite_chronicle_execute(store, "DELETE FROM chronicle_inputs WHERE workspace=?1 AND note_id=?2 AND state=4 AND source_id<=?3", workspace, {note, watermark}); rc != sql.OK do return rc
 	r.status = "deleted"; r.deleted_through = fmt.aprintf("%d", watermark)
-	return sql.OK
+	return db.publish_chronicle(store, workspace)
 }

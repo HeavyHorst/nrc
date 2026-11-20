@@ -31,13 +31,15 @@ CHRONICLE_SCHEMA = Path(__file__).with_name("chronicle.sql")
 CHRONICLE_INPUT_BUDGET_SCHEMA = Path(__file__).with_name("chronicle_input_budget.sql")
 MONITOR_SNAPSHOTS_SCHEMA = Path(__file__).with_name("monitor_snapshots.sql")
 TICKET_TRIGRAM_SCHEMA = Path(__file__).with_name("ticket_trigram.sql")
-SCHEMA_VERSION = 9
+CHRONICLE_PARALLEL_SCHEMA = Path(__file__).with_name("chronicle_parallel.sql")
+SCHEMA_VERSION = 10
 
 
 def schema_text():
     return (SCHEMA.read_text() + SLICE_SCHEMA.read_text() + INCREMENTAL_SCHEMA.read_text()
             + PAGINATION_SCHEMA.read_text() + MONITORING_SCHEMA.read_text() + CHRONICLE_SCHEMA.read_text()
-            + CHRONICLE_INPUT_BUDGET_SCHEMA.read_text() + MONITOR_SNAPSHOTS_SCHEMA.read_text() + TICKET_TRIGRAM_SCHEMA.read_text())
+            + CHRONICLE_INPUT_BUDGET_SCHEMA.read_text() + MONITOR_SNAPSHOTS_SCHEMA.read_text() + TICKET_TRIGRAM_SCHEMA.read_text()
+            + CHRONICLE_PARALLEL_SCHEMA.read_text())
 
 
 def schema_hash():

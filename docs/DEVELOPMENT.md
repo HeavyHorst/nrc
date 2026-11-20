@@ -85,6 +85,44 @@ Use the [Compose deployment](../README.md#quickstart) for the complete web appli
 Production serves the complete generated `client/dist/`, not the source directory.
 After frontend changes, rebuild the Nginx image and reload open browser tabs.
 
+## SQLite schema 10
+
+Schema 10 is a local development feature for Chronicle parallel durable
+publication; it is not deployed to production. Startup requires schema 10 and
+does not automatically migrate existing files.
+
+Stop every writer, back up the complete stopped data directory, and rehearse on
+a disposable copy before changing any installation. For each schema-9 shard,
+run from the repository root with `sqlite3 -bail "$SHARD"`:
+
+```sql
+PRAGMA foreign_keys=ON;
+BEGIN IMMEDIATE;
+.read workspace_db/chronicle_parallel.sql
+COMMIT;
+PRAGMA user_version;
+PRAGMA integrity_check;
+PRAGMA foreign_key_check;
+```
+
+Expect version 10, `ok`, and no foreign-key violations. The migration requires
+the NRC application ID and exactly schema 9; repeating it is refused. On any
+error, roll back the transaction (or close the connection without committing).
+Compare active receipts, membership, reservations and summaries with the backup
+before switching binaries. Restore the stopped backup to roll back; an older
+binary must not open schema 10.
+
+Receipt `generation` stays immutable. Existing terminal jobs in states 1, 2
+and 4 receive the same `publication_generation` as their generation, preserving
+public history IDs. Active jobs and their membership are unchanged. Each
+workspace's publication floor starts at the maximum of its claim floor and all
+existing job generations, including deleted receipts, so future publication
+cannot reuse old IDs. Multiple active jobs are now allowed. New terminal
+receipts with a NULL publication ID are durable staged results, invisible to
+history until publication; their inputs have already been terminalized and raw
+input removed. The service must bound running jobs plus unpublished results to
+10; the indexes support this window but do not enforce it themselves.
+
 ## SQLite schema 9
 
 Ticket activity searches use a case-sensitive trigram index over text already
@@ -290,11 +328,17 @@ do not charge twice. Confirmed provider input/output usage settles the reservati
 atomically with Result/Ack or a retry release. Only the unused portion is credited
 to its original UTC day; it cannot increase a later day's budget. Missing usage
 keeps the full reservation. Result replay includes usage in its fingerprint and
-cannot credit the budget twice. Calls and attempt counts are never refunded.
-Retry retains attempts and applies exponential backoff plus
-jitter. An unreserved `rebatch` release does not charge an attempt. After five
-failed/reserved-and-abandoned attempts, claims return `exhausted`; the input stays
-visible and pending until TTL or authorized deletion. Later inputs cannot skip it.
+cannot credit the budget twice. Calls are never refunded. The input's `attempts`
+counter saturates at five; it is a backoff level, not a lifetime call count.
+Retries use exponential backoff plus jitter for the first four reservations,
+then 15 minutes plus up to 499 ms of jitter from the fifth reservation onward.
+The pause is persisted at reservation and renewed on retry release, so an
+abandoned call cannot bypass it through lease expiry or restart. Once due, claims
+retry the same inputs rather than returning `exhausted`. Every new call still
+requires daily token budget. An unreserved `rebatch` release does not charge an
+attempt. Later inputs cannot skip the unresolved head. The 72-hour TTL is unchanged;
+retry exhaustion itself never deletes raw input or creates a gap. No migration or
+manual attempt reset is needed for previously exhausted inputs.
 A singleton that cannot fit the token budget may commit a `token_limit` gap
 without a provider reservation; silent truncation is not supported.
 Deterministic provider failures may release a reserved claim with
@@ -441,7 +485,7 @@ WAL layouts; no existing data is automatically migrated. The base schema defines
 ordered attachments, history with immutable ACL/endpoint columns, DM membership
 and persistent ID floors. Derived tables cover notes/tags, reminders, appointments,
 customers, tickets, slices and room mappings. Server and importer use
-[schema 9](#sqlite-schema-9), including the Slice migrations, monitoring, chronicle capture and ticket search tables.
+[schema 10](#sqlite-schema-10), including the Slice migrations, monitoring, chronicle capture and ticket search tables.
 Recreate test databases after schema
 changes during development; there is no automatic migration. Workspace tables and their projections use workspace/ID
 keys without a scope column. Protocol scope fields must still be zero; storage
