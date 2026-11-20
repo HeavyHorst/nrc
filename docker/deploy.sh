@@ -357,8 +357,8 @@ if ! $skip_tests; then
             echo "Odin compiler not found; set ODIN_BIN." >&2
             exit 1
         fi
-        ODIN_BIN="$ODIN_BIN" ./test/run_odin_tests.sh . -define:ODIN_TEST_LOG_LEVEL=error
-        ODIN_BIN="$ODIN_BIN" ./test/run_odin_tests.sh . -define:NRC_SIMULATION=true -define:ODIN_TEST_LOG_LEVEL=error
+        ODIN_BIN="$ODIN_BIN" ./test/run_odin_tests.sh . -define:ODIN_TEST_THREADS=4 -define:ODIN_TEST_LOG_LEVEL=error
+        ODIN_BIN="$ODIN_BIN" ./test/run_odin_tests.sh . -define:NRC_SIMULATION=true -define:ODIN_TEST_THREADS=4 -define:ODIN_TEST_LOG_LEVEL=error
     fi
 
     if $client; then
