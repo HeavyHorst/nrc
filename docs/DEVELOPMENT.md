@@ -79,15 +79,39 @@ Compose sends `SIGINT` to the server on stop, matching its graceful shutdown
 handler. Keep this setting for quiesced backups; Docker's default `SIGTERM` does
 not request the server's graceful shutdown.
 
-The deployment backup stops the running services only for uncompressed volume
-copies, then starts the same containers without recreating them. Compression,
-checksums and archive verification run after restart against those frozen copies.
-Allow free backup space for all uncompressed archives plus the largest archive's
-compressed output. A failed copy attempts to restart services; any backup failure
-blocks deployment and removes the incomplete backup. Backup logs timestamp the
-stop and container-start boundaries; application readiness can take longer.
-Run `python3 test/test_backup.py` for the isolated backup regression tests; deploy
-runs them automatically unless `--skip-tests` is set.
+Daily backups stop running services only for uncompressed volume copies, then
+restart the same containers. Compression, checksums and archive verification run
+online against those frozen copies. Allow free backup space for all uncompressed
+archives plus the largest archive's compressed output.
+
+Deployments needing a backup use one combined restart window. Before source sync,
+`nrc-backup --prepare-deploy CONFIG` saves the rendered old Compose configuration
+and actual running image IDs in a mode-0600 file under the source rollback directory.
+This file contains resolved secrets; keep it restricted. Deploy builds the new
+images while services are still running, then starts a transient systemd unit
+running `nrc-backup --deploy CONFIG SERVICE...`. The unit takes the same backup
+lock as the daily service. It copies stopped volumes and starts the prepared images
+directly, with no build or pull during downtime. Previously running services are
+also restarted; previously stopped, unrelated services stay stopped.
+
+Compose waits up to 120 seconds for services to be running or, where configured,
+healthy. A failed switch stops the selected deployment services and attempts to
+recreate the previously running set from the saved configuration and immutable
+image IDs. Changes to that set or its images since capture block the operation
+before stopping services. Copy failures restart the existing containers without
+attempting an image switch. SIGINT and SIGTERM also trigger recovery.
+
+This is an image/configuration rollback, not a database restore. New binaries may
+already have written data; incompatible schema changes still need an explicit
+migration/recovery procedure. Failures after the switch retain the pre-switch
+copies as `.partial` for manual recovery and return failure. A later compression
+failure does not roll back healthy new containers. Once Compose's startup check
+succeeds, later deployment smoke-test failures are reported but do not automatically
+roll back. Services without a healthcheck are checked for running state only.
+
+Backup logs timestamp the stop and startup-check boundaries. Run
+`python3 test/test_backup.py` and `python3 docker/deploy_test.py` for the isolated
+regression tests; deploy runs the backup suite unless `--skip-tests` is set.
 
 The standalone server listens on port 8080 and expects authenticated upgrades.
 Serving static `client/` alone does not provide browser authentication.

@@ -15,8 +15,21 @@ TS=$(date -u +%Y%m%dT%H%M%SZ)
 PARTIAL="$BACKUP_ROOT/$TS.partial"
 FINAL="$BACKUP_ROOT/$TS"
 
-mkdir -p "$BACKUP_ROOT" "$PARTIAL"
-chmod 700 "$BACKUP_ROOT" "$PARTIAL"
+MODE=backup
+ROLLBACK_CONFIG=""
+DEPLOY_SERVICES=()
+if (($#)); then
+  case "$1" in
+    --prepare-deploy | --deploy)
+      MODE=${1#--}
+      (($# >= 2)) || { echo "Missing rollback configuration path" >&2; exit 2; }
+      ROLLBACK_CONFIG=$2
+      shift 2
+      DEPLOY_SERVICES=("$@")
+      ;;
+    *) echo "Usage: nrc-backup [--prepare-deploy CONFIG | --deploy CONFIG SERVICE...]" >&2; exit 2 ;;
+  esac
+fi
 cd "$COMPOSE_DIR"
 
 COMPOSE_ARGS=(--env-file .env -f "$COMPOSE_FILE")
@@ -60,19 +73,88 @@ if ((${#VOLUMES[@]} == 0)); then
   exit 1
 fi
 
+if [[ $MODE == prepare-deploy ]]; then
+  # Render before source sync. Pin actual running image IDs, not mutable tags.
+  mkdir -p "$(dirname "$ROLLBACK_CONFIG")"
+  docker compose "${COMPOSE_ARGS[@]}" config --format json > "$ROLLBACK_CONFIG"
+  docker inspect "${container_ids[@]}" | python3 -c '
+import json, os, sys
+path = sys.argv[1]
+with open(path) as f:
+    model = json.load(f)
+containers = [c for c in json.load(sys.stdin) if c["State"]["Running"]]
+# After a rollback, source still contains the failed candidate. Capture the
+# configuration actually used to recreate the running containers instead.
+config_files = {c["Config"]["Labels"].get("com.docker.compose.project.config_files", "")
+                for c in containers}
+if len(config_files) == 1:
+    previous = next(iter(config_files))
+    if previous != path and previous.endswith("/compose-rollback.json") and os.path.isfile(previous):
+        with open(previous) as f:
+            model = json.load(f)
+running = []
+for container in containers:
+    name = container["Config"]["Labels"]["com.docker.compose.service"]
+    service = model["services"][name]
+    service["image"] = container["Image"]
+    service.pop("build", None)
+    running.append(name)
+model["x-nrc-running-services"] = running
+# Compose config already escapes literal dollars for reuse as Compose input.
+with open(path, "w") as f:
+    json.dump(model, f)
+' "$ROLLBACK_CONFIG"
+  echo "Saved rollback configuration and running image IDs: $ROLLBACK_CONFIG"
+  exit 0
+fi
+
+if [[ $MODE == deploy ]]; then
+  ((${#DEPLOY_SERVICES[@]})) || { echo "No deployment services supplied" >&2; exit 2; }
+  # Validate rollback inputs before stopping anything, including image availability.
+  docker compose --env-file /dev/null -f "$ROLLBACK_CONFIG" --profile '*' config -q
+  docker inspect "${container_ids[@]}" | python3 -c '
+import json, subprocess, sys
+with open(sys.argv[1]) as f:
+    model = json.load(f)
+actual = {c["Config"]["Labels"]["com.docker.compose.service"]: c["Image"]
+          for c in json.load(sys.stdin) if c["State"]["Running"]}
+expected = {s: model["services"][s]["image"] for s in model["x-nrc-running-services"]}
+if actual != expected:
+    raise SystemExit("Running services/images changed since rollback capture; refusing deployment")
+subprocess.run(["docker", "image", "inspect", *set(expected.values())],
+               check=True, stdout=subprocess.DEVNULL)
+' "$ROLLBACK_CONFIG"
+fi
+
+mkdir -p "$BACKUP_ROOT" "$PARTIAL"
+chmod 700 "$BACKUP_ROOT" "$PARTIAL"
 STACK_STOPPED=0
+SWITCH_ATTEMPTED=0
 restart_stack() {
   local status=$?
   trap - EXIT INT TERM
   if ((STACK_STOPPED)); then
-    docker compose "${COMPOSE_ARGS[@]}" start "${RUNNING_SERVICES[@]}" || status=1
+    if ((SWITCH_ATTEMPTED)); then
+      echo "Image switch failed; restoring previous configuration and image IDs" >&2
+      docker compose "${COMPOSE_ARGS[@]}" stop "${DEPLOY_SERVICES[@]}" || status=1
+      docker compose --env-file /dev/null -f "$ROLLBACK_CONFIG" --profile '*' \
+        up -d --no-deps --no-build --pull never --wait --wait-timeout 120 "${RUNNING_SERVICES[@]}" || status=1
+    else
+      docker compose "${COMPOSE_ARGS[@]}" start "${RUNNING_SERVICES[@]}" || status=1
+    fi
   fi
   if ((status != 0)); then
-    rm -rf -- "$PARTIAL"
+    if ((SWITCH_ATTEMPTED)); then
+      echo "Preserving pre-switch volume copies for manual recovery: $PARTIAL" >&2
+    else
+      rm -rf -- "$PARTIAL"
+    fi
   fi
   exit "$status"
 }
-trap restart_stack EXIT INT TERM
+trap restart_stack EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 {
   printf "timestamp=%s\n" "$TS"
@@ -108,9 +190,14 @@ done
 # stopped. Never restore personal memory by copying only an old DB into service:
 # reconcile current deletion/approval guards with personal_memory/storage_ops.py.
 
-# Restart existing containers, not newly built images or changed Compose config.
-# Compression and verification read only the frozen copies, never live volumes.
-docker compose "${COMPOSE_ARGS[@]}" start "${RUNNING_SERVICES[@]}"
+if [[ $MODE == deploy ]]; then
+  SWITCH_ATTEMPTED=1
+  # Start the prepared images and the previously running services in one window.
+  docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --no-build --pull never \
+    --wait --wait-timeout 120 "${RUNNING_SERVICES[@]}" "${DEPLOY_SERVICES[@]}"
+else
+  docker compose "${COMPOSE_ARGS[@]}" start "${RUNNING_SERVICES[@]}"
+fi
 STACK_STOPPED=0
 echo "NRC containers started; compressing and verifying backup online: $(date -u +%FT%TZ)"
 docker compose "${COMPOSE_ARGS[@]}" ps > "$PARTIAL/compose-ps-after.txt"

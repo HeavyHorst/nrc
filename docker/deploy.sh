@@ -71,7 +71,7 @@ if [[ $head_revision != "$origin_revision" ]]; then
     exit 1
 fi
 
-for command in git rsync ssh python3; do
+for command in git rsync ssh python3 docker; do
     if ! command -v "$command" >/dev/null; then
         echo "Required command not found: $command" >&2
         exit 1
@@ -308,14 +308,24 @@ $incidents && services+=(incidents)
 if $ai && $chronicle_enabled; then services+=(chronicle); fi
 
 # Source parity does not imply that containers use the latest built images.
-stale_services=$(ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && bash -s" <<'REMOTE'
+stale_services=$(ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && bash -s -- $COMPOSE_ARGS" <<'REMOTE'
 set -euo pipefail
+desired_images=$(docker compose "$@" --profile '*' config --format json | python3 -c '
+import json, sys
+model = json.load(sys.stdin)
+for name, service in model["services"].items():
+    print(name + "\t" + (service.get("image") or model["name"] + "-" + name))
+')
+declare -A images
+while IFS=$'\t' read -r service ref; do images[$service]=$ref; done <<< "$desired_images"
 for id in $(docker ps -q --filter label=com.docker.compose.project=docker); do
-    ref=$(docker inspect --format '{{.Config.Image}}' "$id")
+    service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$id")
+    # Rollback containers use immutable IDs; compare to the desired tag, not that ID.
+    ref=${images[$service]:-$(docker inspect --format '{{.Config.Image}}' "$id")}
     running=$(docker inspect --format '{{.Image}}' "$id")
     built=$(docker image inspect --format '{{.Id}}' "$ref")
     if [[ $running != "$built" ]]; then
-        docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$id"
+        echo "$service"
     fi
 done
 REMOTE
@@ -400,19 +410,20 @@ else
     echo "WARNING: local tests were explicitly skipped." >&2
 fi
 
-if $server || $publish || $newsletter || $incidents; then
-    # The backup must understand newly enabled overlays before stopping services.
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+rollback_config="/root/nrc-deploy-backups/$stamp/compose-rollback.json"
+backup_required=false
+for service in "${update_services[@]}"; do
+    case "$service" in
+        websocket-server | publish | newsletter | incidents) backup_required=true ;;
+    esac
+done
+if $backup_required; then
+    # Capture the old configuration before syncing source or building new tags.
     ssh "$DEPLOY_HOST" 'set -eu; tmp=$(mktemp); trap '\''rm -f "$tmp"'\'' EXIT; cat > "$tmp"; bash -n "$tmp"; install -m 0750 "$tmp" /usr/local/sbin/nrc-backup' < docker/backup.sh
-    echo "Taking a quiesced backup of production volumes..."
-    ssh "$DEPLOY_HOST" 'systemctl start nrc-backup.service'
-    backup_result=$(ssh "$DEPLOY_HOST" 'systemctl show nrc-backup.service --property=Result --value')
-    if [[ $backup_result != success ]]; then
-        echo "Production backup failed with result: $backup_result" >&2
-        exit 1
-    fi
+    ssh "$DEPLOY_HOST" "/usr/local/sbin/nrc-backup --prepare-deploy '$rollback_config'"
 fi
 
-stamp=$(date -u +%Y%m%dT%H%M%SZ)
 echo "Synchronizing tracked source; rollback copies: /root/nrc-deploy-backups/$stamp"
 sync_source -pv --backup --backup-dir="/root/nrc-deploy-backups/$stamp"
 
@@ -425,7 +436,14 @@ if ((${#services[@]})); then
 fi
 if ((${#update_services[@]})); then
     quoted_services=$(printf ' %q' "${update_services[@]}")
-    if $compose; then
+    if $backup_required; then
+        echo "Taking a quiesced backup and switching to prepared images in one restart window..."
+        # A transient unit owns recovery even if this SSH connection disappears.
+        ssh "$DEPLOY_HOST" "systemd-run --unit=nrc-deploy-$stamp --wait --pipe --collect \
+            --service-type=oneshot --property=TimeoutStartSec=30min --property=Nice=10 \
+            --property=IOSchedulingClass=best-effort --property=IOSchedulingPriority=7 \
+            /usr/local/sbin/nrc-backup --deploy '$rollback_config'$quoted_services"
+    elif $compose; then
         ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && docker compose $COMPOSE_ARGS up -d$quoted_services"
     else
         ssh "$DEPLOY_HOST" "cd '$REMOTE_DIR' && docker compose $COMPOSE_ARGS up -d --no-deps$quoted_services"

@@ -24,6 +24,7 @@ class DeploymentStorageTest(unittest.TestCase):
             path.mkdir(parents=True)
         for name in ("deploy.sh", "docker-compose.yml"):
             shutil.copyfile(SOURCE / name, self.repo / "docker" / name)
+        shutil.copyfile(SOURCE / "docker-compose.yml", self.remote / "docker/docker-compose.yml")
         for args in (
             ("init", "-q", "-b", "main"),
             ("add", "."),
@@ -48,7 +49,7 @@ class DeploymentStorageTest(unittest.TestCase):
         # Compose itself parses the actual file; no Docker daemon is needed.
         self.tool("ssh", '''
 case "$2" in
-  "if test -f "*|"docker ps "*|"bash -s"|*" && bash -s"|*" config --format json")
+  "if test -f "*|"docker ps "*|"bash -s"|*" && bash -s"*|*" config --format json")
     exec bash -c "$2" ;;
   *) echo "$2" >> "$MUTATIONS"; exit 1 ;;
 esac
@@ -72,12 +73,15 @@ case "$1" in
   inspect)
     case "$*" in
       *Mounts*) printf '%s\n' "$ACTIVE_VOLUME" ;;
-      *Config.Image*) echo nrc-server:fixture ;;
+      *Config.Labels*) echo websocket-server ;;
+      *Config.Image*) echo "${RUNNING_IMAGE:-nrc-server:fixture}" ;;
       *Image*) echo sha256:fixture ;;
       *) exit 1 ;;
     esac
     ;;
-  image) echo sha256:fixture ;;
+  image)
+    if [[ "$*" == *sha256:old* ]]; then echo sha256:fixture
+    else echo "${DESIRED_IMAGE_ID:-sha256:fixture}"; fi ;;
   *) echo "$*" >> "$MUTATIONS"; exit 1 ;;
 esac
 ''')
@@ -100,7 +104,8 @@ esac
             env=self.env, capture_output=True, text=True,
         )
         self.assertEqual((self.remote / ".env").read_bytes(), before)
-        self.assertFalse(Path(self.env["MUTATIONS"]).exists())
+        mutations = Path(self.env["MUTATIONS"])
+        self.assertFalse(mutations.exists(), mutations.read_text() if mutations.exists() else "")
         return result
 
     def test_migrated_volume_and_project_default_are_preserved(self):
@@ -115,6 +120,65 @@ esac
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(f"Verified production data volume: {volume}", result.stdout)
                 self.assertIn("production was not changed", result.stdout)
+
+    def test_combined_deployment_builds_before_backup_and_never_starts_twice(self):
+        self.configure("docker_sqlite-migrated")
+        shutil.copyfile(SOURCE / "backup.sh", self.repo / "docker/backup.sh")
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                        "commit", "-qm", "backup fixture"], cwd=self.repo, check=True)
+        subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+                       cwd=self.repo, check=True)
+        (self.bin / "ssh").rename(self.bin / "ssh-read")
+        events = Path(self.temp.name) / "events"
+        self.env.update(EVENTS=str(events), NRC_CLI=str(self.bin / "nrc"))
+        self.tool("nrc", "exit 0")
+        self.tool("ssh", r'''
+case "$2" in
+  *"install -m 0750"*) cat >/dev/null ;;
+  *" --prepare-deploy "*) echo prepare >> "$EVENTS" ;;
+  *" config -q") echo config >> "$EVENTS" ;;
+  *" build "*)
+    echo build >> "$EVENTS"
+    [[ ${BUILD_FAIL:-false} != true ]] ;;
+  "systemd-run "*)
+    [[ "$2" == *" --deploy "* ]] || exit 9
+    echo switch >> "$EVENTS" ;;
+  *" up -d"*|*"systemctl start nrc-backup"*) exit 10 ;;
+  *" && bash -s --"*) cat >/dev/null ;;
+  *" exec -T nginx "*|*"for attempt in "*|*" logs --since="*|*".nrc-deployed-revision"*) : ;;
+  *) exec ssh-read "$@" ;;
+esac
+''')
+        self.tool("rsync", r'''
+if [[ "$*" == *" -cn "* ]]; then
+  if [[ ! -f "$EVENTS.parity" ]]; then
+    touch "$EVENTS.parity"
+    echo server.odin
+  fi
+else
+  echo sync >> "$EVENTS"
+fi
+''')
+        for failure in ("false", "true"):
+            with self.subTest(build_failure=failure):
+                events.unlink(missing_ok=True)
+                Path(str(events) + ".parity").unlink(missing_ok=True)
+                self.env["BUILD_FAIL"] = failure
+                result = self.deploy("--skip-tests")
+                self.assertEqual(result.returncode == 0, failure == "false", result.stdout + result.stderr)
+                self.assertEqual(events.read_text().splitlines(),
+                                 ["prepare", "sync", "config", "build"] +
+                                 (["switch"] if failure == "false" else []))
+
+    def test_rollback_image_ids_do_not_hide_a_pending_image_update(self):
+        self.configure("docker_sqlite-migrated")
+        self.tool("rsync", "cat >/dev/null")
+        self.env.update(RUNNING_IMAGE="sha256:old", DESIRED_IMAGE_ID="sha256:new")
+        result = self.deploy("--dry-run")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Services to update: websocket-server", result.stdout)
+        self.assertNotIn("nothing to deploy", result.stdout)
 
     def test_missing_override_or_wrong_volume_blocks_real_deployment(self):
         for configured in (None, "docker_task-data", "docker_sqlite-typo"):
