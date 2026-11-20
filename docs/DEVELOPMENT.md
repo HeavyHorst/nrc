@@ -94,8 +94,10 @@ lock as the daily service. It copies stopped volumes and starts the prepared ima
 directly, with no build or pull during downtime. Previously running services are
 also restarted; previously stopped, unrelated services stay stopped.
 
-Compose waits up to 120 seconds for services to be running or, where configured,
-healthy. A failed switch stops the selected deployment services and attempts to
+The startup check polls for up to 120 seconds until services are running and,
+where configured, healthy. A transient unhealthy state during dependency startup
+does not fail immediately; a service still unhealthy at the deadline does.
+A failed switch stops the selected deployment services and attempts to
 recreate the previously running set from the saved configuration and immutable
 image IDs. Changes to that set or its images since capture block the operation
 before stopping services. Copy failures restart the existing containers without
@@ -105,7 +107,7 @@ This is an image/configuration rollback, not a database restore. New binaries ma
 already have written data; incompatible schema changes still need an explicit
 migration/recovery procedure. Failures after the switch retain the pre-switch
 copies as `.partial` for manual recovery and return failure. A later compression
-failure does not roll back healthy new containers. Once Compose's startup check
+failure does not roll back healthy new containers. Once the startup check
 succeeds, later deployment smoke-test failures are reported but do not automatically
 roll back. Services without a healthcheck are checked for running state only.
 

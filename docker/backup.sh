@@ -128,6 +128,36 @@ fi
 
 mkdir -p "$BACKUP_ROOT" "$PARTIAL"
 chmod 700 "$BACKUP_ROOT" "$PARTIAL"
+
+wait_for_services() {
+  local deadline=$((SECONDS + 120)) all_ready service ids states state unready
+  while :; do
+    all_ready=true
+    unready=""
+    for service in "$@"; do
+      ids=$(docker ps -aq --filter label=com.docker.compose.project=docker --filter "label=com.docker.compose.service=$service") || return 1
+      if [[ -z $ids ]]; then
+        all_ready=false
+        unready+=" $service(missing)"
+        continue
+      fi
+      states=$(docker inspect --format '{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' $ids) || return 1
+      while IFS= read -r state; do
+        if [[ $state != 'true healthy' && $state != 'true none' ]]; then
+          all_ready=false
+          unready+=" $service($state)"
+        fi
+      done <<< "$states"
+    done
+    $all_ready && return 0
+    if ((SECONDS >= deadline)); then
+      echo "Services did not become ready within 120 seconds:$unready" >&2
+      return 1
+    fi
+    sleep 1
+  done
+}
+
 STACK_STOPPED=0
 SWITCH_ATTEMPTED=0
 restart_stack() {
@@ -137,8 +167,14 @@ restart_stack() {
     if ((SWITCH_ATTEMPTED)); then
       echo "Image switch failed; restoring previous configuration and image IDs" >&2
       docker compose "${COMPOSE_ARGS[@]}" stop "${DEPLOY_SERVICES[@]}" || status=1
-      docker compose --env-file /dev/null -f "$ROLLBACK_CONFIG" --profile '*' \
-        up -d --no-deps --no-build --pull never --wait --wait-timeout 120 "${RUNNING_SERVICES[@]}" || status=1
+      if docker compose --env-file /dev/null -f "$ROLLBACK_CONFIG" --profile '*' \
+          up -d --no-deps --no-build --pull never "${RUNNING_SERVICES[@]}" &&
+          wait_for_services "${RUNNING_SERVICES[@]}"; then
+        echo "Previous images and configuration restored; services are ready"
+      else
+        echo "Rollback did not restore ready services; manual recovery required" >&2
+        status=1
+      fi
     else
       docker compose "${COMPOSE_ARGS[@]}" start "${RUNNING_SERVICES[@]}" || status=1
     fi
@@ -194,7 +230,8 @@ if [[ $MODE == deploy ]]; then
   SWITCH_ATTEMPTED=1
   # Start the prepared images and the previously running services in one window.
   docker compose "${COMPOSE_ARGS[@]}" up -d --no-deps --no-build --pull never \
-    --wait --wait-timeout 120 "${RUNNING_SERVICES[@]}" "${DEPLOY_SERVICES[@]}"
+    "${RUNNING_SERVICES[@]}" "${DEPLOY_SERVICES[@]}"
+  wait_for_services "${RUNNING_SERVICES[@]}" "${DEPLOY_SERVICES[@]}"
 else
   docker compose "${COMPOSE_ARGS[@]}" start "${RUNNING_SERVICES[@]}"
 fi

@@ -31,6 +31,7 @@ class BackupTests(unittest.TestCase):
                                 "exec 9>" + shlex.quote(str(self.root / "backup.lock")))
         script = script.replace("COMPOSE_DIR=/root/nrc", "COMPOSE_DIR=" + shlex.quote(str(self.root)))
         script = script.replace("BACKUP_ROOT=/root/backups/nrc-daily", "BACKUP_ROOT=" + shlex.quote(str(self.backups)))
+        script = script.replace("deadline=$((SECONDS + 120))", "deadline=$((SECONDS + 2))")
         self.script = self.root / "backup.sh"
         self.script.write_text(script)
         bin_dir = self.root / "bin"
@@ -61,7 +62,7 @@ if args[0] == "compose":
         assert not (root / "switched").exists(), "old containers must not start before switch"
         resumed()
     elif "up" in args:
-        assert "--wait" in args and "--no-build" in args and "never" in args
+        assert "--no-build" in args and "never" in args
         if "/dev/null" in args:
             model = json.loads(pathlib.Path(args[args.index("-f") + 1]).read_text())
             images = {s: model["services"][s]["image"] for s in model["x-nrc-running-services"]}
@@ -86,7 +87,14 @@ elif args[0] == "ps":
 elif args[0] == "inspect":
     if os.environ.get("BACKUP_TEST_FAILURE") == "inspect":
         sys.exit(7)
-    if "--format" not in args:
+    if any(".State.Running" in arg for arg in args):
+        probe_path = root / "health-probes"
+        probes = int(probe_path.read_text()) if probe_path.exists() else 0
+        probe_path.write_text(str(probes + 1))
+        failure = os.environ.get("BACKUP_TEST_FAILURE")
+        unhealthy = (failure == "unhealthy" and images["websocket-server"] == new_image) or (failure == "transient-health" and probes == 0)
+        print("true unhealthy" if unhealthy else "true healthy")
+    elif "--format" not in args:
         print(json.dumps([{"State": {"Running": True}, "Image": image,
             "Config": {"Labels": {"com.docker.compose.service": name,
                 "com.docker.compose.project.config_files":
@@ -94,7 +102,7 @@ elif args[0] == "inspect":
             for name, image in images.items()]))
     elif "running-container" in args:
         print("active-sqlite\\nshared")
-    if "--format" in args and "stopped-container" in args:
+    if any(".Mounts" in arg for arg in args) and "stopped-container" in args:
         print("stopped-sqlite\\nshared")
 elif args[:2] == ["volume", "ls"]:
     if os.environ.get("BACKUP_TEST_FAILURE") == "catalog":
@@ -182,6 +190,25 @@ exec /usr/bin/gzip "$@"
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / "stopped").exists())
         self.assertFalse((self.root / "switched").exists())
+
+    def test_transient_unhealthy_status_is_allowed_to_recover_before_deadline(self):
+        config = self.prepare_deploy()
+        result = self.run_backup("--deploy", config, "websocket-server",
+                                 BACKUP_TEST_FAILURE="transient-health")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertGreater(int((self.root / "health-probes").read_text()), 1)
+        self.assertEqual(json.loads((self.root / "images.json").read_text())["websocket-server"],
+                         "sha256:" + "2" * 64)
+
+    def test_persistent_unhealthy_status_rolls_back_after_deadline(self):
+        config = self.prepare_deploy()
+        result = self.run_backup("--deploy", config, "websocket-server",
+                                 BACKUP_TEST_FAILURE="unhealthy")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not become ready", result.stderr)
+        self.assertEqual(json.loads((self.root / "images.json").read_text()),
+                         {"websocket-server": "sha256:" + "1" * 64})
+        self.assertFalse((self.root / "stopped").exists())
 
     def test_failed_rollback_reports_failure_and_keeps_recovery_copies(self):
         config = self.prepare_deploy()
