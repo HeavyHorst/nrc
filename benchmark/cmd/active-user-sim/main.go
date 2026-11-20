@@ -249,8 +249,12 @@ func (s *simulation) run(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("startup: %w", err)
 	}
-	if err := parallel(ctx, len(s.spaces), 16, func(i int) error { return s.spaces[i].seed(ctx) }); err != nil {
-		return err
+	// Setup traffic must not saturate admission before the measurement barrier.
+	// Keep subscribers connected so the existing seed delivery audit still runs.
+	for _, space := range s.spaces {
+		if err := space.seed(ctx); err != nil {
+			return fmt.Errorf("seed %s: %w", space.name, err)
+		}
 	}
 	if err := s.drain(ctx); err != nil {
 		return err

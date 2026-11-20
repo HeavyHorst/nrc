@@ -6,7 +6,6 @@ All data, reports and logs stay in a new run directory for inspection.
 """
 
 import argparse
-import base64
 import hashlib
 import json
 import math
@@ -22,7 +21,6 @@ import time
 
 
 ROOT = Path(__file__).resolve().parent.parent
-MANIFEST = "TlJDTAABAAAAAAAAAAAAAQIBAAAAAAAAAAABAAABAACsNnTeRP92XA=="
 
 
 def cpu_plan(workers, generators):
@@ -41,16 +39,6 @@ def cpu_plan(workers, generators):
             "workers": [g[0] for g in groups[3:3 + workers]],
             "generators": [g[0] for g in groups[-generators:]],
             "isolation": "process affinity only; unrelated tasks and IRQs are not excluded"}
-
-
-def initialize(data):
-    data.mkdir()
-    generation = data / "sharded-00000000000000000001"
-    for shard in range(256):
-        directory = generation / f"shard_{shard:03}"
-        directory.mkdir(parents=True)
-        (directory / "active.wal").touch()
-    (data / "storage-layout.manifest").write_bytes(base64.b64decode(MANIFEST))
 
 
 def read_optional(path):
@@ -124,7 +112,7 @@ def run(args):
     print(f"Results: {output}", flush=True)
     server_dir = output / "server"
     server_dir.mkdir()
-    initialize(server_dir / "data")
+    (server_dir / "data").mkdir()  # The server bootstraps its current SQLite layout.
     # Never reuse a running server or a repository data directory.
     with socket.socket() as sock:
         # NRC binds all interfaces. Probe the same scope so a source socket on

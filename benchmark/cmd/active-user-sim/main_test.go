@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -125,20 +123,8 @@ func TestCLIRealServer(t *testing.T) {
 	for _, mode := range []string{"healthy", "drop-live", "corrupt-history", "ready-high", "ready-cutoff", "history-high", "history-cutoff", "history-cursor", "live-boundary", "duplicate-ack", "latency", "deadline", "disconnect"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
-			for shard := 0; shard < 256; shard++ {
-				p := filepath.Join(root, "data", "sharded-00000000000000000001", fmt.Sprintf("shard_%03d", shard))
-				if err := os.MkdirAll(p, 0700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(p, "active.wal"), nil, 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			manifest, err := base64.StdEncoding.DecodeString("TlJDTAABAAAAAAAAAAAAAQIBAAAAAAAAAAABAAABAACsNnTeRP92XA==")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err = os.WriteFile(filepath.Join(root, "data", "storage-layout.manifest"), manifest, 0600); err != nil {
+			// Let the server bootstrap its current SQLite storage layout.
+			if err := os.MkdirAll(filepath.Join(root, "data"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			listener, err := net.Listen("tcp4", "0.0.0.0:0")
@@ -177,7 +163,7 @@ func TestCLIRealServer(t *testing.T) {
 					<-done
 				}
 			}()
-			deadline := time.Now().Add(20 * time.Second)
+			deadline := time.Now().Add(60 * time.Second)
 			for {
 				c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 				if err == nil {

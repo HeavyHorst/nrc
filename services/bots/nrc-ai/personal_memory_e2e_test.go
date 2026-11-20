@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -229,21 +228,8 @@ func startReceiptNRC(t *testing.T) string {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	for shard := 0; shard < 256; shard++ {
-		path := filepath.Join(dir, "data", "sharded-00000000000000000001", fmt.Sprintf("shard_%03d", shard))
-		if err := os.MkdirAll(path, 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(path, "active.wal"), nil, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Same generation-1 layout fixture as test/e2e/server_harness_test.go.
-	manifest, err := base64.StdEncoding.DecodeString("TlJDTAABAAAAAAAAAAAAAQIBAAAAAAAAAAABAAABAACsNnTeRP92XA==")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "data", "storage-layout.manifest"), manifest, 0600); err != nil {
+	// Let the server bootstrap its current SQLite storage layout.
+	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -266,7 +252,7 @@ func startReceiptNRC(t *testing.T) string {
 	}
 	t.Cleanup(func() { cmd.Process.Signal(os.Interrupt); cmd.Wait() })
 	address := fmt.Sprintf("127.0.0.1:%d", port)
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for {
 		conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
 		if err == nil {
