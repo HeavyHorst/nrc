@@ -101,7 +101,9 @@ const Opcode = {
   C_GetTasks: 24,
   C_ListTasksPaged: 25,
   C_GetTask: 26,
+  C_ListTaskProjects: 29,
   C_ListTaskSlices: 56,
+  C_ListTaskAssignees: 57,
   C_GetWorkspaceOverview: 59,
   C_GetTasksByIDs: 60,
   C_GetAssetsByIDs: 61,
@@ -1931,7 +1933,6 @@ function handleBinaryMessage(arrayBuffer) {
         break;
       case Opcode.S_TaskProjects:
         window.NRCTaskQuery?.handleProjects(dataView);
-        window.NRCAttention?.handleTaskProjects?.(dataView);
         window.NRCCalendar?.handleTaskProjects(dataView);
         break;
       case Opcode.S_TaskAssignees:
@@ -2356,6 +2357,10 @@ function parseErrorResponse(dataView) {
 
 function dispatchCentralizedErrorResponse(originOpcode, correlationId, errorMsg, opcodeName) {
   if (window.NRCTransactions?.handleTransactionErrorResponse(originOpcode, correlationId, errorMsg)) {
+    return true;
+  }
+  if (window.NRCTaskQuery?.handleError?.(originOpcode, correlationId) ||
+      window.NRCCalendar?.handleTaskError?.(originOpcode, correlationId)) {
     return true;
   }
   if (

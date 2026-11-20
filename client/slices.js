@@ -506,7 +506,7 @@
 
   function requestList({ force = false } = {}) {
     const scope = ++ownerGeneration;
-    window.NRCTaskQuery?.requestProjects?.({ force });
+    window.NRCTaskQuery?.requestProjects?.();
     window.NRCAssets.sendListNoteProjects?.(0n, {
       onSuccess: ({ projects }) => {
         if (scope !== ownerGeneration) return;

@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261119incidentretry1";
+const CACHE_NAME = "nrc-terminal-20261120projects3";
 
 const APP_SHELL = [
   "./",
@@ -46,14 +46,14 @@ const APP_SHELL = [
   "./detail-ui.js?v=20261116pickers1",
   "./column-resize.js?v=20261028fit2",
   "./record-activity.js?v=20261019ticketpages1",
-  "./tasks.js?v=20261114overload3",
-  "./attention.js?v=20261119incidents1",
-  "./calendar.js?v=20261114overload1",
+  "./tasks.js?v=20261119projects1",
+  "./attention.js?v=20261120projects3",
+  "./calendar.js?v=20261120projects3",
   "./appointments.js?v=20261022cancel1",
   "./appointment-notify.js?v=20261114overload1",
   "./reminder-notify.js?v=20260923attention7",
-  "./task-query.js?v=20261114overload1",
-  "./slices.js?v=20261114overload1",
+  "./task-query.js?v=20261120projects3",
+  "./slices.js?v=20261119projects1",
   "./overview.js?v=20261114overload1",
   "./chronicle.js?v=20261118chronicle1",
   "./history.js?v=20261117chronicle1",
@@ -65,7 +65,7 @@ const APP_SHELL = [
   "./voice.js?v=20261108memory8",
   "./retained-messages.js?v=20261023protocol2",
   "./chat.js?v=20261020composer1",
-  "./app.js?v=20261119incidents1",
+  "./app.js?v=20261120projects3",
   "./monitoring.js?v=20261119incidentretry1",
   "./calls.js?v=20261022cancel1",
   "./newsletter.js?v=20261022cancel1",

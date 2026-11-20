@@ -3536,6 +3536,7 @@ function deleteTaskFromPalette(taskIdValue) {
 }
 
 function refreshTasksFromPalette() {
+  window.NRCTaskQuery?.requestProjects({ force: true });
   window.NRCTaskQuery?.update({ force: true });
   loadActiveTasks(0n);
 }

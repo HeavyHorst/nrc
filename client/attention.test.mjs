@@ -107,7 +107,6 @@ function harness({ tasks = [], counts = {}, taskPages = null, dependencyPages = 
         options.onChange();
       },
       handlePage() {},
-      handleProjects() {},
     }),
     NRCTasks: {
       TaskStatus,

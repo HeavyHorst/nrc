@@ -119,7 +119,6 @@ window.NRCAttention = (() => {
       },
       // Counts must not seed the task register's cache or trigger its renders.
       cacheTasks: () => {},
-      onProjects: () => {},
       onChange: () => advanceCountQuery(),
     });
     return countController;
@@ -623,11 +622,6 @@ window.NRCAttention = (() => {
     countController.handlePage(dataView);
   }
 
-  function handleTaskProjects(dataView) {
-    if (!countController) return;
-    countController.handleProjects(dataView);
-  }
-
   // A dropped connection abandons the count walk; the next view entry starts a
   // fresh one instead of answering a request that no longer exists.
   function disconnect() {
@@ -711,5 +705,5 @@ window.NRCAttention = (() => {
   }
 
   return { init, refresh, refreshSoon, render, setFilter, onViewChanged, handleTaskQueryPage,
-    handleTaskProjects, disconnect, onSessionStarted, getState: () => state, isActive };
+    disconnect, onSessionStarted, getState: () => state, isActive };
 })();

@@ -240,6 +240,17 @@ test("disconnect clears a pending snapshot and renders offline", () => {
   assert.match(h.elements.calendarStatus.textContent, /OFFLINE/);
 });
 
+test("project metadata error transitions calendar to error immediately and ignores stale correlations", () => {
+  const h = harness(); h.calendar.refresh();
+  const projectReq = h.requests(29).at(-1);
+  const corr = projectReq.getUint32(10);
+  assert.equal(h.calendar.handleTaskError(29, corr + 1), false);
+  assert.equal(h.calendar.getState().status, "loading");
+  assert.equal(h.calendar.handleTaskError(29, corr), true);
+  assert.equal(h.calendar.getState().status, "error");
+  assert.match(h.elements.calendarStatus.textContent, /DEADLINE READ FAILED/);
+});
+
 test("remote task deletion notifies summary views without a task cache", () => {
   const source = fs.readFileSync(new URL("./tasks.js", import.meta.url), "utf8");
   const events = [];

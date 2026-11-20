@@ -71,7 +71,10 @@
       if (!options.isReady()) return;
       const roomId = 0n;
       if (!force && projectRoom === roomId) return;
-      if (projectRequest) clearTimeout(projectRequest.timer);
+      if (projectRequest) {
+        if (!force) { projectRequest.refreshAfter = true; return; }
+        clearTimeout(projectRequest.timer);
+      }
       projectRoom = roomId;
       const correlationId = options.nextId();
       const buffer = new ArrayBuffer(14);
@@ -79,10 +82,12 @@
       view.setUint16(0, 29, false); view.setBigUint64(2, roomId, false); view.setUint32(10, correlationId, false);
       const timer = setTimeout(() => {
         if (projectRequest?.correlationId !== correlationId) return;
+        const refreshAfter = projectRequest.refreshAfter;
         projectRequest = null; projectRoom = null;
         options.onMetadataError?.();
+        if (refreshAfter) requestProjects();
       }, 15000);
-      projectRequest = { roomId, correlationId, values: [], timer };
+      projectRequest = { roomId, correlationId, values: [], timer, refreshAfter: false };
       options.send(buffer, correlationId);
     }
     function loadMore() {
@@ -99,7 +104,7 @@
       notify();
     }
     function update({ force = false } = {}) {
-      requestProjects({ force });
+      if (options.onProjects) requestProjects();
       requestAssignees({ force });
       if (options.getFilters().search || !options.isReady()) {
         clearTimeout(refreshTimer);
@@ -159,16 +164,19 @@
       notify();
     }
     function handleProjects(view) {
+      if (!projectRequest) return;
       const page = window.NRCFrames.decodeStringList(view);
       const correlationId = page.correlationId;
       const roomId = page.convId;
-      if (projectRequest?.correlationId !== correlationId || projectRequest.roomId !== roomId) return;
+      if (projectRequest.correlationId !== correlationId || projectRequest.roomId !== roomId) return;
       projectRequest.values.push(...page.values);
       if (page.hasMore) return;
-      projects.set(roomId, projectRequest.values);
       clearTimeout(projectRequest.timer);
+      const refreshAfter = projectRequest.refreshAfter;
+      projects.set(roomId, projectRequest.values);
       projectRequest = null;
       options.onProjects?.();
+      if (refreshAfter) requestProjects();
     }
     function requestAssignees({ force = false } = {}) {
       if (!options.onAssignees || !options.isReady() || (!force && (assignees !== null || assigneeRequest))) return;
@@ -190,6 +198,23 @@
       clearTimeout(assigneeRequest.timer); assigneeRequest = null;
       options.onAssignees();
     }
+    function handleError(originOpcode, correlationId) {
+      if (originOpcode === 29 && projectRequest && projectRequest.correlationId === correlationId) {
+        clearTimeout(projectRequest.timer);
+        const refreshAfter = projectRequest.refreshAfter;
+        projectRequest = null; projectRoom = null;
+        options.onMetadataError?.();
+        if (refreshAfter) requestProjects();
+        return true;
+      }
+      if (originOpcode === 57 && assigneeRequest && assigneeRequest.correlationId === correlationId) {
+        clearTimeout(assigneeRequest.timer);
+        assigneeRequest = null;
+        options.onMetadataError?.();
+        return true;
+      }
+      return false;
+    }
     function disconnect() {
       for (const request of pageRequests.values()) {
         clearTimeout(request.timer); request.reject(new Error("Task query reset"));
@@ -202,7 +227,7 @@
       clearTimeout(refreshTimer); cancelPage(); projectRequest = null; projects.clear(); signature = null;
       state = { mode: "idle", roomId: null, tasks: new Map(), hasMore: false, total: 0 };
     }
-    return { update, loadMore, requestPage, afterMutation, handlePage, handleProjects, handleAssignees, disconnect,
+    return { update, loadMore, requestPage, afterMutation, handlePage, handleProjects, handleAssignees, handleError, disconnect,
       requestProjects,
       requestMetadata: () => { requestProjects({ force: true }); requestAssignees({ force: true }); },
       getAssignees: () => assignees || [],

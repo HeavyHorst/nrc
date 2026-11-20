@@ -10,7 +10,7 @@ const readString = (view, offset) => {
   const size = view.getUint16(offset, false);
   return { value: new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset + offset + 2, size)), newOffset: offset + 2 + size };
 };
-function harness(t, onAssignees) {
+function harness(t, onAssignees, onMetadataError) {
   const window = {};
   vm.runInNewContext(source, { window, TextEncoder, TextDecoder, ArrayBuffer, DataView, Uint8Array, setTimeout, clearTimeout });
   const filters = { status: null, assignee: null, color: null, project: null, blocked: null, overdue: null, search: "" };
@@ -21,7 +21,9 @@ function harness(t, onAssignees) {
     getRoomId: () => room, getFilters: () => filters, getSort: () => sort, getNickname: () => "René",
     isReady: () => ready, nextId: () => ++id, send: (buffer) => sent.push(new DataView(buffer)),
     cacheTasks: (roomId, tasks) => cached.push({ roomId, tasks }),
+    onProjects() {},
     onAssignees,
+    onMetadataError,
   });
   t.after(() => controller.disconnect());
   return { controller, filters, sort, sent, cached, encode: window.encodeTaskQuery,
@@ -210,23 +212,48 @@ test("Open requests only backlog, todo, and in-progress tasks", (t) => {
   assert.equal(h.sent.at(-1).getUint8(10), 7);
 });
 
-test("live mutations coalesce into a fresh query and facets reject stale correlations", async (t) => {
+function projects(request, more = false, label = "Z") {
+  const view = new DataView(new ArrayBuffer(20));
+  view.setUint16(0, 139); view.setBigUint64(2, request.getBigUint64(2)); view.setUint16(10, 1);
+  view.setUint16(12, 1); view.setUint8(14, label.charCodeAt(0)); view.setUint8(15, more ? 1 : 0); view.setUint32(16, correlation(request)); return view;
+}
+
+test("forced metadata refresh replaces an unfinished project list and ignores its late pages", (t) => {
+  const h = harness(t);
+  h.controller.requestMetadata();
+  const first = h.sent.at(-1);
+  h.controller.handleProjects(projects(first, true));
+  h.controller.requestMetadata();
+  const second = h.sent.at(-1);
+  assert.notEqual(correlation(second), correlation(first));
+  h.controller.handleProjects(projects(first));
+  assert.equal(h.controller.getProjects(0n), undefined);
+  h.controller.handleProjects(projects(second, false, "B"));
+  assert.deepEqual(Array.from(h.controller.getProjects(0n)), ["B"]);
+});
+
+test("mutations publish completed project snapshots and coalesce the trailing refresh", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const h = harness(t);
   h.controller.update(); const oldProjects = h.sent[0];
-  h.setRoom(8n); h.controller.update({ force: true }); const currentProjects = h.sent.at(-2);
-  function projects(request, more = false) {
-    const view = new DataView(new ArrayBuffer(20));
-    view.setUint16(0, 139); view.setBigUint64(2, request.getBigUint64(2)); view.setUint16(10, 1);
-    view.setUint16(12, 1); view.setUint8(14, 90); view.setUint8(15, more ? 1 : 0); view.setUint32(16, correlation(request)); return view;
-  }
-  h.controller.handleProjects(projects(oldProjects)); assert.equal(h.controller.getProjects(0n), undefined);
-  h.controller.handleProjects(projects(currentProjects, true)); assert.equal(h.controller.getProjects(0n), undefined);
-  h.controller.handleProjects(projects(currentProjects)); assert.deepEqual(Array.from(h.controller.getProjects(0n)), ["Z", "Z"]);
-  const before = h.sent.length;
+  h.setRoom(8n); h.controller.update({ force: true });
+  assert.equal(h.sent.filter(v => v.getUint16(0) === 29).length, 1);
+  const reads = () => h.sent.filter(v => v.getUint16(0) === 29);
   h.controller.afterMutation(0n); h.controller.afterMutation(0n);
-  h.controller.update(); // Reopening the same view must not cancel its scheduled refresh.
-  await new Promise((resolve) => setTimeout(resolve, 130));
-  assert.equal(h.sent.length, before + 2);
+  h.controller.handleProjects(projects(oldProjects));
+  assert.deepEqual(Array.from(h.controller.getProjects(0n)), ["Z"]);
+  t.mock.timers.tick(99); assert.equal(reads().length, 1);
+  t.mock.timers.tick(1); assert.equal(reads().length, 2);
+  const second = reads()[1];
+  h.controller.handleProjects(projects(second, true, "A"));
+  h.controller.afterMutation(0n);
+  t.mock.timers.tick(100); assert.equal(reads().length, 2);
+  h.controller.handleProjects(projects(second, false, "B"));
+  assert.deepEqual(Array.from(h.controller.getProjects(0n)), ["A", "B"]);
+  assert.equal(reads().length, 3);
+  h.controller.handleProjects(projects(reads()[2], false, "C"));
+  h.controller.update(); assert.equal(reads().length, 3);
+  assert.deepEqual(Array.from(h.controller.getProjects(0n)), ["C"]);
 });
 
 test("text search loads workspace facets on reconnect, not chat switches or each keystroke", (t) => {
@@ -275,4 +302,43 @@ test("typing or changing sort cannot cancel mutation-driven facet invalidation",
     await new Promise((resolve) => setTimeout(resolve, 130));
     assert.equal(h.sent.length, before + (search ? 1 : 2));
   }
+});
+
+test("metadata error responses clear matching in-flight project and assignee requests immediately", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let errors = 0;
+  const h = harness(t, () => {}, () => { errors++; });
+  h.controller.update();
+  const projectReq = h.sent.find(v => v.getUint16(0) === 29);
+  const assigneeReq = h.sent.find(v => v.getUint16(0) === 57);
+  assert.equal(h.controller.handleError(29, correlation(projectReq) + 99), false);
+  assert.equal(h.controller.handleError(28, correlation(projectReq)), false);
+  assert.equal(errors, 0);
+
+  assert.equal(h.controller.handleError(29, correlation(projectReq)), true);
+  assert.equal(errors, 1);
+  // Cleared state allows an immediate retry without waiting for the 15s timeout.
+  h.controller.requestProjects();
+  const retriedProject = h.sent.filter(v => v.getUint16(0) === 29);
+  assert.equal(retriedProject.length, 2);
+  assert.notEqual(correlation(retriedProject[1]), correlation(projectReq));
+
+  // A mutation coalesced onto an in-flight project read still triggers one trailing refresh after an error.
+  h.controller.afterMutation(0n);
+  t.mock.timers.tick(100);
+  assert.equal(h.sent.filter(v => v.getUint16(0) === 29).length, 2);
+  assert.equal(h.controller.handleError(29, correlation(retriedProject[1])), true);
+  assert.equal(errors, 2);
+  assert.equal(h.sent.filter(v => v.getUint16(0) === 29).length, 3);
+
+  const activeAssigneeReq = h.sent.filter(v => v.getUint16(0) === 57).at(-1);
+  assert.equal(h.controller.handleError(57, correlation(assigneeReq)), false);
+  assert.equal(h.controller.handleError(57, correlation(activeAssigneeReq)), true);
+  assert.equal(errors, 3);
+  h.controller.update();
+  assert.equal(h.sent.filter(v => v.getUint16(0) === 57).length, 3);
+
+  // Original timers were cancelled; advancing past 15s only triggers errors for the two active retries.
+  t.mock.timers.tick(15000);
+  assert.equal(errors, 5);
 });

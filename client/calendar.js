@@ -259,5 +259,6 @@ window.NRCCalendar = (() => {
   }
   return { init, refresh, refreshSoon, disconnect, render, onViewChanged: view => { if (view === "calendar") refresh(); },
     handlePage, handleTaskProjects: view => query?.handleProjects(view), handleTaskAssignees: view => query?.handleAssignees(view),
+    handleTaskError: (originOpcode, correlationId) => query?.handleError(originOpcode, correlationId) || false,
     getState: () => state, dayKey, monthDays, visibleRange, occursOnDay, timeLabel, encodeRequest, decodePage };
 })();
