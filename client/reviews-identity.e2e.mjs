@@ -9,13 +9,20 @@ import {chromium} from 'playwright';
 const url=process.env.NRC_REVIEW_URL;
 assert.ok(url,'run with NRC_REVIEW_IDENTITY=1 NRC_REVIEW_CLIENT_E2E=1 go test -run TestReviewClientPublicUI');
 const phase=process.env.NRC_REVIEW_PHASE || 'after', before=phase==='before';
+const reconnect=process.env.NRC_REVIEW_RECONNECT==='1';
 const fixture=await fetch(`${url}/fixture.json`).then(r=>r.json());
 const output=path.resolve('.amp/in/artifacts/review-p2-latest');
 await fs.mkdir(output,{recursive:true});
 const browser=await chromium.launch({args:[`--remote-debugging-port=${process.env.NRC_REVIEW_RECORD==='1'?9339:0}`,'--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4']});
 const results=[],errors=[];
 try {
-  const context=await browser.newContext({viewport:{width:1440,height:1000},deviceScaleFactor:2,serviceWorkers:'block'});
+  const context=await browser.newContext({viewport:{width:1440,height:1000},deviceScaleFactor:2,serviceWorkers:'block',...(reconnect?{recordVideo:{dir:output,size:{width:1440,height:1000}}}:{})});
+  if(reconnect)await context.addInitScript(()=>{
+    addEventListener('DOMContentLoaded',()=>{
+      const cursor=document.createElement('div');cursor.style.cssText='position:fixed;width:12px;height:12px;border:2px solid #111;background:#fff;border-radius:50%;z-index:2147483647;pointer-events:none;left:8px;top:8px';document.body.append(cursor);
+      addEventListener('mousemove',e=>{cursor.style.left=e.clientX+'px';cursor.style.top=e.clientY+'px'});
+    });
+  });
   const page=await context.newPage();
   const sent=[],received=[];
   page.on('pageerror',e=>errors.push(e.message));
@@ -31,10 +38,53 @@ try {
   const prompt=async value=>{const d=page.getByRole('dialog').last();await d.locator('input').fill(value);await d.getByRole('button',{name:'Create',exact:true}).click()};
   const ref=()=>page.evaluate(()=>{const r=NRCInspector.current();return {...r,id:String(r.id),roomId:String(r.roomId)}});
   const visibleID=async()=> (await page.locator('#inspectorHeader .identity-reference').textContent()).match(/#(\d+)/)?.[1] || '0';
-  const shot=async name=>{await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.screenshot({path:path.join(output,`client-${phase}-${name}.png`)})};
+  const shot=async name=>{if(reconnect)await page.locator('#reviewEditor').evaluate(el=>{document.activeElement?.blur();for(let node=el;node;node=node.parentElement)node.scrollTop=0;for(const node of el.querySelectorAll('*'))if(node.scrollTop)node.scrollTop=0});await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.screenshot({path:path.join(output,`client-${phase}-${name}.png`)})};
   const task=async(discard=false)=>{if(!await page.locator('#kanbanPanel').isVisible())await page.locator('#tasksBtn').click();await page.locator('[data-task-grouping="flat"]').click();await page.locator(`#taskListBody [data-task-id="${fixture.taskId}"] .col-id`).click();if(discard)await confirm();await page.waitForFunction(()=>NRCInspector.current()?.type==='task')};
   const roundtrip=async(discard=false)=>{await task(discard);await page.locator('#inspectorBack').click();await page.locator('#reviewEditor').waitFor();await idle()};
   const original=async()=>{await boot();await page.locator('#reviewsBtn').click();await page.locator(`[data-review="${fixture.formId}"]`).click();await op('copy').waitFor();await idle()};
+  if(reconnect) {
+    await original();await op('copy').click();await idle();
+    await page.locator('#reviewForm [name="build"]').fill('reconnect-build');await save();
+    const id=await visibleID(),title=page.locator('#reviewForm [name="title"]');
+    await title.fill('Ungespeicherter Entwurf · nach Verbindungsabbruch erhalten');
+    const box=await title.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2,{steps:20});
+    await shot('reconnect-draft-before-loss');
+    assert.equal((await page.request.post(`${url}/disconnect-transport`)).status(),204);await page.waitForFunction(()=>!serverReady);
+    if(!before) {
+      assert.equal(await op('save').isDisabled(),true);
+      assert.equal(await title.inputValue(),'Ungespeicherter Entwurf · nach Verbindungsabbruch erhalten');
+      assert.equal(await visibleID(),id);await shot('reconnect-offline-preserved');
+    }
+    assert.equal((await page.request.post(`${url}/restore-transport`)).status(),204);await page.waitForFunction(()=>serverReady);
+    if(before) {
+      const start=sent.length;await page.locator('#inspectorHeader [data-review-op="reload"]').click();await idle();
+      await page.getByText('LATEST SERVER STATE',{exact:true}).waitFor();
+      assert.equal(await title.inputValue(),'');assert.equal(await visibleID(),'0');
+      assert.equal(sent.slice(start).filter(q=>q.op==='get').length,0);
+      results.push({reconnect:true,lostDraft:true,falseLatestServerState:true});await shot('reconnect-before-false-refresh');
+    } else {
+      await page.getByText('RECONNECTED · LOCAL DRAFT RETAINED · REFRESH TO FETCH SERVER STATE',{exact:true}).waitFor();
+      assert.equal(await visibleID(),id);assert.equal((await ref()).id,id);assert.equal(await op('save').isEnabled(),true);
+      assert.equal(await title.inputValue(),'Ungespeicherter Entwurf · nach Verbindungsabbruch erhalten');
+      await shot('reconnect-after-preserved');
+      const start=sent.length;
+      const refresh=page.locator('#inspectorHeader [data-review-op="reload"]');
+      const saveBox=await op('save').boundingBox();await page.mouse.move(saveBox.x+saveBox.width/2,saveBox.y+saveBox.height/2,{steps:60});
+      const refreshBox=await refresh.boundingBox();await page.mouse.move(refreshBox.x+refreshBox.width/2,refreshBox.y+refreshBox.height/2,{steps:60});await refresh.click();
+      const cancel=page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true});await cancel.waitFor();
+      const cancelBox=await cancel.boundingBox();await page.mouse.move(cancelBox.x+cancelBox.width/2,cancelBox.y+cancelBox.height/2,{steps:60});await shot('reconnect-refresh-discard-guard');
+      await cancel.click();await idle();
+      assert.equal(sent.slice(start).filter(q=>q.op==='get').length,0);
+      assert.equal(await title.inputValue(),'Ungespeicherter Entwurf · nach Verbindungsabbruch erhalten');
+      await save();const writes=sent.slice(start).filter(q=>['create','update'].includes(q.op));
+      assert.equal(writes.length,1);assert.equal(writes[0].op,'update');assert.equal(writes[0].form_id,id);
+      await refresh.click();await page.getByText('LATEST SERVER STATE',{exact:true}).waitFor();await idle();
+      assert.equal(sent.slice(start).filter(q=>q.op==='get' && q.form_id===id).length,1);
+      assert.equal(await title.inputValue(),'Ungespeicherter Entwurf · nach Verbindungsabbruch erhalten');
+      await roundtrip();assert.equal(await visibleID(),id);assert.equal(await title.inputValue(),'Ungespeicherter Entwurf · nach Verbindungsabbruch erhalten');
+      results.push({reconnect:true,id,preservedDraft:true,guardedRefresh:true,persistedOnce:true});await shot('reconnect-after-saved');
+    }
+  } else {
   for(const kind of ['create','ticket-create','copy','retest']) {
     if(kind==='create' || kind==='ticket-create') {
       await boot();
@@ -111,6 +161,7 @@ try {
     if(mobile && !await page.locator('.review-answer-selected').isVisible()) {await page.locator(`#taskListBody [data-task-id="${fixture.taskId}"]`).focus();await page.keyboard.press('Enter');await follow()}
     await shot(`typed-answer-${mobile?'narrow':'desktop'}-${theme}`);
   }
+  }
   // Optional human-pointer clip, through agent-browser attached to this real UI.
   if(process.env.NRC_REVIEW_RECORD==='1') {
     await page.setViewportSize({width:1440,height:1000});await original();
@@ -144,7 +195,9 @@ try {
     } finally {await execute('agent-browser',['--session',session,'close'],{env}).catch(()=>{})}
   }
   assert.deepEqual(errors,[]);
-  await fs.writeFile(path.join(output,`client-${phase}-identity-results.json`),JSON.stringify({phase,results,errors},null,2));
+  await fs.writeFile(path.join(output,`client-${phase}-${reconnect?'reconnect':'identity'}-results.json`),JSON.stringify({phase,results,errors},null,2));
   console.log(JSON.stringify({phase,results,errors},null,2));
+  const video=reconnect?page.video():null;
   await context.close();
+  if(video){await video.saveAs(path.join(output,`client-${phase}-reconnect.webm`));await fs.unlink(await video.path());}
 } finally {await browser.close()}

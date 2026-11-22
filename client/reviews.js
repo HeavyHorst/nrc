@@ -5,13 +5,15 @@
   const state = { forms:[], id:'', revision:'', form:blank(), runs:[], run:null, comparison:null, busy:false, dirty:false, notice:'', ticket:'', answerId:'' };
   const requests = new Map();
   let generation = 0, current = () => false;
+  let session = null;
   let inspectorRef = null;
   let comparisonView = null;
   const comparisonState = {query:'',filter:'all',point:'',run:''};
   const host = () => document.getElementById('reviewEditor');
+  const connected = () => typeof serverReady !== 'undefined' && serverReady && ws?.readyState === WebSocket.OPEN;
   const write = send => new Promise((resolve,reject) => { if (!send({onSuccess:resolve,onError:e=>reject(Error(e?.message || 'Reference update failed'))})) reject(Error('Not connected')); });
   function request(op, fields = {}) {
-    if (typeof serverReady === 'undefined' || !serverReady || ws?.readyState !== WebSocket.OPEN) return Promise.reject(Error('OFFLINE · reconnect first'));
+    if (!connected()) return Promise.reject(Error('OFFLINE · reconnect first'));
     const id = getRpcCorrelationId(), data = new TextEncoder().encode(JSON.stringify({op,...fields}));
     const view = new DataView(new ArrayBuffer(data.length + 6));
     view.setUint16(0,77); view.setUint32(data.length+2,id); new Uint8Array(view.buffer,2,data.length).set(data);
@@ -116,6 +118,7 @@
     state.form=page.form; state.revision=page.revision; state.runs=runs; state.dirty=false;
     if (runId) { const detail=await request('run_get',{run_id:runId}); if (!current() || state.id!==id) return; state.run=detail.run;state.participant=detail.participant_id; }
     else {state.run=null;state.participant='';}
+    return true;
   }
   const field = (name,label,value,disabled=false,type='input') => disabled
     ? `<div class="task-detail-row"><span class="detail-edit-label">${label}</span><span class="review-read-value">${esc(value) || '—'}</span></div>`
@@ -254,9 +257,11 @@
     });
     const close=root.querySelector('[data-review-op="close"]');if(close)close.disabled=!member?.can_close;
     if(r?.previous_run){const previous=document.createElement('p');previous.className='overview-note';previous.textContent=`RETEST OF RUN #${r.previous_run}`;root.querySelector('[data-answer]')?.parentElement.before(previous);}
+    updateConnectionControls();
   }
   async function command(op, anchor) {
     if (state.busy) return;
+    if (!connected()) return status('OFFLINE · LOCAL DRAFT RETAINED · RECONNECT BEFORE SAVING');
     const [verb,id]=op.split(':');
     if (['up','down','remove','add'].includes(verb)) {
       if(state.form.released_at)return;
@@ -270,7 +275,7 @@
     if(verb==='refs') return references(id,anchor);
     return action(async()=> {
       if(verb==='finding')await createFindingTask(id);
-      if(verb==='reload') {if(state.dirty && !await window.NRCDialog.confirm('Discard unsaved form changes and refresh?')) return; await load();status('LATEST SERVER STATE');}
+      if(verb==='reload') {if(!state.id)return status('UNSAVED NEW FORM · SAVE DRAFT FIRST');if(state.dirty && !await window.NRCDialog.confirm('Discard unsaved form changes and refresh?')) return; if(await load())status('LATEST SERVER STATE');}
       if(verb==='compare') {
         const formId=state.id, runs=[];
         for(const run of state.runs) {
@@ -348,8 +353,32 @@
     }
   }
   async function confirmDiscardEdits() {return !state.busy && (!state.dirty || await window.NRCDialog.confirm('Discard unsaved review form changes?'));}
-  function disconnect() {generation++;for(const [id] of requests)settle(id,null,'Disconnected · outcome may be unknown; refresh before retry');comparisonView?.close();comparisonView=null;state.forms=[];state.run=null;state.runs=[];state.comparison=null;state.form=blank();state.id='';state.dirty=false;status('OFFLINE');renderList();}
-  window.NRCReviews={open,openAnswer,refresh,showInspector,confirmDiscardEdits,handlePage,handleError:(id,error)=>settle(id,null,error),disconnect,sessionStarted:()=>{if(window.NRCViewManager.getActiveView()==='reviews')refresh();},progress,request};
+  function updateConnectionControls() {
+    if (!current()) return;
+    for (const root of [host(),document.getElementById('inspectorHeader')]) root?.querySelectorAll('button,input,textarea,select').forEach(el=>{
+      if (el.id==='reviewClose') return;
+      if (!connected()) {
+        if (!el.hasAttribute('data-review-offline')) el.setAttribute('data-review-offline',String(el.disabled));
+        el.disabled=true;
+      } else if (el.hasAttribute('data-review-offline')) {
+        el.disabled=el.getAttribute('data-review-offline')==='true';el.removeAttribute('data-review-offline');
+      }
+    });
+  }
+  function disconnect() {generation++;for(const [id] of requests)settle(id,null,'Disconnected · outcome may be unknown; refresh before retry');comparisonView?.close();comparisonView=null;state.forms=[];status('OFFLINE · LOCAL DRAFT RETAINED · RECONNECT BEFORE SAVING');updateConnectionControls();renderList();}
+  function sessionStarted() {
+    const identity=JSON.stringify([currentWorkspaceId,myNickname]);
+    if (session!==null && session!==identity) {
+      Object.assign(state,{id:'',revision:'',form:blank(),run:null,runs:[],comparison:null,dirty:false,ticket:'',answerId:'',predecessor:null,notice:''});
+      inspectorRef=null;
+      if(current())window.NRCInspector.close();
+    } else if(current()) {
+      status('RECONNECTED · LOCAL DRAFT RETAINED · REFRESH TO FETCH SERVER STATE');updateConnectionControls();
+    }
+    session=identity;
+    if(window.NRCViewManager.getActiveView()==='reviews')refresh();
+  }
+  window.NRCReviews={open,openAnswer,refresh,showInspector,confirmDiscardEdits,handlePage,handleError:(id,error)=>settle(id,null,error),disconnect,sessionStarted,progress,request};
   function init(){document.getElementById('reviewsBtn')?.addEventListener('click',()=>{window.NRCViewManager.setActiveView('reviews');refresh();});document.getElementById('reviewNew')?.addEventListener('click',()=>open());document.getElementById('reviewsRefresh')?.addEventListener('click',refresh);document.getElementById('reviewsSearch')?.addEventListener('input',renderList);document.getElementById('reviewsList')?.addEventListener('click',e=>{const b=e.target.closest('[data-review]');if(b)open(b.dataset.review);});}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();

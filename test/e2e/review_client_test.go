@@ -3,6 +3,7 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -12,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,8 +115,32 @@ func TestReviewClientPublicUI(t *testing.T) {
 			r.Header.Set("X-NRC-Auth", token)
 		}
 		files := http.FileServer(http.Dir(source))
-		web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var transportDown atomic.Bool
+		var socketMu sync.Mutex
+		var sockets []net.Conn
+		web := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Fault injection closes actual upgraded transports; no domain response is mocked.
+			if r.Method == http.MethodPost && r.URL.Path == "/disconnect-transport" {
+				transportDown.Store(true)
+				socketMu.Lock()
+				for _, socket := range sockets {
+					socket.Close()
+				}
+				sockets = nil
+				socketMu.Unlock()
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			if r.Method == http.MethodPost && r.URL.Path == "/restore-transport" {
+				transportDown.Store(false)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+				if transportDown.Load() {
+					http.Error(w, "synthetic transport outage", http.StatusServiceUnavailable)
+					return
+				}
 				proxy.ServeHTTP(w, r)
 				return
 			}
@@ -124,6 +151,14 @@ func TestReviewClientPublicUI(t *testing.T) {
 			}
 			files.ServeHTTP(w, r)
 		}))
+		web.Config.ConnState = func(conn net.Conn, state http.ConnState) {
+			if state == http.StateHijacked {
+				socketMu.Lock()
+				sockets = append(sockets, conn)
+				socketMu.Unlock()
+			}
+		}
+		web.Start()
 		script := "reviews-fixes.e2e.mjs"
 		if os.Getenv("NRC_REVIEW_IDENTITY") == "1" {
 			script = "reviews-identity.e2e.mjs"

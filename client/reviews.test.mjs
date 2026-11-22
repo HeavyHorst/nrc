@@ -13,10 +13,10 @@ function client({prompts=[],canClose=false,reply=false}={}) {
   const packets=[];
   const messages=[];
   const opened=[];
-  const context={window:{},document:{readyState:'loading',addEventListener(){},getElementById(){return null;}},TextEncoder,TextDecoder,DataView,Uint8Array,ArrayBuffer,setTimeout,clearTimeout,serverReady:true,ws:{readyState:1},WebSocket:{OPEN:1},getRpcCorrelationId:()=>4294967294,sendPacket:buffer=>packets.push(new DataView(buffer))};
+  const context={window:{},document:{readyState:'loading',addEventListener(){},getElementById(){return null;}},TextEncoder,TextDecoder,DataView,Uint8Array,ArrayBuffer,setTimeout,clearTimeout,currentWorkspaceId:'reviews',myNickname:'Alice',serverReady:true,ws:{readyState:1},WebSocket:{OPEN:1},getRpcCorrelationId:()=>4294967294,sendPacket:buffer=>packets.push(new DataView(buffer))};
   context.window.NRCFrames={decodeServerFrame};
   context.MAX_TASK_DESCRIPTION_LENGTH=4096;
-  context.window.NRCViewManager={setActiveView(){}};
+  context.window.NRCViewManager={setActiveView(){},getActiveView:()=> 'chat'};
   context.window.NRCInspector={current:()=>null,openEntity:async ref=>opened.push(ref)};
   context.window.NRCAssets={requestAllAssets:async()=>[]};
   context.window.NRCDialog={prompt:async message=>{messages.push(message);return prompts.shift() ?? null;},confirm:async()=>canClose,notify:message=>messages.push(message)};
@@ -49,6 +49,30 @@ test('team progress counts points, retains every contribution and marks disagree
 });
 test('disconnect rejects pending writes instead of replaying unknown outcomes',async()=>{
   const {api,packets}=client();const pending=api.request('create',{form:{}});api.disconnect();await assert.rejects(pending,/outcome may be unknown/);assert.equal(packets.length,1);
+});
+test('reconnect preserves the canonical draft and discard guard; refresh requires a confirmed server read',async()=>{
+  const saved={version:1,title:'Saved title',build:'42',environment:'QA',released_at:'',points:[{id:'9',question:'Saved question'}]};
+  const c=client({reply:q=>q.op==='get'?{status:'ok',form:saved,revision:'102'}:{status:'ok',runs:[]}});
+  c.api.sessionStarted();c.setCurrent(()=>true);
+  c.state.id='77';c.state.revision='101';c.state.form={...saved,title:'Unsaved ü title'};c.state.dirty=true;
+  c.context.serverReady=false;c.context.ws.readyState=3;c.api.disconnect();
+  assert.equal(c.state.id,'77');assert.equal(c.state.form.title,'Unsaved ü title');assert.equal(c.state.dirty,true);
+  await c.command('save');assert.equal(c.packets.length,0);
+  c.context.serverReady=true;c.context.ws.readyState=1;c.api.sessionStarted();
+  assert.equal(c.state.id,'77');assert.equal(c.state.revision,'101');assert.equal(c.state.form.title,'Unsaved ü title');
+  assert.equal(await c.api.confirmDiscardEdits(),false);
+  await c.command('reload');assert.equal(c.packets.length,0);assert.equal(c.state.dirty,true);
+  c.context.window.NRCDialog.confirm=async()=>true;await c.command('reload');
+  assert.deepEqual(c.packets.map(p=>packetBody(p).op),['get','run_list']);assert.equal(c.state.form.title,'Saved title');
+  assert.equal(c.state.revision,'102');assert.equal(c.state.dirty,false);assert.equal(c.state.notice,'LATEST SERVER STATE');
+  c.state.id='';await c.command('reload');assert.notEqual(c.state.notice,'LATEST SERVER STATE');
+});
+test('a different authenticated session does not inherit a reconnect draft or retest context',()=>{
+  const c=client();c.api.sessionStarted();
+  Object.assign(c.state,{id:'77',revision:'101',form:{title:'Private draft'},dirty:true,ticket:'9',answerId:'8',predecessor:{id:'81'}});
+  c.context.serverReady=false;c.api.disconnect();c.context.currentWorkspaceId='other-workspace';c.context.serverReady=true;c.api.sessionStarted();
+  assert.equal(c.state.id,'');assert.equal(c.state.revision,'');assert.equal(c.state.form.title,'');assert.equal(c.state.dirty,false);
+  assert.equal(c.state.ticket,'');assert.equal(c.state.answerId,'');assert.equal(c.state.predecessor,null);
 });
 const packetBody=view=>JSON.parse(new TextDecoder().decode(new Uint8Array(view.buffer,2,view.byteLength-6)));
 test('portal account assignment sends canonical requester, display name and explicit close permission',async()=>{
