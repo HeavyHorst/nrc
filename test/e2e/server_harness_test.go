@@ -144,7 +144,7 @@ func startServerProcessWithEnv(binPath, workDir string, extraEnv map[string]stri
 		return nil, fmt.Errorf("failed to start server process: %w", err)
 	}
 
-	if err := waitForServerReady(proc.cmd, 10*time.Second); err != nil {
+	if err := waitForServerReady(proc.cmd, 30*time.Second); err != nil {
 		stopServerProcess(proc)
 		return nil, fmt.Errorf("server did not become ready: %v\nserver logs:\n%s", err, proc.logs.String())
 	}

@@ -97,6 +97,7 @@ type portal struct {
 	brand    branding
 	accounts []account
 	origin   string
+	guestKey []byte
 }
 
 func (s *portal) sharedContacts(ctx context.Context, who account) map[string]bool {
@@ -199,6 +200,10 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
 	}
+	if r.URL.Path == "/abnahmen/einladung" || r.URL.Path == "/abnahmen/einladung.js" || r.URL.Path == "/abnahmen/gast" || strings.HasPrefix(r.URL.Path, "/abnahmen/gast/") {
+		s.guestReview(w, r)
+		return
+	}
 	login, password, ok := r.BasicAuth()
 	var who account
 	valid := false
@@ -241,6 +246,10 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == "POST" && (r.Header.Get("Origin") != s.origin || r.Header.Get("Sec-Fetch-Site") == "cross-site") {
 		http.Error(w, "Ungültiger Formularursprung.", 403)
+		return
+	}
+	if r.URL.Path == "/abnahmen" || strings.HasPrefix(r.URL.Path, "/abnahmen/") {
+		s.accountReview(w, r, who)
 		return
 	}
 	api := strings.HasPrefix(r.URL.Path, "/api/")
@@ -505,7 +514,7 @@ var page = template.Must(template.New("portal").Parse(`<!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Branding.Brand}}</title><link rel="stylesheet" href="/style.css"><script src="/attachments.js" defer></script></head><body>
 <header><a class="brand" href="/">{{if .Branding.Logo}}<img src="/branding/logo" alt="">{{end}}<span>{{.Branding.Brand}}</span></a>
-<nav aria-label="Hauptnavigation"><a href="/">Meine Anfragen</a><a href="/new">Neue Anfrage</a></nav></header><main>
+<nav aria-label="Hauptnavigation"><a href="/">Meine Anfragen</a><a href="/new">Neue Anfrage</a><a href="/abnahmen">Meine Abnahmen</a></nav></header><main>
 {{if .New}}
 <h1>Wie können wir Ihnen helfen?</h1><p>Schildern Sie uns Ihr Anliegen. Wir kümmern uns darum.</p>
 <form method="post" action="/tickets" enctype="multipart/form-data">

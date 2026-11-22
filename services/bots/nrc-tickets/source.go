@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -22,6 +23,40 @@ type source interface {
 	edges(context.Context, uint64) ([]p.Edge, error)
 }
 type nrcSource struct{ server, workspace, secret string }
+
+// Reviews use only the dedicated, server-authorized public review contract.
+// Existing ticket sources need not implement this optional capability.
+type reviewSource interface {
+	review(context.Context, p.ReviewRequest) (*p.ReviewResponse, error)
+}
+
+func (s nrcSource) review(ctx context.Context, q p.ReviewRequest) (*p.ReviewResponse, error) {
+	wire, err := p.EncodeReviewRequest(q, 1)
+	if err != nil {
+		return nil, err
+	}
+	body, err := s.request(ctx, p.C_Review, wire[2:], p.S_Review)
+	if err != nil {
+		return nil, err
+	}
+	r, err := p.DecodeReviewResponse(body)
+	if err != nil {
+		return nil, err
+	}
+	if r.CorrelationID != 1 {
+		return nil, errors.New("invalid review correlation")
+	}
+	if r.Status == "ok" && q.Op == "invitation_info" {
+		if strings.TrimSpace(r.Form.Title) == "" {
+			return nil, errors.New("invalid invitation acknowledgement")
+		}
+	} else if r.Status == "ok" && q.Op != "run_list" {
+		if r.Run.ID == "" || q.RunID != "" && r.Run.ID != q.RunID || r.Run.FormID != r.FormID || r.ParticipantID == "" {
+			return nil, errors.New("invalid review acknowledgement")
+		}
+	}
+	return r, nil
+}
 
 // Each connection has exactly one outstanding correlated request. Mutations are
 // sent once only; losing an acknowledgement has an explicitly uncertain outcome.

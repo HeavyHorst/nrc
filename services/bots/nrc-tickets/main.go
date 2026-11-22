@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -156,6 +157,12 @@ func main() {
 		log.Fatal(e)
 	}
 	app := &portal{source: nrcSource{strings.TrimRight(server, "/"), workspace, secret}, files: httpFiles{strings.TrimRight(filesURL, "/"), workspace, secret}, brand: brand, accounts: accounts, origin: origin}
+	if key := os.Getenv("TICKETS_GUEST_SESSION_KEY"); key != "" {
+		app.guestKey, e = hex.DecodeString(key)
+		if e != nil || len(app.guestKey) != 32 {
+			log.Fatal("TICKETS_GUEST_SESSION_KEY must be a private random 32-byte key encoded as 64 hex characters")
+		}
+	}
 	if err := startMail(os.Getenv("TICKETS_MAIL_CONFIG_FILE"), workspace, app); err != nil {
 		log.Fatal(err)
 	}

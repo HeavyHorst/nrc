@@ -16,6 +16,9 @@ services:
       TICKETS_ORIGIN: ${TICKETS_ORIGIN:?set HTTPS TICKETS_ORIGIN}
       TICKETS_ACCOUNTS_FILE: /run/secrets/ticket-accounts.json
       TICKETS_ADDR: :8096
+      # Optional: private random 32-byte hex key, stable across restarts/replicas.
+      # Empty keeps existing account access enabled but disables guest sessions.
+      TICKETS_GUEST_SESSION_KEY: ${TICKETS_GUEST_SESSION_KEY:-}
       FILES_URL: http://tailscale-proxy:8094
       TICKETS_BRAND: ${TICKETS_BRAND:-Ihr Kundenportal}
       TICKETS_FOOTER_TEXT: ${TICKETS_FOOTER_TEXT:-}
