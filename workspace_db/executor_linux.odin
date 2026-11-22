@@ -33,6 +33,7 @@ Request :: struct {
 	workspace:        string,
 	subject:          string, // Authenticated actor for domain mutations.
 	chronicle_access: u8, // Immutable verified rights copied by the owning worker.
+	review_portal:    bool, // Verified nrc-tickets bot, not a client-supplied identity.
 	scope, task_id:   u64, // Get/Remove; Put uses task.conv_id/task.id.
 	task:             pr.Task, // Borrowed only for the duration of submit.
 	actor:            string,

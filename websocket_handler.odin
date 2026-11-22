@@ -253,6 +253,13 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte, dm_auth
 		return
 	}
 	#partial switch opcode {
+	case .C_Review:
+		if len(frame_data) < 8 {
+			send_error_response(c, opcode, "Invalid review envelope")
+		} else {
+			_, correlation, _ := pr.parseChronicleEnvelope(frame_data[2:])
+			worker_db_submit_command(c, opcode, frame_data[2:], correlation)
+		}
 	case .C_Chronicle:
 		process_chronicle(c, frame_data[2:])
 	case .C_ListTaskDependents:

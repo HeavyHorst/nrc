@@ -313,6 +313,12 @@ exercise :: proc(input: []byte) -> pr.ProtocolParseError {
 	case .C_ListHistory:
 		_, err := pr.parseListHistoryRequest(data)
 		return err
+	case .C_Review:
+		arena: virtual.Arena
+		if virtual.arena_init_growing(&arena) != nil do return .InvalidValue
+		defer virtual.arena_destroy(&arena)
+		_, _, err := pr.parseReviewRequest(data, virtual.arena_allocator(&arena))
+		return err
 	case .C_Chronicle:
 		// Chronicle decodes JSON into caller-owned memory, unlike the borrowed
 		// binary request parsers. Bound its lifetime to this one fuzz input.

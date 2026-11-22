@@ -12,7 +12,7 @@ import db "workspace_db"
 
 // This model covers the original generic types. Monitoring's machine-owned
 // lifecycle and config validation are exercised by sqlite_monitoring_test.odin.
-#assert(min(pr.AssetType) == .Comment && int(pr.AssetType.TicketEntry) == 14 && max(pr.AssetType) == .MonitorSource)
+#assert(min(pr.AssetType) == .Comment && int(pr.AssetType.TicketEntry) == 14 && max(pr.AssetType) == .ReviewAnswer)
 #assert(pr.TRANSACTION_ASSET_PATCH_PREVIEW == 1 && pr.TRANSACTION_ASSET_PATCH_PAYLOAD == 2)
 
 sqlite_command_asset_preview :: proc(kind: pr.AssetType) -> string {

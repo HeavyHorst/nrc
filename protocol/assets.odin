@@ -31,6 +31,8 @@ AssetType :: enum u16 {
 	Monitor          = 15,
 	Incident         = 16,
 	MonitorSource    = 17,
+	ReviewForm       = 18,
+	ReviewAnswer     = 19,
 }
 
 MAX_APPOINTMENT_DESCRIPTION_LENGTH :: 2048

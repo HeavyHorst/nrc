@@ -114,6 +114,7 @@ sqlite_mutate_asset :: proc(store: ^db.Store, request: ^db.Request, allocator: m
 		create, err = pr.parseCreateAssetRequestWithAttachments(request.body, attachments[:])
 		result.correlation = create.correlation_id
 		if err != nil || create.conv_id != 0 {result.rc = sql.CONSTRAINT; return}
+		if create.asset_type == .ReviewForm || create.asset_type == .ReviewAnswer {result.error = "Use review commands for review records"; return}
 	} else {
 		update, err = pr.parseUpdateAssetRequestWithAttachments(request.body, attachments[:])
 		result.correlation = update.correlation_id
@@ -222,6 +223,7 @@ sqlite_mutate_asset :: proc(store: ^db.Store, request: ^db.Request, allocator: m
 		if result.rc != sql.OK do return
 		if !found {result.error = "Asset not found"; return}
 		if old.asset_type == .RoomMapping {result.error = "Room mappings are immutable"; return}
+		if old.asset_type == .ReviewForm || old.asset_type == .ReviewAnswer {result.error = "Use review commands for review records"; return}
 		if old.updated_at == max(i64) {result.rc = sql.FULL; return}
 		a = old
 		a.preview =

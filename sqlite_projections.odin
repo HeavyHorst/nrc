@@ -56,6 +56,9 @@ sqlite_project_asset :: proc(store: ^db.Store, workspace: string, asset: ^pr.Ass
 	defer virtual.arena_destroy(&arena)
 	context.allocator = virtual.arena_allocator(&arena)
 	switch asset.asset_type {
+	case .ReviewForm, .ReviewAnswer:
+		// The form is self-contained; the standard type/updated index owns its register.
+		return sql.OK
 	case .Note:
 		tags := make([dynamic]string)
 		project := json_note_metadata_fields(asset.preview, &tags, context.allocator)

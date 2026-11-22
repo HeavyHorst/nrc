@@ -121,6 +121,11 @@ sqlite_delete_record :: proc(store: ^db.Store, request: ^db.Request, output: ^db
 			a, exists, read_rc := sqlite_read_asset(store, request.workspace, request.actor, id, false, check_visibility = false)
 			if read_rc != sql.OK do return read_rc
 			if !exists do return sql.CORRUPT
+			if a.asset_type == .ReviewForm || a.asset_type == .ReviewAnswer {
+				if transaction_batch do return sql.CONSTRAINT
+				context.allocator = backing
+				return sqlite_command_error(output, request.opcode, correlation, "Review records cannot be deleted")
+			}
 			if !appointment_mutation_allowed(&a, nil, request.actor) {
 				if transaction_batch do return sql.CONSTRAINT
 				context.allocator = backing

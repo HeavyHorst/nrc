@@ -121,11 +121,38 @@ Use the [Compose deployment](../README.md#quickstart) for the complete web appli
 Production serves the complete generated `client/dist/`, not the source directory.
 After frontend changes, rebuild the Nginx image and reload open browser tabs.
 
+## SQLite schema 11
+
+Standalone review forms use schema 11. Startup rejects older databases without
+modifying them. New databases include `workspace_db/reviews.sql`; the upgrade
+adds private run, participant, invitation and answer indexes without rewriting
+existing records. See [review operations](REVIEWS.md) for the protocol and access rules.
+
+Stop every writer, back up the complete stopped data directory and rehearse on
+a disposable copy. For every schema-10 shard in the active generation, run
+`sqlite3 -bail "$SHARD"` from the repository root:
+
+```sql
+PRAGMA foreign_keys=ON;
+BEGIN IMMEDIATE;
+.read workspace_db/reviews.sql
+COMMIT;
+PRAGMA user_version;
+PRAGMA integrity_check;
+PRAGMA foreign_key_check;
+```
+
+Require version 11, `ok`, no foreign-key violations and unchanged existing
+records. The guard rejects a foreign application ID, wrong starting version
+or repeated upgrade. On failure, roll back or close without committing and
+keep writers stopped. Upgrade all shards before starting the new binary.
+Restore the stopped backup for rollback; do not run an older binary on schema 11.
+
 ## SQLite schema 10
 
 Schema 10 is a local development feature for Chronicle parallel durable
-publication; it is not deployed to production. Startup requires schema 10 and
-does not automatically migrate existing files.
+publication; it is not deployed to production. This is the prerequisite for
+the schema-11 upgrade above, not the current startup schema.
 
 Stop every writer, back up the complete stopped data directory, and rehearse on
 a disposable copy before changing any installation. For each schema-9 shard,

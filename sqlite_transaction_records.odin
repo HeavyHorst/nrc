@@ -74,6 +74,7 @@ sqlite_transaction_prepare_records :: proc(
 			a, found, read_rc := sqlite_read_asset(store, request.workspace, request.actor, r.asset.value, false)
 			if read_rc != sql.OK do return read_rc
 			if !found || a.asset_type == .RoomMapping || r.if_updated_at != 0 && a.updated_at != r.if_updated_at do return sql.CONSTRAINT
+			if a.asset_type == .ReviewForm || a.asset_type == .ReviewAnswer do return sql.CONSTRAINT
 			results[i].entity_id = r.asset.value
 		case .TaskDelete, .AssetDelete, .EdgeDelete:
 			has_deletes = true
@@ -178,6 +179,7 @@ sqlite_transaction_assets :: proc(
 		if creating {
 			r, e := pr.parseTransactionAssetCreate(op.body)
 			if e != nil || r.asset_type == .RoomMapping || r.asset_type == .Agenda do return sql.CONSTRAINT
+			if r.asset_type == .ReviewForm || r.asset_type == .ReviewAnswer do return sql.CONSTRAINT
 			parent: u64
 			if r.parent_type != .None {
 				valid: bool

@@ -58,6 +58,7 @@ const (
 	C_Chronicle              uint16 = 74
 	C_MonitorHistory         uint16 = 75
 	C_ListOpenIncidents      uint16 = 76
+	C_Review                 uint16 = 77
 
 	// Assets (Client -> Server)
 	C_CreateAsset              uint16 = 30
@@ -154,6 +155,7 @@ const (
 	S_MonitorStatusPage         uint16 = 179
 	S_Chronicle                 uint16 = 180
 	S_OpenIncidentPage          uint16 = 181
+	S_Review                    uint16 = 182
 
 	// Assets (Server -> Client)
 	S_AssetCreated    uint16 = 140
@@ -231,6 +233,8 @@ const (
 	AssetTypeMonitor       uint16 = 15
 	AssetTypeIncident      uint16 = 16
 	AssetTypeMonitorSource uint16 = 17
+	AssetTypeReviewForm    uint16 = 18
+	AssetTypeReviewAnswer  uint16 = 19
 )
 
 // WorkspaceDataConvID is the reserved scope for all durable tasks, assets,

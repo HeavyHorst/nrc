@@ -49,6 +49,10 @@ func parseAssetTypeName(s string) (uint16, error) {
 		return protocol.AssetTypeMonitorSource, nil
 	case "incident":
 		return protocol.AssetTypeIncident, nil
+	case "review_form":
+		return protocol.AssetTypeReviewForm, nil
+	case "review_answer":
+		return protocol.AssetTypeReviewAnswer, nil
 	default:
 		return 0, fmt.Errorf("unknown asset type: %s", s)
 	}
@@ -90,6 +94,10 @@ func assetTypeName(t uint16) string {
 		return "monitor_source"
 	case protocol.AssetTypeIncident:
 		return "incident"
+	case protocol.AssetTypeReviewForm:
+		return "review_form"
+	case protocol.AssetTypeReviewAnswer:
+		return "review_answer"
 	default:
 		return fmt.Sprintf("unknown(%d)", t)
 	}

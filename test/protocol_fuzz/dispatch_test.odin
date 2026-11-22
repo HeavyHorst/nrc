@@ -55,6 +55,7 @@ RESPONSE_OPCODES_WITHOUT_ODIN_PARSER := [?]pr.Opcode {
 	.S_TicketPage,
 	.S_GraphRankResult,
 	.S_Chronicle,
+	.S_Review,
 }
 
 @(test)

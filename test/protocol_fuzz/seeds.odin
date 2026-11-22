@@ -538,6 +538,10 @@ build_request_seeds :: proc(seeds: ^[dynamic]Seed, buf: []byte) {
 		add_seed(seeds, chronicle_names[i], buf[:n])
 	}
 
+	n = pr.serializeReviewRequest({op = "get", form_id = "9007199254740993"}, 0x01020304, buf)
+	assert(n > 0)
+	add_seed(seeds, "review_get", buf[:n])
+
 	// Tickets: the body is the raw query payload behind a correlation id.
 	n = pr.serializeTicketQueryRequest(0x01020304, bstr(`{"ticket":1}`), buf)
 	assert(n > 0)

@@ -37,7 +37,8 @@ schema-8 availability outbox. `ticket_trigram.sql` adds the FTS5 ticket index.
 `chronicle_parallel.sql` adds schema-10 parallel durable publication, preserving
 old public receipt IDs and seeding a separate publication floor. This is a local
 development feature, not a production deployment.
-The import fingerprints all ten files and creates schema-10 databases. Keep all ten
+`reviews.sql` adds schema-11 review runs and private participant/invitation metadata.
+The import fingerprints all eleven files and creates schema-11 databases. Keep all eleven
 files in the migration bundle. The real Odin projection builder populates the
 derived membership, summary, project and workspace counters before activation.
 
