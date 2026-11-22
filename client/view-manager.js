@@ -31,6 +31,7 @@ const viewPageTitles = {
   customers: "CUSTOMERS",
   newsletter: "NEWSLETTER",
   tickets: "TICKETS",
+  reviews: "REVIEWS",
   monitoring: "MONITORING",
 };
 
@@ -101,6 +102,9 @@ function setActiveView(view) {
   if (newsletterPanel) newsletterPanel.style.display = "none";
   if (ticketsPanel) ticketsPanel.style.display = "none";
   document.getElementById("ticketsBtn")?.classList?.toggle("active", view === "tickets");
+  const reviewsPanel = document.getElementById("reviewsPanel");
+  if (reviewsPanel) reviewsPanel.style.display = view === "reviews" ? "flex" : "none";
+  document.getElementById("reviewsBtn")?.classList?.toggle("active", view === "reviews");
   const monitoringPanel = document.getElementById("monitoringPanel");
   if (monitoringPanel) monitoringPanel.style.display = view === "monitoring" ? "flex" : "none";
   document.getElementById("monitoringBtn")?.classList?.toggle("active", view === "monitoring");

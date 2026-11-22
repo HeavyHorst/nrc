@@ -828,6 +828,12 @@ function navigateToTarget(convId, targetType, targetId, sourceType = 1) {
       window.NRCInspector?.openEntity({ roomId: convId, type: "ticket", id: targetId });
       return;
     }
+    if (asset && asset.assetType === window.NRCAssets?.AssetType?.ReviewForm) {
+      return window.NRCInspector?.openEntity({ roomId: convId, type: "review", id: targetId, runId: null, answerId: null });
+    }
+    if (asset && asset.assetType === window.NRCAssets?.AssetType?.ReviewAnswer) {
+      return window.NRCReviews?.openAnswer(targetId);
+    }
     // Linked slices keep the current view, just like linked tasks and notes.
     // Resolve by stable ID, never by the potentially duplicate display name.
     const sliceId = asset ? asset.assetType === (window.NRCAssets?.AssetType?.Slice ?? 11) : Boolean(sliceName(targetId));

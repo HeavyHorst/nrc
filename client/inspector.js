@@ -36,6 +36,7 @@
     if (ref.type === "appointment") return await (window.NRCAppointments?.confirmDiscardEdits?.() ?? true);
     if (ref.type === "slice") return await (window.NRCSlices?.confirmDiscardRecordEdits?.() ?? true);
     if (ref.type === "ticket") return await (window.NRCTickets?.confirmDiscardEdits?.() ?? true);
+    if (ref.type === "review") return await (window.NRCReviews?.confirmDiscardEdits?.() ?? true);
     if (["company", "contact", "activity"].includes(ref.type)) return await (window.NRCCustomers?.confirmDiscardEdits?.() ?? true);
     return true;
   }
@@ -255,6 +256,8 @@
       window.NRCFiles?.showInspector?.(ref);
     } else if (ref.type === "ticket") {
       window.NRCTickets?.showInspector(ref, stillCurrent);
+    } else if (ref.type === "review") {
+      window.NRCReviews?.showInspector(ref, stillCurrent);
     } else if (ref.type === "monitor" || ref.type === "incident") {
       window.NRCMonitoring?.showInspector(ref, stillCurrent);
     } else if (ref.type === "slice") {

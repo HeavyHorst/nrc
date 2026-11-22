@@ -6,7 +6,7 @@ import vm from "node:vm";
 
 const source = fs.readFileSync(path.resolve("client/links-ui.js"), "utf8");
 
-function loadLinksUI({ edges = [], getEdgesForEntity = null, onRequestTask = null, onRequestAsset = null, requestEdgePage = null, slices = [] } = {}) {
+function loadLinksUI({ edges = [], getEdgesForEntity = null, onRequestTask = null, onRequestAsset = null, requestEdgePage = null, slices = [], onOpenAnswer = null } = {}) {
   const opened = [];
   const customerOpened = [];
   const sliceSelects = [];
@@ -20,7 +20,7 @@ function loadLinksUI({ edges = [], getEdgesForEntity = null, onRequestTask = nul
   const assetTypeLabels = { 3: "FILE", 5: "NOTE", 6: "REMINDER", 8: "COMPANY", 9: "CONTACT", 10: "ACTIVITY", 11: "SLICE" };
   const window = {
     NRCAssets: {
-      AssetType: { Ticket: 13 },
+      AssetType: { Ticket: 13, ReviewForm: 18, ReviewAnswer: 19 },
       roomAssets,
       requestAsset: (...args) => onRequestAsset?.(...args),
       requestAssetsByIds: (room, ids) => Promise.all(ids.map(id => new Promise((resolve, reject) => {
@@ -36,6 +36,7 @@ function loadLinksUI({ edges = [], getEdgesForEntity = null, onRequestTask = nul
       requestEdgePage,
     },
     NRCInspector: { openEntity: (ref) => opened.push(ref) },
+    NRCReviews: { openAnswer: id => onOpenAnswer?.(id) },
     NRCViewManager: { setActiveView: (view) => activeViews.push(view) },
     NRCSlices: {
       getState: () => ({ slices }),
@@ -378,6 +379,19 @@ test("a linked slice opens by ID even when another slice has the same label", ()
   assert.equal(opened[0].id, 40n);
   assert.equal(sliceSelects.length, 0);
   assert.equal(kanbanShows(), 0);
+});
+
+test("ticket and task backlinks route review forms and concrete answers without changing note routing", async () => {
+  const answers=[];
+  const { linksUI, roomAssets, opened, activeViews }=loadLinksUI({onOpenAnswer:id=>answers.push(id)});
+  roomAssets.set(0n,new Map([[40n,{assetType:18}],[91n,{assetType:19}],[92n,{assetType:5}]]));
+  await linksUI.navigateToTarget(0n,1,40n);
+  await linksUI.navigateToTarget(0n,1,91n,2);
+  await linksUI.navigateToTarget(0n,1,92n,2);
+  assert.equal(opened[0].type,'review');assert.equal(opened[0].id,40n);
+  assert.deepEqual(answers,[91n]);
+  assert.equal(opened[1].type,'note');assert.equal(opened[1].id,92n);
+  assert.deepEqual(activeViews,[]);
 });
 
 test("an uncached slice known to the register still opens in the inspector", () => {

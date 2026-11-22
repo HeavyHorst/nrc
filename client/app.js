@@ -114,6 +114,8 @@ const Opcode = {
   C_QueryMonitorStatus: 73,
   C_ListOpenIncidents: 76,
   S_OpenIncidentPage: 181,
+  C_Review: 77,
+  S_Review: 182,
   C_ActOnIncident: 70,
   S_MonitorStatusPage: 179,
   S_IncidentActionApplied: 176,
@@ -1477,6 +1479,7 @@ async function connectWebSocket() {
     window.NRCAppointmentNotify?.disconnect();
     window.NRCRecordActivity?.disconnect();
     window.NRCTickets?.disconnect();
+    window.NRCReviews?.disconnect();
     window.NRCCustomers?.onDisconnect();
     window.NRCNewsletter?.disconnect();
     window.NRCCalls?.disconnect();
@@ -1593,6 +1596,7 @@ async function initializeSession() {
   window.NRCAssets.sendGetAllAssets(0n);
   window.NRCTasks.loadActiveTasks(0n);
   window.NRCTickets?.sessionStarted();
+  window.NRCReviews?.sessionStarted();
   window.NRCRecordActivity?.refresh();
 
   if (window.NRCAssets?.sendGetRoomMappings) {
@@ -1964,6 +1968,9 @@ function handleBinaryMessage(arrayBuffer) {
       case Opcode.S_Chronicle:
         window.NRCChronicle?.handlePage(dataView);
         break;
+      case Opcode.S_Review:
+        window.NRCReviews?.handlePage(dataView);
+        break;
       // Asset messages
       case Opcode.S_AssetCreated:
         window.NRCAssets.handleAssetCreated(dataView);
@@ -2307,6 +2314,7 @@ function parseErrorResponse(dataView) {
   const correlationId = error.correlationId;
 
   if (window.NRCMonitoring?.handleError(error)) return;
+  if (originOpcode === Opcode.C_Review && window.NRCReviews?.handleError(correlationId, errorMsg)) return;
   if (originOpcode === Opcode.C_Chronicle && window.NRCChronicle?.handleError(correlationId)) return;
 
   const opcodeName = Object.entries(Opcode).find(([, v]) => v === originOpcode)?.[0] || `opcode ${originOpcode}`;

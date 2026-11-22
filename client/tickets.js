@@ -704,6 +704,12 @@
         } finally { state.pending = false; renderStatus(); }
       };
       link.parentElement.append(create);
+      const review = document.createElement('button'); review.type = 'button'; review.className = 'btn'; review.textContent = '+ REVIEW FORM';
+      review.onclick = async () => {
+        const related = await window.NRCDialog.confirm('Link the new independent review form to this ticket? Cancel creates an unlinked draft.', { title: 'NEW REVIEW FORM' });
+        window.NRCReviews?.open('0', related ? String(entity.assetId) : '', { title: metadata(entity).title, body: entity.payload });
+      };
+      link.parentElement.append(review);
     }
     if (link) {
       const assign = host.querySelector('#ticketAssignSlice');

@@ -25,7 +25,7 @@ function isProtocolError(error) {
 function readSeed(name) {
   for (const corpusDir of corpusDirs) {
     const file = new URL(name, corpusDir);
-    if (fs.existsSync(file)) return fs.readFileSync(file);
+    if (fs.existsSync(file)) return name.endsWith('.hex') ? Buffer.from(fs.readFileSync(file, 'utf8').trim(), 'hex') : fs.readFileSync(file);
   }
   throw new Error(`missing seed ${name}`);
 }
@@ -39,7 +39,7 @@ function supportedSeeds() {
   const seen = new Set();
   for (const corpusDir of corpusDirs) {
     for (const name of fs.readdirSync(corpusDir).sort()) {
-      if (!name.endsWith(".bin") || seen.has(name)) continue;
+      if ((!name.endsWith(".bin") && !name.endsWith('.hex')) || seen.has(name)) continue;
       const bytes = readSeed(name);
       if (bytes.length < 2) continue;
       const opcode = bytes.readUInt16BE(0);
@@ -111,6 +111,7 @@ const RESPONSE_KINDS = {
   171: "slice_owners",
   172: "ticket_assignees",
   173: "calendar_people",
+  182: "review",
 };
 
 test("every supported response opcode maps to its frame kind", () => {

@@ -840,6 +840,7 @@ const SUPPORTED_OPCODES = Object.freeze([
   150, 151, 152, 153, 154, 155, 156, 157, // edges and graph results
   158, 159, // retained messages
   161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, // pages and lists
+  182, // review commands
 ]);
 
 function decodeServerFrame(view) {
@@ -1347,6 +1348,14 @@ function decodeServerFrame(view) {
       return { opcode, kind: "history_page", ...decodeHistoryPage(view) };
     case 180: // S_Chronicle
       return { opcode, kind: "chronicle", ...decodeChronicleResponse(view) };
+    case 182: { // S_Review: leading correlation, then UTF-8 JSON
+      const correlationId = u32(view, 2);
+      let page;
+      try { page = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes(view, 6, view.byteLength - 6))); }
+      catch { throw new ProtocolError('Invalid review JSON'); }
+      if (!page || !['ok', 'changed', 'invalid', 'conflict', 'released', 'forbidden', 'closed', 'not_found'].includes(page.status)) throw new ProtocolError('Invalid review status');
+      return { opcode, kind: 'review', correlationId, page };
+    }
     case 169: // S_TicketPage
       return { opcode, kind: "ticket_page", ...decodeTicketPage(view) };
     case 170: // S_TaskDependentsPage
