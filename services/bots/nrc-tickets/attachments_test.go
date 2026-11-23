@@ -82,7 +82,7 @@ func multipartRequest(t *testing.T, s *portal, path string, fields map[string]st
 	r := httptest.NewRequest("POST", path, &body)
 	r.Header.Set("Content-Type", form.FormDataContentType())
 	r.Header.Set("Origin", s.origin)
-	r.SetBasicAuth("anna", "fixture-password-only")
+	addLoginCookie(s, r)
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	return w
@@ -108,7 +108,10 @@ func TestAttachmentsPersistAndStayTicketScoped(t *testing.T) {
 		t.Fatal(err, w.Body)
 	}
 	link := v.Ticket.Attachments[0].URL
-	w = own(s, "GET", link, "")
+	if w := call(s, "GET", link, "", "", "", ""); w.Code != 303 || w.Header().Get("WWW-Authenticate") != "" {
+		t.Fatal("anonymous download should redirect without a Basic challenge", w.Code)
+	}
+	w = basicAttachment(s, link)
 	if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), data) || w.Header().Get("Content-Type") != "application/octet-stream" || !strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment;") || w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("unsafe or incorrect download", w.Code, w.Header(), w.Body)
 	}
@@ -157,6 +160,14 @@ func TestAttachmentsPersistAndStayTicketScoped(t *testing.T) {
 	}
 }
 
+func basicAttachment(s *portal, path string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodGet, path, nil)
+	r.SetBasicAuth("anna", "fixture-password-only")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	return w
+}
+
 func TestImagePreviewsKeepDownloadsInertAndRejectActiveContent(t *testing.T) {
 	s, f := fixture(t)
 	s.files = testFiles(t)
@@ -194,7 +205,7 @@ func TestImagePreviewsKeepDownloadsInertAndRejectActiveContent(t *testing.T) {
 		if attachment.PreviewURL == "" {
 			t.Fatal("missing image preview URL")
 		}
-		w = own(s, "GET", attachment.PreviewURL, "")
+		w = basicAttachment(s, attachment.PreviewURL)
 		if tc.preview {
 			if w.Code != 200 || w.Header().Get("Content-Type") != "image/png" || !strings.HasPrefix(w.Header().Get("Content-Disposition"), "inline;") || !bytes.Equal(w.Body.Bytes(), tc.data) || w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("X-Content-Type-Options") != "nosniff" {
 				t.Fatal(w.Code, w.Header(), w.Body)
@@ -211,7 +222,7 @@ func TestImagePreviewsKeepDownloadsInertAndRejectActiveContent(t *testing.T) {
 				fmt.Sprintf("/tickets/1/attachments/11/%s?preview=1", asset.Attachments[0].FileId),
 				fmt.Sprintf("/tickets/%d/attachments/11/%s?preview=1", id, asset.Attachments[0].FileId),
 			} {
-				if w := own(s, "GET", path, ""); w.Code != 404 {
+				if w := basicAttachment(s, path); w.Code != 404 {
 					t.Fatal("private image preview leaked", path, w.Code)
 				}
 			}

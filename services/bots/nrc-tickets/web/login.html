@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anmelden · {{.Branding.Brand}}</title><link rel="stylesheet" href="/style.css"></head>
+<body class="login-page">
+<header><div class="brand">{{if .Branding.Logo}}<img src="/branding/logo" alt="">{{end}}<span>{{.Branding.Brand}}</span></div></header>
+<main><form method="post" action="/login" aria-labelledby="login-title">
+<h1 id="login-title">Anmelden</h1><p class="muted">Zugang zu Ihren Anfragen und Abnahmen.</p>
+{{if .Unsaved}}<p class="login-error" role="alert">Ihre Eingaben wurden nicht gespeichert. Melden Sie sich erneut an, um zum Formular zurückzukehren.</p><input type="hidden" name="unsaved" value="1">{{end}}
+{{if .Message}}<p class="login-error" role="alert">{{.Message}}</p>{{end}}
+<input type="hidden" name="next" value="{{.Next}}">
+<label>Benutzername<input name="login" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+<label>Passwort<input name="password" type="password" autocomplete="current-password" required></label>
+<button>Anmelden</button></form></main>
+{{with .Branding}}{{if or .FooterText .ImprintURL .PrivacyURL .TermsURL .ContactURL}}
+<footer>{{if .FooterText}}<span>{{.FooterText}}</span>{{end}}<nav aria-label="Rechtliches und Kontakt">
+{{if .ImprintURL}}<a href="{{.ImprintURL}}">Impressum</a>{{end}}{{if .PrivacyURL}}<a href="{{.PrivacyURL}}">Datenschutz</a>{{end}}
+{{if .TermsURL}}<a href="{{.TermsURL}}">Nutzungsbedingungen</a>{{end}}{{if .ContactURL}}<a href="{{.ContactURL}}">Kontakt</a>{{end}}
+</nav></footer>{{end}}{{end}}
+</body></html>

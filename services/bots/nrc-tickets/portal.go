@@ -8,12 +8,12 @@ import (
 	"html/template"
 	"mime"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 
 	p "github.com/heavyhorst/nrc/protocol-go"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type ticketPreview struct {
@@ -98,6 +98,7 @@ type portal struct {
 	accounts accountStore
 	origin   string
 	guestKey []byte
+	sessions accountSessions
 }
 
 func (s *portal) writeProof(who account) *p.PortalWriteProof {
@@ -105,7 +106,7 @@ func (s *portal) writeProof(who account) *p.PortalWriteProof {
 	if !ok {
 		return nil
 	}
-	// Use the account snapshot from Basic Auth, never a fresh lookup after
+	// Use the account snapshot from authentication, never a fresh lookup after
 	// uploading files or reading the review run. A missing snapshot fails
 	// encoding instead of falling back to the file-mode write.
 	return &p.PortalWriteProof{ID: who.PortalID, Revision: who.PortalRevision, ServiceKey: db.key}
@@ -219,24 +220,6 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.guestReview(w, r)
 		return
 	}
-	login, password, ok := r.BasicAuth()
-	var who account
-	valid := false
-	if ok && validAccountLogin(login) && s.accounts != nil {
-		a, found, err := s.accounts.login(r.Context(), login)
-		if err != nil {
-			s.unavailable(w)
-			return
-		}
-		valid = found && !a.Disabled && bcrypt.CompareHashAndPassword([]byte(a.PasswordHash), []byte(password)) == nil
-		who = a
-		who.PasswordHash = ""
-	}
-	if !valid {
-		w.Header().Set("WWW-Authenticate", `Basic realm="Kundenportal", charset="UTF-8"`)
-		http.Error(w, "Bitte melden Sie sich mit Ihrem Kundenkonto an.", 401)
-		return
-	}
 	if r.Method != "GET" && r.Method != "POST" {
 		w.WriteHeader(405)
 		return
@@ -262,22 +245,64 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write(s.brand.Logo)
 		return
 	}
-	if r.Method == "POST" && (r.Header.Get("Origin") != s.origin || r.Header.Get("Sec-Fetch-Site") == "cross-site") {
+	if r.Method == "POST" && (s.origin == "" || r.Header.Get("Origin") != s.origin || r.Header.Get("Sec-Fetch-Site") == "cross-site") {
 		http.Error(w, "Ungültiger Formularursprung.", 403)
+		return
+	}
+	switch r.URL.Path {
+	case "/login":
+		s.login(w, r)
+		return
+	case "/logout":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		s.sessions.revoke(accountSessionToken(r))
+		cookie := accountSessionCookie("")
+		cookie.MaxAge = -1
+		http.SetCookie(w, cookie)
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	api := strings.HasPrefix(r.URL.Path, "/api/")
+	path := r.URL.Path
+	if api {
+		path = strings.TrimPrefix(path, "/api")
+	}
+	ticketPath, isTicket := strings.CutPrefix(path, "/tickets/")
+	var parts []string
+	if isTicket {
+		parts = strings.Split(ticketPath, "/")
+	}
+	who, valid, err := s.loggedIn(r, api, r.Method == http.MethodGet && attachmentRoute(parts))
+	if err != nil {
+		s.unavailable(w)
+		return
+	}
+	if !valid {
+		if api {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Kundenportal", charset="UTF-8"`)
+			http.Error(w, "Bitte melden Sie sich mit Ihrem Kundenkonto an.", http.StatusUnauthorized)
+		} else if r.Method == http.MethodGet {
+			http.Redirect(w, r, "/login?next="+url.QueryEscape(loginDestination(r.URL.RequestURI())), http.StatusSeeOther)
+		} else if target := formReturnPath(r.URL.Path); target != "" {
+			http.Redirect(w, r, "/login?unsaved=1&next="+url.QueryEscape(target), http.StatusSeeOther)
+		} else {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+		}
 		return
 	}
 	if r.URL.Path == "/abnahmen" || strings.HasPrefix(r.URL.Path, "/abnahmen/") {
 		s.accountReview(w, r, who)
 		return
 	}
-	api := strings.HasPrefix(r.URL.Path, "/api/")
-	path := strings.TrimPrefix(r.URL.Path, "/api")
 	if path == "/tickets" && r.Method == "POST" {
 		s.write(w, r, who, 0, api)
 		return
 	}
-	if strings.HasPrefix(path, "/tickets/") {
-		parts := strings.Split(strings.TrimPrefix(path, "/tickets/"), "/")
+	if isTicket {
 		id, e := strconv.ParseUint(parts[0], 10, 64)
 		if e != nil || id == 0 {
 			http.NotFound(w, r)
@@ -559,7 +584,7 @@ var page = template.Must(template.New("portal").Parse(`<!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Branding.Brand}}</title><link rel="stylesheet" href="/style.css"><script src="/attachments.js" defer></script></head><body>
 <header><a class="brand" href="/">{{if .Branding.Logo}}<img src="/branding/logo" alt="">{{end}}<span>{{.Branding.Brand}}</span></a>
-<nav aria-label="Hauptnavigation"><a href="/">Meine Anfragen</a><a href="/new">Neue Anfrage</a><a href="/abnahmen">Meine Abnahmen</a></nav></header><main>
+<nav class="account-nav" aria-label="Hauptnavigation"><a href="/">Meine Anfragen</a><a href="/new">Neue Anfrage</a><a href="/abnahmen">Meine Abnahmen</a><form method="post" action="/logout"><button>Abmelden</button></form></nav></header><main>
 {{if .New}}
 <h1>Wie können wir Ihnen helfen?</h1><p>Schildern Sie uns Ihr Anliegen. Wir kümmern uns darum.</p>
 <form method="post" action="/tickets" enctype="multipart/form-data">

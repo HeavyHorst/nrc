@@ -21,6 +21,22 @@ a { color: var(--accent); overflow-wrap: anywhere; }
 header a { color: var(--header-text); margin-right: 24px; }
 .brand { display: inline-flex; align-items: center; gap: 16px; font-weight: 700; text-decoration: none; }
 .brand img { max-width: 240px; max-height: 64px; object-fit: contain; }
+.login-page { min-height: 100vh; display: flex; flex-direction: column; background: var(--pale, var(--background)); }
+.login-page header .brand, header:has(.account-nav) .brand { color: var(--header-text); }
+.login-page .brand img, header:has(.account-nav) .brand img { max-width: min(32vw, 150px); padding: 6px 8px; background: #fff; border-radius: 6px; }
+.login-page main { width: min(100%, 488px); flex: 1; display: grid; align-content: center; margin: 0 auto; padding: 40px 24px; }
+.login-page form { margin: 0; padding: clamp(22px, 6vw, 36px); box-shadow: 0 8px 24px rgb(16 46 75 / 7%); }
+.login-page h1 { margin: 0 0 8px; }
+.login-page h1 + p { margin: 0 0 24px; }
+.login-page label input { margin-top: 4px; }
+.login-page button { width: 100%; margin-top: 8px; font-weight: 700; }
+.login-error { border-left: 3px solid #9e302b; background: #fff2f0; color: #812923; padding: 8px 12px; }
+.login-page footer { width: 100%; text-align: center; margin: 0 auto 24px; }
+.login-page footer nav { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 20px; }
+header .account-nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 24px; }
+header .account-nav a, header .account-nav form { margin: 0; }
+header .account-nav form { background: none; border: 0; padding: 0; }
+header .account-nav button { background: none; color: var(--header-text); text-decoration: underline; padding: 0; }
 h1, h2 { line-height: 1.2; overflow-wrap: anywhere; }
 article, form { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; margin: 20px 0; }
 label { display: block; font-weight: 600; margin: 16px 0; }

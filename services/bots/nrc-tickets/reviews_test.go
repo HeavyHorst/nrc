@@ -152,7 +152,7 @@ func reviewRequest(s *portal, method, path string, values url.Values, cookie *ht
 		r.AddCookie(cookie)
 	}
 	if auth {
-		r.SetBasicAuth("anna", "fixture-password-only")
+		addLoginCookie(s, r)
 	}
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
@@ -196,7 +196,7 @@ func joinGuest(t *testing.T, s *portal, c *http.Cookie, g guestSession, name str
 
 func TestPortalAccountReviews(t *testing.T) {
 	s, f := reviewFixture(t)
-	if w := reviewRequest(s, "GET", "/abnahmen", nil, nil, false); w.Code != 401 {
+	if w := reviewRequest(s, "GET", "/abnahmen", nil, nil, false); w.Code != 303 {
 		t.Fatal(w.Code)
 	}
 	w := reviewRequest(s, "GET", "/abnahmen", nil, nil, true)
@@ -264,7 +264,7 @@ func TestPortalReviewForgeryAndOrigin(t *testing.T) {
 		}
 	}
 	r := httptest.NewRequest("POST", "/abnahmen/71/answer", strings.NewReader("point_id=1&result=yes"))
-	r.SetBasicAuth("anna", "fixture-password-only")
+	addLoginCookie(s, r)
 	r.Header.Set("Origin", "https://evil.test")
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -315,7 +315,7 @@ func TestGuestReviewSessions(t *testing.T) {
 	if w = reviewRequest(s, "POST", "/abnahmen/gast/close", url.Values{"csrf": {g.CSRF}, "decision": {"accepted"}, "if_revision": {"101"}}, c, false); w.Code != 403 {
 		t.Fatal("standard guest closed")
 	}
-	if w = reviewRequest(s, "GET", "/tickets/1", nil, c, false); w.Code != 401 {
+	if w = reviewRequest(s, "GET", "/tickets/1", nil, c, false); w.Code != 303 {
 		t.Fatal("guest bypassed ticket login")
 	}
 	f.revoked = true
@@ -646,7 +646,8 @@ func TestReviewLongNavigationAndReport(t *testing.T) {
 	f.run.Decision = "conditional"
 	w = reviewRequest(s, "GET", "/abnahmen/71", nil, nil, true)
 	body = w.Body.String()
-	if strings.Contains(body, "<form") || !strings.Contains(body, "45 bestanden") || !strings.Contains(body, "2 mit Abweichung") || !strings.Contains(body, "1 nicht prüfbar") || strings.Index(body, "Klärungsbedarf") > strings.Index(body, "Alle 48") {
+	_, main, _ := strings.Cut(body, "</header>")
+	if strings.Contains(main, "<form") || !strings.Contains(body, "45 bestanden") || !strings.Contains(body, "2 mit Abweichung") || !strings.Contains(body, "1 nicht prüfbar") || strings.Index(body, "Klärungsbedarf") > strings.Index(body, "Alle 48") {
 		t.Fatal("report counts/order/write safety", body)
 	}
 	for i := range f.form.Points {

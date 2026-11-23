@@ -79,7 +79,7 @@ func TestPortalAccountImportAndLiveSuspension(t *testing.T) {
 	reviewCall(t, staff, p.ReviewRequest{Op: "participant_add", RunID: run, Source: "portal", Identity: "anna@example.test", Name: "Anna"}, "ok")
 	portal, _, file := startReviewPortal(t, workspace, serviceKey)
 	client := portal.Client()
-	reviewHTTP(t, portal, client, "anna", "GET", "/", nil, 401)
+	reviewLogin(t, portal, client, "anna", 401)
 	legacy, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
@@ -151,8 +151,12 @@ func TestPortalAccountImportAndLiveSuspension(t *testing.T) {
 		return mustReadUntilOpcode(t, bot, want, 64)
 	}
 	writeTicket(proof, p.S_AssetCreated)
+	session := reviewLogin(t, portal, client, "anna", 303)
+	stale := reviewLogin(t, portal, client, "anna", 303)
+	reviewRequestHTTP(t, portal, client, session, "GET", "/", nil, 200)
 	call(admin, p.PortalAccountRequest{Op: "disable", ID: anna.ID, IfRevision: anna.Revision}, "ok")
-	reviewHTTP(t, portal, client, "anna", "GET", "/", nil, 401)
+	reviewRequestHTTP(t, portal, client, session, "GET", "/", nil, 303)
+	reviewLogin(t, portal, client, "anna", 401)
 	answer.Result = "no"
 	reviewCall(t, bot, answer, "forbidden")
 	if errReply, err := p.DecodeErrorResponse(writeTicket(proof, p.S_ErrorResponse)); err != nil || errReply.OriginOpcode != p.C_CreateAsset || errReply.CorrelationID != 618 {
@@ -164,6 +168,13 @@ func TestPortalAccountImportAndLiveSuspension(t *testing.T) {
 		t.Fatal("reimport reactivated the suspended account")
 	}
 	call(admin, p.PortalAccountRequest{Op: "enable", ID: anna.ID, IfRevision: got.Account.Revision}, "ok")
+	reviewRequestHTTP(t, portal, client, stale, "GET", "/", nil, 303)
 	reviewHTTP(t, portal, client, "anna", "GET", "/", nil, 200)
 	reviewCall(t, bot, answer, "forbidden") // Re-enabling does not revive an old authorization.
+	fresh := reviewLogin(t, portal, client, "anna", 303)
+	current := call(admin, p.PortalAccountRequest{Op: "get", ID: anna.ID}, "ok").Account
+	// A separately salted hash of the same fixture password still revokes the session.
+	call(admin, p.PortalAccountRequest{Op: "reset_password", ID: anna.ID, IfRevision: current.Revision, PasswordHash: accounts[1].PasswordHash}, "ok")
+	reviewRequestHTTP(t, portal, client, fresh, "GET", "/abnahmen", nil, 303)
+	reviewLogin(t, portal, client, "anna", 303)
 }

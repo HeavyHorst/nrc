@@ -13,6 +13,20 @@ const scratch = mkdtempSync(join(tmpdir(), 'nrc-tickets-browser-'));
 const binary = join(scratch, 'preview.test');
 const base = 'http://127.0.0.1:18196';
 const auth = { username: 'anna', password: 'fixture-password-only' };
+async function signIn(page, path = '') {
+  await page.goto(`${base}${path}`);
+  await page.getByLabel('Benutzername').fill(auth.username);
+  await page.getByLabel('Passwort').fill(auth.password);
+  await page.getByRole('button', { name: 'Anmelden' }).click();
+  await page.getByRole('button', { name: 'Abmelden' }).waitFor();
+}
+async function portalGet(context, url) {
+  // Playwright's HTTP client doesn't send Secure cookies on HTTP loopback,
+  // unlike Chromium. Reuse the cookie Chromium obtained through the form.
+  const cookie = (await context.cookies()).find(c => c.name === '__Host-nrc-ticket-session');
+  assert(cookie);
+  return context.request.get(url, { headers: { Cookie: `${cookie.name}=${cookie.value}` }, maxRedirects: 0 });
+}
 const artifacts = process.env.TICKETS_SCREENSHOTS;
 if (artifacts) mkdirSync(artifacts, { recursive: true });
 let server, browser;
@@ -37,15 +51,16 @@ try {
     server.stdout.on('data', b => { logs += b; }); server.stderr.on('data', b => { logs += b; });
     let ready = false;
     for (let i = 0; i < 100; i++) {
-      try { if ((await fetch(base)).status === 401) { ready = true; break; } } catch {}
+      try { if ((await fetch(`${base}/health`)).status === 200) { ready = true; break; } } catch {}
       if (server.exitCode !== null) break;
       await new Promise(r => setTimeout(r, 100));
     }
     assert(ready, `Fixture failed: ${logs}`);
-    const context = await browser.newContext({ httpCredentials: auth, viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2 });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2 });
     const page = await context.newPage();
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     const shot = async name => { if (artifacts) await page.screenshot({ path: resolve(artifacts, `${name}-images.png`), fullPage: true }); };
+    await signIn(page);
     if (branded === 'team') {
       await page.goto(base);
       await page.getByRole('link', { name: 'Rechnungsexport unvollständig', exact: true }).waitFor();
@@ -62,13 +77,13 @@ try {
       await page.getByText('Ich ergänze die Diagnose für unser Technikteam.', { exact: true }).waitFor();
       await page.reload();
       const link = page.getByRole('link', { name: 'Teamdiagnose.txt', exact: true });
-      assert.equal(await (await context.request.get(base + await link.getAttribute('href'))).text(), 'Team diagnosis');
+      assert.equal(await (await portalGet(context, base + await link.getAttribute('href'))).text(), 'Team diagnosis');
       assert.match(await page.locator('article').last().textContent(), /Anna/);
       await shot('tickets-team-detail');
       await page.setViewportSize({ width: 390, height: 1000 });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await shot('tickets-team-narrow');
-      assert.equal((await context.request.get(`${base}/tickets/3`)).status(), 404);
+      assert.equal((await portalGet(context, `${base}/tickets/3`)).status(), 404);
       assert.deepEqual(errors, []);
       await context.close();
       const closed = new Promise(r => server.once('exit', r)); server.kill('SIGTERM'); await closed; server = null;
@@ -80,7 +95,7 @@ try {
     if (branded) {
       assert(await page.locator('.brand img').evaluate(img => img.complete && img.naturalWidth > 0));
       assert.equal(await page.locator('footer a').count(), 3);
-      assert.equal(await page.locator('button').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(116, 75, 136)');
+      assert.equal(await page.getByRole('button', { name: 'Anfrage senden' }).evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(116, 75, 136)');
     }
     await page.getByLabel('Betreff').fill('Rechnungsexport enthält nur die Kopfzeile');
     await page.getByLabel('Ihre Nachricht').fill('Seit dem letzten Update fehlen die Rechnungen im Export. Die CSV-Datei habe ich angehängt.');
@@ -110,7 +125,7 @@ try {
     await page.getByRole('button', { name: 'Anfrage senden' }).click();
     await page.waitForURL('**/tickets/21');
     const link = page.getByRole('link', { name: 'Rechnungsexport.csv', exact: true });
-    const response = await context.request.get(base + await link.getAttribute('href'));
+    const response = await portalGet(context, base + await link.getAttribute('href'));
     assert.equal(response.status(), 200);
     assert.deepEqual(await response.body(), data);
     assert.match(response.headers()['content-disposition'], /^attachment;/);
@@ -118,7 +133,7 @@ try {
     await originalPreview.scrollIntoViewIfNeeded();
     await originalPreview.evaluate(img => img.decode());
     assert.equal(await originalPreview.evaluate(img => img.naturalWidth), 840);
-    const previewResponse = await context.request.get(base + await originalPreview.getAttribute('src'));
+    const previewResponse = await portalGet(context, base + await originalPreview.getAttribute('src'));
     assert.equal(previewResponse.headers()['content-type'], 'image/png');
     assert.deepEqual(await previewResponse.body(), png);
     const popupPromise = page.waitForEvent('popup');
@@ -140,8 +155,8 @@ try {
     assert.equal(await page.locator('.attachment-preview img').count(), 2);
     assert.equal(await page.locator('#selected-files').textContent(), 'Keine Dateien ausgewählt.');
     await shot(branded ? 'tickets-branded-detail' : 'tickets-default-detail');
-    assert.equal((await context.request.get(`${base}/tickets/2`)).status(), 404);
-    assert.equal((await context.request.get(`${base}/tickets/1/attachments/11/att_0123456789abcdef0123456789abcdef`)).status(), 404);
+    assert.equal((await portalGet(context, `${base}/tickets/2`)).status(), 404);
+    assert.equal((await portalGet(context, `${base}/tickets/1/attachments/11/att_0123456789abcdef0123456789abcdef`)).status(), 404);
     await page.setViewportSize({ width: 390, height: 1000 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await shot(branded ? 'tickets-branded-narrow' : 'tickets-default-narrow');
@@ -157,9 +172,9 @@ try {
     assert.deepEqual(errors, []);
     await context.close();
     if (!branded) {
-      const plain = await browser.newContext({ httpCredentials: auth, javaScriptEnabled: false, viewport: { width: 1100, height: 900 }, deviceScaleFactor: 2 });
+      const plain = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 1100, height: 900 }, deviceScaleFactor: 2 });
       const form = await plain.newPage();
-      await form.goto(`${base}/new`);
+      await signIn(form, '/new');
       const input = form.getByLabel('Dateien hinzufügen', { exact: true });
       assert.equal(await input.evaluate(el => getComputedStyle(el).opacity), '1');
       assert.equal(await form.locator('#selected-files').isVisible(), false);
@@ -172,7 +187,7 @@ try {
       await form.getByRole('button', { name: 'Anfrage senden' }).click();
       await form.waitForURL('**/tickets/25');
       const link = form.getByRole('link', { name: 'Ohne-JavaScript.txt', exact: true });
-      const download = await plain.request.get(base + await link.getAttribute('href'));
+      const download = await portalGet(plain, base + await link.getAttribute('href'));
       assert.deepEqual(await download.body(), data);
       await plain.close();
     }

@@ -119,6 +119,30 @@ func startReviewPortal(t *testing.T, workspace, accountServiceKey string, existi
 
 func reviewHTTP(t *testing.T, s *httptest.Server, c *http.Client, login, method, path string, values url.Values, want int) string {
 	t.Helper()
+	var cookie *http.Cookie
+	if login != "" {
+		cookie = reviewLogin(t, s, c, login, 303)
+	}
+	body, _ := reviewRequestHTTP(t, s, c, cookie, method, path, values, want)
+	return body
+}
+
+func reviewLogin(t *testing.T, s *httptest.Server, c *http.Client, login string, want int) *http.Cookie {
+	t.Helper()
+	_, cookies := reviewRequestHTTP(t, s, c, nil, "POST", "/login", url.Values{"login": {login}, "password": {reviewTestPassword}}, want)
+	for _, cookie := range cookies {
+		if cookie.Name == "__Host-nrc-ticket-session" {
+			return cookie
+		}
+	}
+	if want == 303 {
+		t.Fatal("successful login did not set a session cookie")
+	}
+	return nil
+}
+
+func reviewRequestHTTP(t *testing.T, s *httptest.Server, c *http.Client, cookie *http.Cookie, method, path string, values url.Values, want int) (string, []*http.Cookie) {
+	t.Helper()
 	var body io.Reader
 	if values != nil {
 		body = strings.NewReader(values.Encode())
@@ -127,14 +151,16 @@ func reviewHTTP(t *testing.T, s *httptest.Server, c *http.Client, login, method,
 	if err != nil {
 		t.Fatal(err)
 	}
-	if login != "" {
-		r.SetBasicAuth(login, reviewTestPassword)
+	if cookie != nil {
+		r.AddCookie(cookie)
 	}
 	if values != nil {
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		r.Header.Set("Origin", s.URL)
 	}
-	res, err := c.Do(r)
+	client := *c
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	res, err := client.Do(r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +172,7 @@ func reviewHTTP(t *testing.T, s *httptest.Server, c *http.Client, login, method,
 	if res.StatusCode != want {
 		t.Fatalf("%s %s: HTTP %d want %d: %s", method, path, res.StatusCode, want, b)
 	}
-	return string(b)
+	return string(b), res.Cookies()
 }
 
 func reviewHidden(t *testing.T, html, name string) string {
@@ -186,7 +212,7 @@ func TestReviewTeamsPortalGuestsAndRestart(t *testing.T) {
 		t.Fatal("account list leaks another team")
 	}
 	reviewHTTP(t, portal, account, "anna", "GET", "/abnahmen/"+b, nil, 404)
-	reviewHTTP(t, portal, account, "", "GET", "/", nil, 401)
+	reviewHTTP(t, portal, account, "", "GET", "/", nil, 303)
 	reviewHTTP(t, portal, account, "anna", "GET", "/", nil, 200)
 	invite := reviewCall(t, staff, p.ReviewRequest{Op: "invite", RunID: a, ExpiresAt: strconv.FormatInt(time.Now().Add(time.Hour).UnixNano(), 10)}, "ok")
 	join := func(token string) (*http.Client, string) {
@@ -326,7 +352,8 @@ func TestReviewSectionedLongFormPortal(t *testing.T) {
 	preview := reviewHTTP(t, portal, account, "anna", "POST", path+"/preview", url.Values{"decision": {"conditional"}, "comment": {"Steuerzeile nacharbeiten"}}, 200)
 	reviewHTTP(t, portal, account, "anna", "POST", path+"/close", url.Values{"decision": {"conditional"}, "comment": {"Steuerzeile nacharbeiten"}, "if_revision": {reviewHidden(t, preview, "if_revision")}, "reviewed": {"yes"}}, 303)
 	report := reviewHTTP(t, portal, account, "anna", "GET", path, nil, 200)
-	if !strings.Contains(report, "Mobil fehlt die Steuerzeile") || strings.Contains(report, "<form") || !strings.Contains(report, "Steuerzeile nacharbeiten") {
+	_, main, _ := strings.Cut(report, "</header>")
+	if !strings.Contains(report, "Mobil fehlt die Steuerzeile") || strings.Contains(main, "<form") || !strings.Contains(report, "Steuerzeile nacharbeiten") {
 		t.Fatal("closed long-form report lost finding, proviso or read-only state")
 	}
 	t.Log("real 48-point form: six persisted author sections, stable non-positional point IDs, portal answer, close preview and read-only report passed")

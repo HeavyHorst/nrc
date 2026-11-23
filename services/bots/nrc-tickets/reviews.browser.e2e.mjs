@@ -13,6 +13,13 @@ const scratch = mkdtempSync(join(tmpdir(), 'nrc-review-browser-'));
 const binary = join(scratch, 'review.test');
 const base = 'http://localhost:18197'; // Chromium treats loopback as secure.
 const token = 'a'.repeat(64); // Test fixture only, never a production invite.
+async function signIn(page, path) {
+  await page.goto(`${base}${path}`);
+  await page.getByLabel('Benutzername').fill('anna');
+  await page.getByLabel('Passwort').fill('fixture-password-only');
+  await page.getByRole('button', { name: 'Anmelden' }).click();
+  await page.getByRole('button', { name: 'Abmelden' }).waitFor();
+}
 const artifacts = process.env.TICKETS_SCREENSHOTS;
 if (artifacts) mkdirSync(artifacts, { recursive: true });
 let server, browser;
@@ -32,11 +39,11 @@ try {
   }
   assert(ready, `Fixture failed: ${logs}`);
   browser = await chromium.launch();
-  const account = await browser.newContext({ httpCredentials: { username: 'anna', password: 'fixture-password-only' }, viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
+  const account = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
   const page = await account.newPage();
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   const shot = async (p, name) => { if (artifacts) await p.screenshot({ path: resolve(artifacts, `${name}.png`), fullPage: true }); };
-  await page.goto(`${base}/abnahmen`);
+  await signIn(page, '/abnahmen');
   await page.getByRole('link', { name: 'Zweite Seite · Nachtest' }).waitFor();
   await page.getByRole('link', { name: 'Release-Abnahme · Technikteam' }).click();
   assert.equal(await page.getByRole('navigation', { name: 'Abschnitte' }).count(), 0);
@@ -82,7 +89,7 @@ try {
   await gp.reload();
   assert.match(await gp.locator('main').textContent(), /Gast Müller · Gastname \(Selbstangabe\) · Nicht prüfbar/);
   await shot(gp, 'review-guest-narrow');
-  assert.equal((await guest.request.get(`${base}/tickets/1`)).status(), 401);
+  assert.equal((await guest.request.get(`${base}/tickets/1`, { maxRedirects: 0 })).status(), 303);
   const csrf = await gp.locator('input[name=csrf]').first().inputValue();
   const rejected = await guest.request.post(`${base}/abnahmen/gast/answer`, { headers: { Origin: 'https://evil.test' }, form: { csrf, point_id: '2', result: 'yes' } });
   assert.equal(rejected.status(), 403);
@@ -105,9 +112,9 @@ try {
   await shot(page, 'review-closed');
 
   // The 48-point workflow persists and advances without client-side JavaScript.
-  const noJS = await browser.newContext({ javaScriptEnabled: false, httpCredentials: { username: 'anna', password: 'fixture-password-only' }, viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2, ...(artifacts ? { recordVideo: { dir: join(scratch, 'video'), size: { width: 1440, height: 1100 } } } : {}) });
+  const noJS = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 2, ...(artifacts ? { recordVideo: { dir: join(scratch, 'video'), size: { width: 1440, height: 1100 } } } : {}) });
   const lp = await noJS.newPage();
-  await lp.goto(`${base}/abnahmen/73`);
+  await signIn(lp, '/abnahmen/73');
   assert.equal(await lp.locator('form[action$="/answer"]').count(), 1);
   assert.equal(await lp.locator('input[name=point_id]').inputValue(), '19');
   assert.match(await lp.locator('main').textContent(), /18 \/ 48/);
@@ -129,7 +136,7 @@ try {
   assert.equal(await lp.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await shot(lp, 'review-48-narrow');
   await lp.goto(`${base}/abnahmen/74`);
-  assert.equal(await lp.locator('form').count(), 0);
+  assert.equal(await lp.locator('main form').count(), 0);
   assert.equal(await lp.locator('.review-all').getAttribute('open'), null);
   assert.match(await lp.locator('main').textContent(), /45 bestanden/);
   assert.equal(await lp.locator('header nav a').evaluateAll(links => links.every(e => getComputedStyle(e).whiteSpace === 'nowrap')), true);

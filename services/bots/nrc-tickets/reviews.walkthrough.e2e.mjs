@@ -79,7 +79,7 @@ const revealTax = async page => {
 };
 
 try {
-  const owner = await browser.newContext({ ...options, javaScriptEnabled: false, httpCredentials: { username: login, password } });
+  const owner = await browser.newContext({ ...options, javaScriptEnabled: false });
   const ownerPage = await owner.newPage(); watch(ownerPage);
   const invitation = await browser.newContext(options);
   const joinPage = await invitation.newPage(); watch(joinPage);
@@ -129,6 +129,9 @@ try {
   await shot(guestPage, '04-gast-rueckkehr-eigener-beitrag');
 
   await ownerPage.goto(`${base}/abnahmen`);
+  await ownerPage.getByLabel('Benutzername').fill(login);
+  await ownerPage.getByLabel('Passwort').fill(password);
+  await ownerPage.getByRole('button', { name: 'Anmelden' }).click();
   await ownerPage.locator(`a[href="/abnahmen/${runId}"]`).click();
   await selectTaxSection(ownerPage);
   await check(ownerPage, firstAnswer);
@@ -196,7 +199,7 @@ try {
   await ownerPage.locator('input[name=reviewed]').check();
   await closeButton(ownerPage).click();
   await ownerPage.getByRole('heading', { name: 'Mit Vorbehalt abgenommen', exact: true }).waitFor();
-  assert.equal(await ownerPage.locator('form').count(), 0);
+  assert.equal(await ownerPage.locator('main form').count(), 0);
   await check(ownerPage, comment);
   await check(ownerPage, '45 bestanden');
   await check(ownerPage, '1 mit Abweichung');

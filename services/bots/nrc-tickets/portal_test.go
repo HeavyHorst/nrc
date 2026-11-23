@@ -26,7 +26,7 @@ func TestPublicHealth(t *testing.T) {
 			if w.Code != 200 || w.Body.String() != "{\"status\":\"ok\"}\n" || w.Header().Get("Cache-Control") != "no-store" {
 				t.Fatalf("health: %d %s", w.Code, w.Body.String())
 			}
-		} else if w.Code != 401 {
+		} else if w.Code != 303 || w.Header().Get("WWW-Authenticate") != "" {
 			t.Fatalf("unauthenticated portal access: %d", w.Code)
 		}
 	}
@@ -129,8 +129,10 @@ func fixture(t *testing.T) (*portal, *fakeSource) {
 }
 func call(s *portal, method, path, form, origin, login, password string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(form))
-	if login != "" {
+	if login != "" && strings.HasPrefix(path, "/api/") {
 		r.SetBasicAuth(login, password)
+	} else if login != "" {
+		addLoginCookie(s, r)
 	}
 	if method == "POST" {
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -140,8 +142,104 @@ func call(s *portal, method, path, form, origin, login, password string) *httpte
 	s.ServeHTTP(w, r)
 	return w
 }
+func addLoginCookie(s *portal, r *http.Request) {
+	w := call(s, "POST", "/login", "login=anna&password=fixture-password-only", s.origin, "", "")
+	for _, c := range w.Result().Cookies() {
+		r.AddCookie(c)
+	}
+}
 func own(s *portal, method, path, form string) *httptest.ResponseRecorder {
 	return call(s, method, path, form, s.origin, "anna", "fixture-password-only")
+}
+
+func TestPortalBrowserSession(t *testing.T) {
+	s, _ := fixture(t)
+	credentials := "login=anna&password=fixture-password-only"
+	if w := call(s, "POST", "/login", credentials, "https://evil.test", "", ""); w.Code != 403 || len(w.Result().Cookies()) != 0 {
+		t.Fatal("cross-origin login accepted")
+	}
+	if w := call(s, "POST", "/login", "login=anna&password=wrong", s.origin, "", ""); w.Code != 401 || w.Header().Get("WWW-Authenticate") != "" || len(w.Result().Cookies()) != 0 {
+		t.Fatal("failed login must neither challenge nor issue a cookie")
+	}
+	w := call(s, "POST", "/login", credentials+"&next="+url.QueryEscape("/tickets/1?tab=details"), s.origin, "", "")
+	cookies := w.Result().Cookies()
+	if w.Code != 303 || w.Header().Get("Location") != "/tickets/1?tab=details" || len(cookies) != 1 {
+		t.Fatal("login did not restore the original path and query")
+	}
+	c := cookies[0]
+	if c.Name != accountCookie || c.Domain != "" || c.Path != "/" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.MaxAge != 28800 {
+		t.Fatal("incorrect session cookie policy")
+	}
+	for _, target := range []string{"https://evil.test", "//evil.test", "/%2Fevil.test", `/\evil.test`} {
+		w := call(s, "POST", "/login", credentials+"&next="+url.QueryEscape(target), s.origin, "", "")
+		if w.Code != 303 || w.Header().Get("Location") != "/" {
+			t.Fatalf("accepted external return target %q", target)
+		}
+	}
+	request := func(method, path, origin string, cookie *http.Cookie, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, path, nil)
+		r.Header.Set("Origin", origin)
+		r.SetBasicAuth("anna", "fixture-password-only")
+		if cookie != nil {
+			r.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != want || w.Header().Get("WWW-Authenticate") != "" {
+			t.Fatalf("%s %s: got %d, want %d without a challenge", method, path, w.Code, want)
+		}
+		return w
+	}
+	request("GET", "/tickets/1", "", nil, 303) // Cached Basic credentials do not log the browser back in.
+	request("GET", "/logout", "", c, 405)
+	request("POST", "/logout", "https://evil.test", c, 403)
+	request("GET", "/tickets/1", "", c, 200)
+	out := request("POST", "/logout", s.origin, c, 303).Result().Cookies()
+	if len(out) != 1 || out[0].Name != c.Name || out[0].MaxAge >= 0 {
+		t.Fatal("logout did not clear the session cookie")
+	}
+	request("GET", "/tickets/1", "", c, 303) // Even a copied cookie no longer works.
+}
+
+func TestLostSessionReturnsToUnsubmittedForm(t *testing.T) {
+	s, f := reviewFixture(t)
+	login := "login=anna&password=fixture-password-only"
+	old := call(s, "POST", "/login", login, s.origin, "", "").Result().Cookies()[0]
+	// A restarted portal has the same accounts and records, but no old sessions.
+	s = &portal{source: s.source, accounts: s.accounts, origin: s.origin}
+	const warning = "Ihre Eingaben wurden nicht gespeichert."
+	for path, destination := range map[string]string{
+		"/tickets": "/new", "/tickets/1/reply": "/tickets/1",
+		"/abnahmen/71/answer": "/abnahmen/71", "/abnahmen/71/preview": "/abnahmen/71", "/abnahmen/71/close": "/abnahmen/71",
+	} {
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader("body=UNSAVED_DRAFT&comment=UNSAVED_DRAFT"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Header.Set("Origin", s.origin)
+		r.AddCookie(old)
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		location := w.Header().Get("Location")
+		if w.Code != 303 || !strings.HasPrefix(location, "/login?") || strings.Contains(location, "UNSAVED_DRAFT") {
+			t.Fatalf("%s: expected redirect to login without draft, got %d %q", path, w.Code, location)
+		}
+		page := call(s, "GET", location, "", "", "", "")
+		if page.Code != 200 || !strings.Contains(page.Body.String(), warning) || strings.Contains(page.Body.String(), "UNSAVED_DRAFT") {
+			t.Fatalf("%s: missing warning or exposed draft", path)
+		}
+		form := "&unsaved=1&next=" + url.QueryEscape(destination)
+		bad := call(s, "POST", "/login", "login=anna&password=wrong"+form, s.origin, "", "")
+		if bad.Code != 401 || !strings.Contains(bad.Body.String(), warning) {
+			t.Fatal("unsaved warning lost after failed login")
+		}
+		fresh := call(s, "POST", "/login", login+form, s.origin, "", "")
+		if fresh.Code != 303 || fresh.Header().Get("Location") != destination || !strings.Contains(page.Body.String(), `name="next" value="`+destination+`"`) {
+			t.Fatalf("%s: did not return to %s", path, destination)
+		}
+	}
+	if f.writes != 0 || len(f.run.Answers) != 1 || f.run.Decision != "" {
+		t.Fatal("unauthenticated submission modified records")
+	}
 }
 
 func TestTicketCategorySelection(t *testing.T) {
@@ -239,7 +337,7 @@ func TestAuthenticationCSRFAndForgery(t *testing.T) {
 		t.Fatal("unauthorized write")
 	}
 	s.accounts = nil
-	if w := own(s, "GET", "/", ""); w.Code != 401 {
+	if w := own(s, "GET", "/", ""); w.Code != 303 {
 		t.Fatal("empty accounts allowed")
 	}
 }

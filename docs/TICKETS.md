@@ -345,7 +345,7 @@ with an editor/password manager (do not put passwords in shell commands, process
 arguments, logs, Git, or environment variables). Use a protected directory and
 `umask 077`. Input is an array with the following fields:
 
-* `login`: the HTTP Basic login, without a colon
+* `login`: the portal username, without a colon
 * `password`: a unique random password, 14–72 bytes
 * `requester`: canonical lower-case account identity, normally email
 * `name`: customer-facing display name
@@ -387,8 +387,7 @@ Required settings (no credential defaults):
 | `TICKETS_ADDR` | Listen address; default `:8096` |
 
 Serve on a dedicated hostname through a TLS reverse proxy. **Never expose the
-plain HTTP listener to the internet**: HTTP Basic sends credentials on every
-request. Bind the listener to loopback/private network. Terminate TLS at the
+plain HTTP listener to the internet**. Bind it to loopback or a private network. Terminate TLS at the
 proxy, set HSTS, enforce body/time/concurrency limits and authentication rate
 limits there, and never log Authorization headers or request bodies. Do not enable
 CORS, response caching or generic public file routes. Allow multipart requests up
@@ -396,8 +395,10 @@ to 100 MiB + 128 KiB and sufficient upload time at the reverse proxy. The origin
 configuration, not derived from Host/Forwarded headers. POST requires an exact
 Origin match and rejects cross-site fetch metadata; absent/null Origin fails.
 Browsers without Origin on form POST are unsupported. GET never mutates records.
-Basic authentication has browser-managed credentials rather than a logout
-session; use a separate browser profile for shared devices.
+Browser users sign in at `/login` and sign out with **Abmelden**. Sessions use a
+host-only secure cookie and expire after eight hours or when the portal process
+restarts. In DB mode, suspending an account or resetting its password invalidates
+existing sessions at their next request. Guest review links remain independent.
 
 Optional overlay, from repository root (existing NRC `.env` required):
 
@@ -458,7 +459,7 @@ environment variables and restart the portal after changing files/configuration:
 Footer links accept HTTP(S) or root-relative URLs, not protocol-relative or
 script URLs. Empty footer settings omit the footer entirely. Legal content is
 hosted separately; the portal does not create legal pages. Theme CSS and logos
-are loaded at startup and served at authenticated `/style.css` and
+are loaded at startup and served at public `/style.css` and
 `/branding/logo`, not by exposing an operator directory. The themed file selector
 uses an authenticated same-origin script to display selected filenames; form
 uploads still work without JavaScript. CSP disallows inline/external scripts,
@@ -508,9 +509,10 @@ and `entries` (`author,body`). Both may contain `attachments` with public
 `filename,size,url`. Status is a German display label. `POST
 /api/tickets` accepts URL-encoded `title,body`; `POST
 /api/tickets/<id>/reply` accepts URL-encoded `body`. Successful API writes return
-201 with only the ticket `id`; forms redirect after acknowledged creation. Both
-API and pages require Basic auth. POST API calls also require the configured
-Origin. Unknown metadata fields are rejected. Bodies are limited to 32000 bytes,
+201 with only the ticket `id`; forms redirect after acknowledged creation.
+The JSON API and the download and preview URLs it returns accept HTTP Basic
+credentials. POST API calls also require the configured Origin. Unknown metadata
+fields are rejected. Bodies are limited to 32000 bytes,
 titles to 200 bytes. Unknown/cross-requester IDs return 404.
 
 Both writes also accept `multipart/form-data`: the same text fields plus file

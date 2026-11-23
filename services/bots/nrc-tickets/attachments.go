@@ -141,10 +141,14 @@ func publicReply(a p.Asset, ticketID uint64) (entryPreview, bool) {
 	return v, ok
 }
 
+func attachmentRoute(parts []string) bool {
+	return len(parts) == 4 && parts[1] == "attachments" && fileIDPattern.MatchString(parts[3])
+}
+
 // The ticket has already passed requester authorization. Re-read the exact
 // attached entry before opening the blob; internal/foreign entries fail closed.
 func (s *portal) download(w http.ResponseWriter, r *http.Request, ticket p.Asset, parts []string) {
-	if len(parts) != 4 || parts[1] != "attachments" || r.Method != "GET" || !fileIDPattern.MatchString(parts[3]) {
+	if r.Method != http.MethodGet || !attachmentRoute(parts) {
 		http.NotFound(w, r)
 		return
 	}

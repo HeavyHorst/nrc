@@ -51,7 +51,7 @@ broadcast run changes.
 ## Existing portal accounts and guests
 
 The existing `services/bots/nrc-tickets` service serves **Meine Abnahmen** using
-its existing Basic accounts. Only explicit run assignments appear. A customer
+the same account and browser session as the ticket portal. Only explicit run assignments appear. A customer
 does not gain access through a company membership or a ticket reference.
 The portal receives form fields and the assigned team's contributions, never
 internal graph links, invitation hashes or participant account identities.
