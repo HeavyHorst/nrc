@@ -194,6 +194,8 @@ worker_adopt_upgraded_connection :: proc(upgrade: ^HTTP_Upgrade_Connection, boot
 	c.last_activity = nrc_time_now_monotonic()
 	c.user_type = upgrade.user_type
 	c.chronicle_access = upgrade.chronicle_access
+	c.portal_account_admin = upgrade.portal_account_admin
+	c.portal_account_bot = upgrade.portal_account_bot
 
 	if verified_username == "" {
 		log.errorf("[T%d] Rejecting upgraded connection %v without verified identity", td.thread_index, sock)

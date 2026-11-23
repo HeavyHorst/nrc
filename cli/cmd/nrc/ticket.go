@@ -588,7 +588,7 @@ func init() {
 	for _, action := range []string{"list", "get", "create", "update", "reply", "internal-note", "attachments", "delete"} {
 		c.AddCommand(ticketCommand(action))
 	}
-	c.AddCommand(ticketMailCommand(), ticketSearchCommand(), ticketDownload(), ticketLinks("links"), ticketLinks("link"), ticketLinks("unlink"), ticketLinks("create-task"))
+	c.AddCommand(ticketAccountCommand(), ticketMailCommand(), ticketSearchCommand(), ticketDownload(), ticketLinks("links"), ticketLinks("link"), ticketLinks("unlink"), ticketLinks("create-task"))
 	rootCmd.AddCommand(c)
 }
 

@@ -1,0 +1,9 @@
+# Temporary legacy/rollback mode. Include after compose.tickets.yml.
+services:
+  tickets:
+    environment:
+      NRC_SERVER: ${NRC_TICKETS_SERVER:-ws://websocket-server:8080}
+      TICKETS_ACCOUNTS_MODE: file
+      TICKETS_ACCOUNTS_FILE: /run/secrets/ticket-accounts.json
+    volumes:
+      - ${TICKETS_ACCOUNTS_FILE:?set absolute private accounts file path}:/run/secrets/ticket-accounts.json:ro

@@ -86,6 +86,8 @@ CreateAssetRequest :: struct {
 	attachments:          []Attachment,
 	correlation_id:       u32, // Client-generated, echoed in S_AssetCreated for request/response correlation
 	if_parent_updated_at: i64, // Optional positive asset-parent version; checked atomically with creation
+	portal_proof:         Portal_Write_Proof,
+	portal_requester:     string,
 }
 
 // Returned fields borrow data and the caller's attachment descriptors. Without
@@ -186,17 +188,22 @@ parseCreateAssetRequestWithAttachments :: proc(data: []byte, attachments: []Atta
 	if len(data) < offset + 4 {
 		return result, .TooShort
 	}
-	if len(data) != offset + 4 && len(data) != offset + 12 {
-		return result, .ContentLengthMismatch
-	}
 	corr_id, _ := endian.get_u32(data[offset:], .Big)
 	result.correlation_id = corr_id
-	if len(data) == offset + 12 {
-		version, _ := endian.get_u64(data[offset + 4:], .Big)
+	trailer := data[offset + 4:]
+	switch len(trailer) {
+	case 0:
+	case 8:
+		version, _ := endian.get_u64(trailer, .Big)
 		if i64(version) <= 0 || result.parent_type != .Asset || result.parent_id == 0 {
 			return result, .InvalidContentType
 		}
 		result.if_parent_updated_at = i64(version)
+	case:
+		if len(trailer) <= PORTAL_WRITE_PROOF_SIZE || len(trailer) > PORTAL_WRITE_PROOF_SIZE + 320 do return result, .ContentLengthMismatch
+		if result.asset_type != .Ticket && result.asset_type != .TicketEntry do return result, .InvalidValue
+		result.portal_proof = parse_portal_write_proof(trailer)
+		result.portal_requester = string(trailer[PORTAL_WRITE_PROOF_SIZE:])
 	}
 
 	return result, nil

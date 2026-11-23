@@ -22,6 +22,8 @@ services:
       dockerfile: Dockerfile
     env_file:
       - ../.env
+      - path: ../portal-admin.env
+        required: false
     cap_add:
       - NET_ADMIN
       - NET_RAW
@@ -34,6 +36,7 @@ services:
       - TS_AUTHKEY=${TS_AUTHKEY:-}
       - NRC_JWT_SECRET=${NRC_JWT_SECRET:?Set NRC_JWT_SECRET in .env}
       - NRC_BOT_SECRET=${NRC_BOT_SECRET:?Set NRC_BOT_SECRET in .env}
+      - NRC_PORTAL_ACCOUNT_ADMIN_BACKEND=http://nrc-portal-admin:8080
       # Private bridge-network listener; never publish this port.
       - NRC_SEARCH_FILES_ADDR=:8094
     depends_on:
@@ -41,6 +44,7 @@ services:
     restart: unless-stopped
     networks:
       - orion-network
+      - portal-admin-network
 
   websocket-server:
     image: ${NRC_WEBSOCKET_IMAGE:-docker-websocket-server:latest}
@@ -51,6 +55,10 @@ services:
     stop_signal: SIGINT
     env_file:
       - ../.env
+      - path: ../portal-accounts.env
+        required: false
+      - path: ../portal-admin.env
+        required: false
     environment:
       - NRC_JWT_SECRET=${NRC_JWT_SECRET:?Set NRC_JWT_SECRET in .env}
       - NRC_BOT_SECRET=${NRC_BOT_SECRET:?Set NRC_BOT_SECRET in .env}
@@ -71,7 +79,9 @@ services:
     volumes:
       - task-data:/app/data
     networks:
-      - orion-network
+      orion-network: {}
+      portal-admin-network:
+        aliases: [nrc-portal-admin]
 
   attachment-gc:
     image: ${NRC_WEBSOCKET_IMAGE:-docker-websocket-server:latest}
@@ -212,3 +222,8 @@ volumes:
 networks:
   orion-network:
     driver: bridge
+  # Do not attach nginx, bots, or other sidecars: admin frames cross this
+  # bridge directly from the identity proxy to the WebSocket server.
+  portal-admin-network:
+    driver: bridge
+    internal: true

@@ -110,6 +110,8 @@ Opcode :: enum u16 {
 	S_OpenIncidentPage = 181,
 	C_Review = 77,
 	S_Review = 182,
+	C_PortalAccount = 78,
+	S_PortalAccount = 183,
 
 	// Tasks/Kanban (Server -> Client)
 	S_TaskCreated = 130,

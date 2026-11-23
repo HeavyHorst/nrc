@@ -45,6 +45,11 @@ func reviewCall(t *testing.T, c *websocket.Conn, q p.ReviewRequest, status strin
 // A real portal process behind TLS, using the actual NRC bot gateway and account
 // provisioning. Only TLS termination is substituted; no domain response is mocked.
 func reviewPortal(t *testing.T, workspace string, existingBinary ...string) (*httptest.Server, func() string) {
+	portal, stop, _ := startReviewPortal(t, workspace, "", existingBinary...)
+	return portal, stop
+}
+
+func startReviewPortal(t *testing.T, workspace, accountServiceKey string, existingBinary ...string) (*httptest.Server, func() string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "nrc-tickets")
@@ -76,6 +81,11 @@ func reviewPortal(t *testing.T, workspace string, existingBinary ...string) (*ht
 		"TICKETS_ADDR="+target.Host, "TICKETS_BRAND=NRC acceptance", "TICKETS_MAIL_CONFIG_FILE=",
 		"TICKETS_GUEST_SESSION_KEY="+strings.Repeat("34", 32), "NRC_SERVER="+strings.TrimSuffix(wsURLForWorkspace(workspace), "/"+workspace),
 		"NRC_WORKSPACE="+workspace, "NRC_BOT_SECRET="+metricsBotSecret, "FILES_URL=http://127.0.0.1:1")
+	if accountServiceKey != "" {
+		cmd.Env = append(cmd.Env, "TICKETS_ACCOUNTS_MODE=db", "TICKETS_ACCOUNTS_FILE=", "NRC_PORTAL_ACCOUNT_SERVICE_KEY="+accountServiceKey)
+	} else {
+		cmd.Env = append(cmd.Env, "TICKETS_ACCOUNTS_MODE=file")
+	}
 	cmd.Stdout, cmd.Stderr = logs, logs
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -104,7 +114,7 @@ func reviewPortal(t *testing.T, workspace string, existingBinary ...string) (*ht
 	}
 	tls.StartTLS()
 	t.Cleanup(tls.Close)
-	return tls, stop
+	return tls, stop, accounts
 }
 
 func reviewHTTP(t *testing.T, s *httptest.Server, c *http.Client, login, method, path string, values url.Values, want int) string {

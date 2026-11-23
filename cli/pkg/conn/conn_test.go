@@ -14,6 +14,22 @@ import (
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
 
+func TestSecureWebSocket(t *testing.T) {
+	for endpoint, want := range map[string]bool{
+		"wss://staff.example.test/workspace":  true,
+		"ws://127.0.0.1:8080/workspace":       true,
+		"ws://[::1]:8080/workspace":           true,
+		"ws://localhost:8080/workspace":       false,
+		"ws://127.0.0.1.example.test/":        false,
+		"ws://127.0.0.1@remote.example.test/": false,
+		"ws://192.0.2.1:8080/workspace":       false,
+	} {
+		if got := secureWebSocket(endpoint); got != want {
+			t.Errorf("secureWebSocket(%q) = %t, want %t", endpoint, got, want)
+		}
+	}
+}
+
 func TestSessionRetriesOnlyExplicitDatabaseOverload(t *testing.T) {
 	for _, code := range []string{protocol.DBConnectionOverloaded, protocol.DBWorkerOverloaded} {
 		t.Run(code, func(t *testing.T) {

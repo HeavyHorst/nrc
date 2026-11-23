@@ -253,6 +253,13 @@ process_protocol_payload :: proc(c: ^NRC_Connection, frame_data: []byte, dm_auth
 		return
 	}
 	#partial switch opcode {
+	case .C_PortalAccount:
+		_, correlation, err := pr.parseChronicleEnvelope(frame_data[2:])
+		if err != nil {
+			send_error_response(c, opcode, "Invalid portal account envelope", correlation)
+		} else {
+			worker_db_submit_command(c, opcode, frame_data[2:], correlation)
+		}
 	case .C_Review:
 		if len(frame_data) < 8 {
 			send_error_response(c, opcode, "Invalid review envelope")

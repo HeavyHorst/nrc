@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	p "github.com/heavyhorst/nrc/protocol-go"
@@ -90,7 +91,7 @@ func (s *mailTestSource) patchPreview(_ context.Context, a p.Asset, preview stri
 func mailFixture(t *testing.T) (*mailChannel, *mailTestSource, *[]mailMessage) {
 	t.Helper()
 	source := &mailTestSource{fakeSource: &fakeSource{assets: map[uint64]p.Asset{}, next: 20}}
-	portal := &portal{source: source, files: testFiles(t)}
+	portal := &portal{source: source, files: testFiles(t), accounts: fileAccounts{}}
 	c, err := openMailChannel(filepath.Join(t.TempDir(), "mail.db"), "tickets", strings.Repeat("x", 32), portal, smtpMailConfig{From: "support@our.test"})
 	if err != nil {
 		t.Fatal(err)
@@ -404,6 +405,47 @@ func TestMailReplyAddressAuthorization(t *testing.T) {
 	}
 }
 
+func TestMailReplyRequesterRecheckedAfterUpload(t *testing.T) {
+	c, s, _ := mailFixture(t)
+	ctx := context.Background()
+	ticket, err := s.create(ctx, p.Asset{AssetType: ticketType, Preview: `{"version":1,"requester":"anna@customer.test","status":"open"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	to, err := c.replyAddress(ticket.AssetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.portal.accounts = accountPeer(t, func(q p.PortalAccountRequest) (p.PortalAccountResponse, uint32) {
+		if q.Op != "mapping" || q.Requester != "anna@customer.test" {
+			t.Error("mail did not request the sender's account mapping")
+		}
+		return p.PortalAccountResponse{Status: "unavailable"}, 1
+	})
+	changed := false
+	c.portal.files = revokingFiles{c.portal.files, func() {
+		changed = true
+		preview := `{"version":1,"requester":"Anna@customer.test","status":"open"}`
+		if err := s.patchPreview(ctx, ticket, preview); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	raw := mailTestMultipart("mixed", "Content-Type: text/plain\r\n\r\nMy reply", "Content-Disposition: attachment; filename=x.txt\r\n\r\nx")
+	raw = strings.Replace(raw, "STAFF@example.com", "anna@customer.test", 1)
+	if w := mailHTTP(c, "/inbound", "To: "+to+"\r\n"+raw); w.Code != 202 {
+		t.Fatal(w.Code)
+	}
+	mailTick(t, c)
+	if jobs, err := c.jobs(); err != nil || len(jobs) != 1 || jobs[0].State != "queued" || !changed || s.writes != 1 {
+		t.Fatalf("reply should retry after losing ownership during upload: jobs=%+v err=%v changed=%t writes=%d", jobs, err, changed, s.writes)
+	}
+	c.portal.accounts = fileAccounts{}
+	mailTick(t, c)
+	if jobs, err := c.jobs(); err != nil || len(jobs) != 1 || jobs[0].State != "quarantine" || s.writes != 1 {
+		t.Fatalf("reply without shared access should be quarantined: jobs=%+v err=%v writes=%d", jobs, err, s.writes)
+	}
+}
+
 func TestMailRequesterChangeBeforeClaimDoesNotSend(t *testing.T) {
 	c, s, sent := mailFixture(t)
 	ticket, _ := s.create(context.Background(), p.Asset{AssetType: ticketType, Preview: `{"version":1,"requester":"anna@customer.test","title":"Help"}`})
@@ -561,6 +603,93 @@ func TestMailStatusRepairsDoNotStarveQueuedMail(t *testing.T) {
 	if err := c.tick(ctx); err != nil || ctx.Err() != nil {
 		t.Fatal("revisited synchronized delivery records", err)
 	}
+}
+
+type timingOutMailAccounts struct {
+	fileAccounts
+	attempts []string
+}
+
+func (a *timingOutMailAccounts) mapping(ctx context.Context, requester string) (account, bool, error) {
+	a.attempts = append(a.attempts, requester)
+	<-ctx.Done()
+	return account{}, false, ctx.Err()
+}
+
+func TestMailQueuedReplyProgressesPastMappingTimeouts(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		accounts := &timingOutMailAccounts{}
+		s := &mailTestSource{fakeSource: &fakeSource{assets: map[uint64]p.Asset{}}}
+		portal := &portal{source: s, accounts: accounts}
+		path := filepath.Join(t.TempDir(), "mail.db")
+		open := func() *mailChannel {
+			c, err := openMailChannel(path, "tickets", strings.Repeat("x", 32), portal, smtpMailConfig{From: "support@our.test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { c.db.Close() })
+			return c
+		}
+		c := open()
+		ticket, err := s.create(ctx, p.Asset{AssetType: ticketType, Preview: `{"version":1,"requester":"anna@customer.test","status":"open"}`})
+		if err != nil {
+			t.Fatal(err)
+		}
+		to, err := c.replyAddress(ticket.AssetID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, j := range []mailJob{
+			{ID: "in-1", Raw: []byte("From: first@customer.test\r\n\r\nFirst request")},
+			{ID: "in-2", Raw: []byte("From: second@customer.test\r\n\r\nSecond request")},
+			{ID: "in-3", Raw: []byte("From: anna@customer.test\r\nTo: " + to + "\r\n\r\nOwn ticket reply")},
+		} {
+			j.Direction, j.State = "in", "queued"
+			if err := c.put(j); err != nil {
+				t.Fatal(err)
+			}
+		}
+		timedTick := func() error {
+			pass, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			defer cancel()
+			return c.tick(pass)
+		}
+		for i, sender := range []string{"first@customer.test", "second@customer.test"} {
+			if err := timedTick(); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("pass %d did not exhaust its budget: %v", i+1, err)
+			}
+			if len(accounts.attempts) != i+1 || accounts.attempts[i] != sender || s.writes != 1 {
+				t.Fatalf("pass %d: expected a timeout for %s and no writes, got attempts %v and %d writes", i+1, sender, accounts.attempts, s.writes-1)
+			}
+			if i == 0 {
+				// The queue remembers its position after a restart.
+				if err := c.db.Close(); err != nil {
+					t.Fatal(err)
+				}
+				c = open()
+			}
+		}
+		if err := timedTick(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+		entries, err := s.list(ctx, entryType)
+		if err != nil || len(entries) != 1 || entries[0].ParentID != ticket.AssetID || entries[0].Payload != "Own ticket reply" {
+			t.Fatalf("exact-owner reply did not reach its ticket: %+v, %v", entries, err)
+		}
+		for _, id := range []string{"in-1", "in-2"} {
+			if j, err := c.job(id); err != nil || j.State != "queued" {
+				t.Fatalf("%s was not left retryable: state=%q, err=%v", id, j.State, err)
+			}
+		}
+		c.portal.accounts = fileAccounts{}
+		mailTick(t, c)
+		for _, id := range []string{"in-1", "in-2"} {
+			if j, err := c.job(id); err != nil || j.State != "done" || j.Ticket == 0 {
+				t.Fatalf("%s did not recover: state=%q, ticket=%d, err=%v", id, j.State, j.Ticket, err)
+			}
+		}
+	})
 }
 
 func TestMailExplicitRetryOnlyAfterDefiniteRejection(t *testing.T) {

@@ -332,6 +332,9 @@ func (s *portal) accountReview(w http.ResponseWriter, r *http.Request, who accou
 	if len(parts) == 2 {
 		action = "/" + parts[1]
 	}
+	if r.Method == "POST" && (action == "/answer" || action == "/close") {
+		q.PortalProof = s.writeProof(who)
+	}
 	s.reviewRun(w, r, q, "/abnahmen/"+q.RunID, action, "", "", false)
 }
 
@@ -509,8 +512,9 @@ func (s *portal) reviewRun(w http.ResponseWriter, r *http.Request, q p.ReviewReq
 		w.WriteHeader(405)
 		return
 	}
-	q.Op = "run_get"
-	res, ok := s.callReview(w, r, q)
+	read := q
+	read.Op, read.PortalProof = "run_get", nil
+	res, ok := s.callReview(w, r, read)
 	if !ok {
 		return
 	}

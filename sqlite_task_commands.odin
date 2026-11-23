@@ -180,6 +180,7 @@ sqlite_execute_task_command :: proc(store: ^db.Store, request: ^db.Request, outp
 	if request.operation == .Monitor_Maintenance do return sqlite_monitor_maintenance(store, request, output)
 	if request.opcode == .C_Chronicle do return sqlite_execute_chronicle(store, request, output)
 	if request.opcode == .C_Review do return sqlite_execute_review(store, request, output)
+	if request.opcode == .C_PortalAccount do return sqlite_execute_portal_account(store, request, output)
 	#partial switch request.opcode {
 	case .C_SendMessage, .C_SendMessageV2, .C_SubscribeConvs, .C_SubscribeConvsV2, .C_UnsubscribeConvs, .C_ListMessagesBefore, .C_ReplayMessagesAfter:
 		return sqlite_authorize_dm_request(store, request, output)
@@ -336,7 +337,7 @@ worker_db_command_error :: proc(c: ^NRC_Connection, opcode: pr.Opcode, correlati
 		send_workspace_overview(c, {error = transmute([]byte)text, correlation_id = correlation})
 	case .C_ListHistory:
 		send_history_error(c, correlation, text)
-	case .C_Chronicle, .C_Review:
+	case .C_Chronicle, .C_Review, .C_PortalAccount:
 		send_error_response(c, opcode, text, correlation)
 	case .C_ListTasksPaged:
 		send_task_list_page(c, 0, nil, false, 0, 0, 0, text, correlation)
@@ -389,6 +390,8 @@ worker_db_complete_command :: proc(c: ^NRC_Connection, correlation: u32, job: ^d
 			case .C_QueryTickets:
 				text = "Failed to query tickets"
 				if job.result.status == sql.TOOBIG do text = "Ticket query exceeds response limit"
+			case .C_PortalAccount:
+				text = "Portal account storage unavailable"
 			case .C_ListTaskSlices:
 				text = "Failed to read slices"
 			case .C_SearchCustomers:

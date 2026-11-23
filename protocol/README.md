@@ -124,8 +124,8 @@ its own cursor and the client asks for the next one when it needs it.
 invalid before any payload parsing happens, so a new opcode must be added to both
 the enum and the range check in `protocol/protocol.odin`.
 
-- Client to server: `1-3`, `8`, `16-77`
-- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-182`
+- Client to server: `1-3`, `8`, `16-78`
+- Server to client: `100`, `102-111`, `121-127`, `130-147`, `150-183`
 
 ### Client to Server
 
@@ -186,6 +186,7 @@ the enum and the range check in `protocol/protocol.odin`.
 | 75 | `C_MonitorHistory` | Read immutable pending availability pages or acknowledge a stored snapshot |
 | 76 | `C_ListOpenIncidents` | Workspace-wide open incidents, paginated by instance ID |
 | 77 | `C_Review` | Standalone review forms, team runs and scoped guest access; JSON with trailing correlation |
+| 78 | `C_PortalAccount` | Private portal account command; JSON with trailing correlation |
 
 #### Assets
 
@@ -294,6 +295,7 @@ them.
 | 180 | `S_Chronicle` | Multiplexed JSON chronicle response with leading correlation |
 | 181 | `S_OpenIncidentPage` | Correlation u32 followed by bounded version-1 open-incident JSON |
 | 182 | `S_Review` | Review command result; correlation u32 followed by JSON ([contract](../docs/REVIEWS.md)) |
+| 183 | `S_PortalAccount` | Private portal account result; correlation u32 followed by JSON ([operations](../docs/TICKETS.md#portal-account-administration)) |
 
 #### Assets
 

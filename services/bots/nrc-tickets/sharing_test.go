@@ -45,10 +45,11 @@ func TestSharedTicketGrantRevokedDuringUpload(t *testing.T) {
 func sharingFixture(t *testing.T) (*portal, *fakeSource) {
 	s, f := fixture(t)
 	f.next = 200
-	s.accounts[0].ContactID = "51"
-	bea := s.accounts[0]
+	accounts := s.accounts.(fileAccounts)
+	accounts[0].ContactID = "51"
+	bea := accounts[0]
 	bea.Login, bea.Requester, bea.Name, bea.ContactID = "bea", "bea@example.test", "Bea", "52"
-	s.accounts = append(s.accounts, bea)
+	s.accounts = append(accounts, bea)
 	a := f.assets[2]
 	var original ticketPreview
 	json.Unmarshal([]byte(a.Preview), &original)
@@ -173,9 +174,9 @@ func TestSharingFailsClosedButKeepsOwnTickets(t *testing.T) {
 			s, f := sharingFixture(t)
 			switch change {
 			case "unmapped":
-				s.accounts[0].ContactID = ""
+				s.accounts.(fileAccounts)[0].ContactID = ""
 			case "different_company":
-				s.accounts[0].CompanyID = "999"
+				s.accounts.(fileAccounts)[0].CompanyID = "999"
 			case "removed_edge":
 				f.links = f.links[1:]
 			case "deleted_contact":
@@ -207,7 +208,7 @@ func TestAccountContactBindings(t *testing.T) {
 	h, _ := bcrypt.GenerateFromPassword([]byte("test-only-long-password"), 12)
 	for _, variant := range []string{"valid", "unmapped", "duplicate", "missing_company", "noncanonical"} {
 		t.Run(variant, func(t *testing.T) {
-			a := []account{{"anna", string(h), "anna@example.test", "Anna", "123", "51"}}
+			a := []account{{Login: "anna", PasswordHash: string(h), Requester: "anna@example.test", Name: "Anna", CompanyID: "123", ContactID: "51"}}
 			switch variant {
 			case "unmapped":
 				a[0].ContactID = ""

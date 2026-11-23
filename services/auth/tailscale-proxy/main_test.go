@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +18,9 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"github.com/coder/websocket"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -166,6 +171,171 @@ func TestInjectIdentityHeadersUserNode(t *testing.T) {
 	}
 	if got := req.Header.Get("X-Tailscale-User"); got != "alice@example.com" {
 		t.Errorf("X-Tailscale-User = %q", got)
+	}
+}
+
+func TestPortalAdminProofKeyConfiguration(t *testing.T) {
+	value := strings.Repeat("ab", sha256.Size)
+	for _, tc := range []struct {
+		value, shared string
+		wantErr       bool
+	}{
+		{"", "jwt", false},
+		{value, "jwt", false},
+		{"not-hex", "jwt", true},
+		{value[:62], "jwt", true},
+		{value, strings.ToUpper(value), true},
+		{strings.Repeat("61", sha256.Size), strings.Repeat("a", sha256.Size), true},
+	} {
+		key, err := parsePortalAccountAdminKey(tc.value, tc.shared)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("unexpected config validation result: %v", err)
+		}
+		if !tc.wantErr && hex.EncodeToString(key) != tc.value {
+			t.Fatal("configured key was not hex-decoded")
+		}
+	}
+}
+
+func TestInjectIdentityHeadersPortalAdminProof(t *testing.T) {
+	previous, previousSubjects := portalAccountAdminKey, portalAdminSubjects
+	t.Cleanup(func() { portalAccountAdminKey, portalAdminSubjects = previous, previousSubjects })
+	portalAdminSubjects = map[string][]string{"workspace": {"alice@example.com"}, "search": {"alice@example.com"}}
+	key := bytes.Repeat([]byte{0xab}, sha256.Size)
+	profile := &tailcfg.UserProfile{ID: 17, LoginName: "alice@example.com"}
+	human := fakeWhoIsClient{response: &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: profile}}
+	tagged := fakeWhoIsClient{response: &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:ci"}}, UserProfile: profile}}
+	noNode := fakeWhoIsClient{response: &apitype.WhoIsResponse{UserProfile: profile}}
+	for _, tc := range []struct {
+		name, method, path           string
+		whois                        fakeWhoIsClient
+		websocket, configured, proof bool
+	}{
+		{"verified human", http.MethodGet, "/workspace", human, true, true, true},
+		{"admin in another workspace", http.MethodGet, "/other", human, true, true, false},
+		{"tagged node", http.MethodGet, "/workspace", tagged, true, true, false},
+		{"unknown node", http.MethodGet, "/workspace", noNode, true, true, false},
+		{"ordinary HTTP", http.MethodGet, "/workspace", human, false, true, false},
+		{"upgrade on POST", http.MethodPost, "/workspace", human, true, true, false},
+		{"sidecar route", http.MethodGet, "/search", human, true, true, false},
+		{"key absent", http.MethodGet, "/workspace", human, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			portalAccountAdminKey = nil
+			if tc.configured {
+				portalAccountAdminKey = key
+			}
+			req := httptest.NewRequest(tc.method, "https://nrc"+tc.path, nil)
+			if tc.websocket {
+				req.Header.Set("Connection", "keep-alive, Upgrade")
+				req.Header.Set("Upgrade", "websocket")
+			}
+			req.Header.Add("x-nrc-PORTAL-admin-proof", "caller assertion one")
+			req.Header.Add(portalAdminProofHeader, "caller assertion two")
+			req.Header.Set("X-NRC-Auth", "caller token")
+			if _, err := injectIdentityHeaders(req, tc.whois); err != nil {
+				t.Fatal(err)
+			}
+			proofs := req.Header.Values(portalAdminProofHeader)
+			if !tc.proof {
+				if len(proofs) != 0 {
+					t.Fatal("unsigned request carried a portal admin proof")
+				}
+				return
+			}
+			token := req.Header.Get("X-NRC-Auth")
+			if token == "" || token == "caller token" {
+				t.Fatal("expected regenerated signed token")
+			}
+			mac := hmac.New(sha256.New, key)
+			mac.Write([]byte(token))
+			if len(proofs) != 1 || proofs[0] != hex.EncodeToString(mac.Sum(nil)) {
+				t.Fatal("expected one generated proof over the exact signed token")
+			}
+		})
+	}
+}
+
+func TestPortalAdminTransportKeepsUpgradeOffOrdinaryUpstream(t *testing.T) {
+	oldKey, oldJWT, oldSubjects := portalAccountAdminKey, jwtSecret, portalAdminSubjects
+	t.Cleanup(func() { portalAccountAdminKey, jwtSecret, portalAdminSubjects = oldKey, oldJWT, oldSubjects })
+	portalAccountAdminKey = bytes.Repeat([]byte{0x21}, sha256.Size)
+	portalAdminSubjects = map[string][]string{"alice-private": {"alice@example.com"}}
+	jwtSecret = []byte("fixture-jwt-signing-key")
+	ordinary := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(portalAdminProofHeader) != "" {
+			t.Error("admin proof reached the ordinary upstream")
+		}
+		w.WriteHeader(http.StatusTeapot)
+	})
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mac := hmac.New(sha256.New, portalAccountAdminKey)
+		mac.Write([]byte(r.Header.Get("X-NRC-Auth")))
+		if r.URL.Path != "/alice-private" || r.Header.Get(portalAdminProofHeader) != hex.EncodeToString(mac.Sum(nil)) {
+			t.Error("private upstream did not receive the verified workspace upgrade")
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer c.CloseNow()
+		kind, body, err := c.Read(r.Context())
+		if err == nil {
+			err = c.Write(r.Context(), kind, body)
+		}
+		if err != nil {
+			t.Error(err)
+		}
+	}))
+	defer backend.Close()
+	if _, err := portalAdminTransport(ordinary, ""); err == nil {
+		t.Fatal("missing private upstream was accepted")
+	}
+	upstream, err := portalAdminTransport(ordinary, backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := fakeWhoIsClient{response: &apitype.WhoIsResponse{
+		Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{ID: 17, LoginName: "alice@example.com"},
+	}}
+	h := httptest.NewServer(proxyHandler(upstream, identity, workspaceTestPolicy(t)))
+	defer h.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	header := http.Header{portalAdminProofHeader: {"client-supplied-proof"}}
+	dial := func(path string) (*websocket.Conn, *http.Response, error) {
+		return websocket.Dial(ctx, "ws"+strings.TrimPrefix(h.URL, "http")+path, &websocket.DialOptions{HTTPHeader: header})
+	}
+	c, _, err := dial("/alice-private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseNow()
+	if err := c.Write(ctx, websocket.MessageBinary, []byte("fixture admin frame")); err != nil {
+		t.Fatal(err)
+	}
+	if kind, body, err := c.Read(ctx); err != nil || kind != websocket.MessageBinary || string(body) != "fixture admin frame" {
+		t.Fatalf("protected WebSocket round trip failed: %v", err)
+	}
+	if _, resp, err := dial("/bob-private"); err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("workspace policy did not block the upgrade: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://nrc/search/health", nil)
+	req.Header = header.Clone()
+	w := httptest.NewRecorder()
+	proxyHandler(upstream, identity, workspaceTestPolicy(t)).ServeHTTP(w, req)
+	if w.Code != http.StatusTeapot {
+		t.Fatalf("ordinary HTTP routed incorrectly: %d", w.Code)
+	}
+	backend.Close()
+	if _, resp, err := dial("/alice-private"); err == nil || resp == nil || resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("unavailable protected upstream did not fail closed: %v", err)
+	}
+	if _, resp, err := dial("/ordinary-workspace"); err == nil || resp == nil || resp.StatusCode != http.StatusTeapot {
+		t.Fatalf("ordinary workspace upgrade did not reach the ordinary upstream: %v", err)
 	}
 }
 

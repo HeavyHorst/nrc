@@ -421,29 +421,25 @@ func (c *mailChannel) inbound(ctx context.Context, j *mailJob) error {
 		j.State, j.Reason = "quarantine", "invalid, unknown or ambiguous ticket reply address"
 		return c.put(*j)
 	}
+	contactID, companyID := "", ""
 	if parent != 0 {
 		a, e := c.portal.source.get(ctx, parent)
 		if e != nil {
 			return e
 		}
-		v := mailFields(a)
-		who := account{Requester: original.From, Name: original.Name}
-		for _, candidate := range c.portal.accounts {
-			if candidate.Requester == original.From {
-				who = candidate
-				break
-			}
+		allowed, e := c.canReply(ctx, a, original.From)
+		if e != nil {
+			return e
 		}
-		if _, ok := c.portal.project(a, who, c.portal.sharedContacts(ctx, who)); !ok {
+		if !allowed {
 			j.State, j.Reason = "quarantine", "sender no longer has ticket access"
 			return c.put(*j)
 		}
-		if mailString(v, "requester") == "" {
-			return errors.New("invalid parent")
+	} else {
+		who, mapped, e := c.portal.accounts.mapping(ctx, original.From)
+		if e != nil {
+			return e
 		}
-	}
-	contactID, companyID := "", ""
-	if parent == 0 {
 		contacts, e := c.portal.source.list(ctx, p.AssetTypeCustomerContact)
 		if e != nil {
 			return e
@@ -471,10 +467,8 @@ func (c *mailChannel) inbound(ctx context.Context, j *mailJob) error {
 		}
 		// Reuse only an explicit existing account company/contact mapping. New
 		// addresses never acquire a customer company through domain inference.
-		for _, who := range c.portal.accounts {
-			if who.Requester == original.From && who.ContactID == contactID {
-				companyID = who.CompanyID
-			}
+		if mapped && who.ContactID == contactID {
+			companyID = who.CompanyID
 		}
 	}
 	attachments, err := c.upload(ctx, original.Files)
@@ -487,14 +481,11 @@ func (c *mailChannel) inbound(ctx context.Context, j *mailJob) error {
 		if e != nil {
 			return e
 		}
-		who := account{Requester: original.From, Name: original.Name}
-		for _, candidate := range c.portal.accounts {
-			if candidate.Requester == original.From {
-				who = candidate
-				break
-			}
+		allowed, e := c.canReply(ctx, current, original.From)
+		if e != nil {
+			return e
 		}
-		if _, ok := c.portal.project(current, who, c.portal.sharedContacts(ctx, who)); !ok {
+		if !allowed {
 			j.State, j.Reason = "quarantine", "ticket access changed during upload"
 			return c.put(*j)
 		}
@@ -531,6 +522,25 @@ func (c *mailChannel) inbound(ctx context.Context, j *mailJob) error {
 	}
 	j.State, j.Reason = "done", ""
 	return c.put(*j)
+}
+
+// The caller already validated the reply token. Exact ticket ownership is
+// independent of portal accounts; only shared access needs a mapping.
+func (c *mailChannel) canReply(ctx context.Context, parent p.Asset, sender string) (bool, error) {
+	requester := mailString(mailFields(parent), "requester")
+	if requester == "" {
+		return false, nil
+	}
+	if requester == sender {
+		_, allowed, err := c.portal.project(ctx, parent, account{Requester: sender}, nil)
+		return allowed, err
+	}
+	who, found, err := c.portal.accounts.mapping(ctx, sender)
+	if err != nil || !found {
+		return false, err
+	}
+	_, allowed, err := c.portal.project(ctx, parent, who, c.portal.sharedContacts(ctx, who))
+	return allowed, err
 }
 
 func (c *mailChannel) patchStatus(ctx context.Context, id uint64, status string) error {
@@ -736,12 +746,28 @@ func (c *mailChannel) tick(ctx context.Context) error {
 		return err
 	}
 	sort.Slice(jobs, func(i, j int) bool { return jobs[i].ID < jobs[j].ID })
-	for _, job := range jobs {
+	var queueAfter string
+	if err := c.db.View(func(tx *bolt.Tx) error {
+		queueAfter = string(tx.Bucket([]byte("mail-v1")).Get([]byte("queue-after")))
+		return nil
+	}); err != nil {
+		return err
+	}
+	start := sort.Search(len(jobs), func(i int) bool { return jobs[i].ID > queueAfter })
+	for i := range jobs {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		job := jobs[(start+i)%len(jobs)]
 		if job.State != "queued" {
 			continue
+		}
+		// Advance before processing so a job that consumes the pass budget
+		// cannot starve later jobs. This changes order, not retry eligibility.
+		if err := c.db.Update(func(tx *bolt.Tx) error {
+			return tx.Bucket([]byte("mail-v1")).Put([]byte("queue-after"), []byte(job.ID))
+		}); err != nil {
+			return err
 		}
 		var err error
 		if job.Direction == "in" {

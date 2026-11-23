@@ -121,11 +121,34 @@ Use the [Compose deployment](../README.md#quickstart) for the complete web appli
 Production serves the complete generated `client/dist/`, not the source directory.
 After frontend changes, rebuild the Nginx image and reload open browser tabs.
 
+## SQLite schema 12
+
+Portal account administration adds private account and audit tables. Upgrading
+storage does not import the portal's legacy JSON file. See the separate
+[account import and cutover procedure](TICKETS.md#switching-from-an-existing-accounts-file).
+
+Stop all writers, back up the complete stopped data directory and rehearse on
+a disposable copy. For every schema-11 shard in the active generation, open
+`sqlite3 -bail "$SHARD"` from the repository root:
+
+```sql
+PRAGMA foreign_keys=ON;
+BEGIN IMMEDIATE;
+.read workspace_db/portal_accounts.sql
+COMMIT;
+PRAGMA user_version;
+PRAGMA integrity_check;
+PRAGMA foreign_key_check;
+```
+
+Require version 12, `ok`, and no foreign-key violations. Upgrade all shards
+before starting the new binary; startup does not migrate an existing database.
+Restore the stopped backup before rolling back to a schema-11 binary.
+
 ## SQLite schema 11
 
-Standalone review forms use schema 11. Startup rejects older databases without
-modifying them. New databases include `workspace_db/reviews.sql`; the upgrade
-adds private run, participant, invitation and answer indexes without rewriting
+Standalone review forms were introduced in schema 11. This upgrade adds
+private run, participant, invitation and answer indexes without rewriting
 existing records. See [review operations](REVIEWS.md) for the protocol and access rules.
 
 Stop every writer, back up the complete stopped data directory and rehearse on

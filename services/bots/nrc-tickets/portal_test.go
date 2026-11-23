@@ -36,8 +36,8 @@ func TestStaffSchedulingIsPrivate(t *testing.T) {
 	s := &portal{}
 	for _, extra := range []string{"", `,"priority":"urgent","follow_up_at":"123"`} {
 		a := p.Asset{AssetID: 1, AssetType: ticketType, Preview: `{"version":1,"title":"Help","requester":"ada","status":"open"` + extra + `}`, Payload: "original"}
-		v, ok := s.project(a, account{Requester: "ada"}, nil)
-		if !ok {
+		v, ok, err := s.project(t.Context(), a, account{Requester: "ada"}, nil)
+		if !ok || err != nil {
 			t.Fatal("optional scheduling broke projection")
 		}
 		b, err := json.Marshal(v)
@@ -125,7 +125,7 @@ func fixture(t *testing.T) (*portal, *fakeSource) {
 		id := uint64(10 + i)
 		f.assets[id] = p.Asset{AssetID: id, AssetType: entryType, ParentType: 2, ParentID: 1, Preview: string(v), Payload: body, Attachments: []p.Attachment{{Filename: "HIDDEN_FILENAME"}}}
 	}
-	return &portal{source: f, accounts: []account{{Login: "anna", PasswordHash: string(h), Requester: "anna@example.test", Name: "Anna", CompanyID: "123"}}, origin: "https://portal.example.test"}, f
+	return &portal{source: f, accounts: fileAccounts{{Login: "anna", PasswordHash: string(h), Requester: "anna@example.test", Name: "Anna", CompanyID: "123"}}, origin: "https://portal.example.test"}, f
 }
 func call(s *portal, method, path, form, origin, login, password string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(form))
@@ -305,7 +305,7 @@ func TestAccountsFailClosed(t *testing.T) {
 		}
 	}
 	h, _ := bcrypt.GenerateFromPassword([]byte("long-random-test-password"), 12)
-	a := []account{{"anna", string(h), "anna@example.test", "Anna", "123", ""}}
+	a := []account{{Login: "anna", PasswordHash: string(h), Requester: "anna@example.test", Name: "Anna", CompanyID: "123"}}
 	b, _ := json.Marshal(a)
 	path := filepath.Join(t.TempDir(), "accounts.json")
 	os.WriteFile(path, b, 0600)

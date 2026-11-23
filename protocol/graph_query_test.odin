@@ -572,10 +572,14 @@ test_get_opcode_rejects_out_of_range :: proc(t: ^testing.T) {
 
 	// The highest allocated client and server opcodes are the boundary; one
 	// above each must still be rejected.
-	endian.put_u16(buf[:], .Big, u16(Opcode.C_Review) + 1)
+	endian.put_u16(buf[:], .Big, u16(Opcode.C_PortalAccount))
+	testing.expect_value(t, get_opcode(buf[:]), Opcode.C_PortalAccount)
+	endian.put_u16(buf[:], .Big, u16(Opcode.C_PortalAccount) + 1)
 	testing.expect_value(t, get_opcode(buf[:]), Opcode(0xFFFF))
 
-	endian.put_u16(buf[:], .Big, u16(Opcode.S_Review) + 1)
+	endian.put_u16(buf[:], .Big, u16(Opcode.S_PortalAccount))
+	testing.expect_value(t, get_opcode(buf[:]), Opcode.S_PortalAccount)
+	endian.put_u16(buf[:], .Big, u16(Opcode.S_PortalAccount) + 1)
 	testing.expect_value(t, get_opcode(buf[:]), Opcode(0xFFFF))
 }
 

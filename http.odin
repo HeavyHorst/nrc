@@ -59,23 +59,24 @@ Server queue full, retry after 5 seconds`
 // HTTP_Upgrade_Connection owns a socket while it moves from main-thread HTTP
 // receive to target-worker authentication and HTTP 101 completion.
 HTTP_Upgrade_Connection :: struct {
-	sock:                net.TCP_Socket,
-	server:              ^NRC_Server,
-	allocator:           runtime.Allocator,
-	state:               Connection_State,
-	workspace_id:        string,
-	verified_username:   string,
-	verified_subject:    string,
-	user_type:           pr.User_Type,
-	authenticated:       bool,
-	chronicle_access:    u8,
+	sock:                                     net.TCP_Socket,
+	server:                                   ^NRC_Server,
+	allocator:                                runtime.Allocator,
+	state:                                    Connection_State,
+	workspace_id:                             string,
+	verified_username:                        string,
+	verified_subject:                         string,
+	user_type:                                pr.User_Type,
+	authenticated:                            bool,
+	chronicle_access:                         u8,
+	portal_account_admin, portal_account_bot: bool,
 
 	// HTTP upgrade tracking
-	http_received:       int,
-	http_remainder_buf:  []u8,
-	http_header_end:     int,
-	target_worker_index: int,
-	httpResponseBuffer:  [126]byte,
+	http_received:                            int,
+	http_remainder_buf:                       []u8,
+	http_header_end:                          int,
+	target_worker_index:                      int,
+	httpResponseBuffer:                       [126]byte,
 }
 
 http_upgrade_allocator :: #force_inline proc(c: ^HTTP_Upgrade_Connection) -> runtime.Allocator {
@@ -174,21 +175,22 @@ HTTP_Upgrade_Decision_Kind :: enum {
 }
 
 HTTP_Upgrade_Decision :: struct {
-	kind:                    HTTP_Upgrade_Decision_Kind,
-	workspace_id:            string,
-	sec_websocket_key:       string,
-	target_worker_index:     int,
-	verified_username:       string,
-	verified_username_owned: bool,
-	verified_subject:        string,
-	user_type:               pr.User_Type,
-	authenticated:           bool,
-	chronicle_access:        u8,
-	key_present:             bool,
-	upgrade_present:         bool,
-	version:                 string,
-	workspace_present:       bool,
-	reason:                  string,
+	kind:                                     HTTP_Upgrade_Decision_Kind,
+	workspace_id:                             string,
+	sec_websocket_key:                        string,
+	target_worker_index:                      int,
+	verified_username:                        string,
+	verified_username_owned:                  bool,
+	verified_subject:                         string,
+	user_type:                                pr.User_Type,
+	authenticated:                            bool,
+	chronicle_access:                         u8,
+	portal_account_admin, portal_account_bot: bool,
+	key_present:                              bool,
+	upgrade_present:                          bool,
+	version:                                  string,
+	workspace_present:                        bool,
+	reason:                                   string,
 }
 
 http_ascii_equal_fold :: #force_inline proc(a, b: string) -> bool {
@@ -240,6 +242,8 @@ parse_http_upgrade_decision :: proc(request_headers: string, service_secret: str
 	workspace_id: string
 	nrc_auth_token: string
 	nrc_auth_present: bool
+	portal_admin_proof: string
+	portal_admin_proof_present: bool
 	nrc_user_type: string
 	nrc_bot_secret: string
 	nrc_bot_nickname: string
@@ -292,6 +296,12 @@ parse_http_upgrade_decision :: proc(request_headers: string, service_secret: str
 			nrc_auth_token = value
 			continue
 		}
+		if http_ascii_equal_fold(header_name, "X-NRC-Portal-Admin-Proof") {
+			// Ambiguous proofs never grant admin, but do not invalidate ordinary auth.
+			portal_admin_proof = portal_admin_proof_present ? "" : value
+			portal_admin_proof_present = true
+			continue
+		}
 		if http_ascii_equal_fold(header_name, "X-NRC-User-Type") {
 			nrc_user_type = value
 			continue
@@ -330,7 +340,7 @@ parse_http_upgrade_decision :: proc(request_headers: string, service_secret: str
 		}
 	}
 
-	jwt_identity, jwt_ok, jwt_reason := validate_nrc_jwt(nrc_auth_token, workspace_id, workspace_access_enabled)
+	jwt_identity, jwt_ok, jwt_reason := validate_nrc_jwt(nrc_auth_token, workspace_id, workspace_access_enabled, portal_admin_proof)
 	// An explicitly supplied JWT must never fall back to broad legacy service
 	// credentials, including a malformed or unauthorized Chronicle service JWT.
 	if !jwt_ok && (user_type == .User || nrc_auth_present) {
@@ -362,6 +372,8 @@ parse_http_upgrade_decision :: proc(request_headers: string, service_secret: str
 	decision.user_type = user_type
 	decision.authenticated = jwt_ok || user_type != .User
 	decision.chronicle_access = jwt_identity.chronicle_access
+	decision.portal_account_admin = jwt_ok && jwt_identity.portal_account_admin && (user_type == .User || user_type == .Admin)
+	decision.portal_account_bot = verified_username == "nrc-tickets" && (!jwt_ok ? user_type == .Bot : jwt_identity.user_type == .Bot)
 	return decision
 }
 
@@ -584,6 +596,8 @@ worker_process_http_upgrade :: proc(c: ^HTTP_Upgrade_Connection) {
 	c.user_type = decision.user_type
 	c.authenticated = decision.authenticated
 	c.chronicle_access = decision.chronicle_access
+	c.portal_account_admin = decision.portal_account_admin
+	c.portal_account_bot = decision.portal_account_bot
 
 	websocket_accept: [60]byte
 	copy(websocket_accept[:], decision.sec_websocket_key)

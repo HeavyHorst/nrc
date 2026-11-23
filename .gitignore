@@ -16,6 +16,8 @@ services/bots/nrc-ai/nrc-ai
 *.agekey
 /publish.env
 /monitoring.env
+/portal-accounts.env
+/portal-admin.env
 /publish-branding/
 
 # Benchmark binary

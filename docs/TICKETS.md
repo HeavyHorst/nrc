@@ -262,7 +262,83 @@ making a new proposal; this is not an idempotency-key implementation. A definite
 server rejection remains retryable. The approval UI currently reports this as an
 apply error; the server enforces the replay block even if it is selected again.
 
-## Private account provisioning
+## Portal account administration
+
+In database mode, administer accounts through the NRC workspace connection:
+
+```sh
+nrc ticket account list
+nrc ticket account get 42
+nrc ticket account disable 42
+nrc ticket account enable 42
+nrc ticket account reset-password 42
+```
+
+Use `nrc ticket account create --help` for account fields. Creation and password
+reset prompt for the password without echoing it. Never share an account between
+customers. Verify the `requester` before creating an account: it immediately
+grants access to existing tickets with that exact requester. Abnahmen still
+require an explicit assignment to each run. Account changes do not rewrite any
+ticket or review. In database mode, the server checks the account revision in
+the same transaction that saves a ticket, reply, or review submission. A request
+that started before a suspension or password reset cannot save afterward. The
+original sender can still answer their own ticket by mail with a valid reply token.
+
+In the private `portal-accounts.env` next to the host `.env`, set
+`NRC_PORTAL_ACCOUNT_SERVICE_KEY` to a separate random 32-byte key encoded as
+64 hex characters. Keep the file at mode `0600`. The deployment loads it only
+into the websocket server and portal; do not put the key in the general `.env`
+shared by the other services. Do not publish resolved Compose configuration.
+The portal needs the key for account lookups, in addition to `NRC_BOT_SECRET`.
+In a separate `portal-admin.env` (also mode `0600`), set
+`NRC_PORTAL_ACCOUNT_ADMIN_KEY` to a different random 32-byte key encoded as
+64 hex characters. In the same file, set `NRC_PORTAL_ACCOUNT_ADMIN_SUBJECTS`
+to a JSON object mapping exact workspace names to arrays of full Tailscale
+login names, for example `{"support":["alice@example.com"]}`. Only the Tailscale
+identity proxy and the websocket server receive this file. Connect the CLI
+through that proxy as an untagged human
+user. The proxy proves the authenticated workspace identity to the server;
+a token signed with the shared infrastructure JWT key alone cannot administer
+accounts. Do not put the admin key in the shared `.env` or the portal's env file.
+Compose sends allowlisted admin WebSockets directly from the identity proxy to NRC
+over `portal-admin-network`, an internal bridge with only those two services.
+Do not attach other services to it. Other users still connect through Nginx.
+Nginx never forwards the admin proof, and a failed private connection does not
+fall back to Nginx. Outside Compose, set
+`NRC_PORTAL_ACCOUNT_ADMIN_BACKEND` to a dedicated origin on an equivalently
+isolated link, or use `https://` with a certificate the proxy trusts.
+
+### Switching from an existing accounts file
+
+Before running the new server on existing data, follow the offline
+[schema 12 upgrade](DEVELOPMENT.md#sqlite-schema-12). If needed, keep the portal
+in file mode during the upgrade by including `compose.ticket-accounts-file.yml`
+after `compose.tickets.yml` and retaining the existing absolute host path in
+`TICKETS_ACCOUNTS_FILE`. Stop changing the file before importing it.
+
+```sh
+nrc ticket account import --file /secure/ticket-accounts.json --dry-run
+nrc ticket account import --file /secure/ticket-accounts.json --apply
+```
+
+Run these commands as an allowlisted administrator connected to the target
+workspace. The input is the existing private hash file, not the provisioning
+input containing plaintext. A batch accepts at most 64 accounts; a conflicting
+batch is rejected without partial changes. The import keeps the login, requester,
+bcrypt hash and company/contact binding. If a row points to a missing company,
+missing contact or invalid membership, reconcile that row in a private copy:
+restore the correct membership or remove the stale binding. Do not change its
+requester. Run the dry run again before applying. For a new portal with no
+legacy file, skip the import and create accounts with the CLI instead.
+
+Remove the file-mode overlay and recreate the portal in database mode. Confirm
+an imported account can sign in, open old tickets and see an assigned Abnahme.
+There is no automatic file fallback. After the first DB password change or
+suspension, do not switch back to the original file: doing so could restore
+obsolete credentials or access. Protect database backups as they now contain
+password hashes.
+
+### Legacy file provisioning
 
 There is no registration or default account. Create a private JSON input file
 with an editor/password manager (do not put passwords in shell commands, process
@@ -304,7 +380,9 @@ Required settings (no credential defaults):
 | `NRC_WORKSPACE` | Dedicated ticket workspace |
 | `NRC_BOT_SECRET` | Same infrastructure bot secret accepted by NRC; secret environment/file injection, never CLI |
 | `FILES_URL` | Private bot file-service origin, e.g. `http://tailscale-proxy:8094`; never the public customer hostname |
-| `TICKETS_ACCOUNTS_FILE` | Private account hash file path |
+| `TICKETS_ACCOUNTS_MODE` | `db` in the standard overlay; `file` for legacy operation |
+| `NRC_PORTAL_ACCOUNT_SERVICE_KEY` | Dedicated account lookup credential in DB mode |
+| `TICKETS_ACCOUNTS_FILE` | Private account hash file path, file mode only |
 | `TICKETS_ORIGIN` | Exact public HTTPS origin, e.g. `https://support.example.org`, no slash/path |
 | `TICKETS_ADDR` | Listen address; default `:8096` |
 
@@ -327,12 +405,21 @@ Optional overlay, from repository root (existing NRC `.env` required):
 docker compose --env-file .env -f docker/docker-compose.yml -f docker/compose.tickets.yml up -d --build tickets
 ```
 
-Set `NRC_TICKETS_WORKSPACE`, `TICKETS_ORIGIN`, and an **absolute host path**
-`TICKETS_ACCOUNTS_FILE` in the protected `.env`. The overlay reuses NRC's private
-network and bot secret, publishes only loopback 8096 and mounts the private
-account file plus operator branding. It does not mount attachments, a DB, or staff files. A host TLS
-proxy can forward to loopback 8096. Container root is retained to read the 0600
-bind-mounted file; capabilities are dropped and the filesystem is read-only.
+Set `NRC_TICKETS_WORKSPACE` and `TICKETS_ORIGIN` in the protected `.env` and
+configure the private account credentials above. In database mode, set
+`NRC_TICKETS_SERVER` to the private `wss://` base URL of an NRC WebSocket
+endpoint with a certificate trusted by the portal container. This endpoint must
+pass the workspace path and bot authentication to NRC and keep the final hop
+on loopback or equivalently isolated. The public customer hostname and the
+human identity proxy are not bot endpoints. The overlay does not set up that
+TLS endpoint. Plain `ws://` is accepted only for direct literal loopback during
+local testing (or the explicit legacy file mode). The overlay reuses NRC's
+private network and bot secret, publishes only loopback 8096 and mounts operator
+branding. It does not mount attachments, a DB, or staff files. A host TLS
+proxy can forward to loopback 8096. Capabilities are dropped and the filesystem
+is read-only. The optional file-mode overlay mounts a private 0600 accounts file.
+The regular `docker/deploy.sh` does not manage the ticket overlay. Keep it in
+the portal deployment's Compose arguments for later rebuilds as well.
 The `/tmp` tmpfs holds bounded multipart staging (112 MiB); limit concurrent
 uploads at the reverse proxy. Rebuild the proxy too when upgrading from the
 download-only bot listener: `docker compose ... build tailscale-proxy`, then

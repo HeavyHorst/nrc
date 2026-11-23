@@ -66,6 +66,8 @@ worker_db_submit :: proc(c: ^NRC_Connection, request: db.Request, correlation: u
 	owned_request.subject = c.verified_subject
 	owned_request.chronicle_access = c.chronicle_access
 	owned_request.review_portal = c.user_type == .Bot && c.verified_username == "nrc-tickets"
+	owned_request.portal_account_admin = c.portal_account_admin
+	owned_request.portal_account_bot = c.portal_account_bot
 	if request.operation == .Create_Task {
 		owned_request.task.created_by = transmute([]byte)c.verified_username
 	}

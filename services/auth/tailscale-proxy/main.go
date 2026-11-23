@@ -30,6 +30,7 @@ import (
 	"time"
 
 	xhtml "golang.org/x/net/html"
+	"golang.org/x/net/http/httpguts"
 	tsclient "tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn/ipnstate"
@@ -44,11 +45,50 @@ var (
 )
 
 var (
-	jwtSecret   []byte
-	jwtIssuer   = "nrc-tailscale-proxy"
-	jwtAudience = "nrc"
-	jwtTTL      = 5 * time.Minute
+	jwtSecret             []byte
+	jwtIssuer             = "nrc-tailscale-proxy"
+	jwtAudience           = "nrc"
+	jwtTTL                = 5 * time.Minute
+	portalAccountAdminKey []byte
+	portalAdminSubjects   map[string][]string
 )
+
+const portalAdminProofHeader = "X-NRC-Portal-Admin-Proof"
+
+func parsePortalAccountAdminKey(value string, sharedKeys ...string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != sha256.Size {
+		return nil, errors.New("NRC_PORTAL_ACCOUNT_ADMIN_KEY must contain 64 hex digits")
+	}
+	for _, shared := range sharedKeys {
+		if strings.EqualFold(value, shared) || string(decoded) == shared {
+			return nil, errors.New("NRC_PORTAL_ACCOUNT_ADMIN_KEY must not reuse another credential")
+		}
+	}
+	return decoded, nil
+}
+
+func portalAdminTransport(ordinary http.Handler, backend string) (http.Handler, error) {
+	target, err := url.Parse(backend)
+	if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Hostname() == "" ||
+		target.User != nil || target.Path != "" || target.RawQuery != "" || target.ForceQuery || target.Fragment != "" {
+		return nil, errors.New("NRC_PORTAL_ACCOUNT_ADMIN_BACKEND must be a dedicated, isolated HTTP(S) origin")
+	}
+	protected := httputil.NewSingleHostReverseProxy(target)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil // Never send the proof or admin frames to an environment-configured HTTP proxy.
+	protected.Transport = transport
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(portalAdminProofHeader) != "" {
+			protected.ServeHTTP(w, r) // No fallback to the ordinary upstream on failure.
+			return
+		}
+		ordinary.ServeHTTP(w, r)
+	}), nil
+}
 
 type customerUsers map[string]struct{}
 
@@ -218,6 +258,15 @@ func main() {
 		log.Printf("WARNING: NRC_JWT_SECRET not set, using insecure default")
 	}
 	jwtSecret = []byte(jwtSecretValue)
+	portalAccountAdminKey, err = parsePortalAccountAdminKey(os.Getenv("NRC_PORTAL_ACCOUNT_ADMIN_KEY"), jwtSecretValue, os.Getenv("NRC_BOT_SECRET"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if config := os.Getenv("NRC_PORTAL_ACCOUNT_ADMIN_SUBJECTS"); config != "" {
+		if err := json.Unmarshal([]byte(config), &portalAdminSubjects); err != nil {
+			log.Fatal("invalid NRC_PORTAL_ACCOUNT_ADMIN_SUBJECTS")
+		}
+	}
 
 	if issuer := os.Getenv("NRC_JWT_ISSUER"); issuer != "" {
 		jwtIssuer = issuer
@@ -280,8 +329,16 @@ func main() {
 	// Enable WebSocket support by flushing responses immediately
 	proxy.FlushInterval = -1 // Flush immediately for streaming/WebSocket
 
+	var upstream http.Handler = proxy
+	if len(portalAccountAdminKey) != 0 {
+		upstream, err = portalAdminTransport(proxy, os.Getenv("NRC_PORTAL_ACCOUNT_ADMIN_BACKEND"))
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	// Handle both HTTPS and HTTP
-	handleHTTPS(ts, proxy, localClient, policy)
+	handleHTTPS(ts, upstream, localClient, policy)
 }
 
 func handleGetUsers(w http.ResponseWriter, r *http.Request, localClient tailscaleClient) {
@@ -1046,7 +1103,7 @@ func taggedNodeLogin(node *tailcfg.Node) (string, error) {
 
 func injectIdentityHeaders(r *http.Request, localClient whoIsClient) (string, error) {
 	// These headers are assertions by this boundary, never by its callers.
-	for _, header := range []string{"X-Tailscale-Login", "X-Tailscale-User", "X-Tailscale-Node", "X-NRC-Auth", "X-NRC-AI-Auth", "X-NRC-Publish-Auth", "X-NRC-Newsletter-Auth", "X-NRC-Calls-Auth", "X-NRC-User-Type", "X-NRC-Bot-Secret", "X-NRC-Bot-Nickname", "X-NRC-Denied-Workspaces"} {
+	for _, header := range []string{"X-Tailscale-Login", "X-Tailscale-User", "X-Tailscale-Node", "X-NRC-Auth", portalAdminProofHeader, "X-NRC-AI-Auth", "X-NRC-Publish-Auth", "X-NRC-Newsletter-Auth", "X-NRC-Calls-Auth", "X-NRC-User-Type", "X-NRC-Bot-Secret", "X-NRC-Bot-Nickname", "X-NRC-Denied-Workspaces"} {
 		r.Header.Del(header)
 	}
 	*r = *r.WithContext(context.WithValue(r.Context(), aiSubjectKey{}, ""))
@@ -1062,6 +1119,7 @@ func injectIdentityHeaders(r *http.Request, localClient whoIsClient) (string, er
 
 	fullLogin := ""
 	login := ""
+	verifiedHuman := false
 	if whois.Node != nil && whois.Node.IsTagged() {
 		login, err = taggedNodeLogin(whois.Node)
 		if err != nil {
@@ -1082,6 +1140,7 @@ func injectIdentityHeaders(r *http.Request, localClient whoIsClient) (string, er
 			return "", fmt.Errorf("empty login")
 		}
 		if whois.UserProfile.ID > 0 {
+			verifiedHuman = whois.Node != nil
 			subject := fmt.Sprintf("tailscale:user:%d", whois.UserProfile.ID)
 			*r = *r.WithContext(context.WithValue(r.Context(), aiSubjectKey{}, subject))
 		}
@@ -1104,6 +1163,15 @@ func injectIdentityHeaders(r *http.Request, localClient whoIsClient) (string, er
 		r.Header.Del("X-Tailscale-Node")
 	}
 	r.Header.Set("X-NRC-Auth", token)
+	// Only sign workspace upgrades, not HTTP requests or sidecar routes.
+	if len(portalAccountAdminKey) != 0 && verifiedHuman && r.Method == http.MethodGet &&
+		workspaceNamePattern.MatchString(workspace) && !strings.HasPrefix(workspace, "search") &&
+		slices.Contains(portalAdminSubjects[workspace], fullLogin) &&
+		httpguts.HeaderValuesContainsToken(r.Header.Values("Connection"), "upgrade") {
+		mac := hmac.New(sha256.New, portalAccountAdminKey)
+		mac.Write([]byte(token))
+		r.Header.Set(portalAdminProofHeader, hex.EncodeToString(mac.Sum(nil)))
+	}
 
 	usersMu.Lock()
 	users[login] = true
@@ -1177,7 +1245,7 @@ func proxyHandler(proxy http.Handler, localClient tailscaleClient, policy worksp
 	return workspaceBoundary(mux, localClient, policy)
 }
 
-func handleHTTPS(ts *tsnet.Server, proxy *httputil.ReverseProxy, localClient *tsclient.LocalClient, policy workspacePolicy) {
+func handleHTTPS(ts *tsnet.Server, proxy http.Handler, localClient *tsclient.LocalClient, policy workspacePolicy) {
 	// Listen on HTTPS with Tailscale TLS
 	lnHTTPS, err := ts.ListenTLS("tcp", ":443")
 	if err != nil {

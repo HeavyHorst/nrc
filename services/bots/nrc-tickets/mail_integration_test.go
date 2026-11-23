@@ -22,7 +22,7 @@ func TestMailNRCIntegration(t *testing.T) {
 	}
 	workspace := fmt.Sprintf("email-review-%d", time.Now().UnixNano())
 	s := nrcSource{server: strings.Replace(base, "http", "ws", 1), workspace: workspace, secret: "fixture-only"}
-	portal := &portal{source: s, files: httpFiles{base: base, workspace: workspace, secret: "fixture-only"}}
+	portal := &portal{source: s, files: httpFiles{base: base, workspace: workspace, secret: "fixture-only"}, accounts: fileAccounts{}}
 	c, err := openMailChannel(filepath.Join(t.TempDir(), "journal.db"), workspace, strings.Repeat("t", 32), portal, smtpMailConfig{From: "support@our.test"})
 	if err != nil {
 		t.Fatal(err)

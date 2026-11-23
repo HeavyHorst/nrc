@@ -222,6 +222,39 @@ instance and episode IDs, lifecycle times, acknowledgment and assignment.
 
 ## Staff tickets
 
+### Portal accounts
+
+Use the authenticated workspace connection with an allowlisted administrator
+identity. `create`, `reset-password` and `import` require `wss://` with verified
+TLS. For local testing they also accept direct `ws://` to a literal loopback IP
+such as `127.0.0.1` or `[::1]`, not `localhost`.
+
+```sh
+nrc ticket account list
+nrc ticket account get 42
+nrc ticket account create --login customer --name 'Customer' \
+  --requester customer@example.com --confirm
+nrc ticket account disable 42
+nrc ticket account enable 42
+nrc ticket account reset-password 42
+nrc ticket account import --file /secure/ticket-accounts.json --dry-run
+nrc ticket account import --file /secure/ticket-accounts.json --apply
+```
+
+Verify the exact requester before confirming creation: the new login can access
+existing tickets filed under that requester. Create and reset prompt twice for
+the password without echoing it; there is no password flag. Use the account ID
+from `list` or `get`, and pass the returned `cursor` to `list --cursor` for the
+next page when present. If a write is unconfirmed, check the current state
+before retrying.
+
+Import takes a private regular file (mode `0600` or `0400`) containing 1–64
+legacy bcrypt account records, not the plaintext provisioning file. It does
+not prompt: choose exactly one of `--dry-run` or `--apply`. Output does not
+include password hashes.
+
+### Tickets and sharing groups
+
 Company ticket-sharing groups are managed separately from individual tickets:
 
 ```sh

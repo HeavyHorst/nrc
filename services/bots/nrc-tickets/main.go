@@ -19,12 +19,15 @@ import (
 )
 
 type account struct {
-	Login        string `json:"login"`
-	PasswordHash string `json:"password_hash"`
-	Requester    string `json:"requester"`
-	Name         string `json:"name"`
-	CompanyID    string `json:"company_id"`
-	ContactID    string `json:"contact_id,omitempty"`
+	Login          string `json:"login"`
+	PasswordHash   string `json:"password_hash"`
+	Requester      string `json:"requester"`
+	Name           string `json:"name"`
+	CompanyID      string `json:"company_id"`
+	ContactID      string `json:"contact_id,omitempty"`
+	Disabled       bool   `json:"-"`
+	PortalID       string `json:"-"`
+	PortalRevision string `json:"-"`
 }
 
 func decimal(s string) bool {
@@ -61,7 +64,7 @@ func loadAccounts(path string) ([]account, error) {
 	contacts := map[string]bool{}
 	for _, v := range a {
 		cost, e := bcrypt.Cost([]byte(v.PasswordHash))
-		if v.Login == "" || len(v.Login) > 320 || strings.Contains(v.Login, ":") || seen[v.Login] || identities[v.Requester] || v.Requester == "" || len(v.Requester) > 320 || strings.TrimSpace(v.Requester) != v.Requester || strings.ToLower(v.Requester) != v.Requester || v.Name == "" || len(v.Name) > 256 || !decimal(v.CompanyID) || e != nil || cost < 12 || cost > 16 {
+		if !validAccountLogin(v.Login) || seen[v.Login] || identities[v.Requester] || v.Requester == "" || len(v.Requester) > 320 || strings.TrimSpace(v.Requester) != v.Requester || strings.ToLower(v.Requester) != v.Requester || v.Name == "" || len(v.Name) > 256 || !decimal(v.CompanyID) || e != nil || cost < 12 || cost > 16 {
 			return nil, errors.New("invalid or duplicate account")
 		}
 		if !decimal(v.ContactID) || v.ContactID != "" && (v.CompanyID == "" || contacts[v.ContactID]) {
@@ -101,7 +104,7 @@ func provision(path string) error {
 		if e != nil {
 			return e
 		}
-		out = append(out, account{v.Login, string(h), v.Requester, v.Name, v.CompanyID, v.ContactID})
+		out = append(out, account{Login: v.Login, PasswordHash: string(h), Requester: v.Requester, Name: v.Name, CompanyID: v.CompanyID, ContactID: v.ContactID})
 	}
 	f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if e != nil {
@@ -129,10 +132,6 @@ func main() {
 		}
 		return
 	}
-	accounts, e := loadAccounts(os.Getenv("TICKETS_ACCOUNTS_FILE"))
-	if e != nil {
-		log.Fatal("valid private TICKETS_ACCOUNTS_FILE required")
-	}
 	origin := os.Getenv("TICKETS_ORIGIN")
 	u, e := url.Parse(origin)
 	if e != nil || u.Scheme != "https" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
@@ -147,6 +146,11 @@ func main() {
 	if workspace == "" || secret == "" {
 		log.Fatal("NRC_WORKSPACE and NRC_BOT_SECRET required")
 	}
+	source := nrcSource{strings.TrimRight(server, "/"), workspace, secret}
+	accounts, e := configuredAccounts(source)
+	if e != nil {
+		log.Fatal(e)
+	}
 	filesURL := os.Getenv("FILES_URL")
 	files, e := url.Parse(filesURL)
 	if e != nil || (files.Scheme != "http" && files.Scheme != "https") || files.Host == "" || files.User != nil || files.RawQuery != "" || files.Fragment != "" || (files.Path != "" && files.Path != "/") {
@@ -156,7 +160,7 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
-	app := &portal{source: nrcSource{strings.TrimRight(server, "/"), workspace, secret}, files: httpFiles{strings.TrimRight(filesURL, "/"), workspace, secret}, brand: brand, accounts: accounts, origin: origin}
+	app := &portal{source: source, files: httpFiles{strings.TrimRight(filesURL, "/"), workspace, secret}, brand: brand, accounts: accounts, origin: origin}
 	if key := os.Getenv("TICKETS_GUEST_SESSION_KEY"); key != "" {
 		app.guestKey, e = hex.DecodeString(key)
 		if e != nil || len(app.guestKey) != 32 {

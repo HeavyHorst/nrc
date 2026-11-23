@@ -187,6 +187,13 @@ func (s nrcSource) create(ctx context.Context, a p.Asset) (p.Asset, error) {
 func (s nrcSource) createReply(ctx context.Context, a p.Asset, parentVersion int64) (p.Asset, error) {
 	return s.createAt(ctx, a, parentVersion)
 }
+func (s nrcSource) createPortalTicket(ctx context.Context, a p.Asset, requester string, proof p.PortalWriteProof) (p.Asset, error) {
+	body, err := p.EncodePortalTicketCreate(a, requester, proof, 1)
+	if err != nil {
+		return p.Asset{}, err
+	}
+	return s.sendAssetCreate(ctx, a, body)
+}
 func (s nrcSource) createAt(ctx context.Context, a p.Asset, parentVersion int64) (p.Asset, error) {
 	body, e := p.EncodeCreateAssetWithAttachmentsAndCorrelation(0, a.AssetType, a.ParentType, a.ParentID, a.Preview, a.Payload, a.Attachments, 1)
 	if parentVersion != 0 {
@@ -195,6 +202,9 @@ func (s nrcSource) createAt(ctx context.Context, a p.Asset, parentVersion int64)
 	if e != nil {
 		return p.Asset{}, e
 	}
+	return s.sendAssetCreate(ctx, a, body)
+}
+func (s nrcSource) sendAssetCreate(ctx context.Context, a p.Asset, body []byte) (p.Asset, error) {
 	b, e := s.request(ctx, p.C_CreateAsset, body, p.S_AssetCreated)
 	if e != nil {
 		return p.Asset{}, e

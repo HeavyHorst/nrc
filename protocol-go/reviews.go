@@ -49,6 +49,8 @@ type ReviewRequest struct {
 	ExpiresAt   string     `json:"expires_at,omitempty"`
 	InviteID    string     `json:"invite_id,omitempty"`
 	Cursor      string     `json:"cursor,omitempty"`
+
+	PortalProof *PortalWriteProof `json:"-"`
 }
 type ReviewParticipant struct {
 	ID       string `json:"id"`
@@ -183,11 +185,18 @@ func EncodeReviewRequest(q ReviewRequest, correlation uint32) ([]byte, error) {
 	if len(payload) > MaxReviewFormBytes {
 		return nil, fmt.Errorf("review: request too large")
 	}
-	frame := make([]byte, len(payload)+6)
-	binary.BigEndian.PutUint16(frame, C_Review)
-	copy(frame[2:], payload)
-	binary.BigEndian.PutUint32(frame[len(frame)-4:], correlation)
-	return frame, nil
+	frame := binary.BigEndian.AppendUint16(make([]byte, 0, len(payload)+6), C_Review)
+	if q.PortalProof != nil {
+		if q.Source != "portal" || q.Op != "answer" && q.Op != "close" {
+			return nil, fmt.Errorf("review: portal proof is only valid on portal mutations")
+		}
+		frame, err = q.PortalProof.appendTo(append(frame, 0))
+		if err != nil {
+			return nil, err
+		}
+	}
+	frame = append(frame, payload...)
+	return binary.BigEndian.AppendUint32(frame, correlation), nil
 }
 
 // DecodeReviewResponse accepts a response body with its opcode removed.

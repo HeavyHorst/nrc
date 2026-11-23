@@ -26,25 +26,26 @@ Operation :: enum {
 	Monitor_Maintenance, // Internal writer job; never selected by a wire opcode.
 }
 Request :: struct {
-	request_id:       u64,
-	ordering_key:     u64, // Generational connection identity; zero is the internal default stream.
-	shard:            int, // Index into the executor's explicit path list.
-	operation:        Operation,
-	workspace:        string,
-	subject:          string, // Authenticated actor for domain mutations.
-	chronicle_access: u8, // Immutable verified rights copied by the owning worker.
-	review_portal:    bool, // Verified nrc-tickets bot, not a client-supplied identity.
-	scope, task_id:   u64, // Get/Remove; Put uses task.conv_id/task.id.
-	task:             pr.Task, // Borrowed only for the duration of submit.
-	actor:            string,
-	opcode:           pr.Opcode,
-	body:             []byte,
-	timestamp:        i64,
-	monitor_cursor:   u64, // Last globally allocated instance ID scanned in this shard.
-	monitor_through:  u64, // Fixed scan boundary, captured with the first page.
-	ticket_reads:     []Ticket_Read_Cursor,
-	read_generation:  u64,
-	dm_target_online: bool, // Worker presence snapshot; SQLite still checks persistent identity.
+	request_id:                               u64,
+	ordering_key:                             u64, // Generational connection identity; zero is the internal default stream.
+	shard:                                    int, // Index into the executor's explicit path list.
+	operation:                                Operation,
+	workspace:                                string,
+	subject:                                  string, // Authenticated actor for domain mutations.
+	chronicle_access:                         u8, // Immutable verified rights copied by the owning worker.
+	review_portal:                            bool, // Verified nrc-tickets bot, not a client-supplied identity.
+	portal_account_admin, portal_account_bot: bool,
+	scope, task_id:                           u64, // Get/Remove; Put uses task.conv_id/task.id.
+	task:                                     pr.Task, // Borrowed only for the duration of submit.
+	actor:                                    string,
+	opcode:                                   pr.Opcode,
+	body:                                     []byte,
+	timestamp:                                i64,
+	monitor_cursor:                           u64, // Last globally allocated instance ID scanned in this shard.
+	monitor_through:                          u64, // Fixed scan boundary, captured with the first page.
+	ticket_reads:                             []Ticket_Read_Cursor,
+	read_generation:                          u64,
+	dm_target_online:                         bool, // Worker presence snapshot; SQLite still checks persistent identity.
 }
 Result :: struct {
 	status:          c.int,
@@ -321,7 +322,15 @@ submit :: proc(port: ^Worker_Port, request: Request, rejection: ^Admission_Rejec
 	remaining -= len(request.ticket_reads) * size_of(Ticket_Read_Cursor)
 	if (request.operation == .Get_Task || request.operation == .Command || request.operation == .Monitor_Maintenance) && !take_credit(&remaining, e.max_result_bytes) do return false
 	if request.operation == .Put_Task || request.operation == .Create_Task {
-		for bytes in ([7][]byte{request.task.title, request.task.description, request.task.assignee, request.task.created_by, request.task.external_ref, request.task.completed_by, request.task.project}) {
+		for bytes in ([7][]byte {
+				request.task.title,
+				request.task.description,
+				request.task.assignee,
+				request.task.created_by,
+				request.task.external_ref,
+				request.task.completed_by,
+				request.task.project,
+			}) {
 			if !take_credit(&remaining, len(bytes)) do return false
 		}
 		for attachment in request.task.attachments {

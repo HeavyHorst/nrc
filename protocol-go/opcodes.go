@@ -59,6 +59,7 @@ const (
 	C_MonitorHistory         uint16 = 75
 	C_ListOpenIncidents      uint16 = 76
 	C_Review                 uint16 = 77
+	C_PortalAccount          uint16 = 78
 
 	// Assets (Client -> Server)
 	C_CreateAsset              uint16 = 30
@@ -156,6 +157,7 @@ const (
 	S_Chronicle                 uint16 = 180
 	S_OpenIncidentPage          uint16 = 181
 	S_Review                    uint16 = 182
+	S_PortalAccount             uint16 = 183
 
 	// Assets (Server -> Client)
 	S_AssetCreated    uint16 = 140

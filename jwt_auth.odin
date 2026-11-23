@@ -28,10 +28,11 @@ JWT_Claims :: struct {
 }
 
 JWT_Identity :: struct {
-	subject:          string,
-	username:         string,
-	user_type:        pr.User_Type,
-	chronicle_access: u8,
+	subject:              string,
+	username:             string,
+	user_type:            pr.User_Type,
+	chronicle_access:     u8,
+	portal_account_admin: bool,
 }
 
 @(thread_local)
@@ -66,7 +67,16 @@ workspace_access_config_enabled :: proc(config: string) -> bool {
 	return strings.trim_space(value[1:len(value) - 1]) != ""
 }
 
-validate_nrc_jwt :: proc(token: string, workspace: string = "", require_workspace: bool = false) -> (identity: JWT_Identity, ok: bool, reason: string) {
+validate_nrc_jwt :: proc(
+	token: string,
+	workspace: string = "",
+	require_workspace: bool = false,
+	portal_admin_proof: string = "",
+) -> (
+	identity: JWT_Identity,
+	ok: bool,
+	reason: string,
+) {
 	if token == "" {
 		return {}, false, "missing token"
 	}
@@ -185,7 +195,23 @@ validate_nrc_jwt :: proc(token: string, workspace: string = "", require_workspac
 		user_type = .System
 	}
 
-	return JWT_Identity{subject = strings.clone(claims.sub), username = username, user_type = user_type, chronicle_access = chronicle_access}, true, ""
+	human := claims.user_type == "" || strings.equal_fold(claims.user_type, "user") || strings.equal_fold(claims.user_type, "admin")
+	portal_admin :=
+		human &&
+		!strings.has_prefix(claims.sub, "tag:") &&
+		claims.workspace != "" &&
+		jwt_auth_secret != "dev-insecure-nrc-jwt-secret" &&
+		chronicle_subject_allowed(portal_account_admin_subjects, workspace, claims.sub) &&
+		portal_account_proof_valid(token, portal_admin_proof)
+	return JWT_Identity {
+			subject = strings.clone(claims.sub),
+			username = username,
+			user_type = user_type,
+			chronicle_access = chronicle_access,
+			portal_account_admin = portal_admin,
+		},
+		true,
+		""
 }
 
 decode_base64url_segment :: proc(segment: string) -> (decoded: []u8, ok: bool) {

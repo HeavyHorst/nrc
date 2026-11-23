@@ -251,7 +251,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-11:bafae91a"
+BUILD_VERSION :: "dev-2026-11:f68b90ee"
 PROTOCOL_VERSION :: 10 // Calendar kind 3 carries a stable series occurrence identity.
 
 jwt_auth_secret: string
@@ -393,6 +393,12 @@ main :: proc() {
 
 	jwt_expected_issuer = os.get_env_alloc("NRC_JWT_ISSUER", context.allocator)
 	jwt_expected_audience = os.get_env_alloc("NRC_JWT_AUDIENCE", context.allocator)
+
+	if !portal_account_auth_init(bot_auth_secret, jwt_auth_secret) {
+		log.error("Invalid portal account authorization configuration")
+		os.exit(2)
+	}
+	defer portal_account_auth_destroy()
 
 	workspace_access_config := os.get_env_alloc("NRC_WORKSPACE_ACCESS", context.allocator)
 	workspace_access_enabled = workspace_access_config_enabled(workspace_access_config)

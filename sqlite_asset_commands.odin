@@ -115,6 +115,20 @@ sqlite_mutate_asset :: proc(store: ^db.Store, request: ^db.Request, allocator: m
 		result.correlation = create.correlation_id
 		if err != nil || create.conv_id != 0 {result.rc = sql.CONSTRAINT; return}
 		if create.asset_type == .ReviewForm || create.asset_type == .ReviewAnswer {result.error = "Use review commands for review records"; return}
+		if create.portal_requester != "" {
+			allowed: bool
+			allowed, result.rc = sqlite_portal_write_allowed(store, request, create.portal_proof, create.portal_requester)
+			if result.rc != sql.OK do return
+			if !allowed {result.error = "Portal account write denied"; return}
+			if create.asset_type == .Ticket {
+				preview, valid := parse_ticket_preview(create.preview, allocator, strict = true)
+				if !valid || preview.requester != create.portal_requester {result.error = "Portal account write denied"; return}
+			} else {
+				// A shared-ticket reply is not necessarily by the parent ticket's requester.
+				preview, valid := parse_ticket_entry_preview(create.preview, allocator, strict = true)
+				if !valid || preview.kind != "customer_reply" {result.error = "Portal account write denied"; return}
+			}
+		}
 	} else {
 		update, err = pr.parseUpdateAssetRequestWithAttachments(request.body, attachments[:])
 		result.correlation = update.correlation_id

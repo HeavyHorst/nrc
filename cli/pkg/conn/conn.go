@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -205,10 +207,20 @@ func ResolveRoomFlag(workspaceID, roomFlag string) (int64, error) {
 // be empty: silently redirecting a private conversation could publish its data.
 // Caller MUST defer s.Close().
 func Dial(roomFlag string) (*Session, error) {
+	return dialWorkspace(roomFlag, false)
+}
+
+// DialSecure connects to workspace-wide data over verified TLS or direct,
+// literal loopback WebSocket. The client does not use an HTTP proxy.
+func DialSecure(roomFlag string) (*Session, error) {
+	return dialWorkspace(roomFlag, true)
+}
+
+func dialWorkspace(roomFlag string, secure bool) (*Session, error) {
 	if roomFlag != "" {
 		return nil, &InvalidArgumentError{Err: fmt.Errorf("--room is only supported for chat; durable data is workspace-wide")}
 	}
-	s, err := DialChat("")
+	s, err := dialChat("", secure)
 	if err == nil {
 		s.RoomID = protocol.WorkspaceDataConvID
 	}
@@ -217,9 +229,28 @@ func Dial(roomFlag string) (*Session, error) {
 
 // DialChat connects using the configured chat room or an explicit override.
 func DialChat(roomFlag string) (*Session, error) {
+	return dialChat(roomFlag, false)
+}
+
+func secureWebSocket(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+		return false
+	}
+	if u.Scheme == "wss" {
+		return true
+	}
+	ip, err := netip.ParseAddr(u.Hostname())
+	return u.Scheme == "ws" && err == nil && ip.Zone() == "" && ip.IsLoopback()
+}
+
+func dialChat(roomFlag string, secure bool) (*Session, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, &CommandError{Err: fmt.Errorf("loading config: %w", err)}
+	}
+	if secure && !secureWebSocket(cfg.Server+cfg.WorkspaceID) {
+		return nil, &InvalidArgumentError{Err: fmt.Errorf("requires wss:// with verified TLS or ws:// to a literal loopback IP")}
 	}
 
 	roomID := cfg.RoomID

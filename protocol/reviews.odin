@@ -37,6 +37,7 @@ Review_Request :: struct {
 	point_id, result, comment, decision:    string,
 	token, guest_id, expires_at, invite_id: string,
 	cursor:                                 string,
+	portal_proof:                           Portal_Write_Proof `json:"-"`,
 }
 Review_Participant :: struct {
 	id, source, identity, name: string,
@@ -99,6 +100,14 @@ parseReviewRequest :: proc(data: []byte, allocator := context.allocator) -> (q: 
 	if len(data) < 6 do return {}, 0, .TooShort
 	correlation, _ = endian.get_u32(data[len(data) - 4:], .Big)
 	body := data[:len(data) - 4]
+	// A zero byte cannot start the legacy JSON envelope. Older servers reject
+	// the request instead of silently accepting an unfenced mutation.
+	proof: Portal_Write_Proof
+	if body[0] == 0 {
+		if len(body) <= 1 + PORTAL_WRITE_PROOF_SIZE do return {}, correlation, .TooShort
+		proof = parse_portal_write_proof(body[1:])
+		body = body[1 + PORTAL_WRITE_PROOF_SIZE:]
+	}
 	if len(body) > MAX_REVIEW_FORM_BYTES || !utf8.valid_string(string(body)) do return {}, correlation, .InvalidValue
 	tok := json.make_tokenizer(string(body), .JSON, true)
 	depth, tokens := 0, 0
@@ -114,6 +123,8 @@ parseReviewRequest :: proc(data: []byte, allocator := context.allocator) -> (q: 
 	}
 	if !json.is_valid(body, .JSON, true) do return {}, correlation, .InvalidValue
 	if json.unmarshal(body, &q, allocator = allocator, spec = .JSON) != nil do return {}, correlation, .InvalidValue
+	q.portal_proof = proof
+	if data[0] == 0 && (q.source != "portal" || (q.op != "answer" && q.op != "close")) do return {}, correlation, .InvalidValue
 	switch q.op {
 	case "create",
 	     "update",
@@ -156,9 +167,18 @@ serializeReviewRequest :: proc(q: Review_Request, correlation: u32, buf: []byte)
 	payload, err := json.marshal(q)
 	if err != nil do return -1
 	defer delete(payload)
-	if len(payload) > MAX_REVIEW_FORM_BYTES || len(buf) < len(payload) + 6 do return -1
+	offset := 2
+	if q.portal_proof != {} do offset += 1 + PORTAL_WRITE_PROOF_SIZE
+	if len(payload) > MAX_REVIEW_FORM_BYTES || len(buf) < offset + len(payload) + 4 do return -1
+	if offset > 2 {
+		if len(q.portal_proof.service_key) != 64 do return -1
+		buf[2] = 0
+		endian.put_u64(buf[3:], .Big, q.portal_proof.id)
+		endian.put_u64(buf[11:], .Big, q.portal_proof.revision)
+		copy(buf[19:offset], transmute([]byte)q.portal_proof.service_key)
+	}
 	endian.put_u16(buf, .Big, u16(Opcode.C_Review))
-	copy(buf[2:], payload)
-	endian.put_u32(buf[2 + len(payload):], .Big, correlation)
-	return len(payload) + 6
+	copy(buf[offset:], payload)
+	endian.put_u32(buf[offset + len(payload):], .Big, correlation)
+	return offset + len(payload) + 4
 }

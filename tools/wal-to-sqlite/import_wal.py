@@ -21,7 +21,8 @@ CANONICAL = ("sequences", "tasks", "task_attachments", "assets", "asset_attachme
              "edges", "dm_conversations", "history_sequences", "history",
              "monitor_instances", "monitor_episodes", "monitor_runs", "monitor_actions", "incident_actions",
              "monitor_queue_usage", "monitor_deliveries", "monitor_delivery_receipts", "monitor_delivery_lanes",
-             "monitor_snapshots", "review_runs", "review_participants", "review_invites", "review_answers")
+             "monitor_snapshots", "review_runs", "review_participants", "review_invites", "review_answers",
+             "portal_accounts", "portal_account_audit")
 SCHEMA = Path(__file__).with_name("schema.sql")
 SLICE_SCHEMA = Path(__file__).with_name("slice_summaries.sql")
 INCREMENTAL_SCHEMA = Path(__file__).with_name("slice_incremental.sql")
@@ -33,14 +34,15 @@ MONITOR_SNAPSHOTS_SCHEMA = Path(__file__).with_name("monitor_snapshots.sql")
 TICKET_TRIGRAM_SCHEMA = Path(__file__).with_name("ticket_trigram.sql")
 CHRONICLE_PARALLEL_SCHEMA = Path(__file__).with_name("chronicle_parallel.sql")
 REVIEW_SCHEMA = Path(__file__).with_name("reviews.sql")
-SCHEMA_VERSION = 11
+PORTAL_ACCOUNT_SCHEMA = Path(__file__).with_name("portal_accounts.sql")
+SCHEMA_VERSION = 12
 
 
 def schema_text():
     return (SCHEMA.read_text() + SLICE_SCHEMA.read_text() + INCREMENTAL_SCHEMA.read_text()
             + PAGINATION_SCHEMA.read_text() + MONITORING_SCHEMA.read_text() + CHRONICLE_SCHEMA.read_text()
             + CHRONICLE_INPUT_BUDGET_SCHEMA.read_text() + MONITOR_SNAPSHOTS_SCHEMA.read_text() + TICKET_TRIGRAM_SCHEMA.read_text()
-            + CHRONICLE_PARALLEL_SCHEMA.read_text() + REVIEW_SCHEMA.read_text())
+            + CHRONICLE_PARALLEL_SCHEMA.read_text() + REVIEW_SCHEMA.read_text() + PORTAL_ACCOUNT_SCHEMA.read_text())
 
 
 def schema_hash():

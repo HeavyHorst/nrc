@@ -95,13 +95,24 @@ type portal struct {
 	source   source
 	files    fileStore
 	brand    branding
-	accounts []account
+	accounts accountStore
 	origin   string
 	guestKey []byte
 }
 
+func (s *portal) writeProof(who account) *p.PortalWriteProof {
+	db, ok := s.accounts.(dbAccounts)
+	if !ok {
+		return nil
+	}
+	// Use the account snapshot from Basic Auth, never a fresh lookup after
+	// uploading files or reading the review run. A missing snapshot fails
+	// encoding instead of falling back to the file-mode write.
+	return &p.PortalWriteProof{ID: who.PortalID, Revision: who.PortalRevision, ServiceKey: db.key}
+}
+
 func (s *portal) sharedContacts(ctx context.Context, who account) map[string]bool {
-	if who.ContactID == "" || who.CompanyID == "" {
+	if who.Disabled || who.ContactID == "" || who.CompanyID == "" {
 		return nil
 	}
 	id, _ := strconv.ParseUint(who.CompanyID, 10, 64)
@@ -158,34 +169,38 @@ func (s *portal) sharedContacts(ctx context.Context, who account) map[string]boo
 	return peers
 }
 
-func (s *portal) project(a p.Asset, who account, peers map[string]bool) (publicTicket, bool) {
+func (s *portal) project(ctx context.Context, a p.Asset, who account, peers map[string]bool) (publicTicket, bool, error) {
 	var v ticketPreview
 	if a.ConvID != 0 || a.AssetType != ticketType || a.ParentType != 0 || a.ParentID != 0 || json.Unmarshal([]byte(a.Preview), &v) != nil || v.Version != 1 {
-		return publicTicket{}, false
+		return publicTicket{}, false, nil
 	}
 	shared := v.Requester != who.Requester
 	if shared {
+		if who.Disabled || v.CompanyID == "" || v.CompanyID != who.CompanyID || len(peers) == 0 {
+			return publicTicket{}, false, nil
+		}
 		contact := v.ContactID
 		// Older tickets have no contact_id. Only explicit account bindings in the
-		// same company can resolve them; never infer membership from an email.
-		if contact == "" {
-			for _, a := range s.accounts {
-				if a.Requester == v.Requester && a.CompanyID == v.CompanyID {
-					contact = a.ContactID
-					break
-				}
+		// same company can resolve them, even after the requester is disabled.
+		if contact == "" && v.Requester != "" {
+			mapped, found, err := s.accounts.mapping(ctx, v.Requester)
+			if err != nil {
+				return publicTicket{}, false, err
+			}
+			if found && mapped.CompanyID == v.CompanyID {
+				contact = mapped.ContactID
 			}
 		}
-		if v.CompanyID == "" || v.CompanyID != who.CompanyID || !peers[contact] {
-			return publicTicket{}, false
+		if !peers[contact] {
+			return publicTicket{}, false, nil
 		}
 	}
 	status := map[string]string{"open": "Offen", "in_progress": "In Bearbeitung", "waiting_customer": "Ihre Antwort wird erwartet", "resolved": "Gelöst", "closed": "Geschlossen"}[v.Status]
 	if status == "" {
-		return publicTicket{}, false
+		return publicTicket{}, false, nil
 	}
 	category := map[string]string{"bug": "Bug", "support": "Support", "feature": "Feature", "unclear": "Unklar"}[v.Category]
-	return publicTicket{ID: a.AssetID, Title: v.Title, Status: status, Category: category, Body: a.Payload, Shared: shared, SubmittedBy: v.RequesterName}, true
+	return publicTicket{ID: a.AssetID, Title: v.Title, Status: status, Category: category, Body: a.Payload, Shared: shared, SubmittedBy: v.RequesterName}, true, nil
 }
 func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -207,12 +222,15 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	login, password, ok := r.BasicAuth()
 	var who account
 	valid := false
-	for _, a := range s.accounts {
-		if a.Login == login {
-			valid = ok && bcrypt.CompareHashAndPassword([]byte(a.PasswordHash), []byte(password)) == nil
-			who = a
-			break
+	if ok && validAccountLogin(login) && s.accounts != nil {
+		a, found, err := s.accounts.login(r.Context(), login)
+		if err != nil {
+			s.unavailable(w)
+			return
 		}
+		valid = found && !a.Disabled && bcrypt.CompareHashAndPassword([]byte(a.PasswordHash), []byte(password)) == nil
+		who = a
+		who.PasswordHash = ""
 	}
 	if !valid {
 		w.Header().Set("WWW-Authenticate", `Basic realm="Kundenportal", charset="UTF-8"`)
@@ -275,7 +293,11 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal([]byte(a.Preview), &preview) == nil && preview.Requester != who.Requester {
 			peers = s.sharedContacts(r.Context(), who)
 		}
-		v, owned := s.project(a, who, peers)
+		v, owned, err := s.project(r.Context(), a, who, peers)
+		if err != nil {
+			s.unavailable(w)
+			return
+		}
 		if !owned {
 			http.NotFound(w, r)
 			return
@@ -345,7 +367,12 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	list := []publicTicket{}
 	peers := s.sharedContacts(r.Context(), who)
 	for _, a := range assets {
-		if v, ok := s.project(a, who, peers); ok {
+		v, ok, err := s.project(r.Context(), a, who, peers)
+		if err != nil {
+			s.unavailable(w)
+			return
+		}
+		if ok {
 			v.Body = ""
 			list = append(list, v)
 		}
@@ -467,7 +494,12 @@ func (s *portal) write(w http.ResponseWriter, r *http.Request, who account, pare
 			http.NotFound(w, r)
 			return
 		}
-		if _, ok := s.project(current, who, s.sharedContacts(r.Context(), who)); !ok {
+		_, ok, err := s.project(r.Context(), current, who, s.sharedContacts(r.Context(), who))
+		if err != nil {
+			s.unavailable(w)
+			return
+		}
+		if !ok {
 			http.NotFound(w, r)
 			return
 		}
@@ -477,7 +509,20 @@ func (s *portal) write(w http.ResponseWriter, r *http.Request, who account, pare
 		b, _ := json.Marshal(entryPreview{1, "customer_reply", who.Name})
 		a.Preview = string(b)
 	}
-	saved, e := s.source.create(r.Context(), a)
+	var saved p.Asset
+	var e error
+	if proof := s.writeProof(who); proof != nil {
+		src, ok := s.source.(interface {
+			createPortalTicket(context.Context, p.Asset, string, p.PortalWriteProof) (p.Asset, error)
+		})
+		if !ok {
+			s.unavailable(w)
+			return
+		}
+		saved, e = src.createPortalTicket(r.Context(), a, who.Requester, *proof)
+	} else {
+		saved, e = s.source.create(r.Context(), a)
+	}
 	if e != nil {
 		s.unavailable(w)
 		return

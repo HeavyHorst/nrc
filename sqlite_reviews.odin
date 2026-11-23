@@ -37,6 +37,12 @@ sqlite_execute_review :: proc(store: ^db.Store, request: ^db.Request, output: ^d
 	}
 	if err != nil do return sqlite_review_reply(output, correlation, r, backing)
 	if request.actor == "" {r.status = "forbidden"; return sqlite_review_reply(output, correlation, r, backing)}
+	if q.portal_proof.service_key != "" {
+		if !request.review_portal {r.status = "forbidden"; return sqlite_review_reply(output, correlation, r, backing)}
+		allowed, rc := sqlite_portal_write_allowed(store, request, q.portal_proof, q.identity)
+		if rc != sql.OK do return rc
+		if !allowed {r.status = "forbidden"; return sqlite_review_reply(output, correlation, r, backing)}
+	}
 	if q.op == "run_create" ||
 	   q.op == "run_get" ||
 	   q.op == "run_list" ||

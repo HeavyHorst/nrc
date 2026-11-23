@@ -960,76 +960,77 @@ Receive_Accumulator :: struct {
 NRC_Connection :: struct #align (64) {
 	// ============ HOT PATH - Cache Line 1 (64 bytes) ============
 	// Fields touched on nearly every receive/send completion and message dispatch.
-	sock:                      net.TCP_Socket, // 8 bytes - accessed every I/O op
-	state:                     Connection_State, // 8 bytes - checked on every operation
-	queued_count:              u32, // 4 bytes - cached queue depth for fast fanout checks
-	is_sending:                bool, // 1 byte - checked on every send
-	authenticated:             bool, // 1 byte - checked on message handlers
-	chronicle_access:          u8, // Immutable verified JWT capabilities, never legacy headers.
-	logical_cleanup_done:      bool, // 1 byte - subscriptions/presence/DM cleanup ran
-	close_submitted:           bool,
-	close_completed:           bool,
-	close_shutdown:            bool, // Preserve cleanup policy while waiting for I/O.
-	close_frame_reserved:      bool,
-	user_type:                 pr.User_Type, // 1 byte - user classification (user/bot/system)
-	pending_io:                u32,
-	retained_io:               u8, // bounded retained-history/dedup operations
+	sock:                                     net.TCP_Socket, // 8 bytes - accessed every I/O op
+	state:                                    Connection_State, // 8 bytes - checked on every operation
+	queued_count:                             u32, // 4 bytes - cached queue depth for fast fanout checks
+	is_sending:                               bool, // 1 byte - checked on every send
+	authenticated:                            bool, // 1 byte - checked on message handlers
+	chronicle_access:                         u8, // Immutable verified JWT capabilities, never legacy headers.
+	portal_account_admin, portal_account_bot: bool, // Immutable upgrade authorization.
+	logical_cleanup_done:                     bool, // 1 byte - subscriptions/presence/DM cleanup ran
+	close_submitted:                          bool,
+	close_completed:                          bool,
+	close_shutdown:                           bool, // Preserve cleanup policy while waiting for I/O.
+	close_frame_reserved:                     bool,
+	user_type:                                pr.User_Type, // 1 byte - user classification (user/bot/system)
+	pending_io:                               u32,
+	retained_io:                              u8, // bounded retained-history/dedup operations
 	// The sole outstanding provided-buffer receive. Close cancels this handle so
 	// a transient ENOBUFS completion cannot resubmit work against a closing FD.
-	recv_completion:           ^nbio.Completion,
-	workspace_id:              string, // Interned routing key for workspace dispatch
+	recv_completion:                          ^nbio.Completion,
+	workspace_id:                             string, // Interned routing key for workspace dispatch
 
 	// ============ WARM PATH - Cache Line 2 (64 bytes) ============
 	// Per-connection timestamps let bounded/indexed maintenance decide whether
 	// this connection is idle or has a stalled transport send. send_started_at is
 	// monotonic and meaningful only while is_sending is true.
-	last_activity:             time.Time,
-	send_started_at:           time.Time,
+	last_activity:                            time.Time,
+	send_started_at:                          time.Time,
 
 	// Reverse index into td.inflight_send_handles. It is 1-based so zero means
 	// "not tracked" and permits O(1) swap-removal when a send completes or the
 	// connection closes, avoiding a worker-wide connection scan.
-	send_watchdog_slot:        u32,
+	send_watchdog_slot:                       u32,
 
 	// Marks the connection as already listed in td.deferred_outbox_handles. This
 	// deduplicates fanout recipients and prevents normal sends from being pumped
 	// until the current callback wave has submitted its priority ACKs.
-	outbox_pump_deferred:      bool,
-	outbox_waiting_durability: bool,
-	inline_head:               u8, // Read position in inline queue
-	inline_len:                u8, // Number of items in inline queue
-	_pad1:                     [1]u8, // Padding to align spill_queue
-	spill_queue:               queue.Queue(Send_Item), // Overflow sends once inline queue is full
-	priority_queue:            queue.Queue(Send_Item), // Control/ACK fast lane drained before normal sends
+	outbox_pump_deferred:                     bool,
+	outbox_waiting_durability:                bool,
+	inline_head:                              u8, // Read position in inline queue
+	inline_len:                               u8, // Number of items in inline queue
+	_pad1:                                    [1]u8, // Padding to align spill_queue
+	spill_queue:                              queue.Queue(Send_Item), // Overflow sends once inline queue is full
+	priority_queue:                           queue.Queue(Send_Item), // Control/ACK fast lane drained before normal sends
 
 	// ============ WARM PATH - Queue Storage ============
 	// Inline queue for first N items (avoids heap pointer chase for common case)
 	// 16 items * 32 bytes = 512 bytes inline, then spills to heap queue
-	inline_queue:              [Inline_Queue_Size]Send_Item, // 512 bytes - inline storage
+	inline_queue:                             [Inline_Queue_Size]Send_Item, // 512 bytes - inline storage
 
 	// ============ WARM PATH - Message/Frame State ============
-	verified_username:         string, // Effective authenticated identity (JWT username or validated service nickname)
-	verified_subject:          string, // Interned stable JWT subject, independent of display nickname.
-	rooms:                     map[pr.ConversationID]bool, // 16 bytes - subscription checks
-	receive_accumulator:       Receive_Accumulator,
-	deferred_input:            []byte, // Owned raw suffix; never aliases an nbio provided buffer
-	deferred_input_offset:     int,
-	input_queued:              bool, // Weak generational entry in the worker FIFO
-	fragment_buf:              []u8, // Geometrically grown message accumulator (nil when not active)
-	fragment_len:              int, // Bytes accumulated in fragment_buf
+	verified_username:                        string, // Effective authenticated identity (JWT username or validated service nickname)
+	verified_subject:                         string, // Interned stable JWT subject, independent of display nickname.
+	rooms:                                    map[pr.ConversationID]bool, // 16 bytes - subscription checks
+	receive_accumulator:                      Receive_Accumulator,
+	deferred_input:                           []byte, // Owned raw suffix; never aliases an nbio provided buffer
+	deferred_input_offset:                    int,
+	input_queued:                             bool, // Weak generational entry in the worker FIFO
+	fragment_buf:                             []u8, // Geometrically grown message accumulator (nil when not active)
+	fragment_len:                             int, // Bytes accumulated in fragment_buf
 
 	// ============ FEATURE STATE ============
-	workspace:                 ^Workspace_State, // Cached workspace state for connection-scoped handlers
-	ticket_read_cursors:       map[pr.AssetID]pr.AssetID,
-	ticket_read_snapshot:      u32,
-	ticket_read_upload:        u32,
-	ticket_read_generation:    u64,
+	workspace:                                ^Workspace_State, // Cached workspace state for connection-scoped handlers
+	ticket_read_cursors:                      map[pr.AssetID]pr.AssetID,
+	ticket_read_snapshot:                     u32,
+	ticket_read_upload:                       u32,
+	ticket_read_generation:                   u64,
 
 	// ============ COLD PATH ============
-	handle:                    Connection_Handle,
-	server:                    ^NRC_Server,
-	thread_index:              int, // Ownership validation on close/handoff
-	close_frame_buf:           [127]byte, // Maximum 2-byte control header plus 125-byte close payload
+	handle:                                   Connection_Handle,
+	server:                                   ^NRC_Server,
+	thread_index:                             int, // Ownership validation on close/handoff
+	close_frame_buf:                          [127]byte, // Maximum 2-byte control header plus 125-byte close payload
 }
 
 #assert(align_of(NRC_Connection) == 64)
