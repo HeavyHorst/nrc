@@ -251,7 +251,7 @@ Server_Thread :: struct {
 	maintenance_completion:    ^nbio.Completion,
 }
 
-BUILD_VERSION :: "dev-2026-11:ac4b5ae"
+BUILD_VERSION :: "dev-2026-11:cc0e32ef"
 PROTOCOL_VERSION :: 10 // Calendar kind 3 carries a stable series occurrence identity.
 
 jwt_auth_secret: string

@@ -21,9 +21,9 @@ The fixture returns 503 for `/ai/` rather than reaching another local service.
 
 ## Build (from repository root)
 
-Requires Odin, Go with CGO, Node.js, curl, and Nginx with `http_auth_request` and
+Requires Odin, Go with CGO, Node.js, curl, unzip, and Nginx with `http_auth_request` and
 the static Brotli module. `.agents/setup` installs these in new orbs; on other
-Debian installations use `sudo apt-get install nginx libnginx-mod-http-brotli-static build-essential`.
+Debian installations use `sudo apt-get install nginx libnginx-mod-http-brotli-static build-essential unzip`.
 
 ```bash
 mkdir -p .amp/lighthouse/{lib,models}
@@ -35,9 +35,14 @@ odin build . -o:speed -out:.amp/lighthouse/server
 curl -fL --retry 3 https://github.com/daulet/tokenizers/releases/download/v1.25.0/libtokenizers.linux-amd64.tar.gz \
   -o .amp/lighthouse/tokenizers.tar.gz
 tar -xzf .amp/lighthouse/tokenizers.tar.gz -C .amp/lighthouse/lib
-curl -fL --retry 3 https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-linux-x64-1.24.1.tgz \
-  -o .amp/lighthouse/onnxruntime.tgz
-tar -xzf .amp/lighthouse/onnxruntime.tgz -C .amp/lighthouse/lib
+curl -fL --retry 3 https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.24.1/microsoft.ml.onnxruntime.1.24.1.nupkg \
+  -o .amp/lighthouse/onnxruntime.nupkg
+echo '5fca4421974b450711520f17a27e527fec60a78c2b6f9db3b05c159d9b5a346d  .amp/lighthouse/onnxruntime.nupkg' | sha256sum -c -
+mkdir -p .amp/lighthouse/lib/onnxruntime-linux-x64-1.24.1/lib
+unzip -p .amp/lighthouse/onnxruntime.nupkg runtimes/linux-x64/native/libonnxruntime.so \
+  > .amp/lighthouse/lib/onnxruntime-linux-x64-1.24.1/lib/libonnxruntime.so.1.24.1
+unzip -p .amp/lighthouse/onnxruntime.nupkg runtimes/linux-x64/native/libonnxruntime_providers_shared.so \
+  > .amp/lighthouse/lib/onnxruntime-linux-x64-1.24.1/lib/libonnxruntime_providers_shared.so
 # About 1.2 GiB; retain these files between rebuilds.
 for file in onnx/model.onnx onnx/model.onnx_data tokenizer.json; do
   curl -fL --retry 3 "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/$file" \

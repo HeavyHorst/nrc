@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     curl \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install HuggingFace tokenizers static library (for github.com/daulet/tokenizers)
@@ -39,12 +40,17 @@ RUN mkdir -p /app/models && \
     https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/${EMBEDDING_MODEL_REVISION}/onnx/model.onnx_data && \
     curl -fL --retry 3 -o /app/models/tokenizer.json \
     https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/${EMBEDDING_MODEL_REVISION}/tokenizer.json && \
-    curl -L -o /tmp/onnxruntime.tar.gz \
-    https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-linux-x64-1.24.1.tgz && \
-    tar -xzf /tmp/onnxruntime.tar.gz -C /usr/local && \
+    curl -fL --retry 3 -o /tmp/onnxruntime.nupkg \
+    https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.24.1/microsoft.ml.onnxruntime.1.24.1.nupkg && \
+    echo '5fca4421974b450711520f17a27e527fec60a78c2b6f9db3b05c159d9b5a346d  /tmp/onnxruntime.nupkg' | sha256sum -c - && \
+    mkdir -p /usr/local/onnxruntime-linux-x64-1.24.1/lib && \
+    unzip -j /tmp/onnxruntime.nupkg 'runtimes/linux-x64/native/*.so' -d /usr/local/onnxruntime-linux-x64-1.24.1/lib && \
+    mv /usr/local/onnxruntime-linux-x64-1.24.1/lib/libonnxruntime.so /usr/local/onnxruntime-linux-x64-1.24.1/lib/libonnxruntime.so.1.24.1 && \
+    ln -s libonnxruntime.so.1.24.1 /usr/local/onnxruntime-linux-x64-1.24.1/lib/libonnxruntime.so && \
+    ln -s libonnxruntime.so.1.24.1 /usr/local/onnxruntime-linux-x64-1.24.1/lib/libonnxruntime.so.1 && \
     ln -s /usr/local/onnxruntime-linux-x64-1.24.1/lib/libonnxruntime.so.1.24.1 /usr/local/lib/libonnxruntime.so && \
     ldconfig && \
-    rm /tmp/onnxruntime.tar.gz
+    rm /tmp/onnxruntime.nupkg
 
 # Only media encoders and processor configuration; no second text backbone.
 RUN mkdir -p /app/models/onnx && \
