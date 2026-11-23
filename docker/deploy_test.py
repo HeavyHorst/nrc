@@ -363,6 +363,8 @@ exec "$REAL_RSYNC" "${args[@]}"
         model = json.loads(result.stdout)
         proxy = model["services"]["tailscale-proxy"]
         self.assertEqual(proxy["environment"]["NRC_PUBLISH_BACKEND"], "http://publish:8094")
+        self.assertEqual(proxy["environment"]["NRC_PORTAL_ACCOUNT_ADMIN_BACKEND"],
+                         "http://nrc-portal-admin:8080")
         self.assertEqual(proxy["environment"]["NRC_MONITOR_HISTORY_BACKEND"], "http://incidents:8095")
         self.assertEqual(proxy["environment"]["NRC_MONITOR_HISTORY_WORKSPACE"], "workspace1")
         self.assertEqual(proxy["environment"]["NRC_HISTORY_SECRET"], "a" * 64)

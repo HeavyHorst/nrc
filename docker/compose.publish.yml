@@ -6,6 +6,7 @@ services:
     environment: !override
       # Remove base-file interpolation overrides; shared credentials come from .env.
       TS_AUTHKEY: ${TS_AUTHKEY:-}
+      NRC_PORTAL_ACCOUNT_ADMIN_BACKEND: http://nrc-portal-admin:8080
       NRC_SEARCH_FILES_ADDR: :8094
       NRC_PUBLISH_BACKEND: http://publish:8094
       NRC_PUBLISH_HEALTH_URL: http://publish:8093/health
