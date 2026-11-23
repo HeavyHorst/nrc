@@ -5,7 +5,11 @@ COPY go.mod go.sum* ./
 RUN go mod download 2>/dev/null || true
 
 COPY *.go ./
-RUN CGO_ENABLED=0 GOOS=linux go build -o tailscale-proxy .
+# This build context has no Git metadata; stamp the embedded Tailscale version.
+RUN TS_VERSION=$(go list -m -f '{{.Version}}' tailscale.com) \
+    && CGO_ENABLED=0 GOOS=linux go build \
+        -ldflags "-X tailscale.com/version.shortStamp=${TS_VERSION#v} -X tailscale.com/version.longStamp=${TS_VERSION#v}-nrc" \
+        -o tailscale-proxy .
 
 FROM pandoc/typst:3.10.0.0-alpine
 

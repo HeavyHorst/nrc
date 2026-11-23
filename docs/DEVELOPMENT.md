@@ -9,7 +9,7 @@ flag, preserving the required flags. Other setup errors retain their existing
 handling. The successful ring's flags select the submission path.
 Tested locally with Odin
 `dev-2026-09-nightly:a2fb372`, Go `1.26.8` and Node `24.21.0`.
-Go module requirements are in each `go.mod`; the proxy requires at least Go 1.26.6.
+Go module requirements are in each `go.mod`; the proxy requires at least Go 1.27.4.
 The server Docker build pins Odin to `7e313bd6f1fa9ae887c7b522611481cbf2da4cac`
 (`dev-2026-10`), the compiler used for the WAL-to-SQLite migration rehearsal.
 

@@ -171,7 +171,7 @@ headers are not forwarded on errors. Responses use `no-store`.
 
 ## Development
 
-Requires Go 1.26.6 or newer and a writable attachment/state directory for running
+Requires Go 1.27.4 or newer and a writable attachment/state directory for running
 the gateway. A standalone launch also needs its expected `http://nginx:80` backend.
 For a complete deployment use Compose, not a bare `go run`.
 
