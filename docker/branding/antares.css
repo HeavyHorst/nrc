@@ -88,26 +88,65 @@ textarea:focus-visible {
   outline: 3px solid var(--accent);
 }
 
-/* Tickets sign-in. Use antares-signet.png as TICKETS_LOGO_FILE. */
-.login-page { background: var(--pale); }
-.login-page header { padding: 18px clamp(20px, 6.25vw, 100px); }
-.login-page header .brand {
-  display: flex;
-  gap: clamp(12px, 1.5vw, 24px);
-  font-size: clamp(19px, 2vw, 32px);
-  line-height: 1.15;
+/* Tickets sign-in; see docs/TICKETS.md for the optional assets. */
+.login-page {
+  --login-width: 1200px;
+  --login-gutter: clamp(20px, 5vw, 72px);
+  --font-family: "Portal Brand", Arial, sans-serif;
+  background: var(--surface);
+  color: var(--ink);
 }
-.login-page .brand img, header:has(.account-nav) .brand img { padding: 0; background: none; }
-.login-page .brand img { width: clamp(46px, 4.85vw, 78px); height: auto; max-height: none; flex: none; }
-.login-page main { width: min(100%, 624px); flex: none; margin: clamp(32px, 10vh, 108px) auto 0; padding: 0 20px; }
-.login-page form { padding: clamp(22px, 3vw, 38px); border-color: #aebfce; border-radius: 10px; box-shadow: none; }
-.login-page h1 { margin-bottom: 12px; font-size: clamp(32px, 3vw, 42px); }
-.login-page h1 + p { margin-bottom: 26px; font-size: clamp(17px, 1.5vw, 21px); color: var(--text); }
-.login-page label { margin: 0 0 20px; font-size: clamp(16px, 1.4vw, 19px); color: var(--antares-navy); }
-.login-page label input { border-radius: 8px; min-height: 48px; }
-.login-page button { padding: 14px 20px; border-radius: 8px; font-size: clamp(17px, 1.45vw, 21px); background: var(--antares-navy); }
+.login-hero { position: relative; isolation: isolate; background: #eaf3f7; }
+.login-image {
+  display: block;
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: -1;
+  width: min(85%, 1600px);
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  mask-image: linear-gradient(90deg, transparent, #000 65%);
+}
+.login-page header {
+  padding: 18px max(var(--login-gutter), (100% - var(--login-width)) / 2);
+  background: transparent;
+}
+.login-page header .brand { color: var(--antares-navy); }
+.login-page .brand img { width: 128px; max-width: none; max-height: none; padding: 0; background: none; }
+.login-page .brand span { display: none; }
+.login-page main {
+  width: calc(100% - 2 * var(--login-gutter));
+  max-width: var(--login-width);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 460px);
+  align-items: center;
+  gap: clamp(32px, 7vw, 100px);
+  padding: clamp(40px, 8vh, 96px) 0;
+}
+.login-intro { display: block; }
+.login-intro p { margin: 0; }
+.login-intro p:first-child, .login-page h1 {
+  color: var(--antares-navy);
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  letter-spacing: -.035em;
+  line-height: 1.06;
+}
+.login-intro p:first-child { font-size: clamp(40px, 4.5vw, 64px); overflow-wrap: anywhere; }
+.login-intro p + p { margin-top: 20px; }
+.login-page form { padding: clamp(22px, 3vw, 36px); border-color: var(--line); border-radius: 6px; box-shadow: none; }
+.login-page h1 { margin-bottom: 24px; font-size: clamp(28px, 3vw, 40px); }
+.login-page #login-description { display: none; }
+.login-page label { font-size: 16px; font-weight: 700; color: var(--antares-navy); }
+.login-page label input { border-radius: 2px; min-height: 48px; }
+.login-page button { padding: 13px 22px; border-radius: 2px; font-size: 14px; background: var(--antares-navy); }
 .login-page button:hover { background: var(--accent); }
-.login-page footer { width: min(100%, 624px); padding: 0 20px; margin: 24px auto 32px; border-top: 0; }
+.login-page footer { max-width: none; margin: 0; padding: 18px 20px; border-color: var(--line); }
 .login-page footer nav { margin-top: 0; }
 .login-page footer a { color: var(--antares-navy); }
-.login-page main:last-child { margin-bottom: 32px; }
+@media (max-width: 850px) {
+  .login-page main { max-width: 460px; grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .login-intro p:first-child { font-size: clamp(36px, 7vw, 48px); }
+  .login-intro p + p { margin-top: 12px; }
+  .login-image { width: 100%; object-position: 65% center; mask-image: linear-gradient(0deg, #000, transparent 65%); }
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	_ "embed"
 	"fmt"
 	"io"
@@ -20,7 +21,7 @@ var portalAttachmentsJS []byte
 // stylesheet response, never trusted HTML interpolated into the page.
 type branding struct {
 	Brand, FooterText, ImprintURL, PrivacyURL, TermsURL, ContactURL string
-	ThemeCSS, Logo                                                  []byte
+	ThemeCSS, Logo, LoginImage, FontRegular, FontBold               []byte
 }
 
 func loadBranding() (branding, error) {
@@ -46,6 +47,8 @@ func loadBranding() (branding, error) {
 		dst *[]byte
 	}{
 		{"TICKETS_THEME_FILE", 256 * 1024, &b.ThemeCSS}, {"TICKETS_LOGO_FILE", 2 * 1024 * 1024, &b.Logo},
+		{"TICKETS_LOGIN_IMAGE_FILE", 2 * 1024 * 1024, &b.LoginImage},
+		{"TICKETS_FONT_REGULAR_FILE", 512 * 1024, &b.FontRegular}, {"TICKETS_FONT_BOLD_FILE", 512 * 1024, &b.FontBold},
 	} {
 		if path := os.Getenv(setting.env); path != "" {
 			file, err := os.Open(path)
@@ -60,11 +63,19 @@ func loadBranding() (branding, error) {
 			*setting.dst = data
 		}
 	}
-	if len(b.Logo) > 0 {
-		switch http.DetectContentType(b.Logo) {
+	for name, image := range map[string][]byte{"TICKETS_LOGO_FILE": b.Logo, "TICKETS_LOGIN_IMAGE_FILE": b.LoginImage} {
+		if len(image) == 0 {
+			continue
+		}
+		switch http.DetectContentType(image) {
 		case "image/png", "image/jpeg", "image/webp":
 		default:
-			return b, fmt.Errorf("logo must be PNG, JPEG or WebP")
+			return b, fmt.Errorf("%s must be PNG, JPEG or WebP", name)
+		}
+	}
+	for name, font := range map[string][]byte{"TICKETS_FONT_REGULAR_FILE": b.FontRegular, "TICKETS_FONT_BOLD_FILE": b.FontBold} {
+		if len(font) > 0 && !bytes.HasPrefix(font, []byte("wOF2")) {
+			return b, fmt.Errorf("%s must be WOFF2", name)
 		}
 	}
 	return b, nil

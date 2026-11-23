@@ -450,6 +450,8 @@ environment variables and restart the portal after changing files/configuration:
 | `TICKETS_BRAND` | Page title and header name; default `Ihr Kundenportal` |
 | `TICKETS_LOGO_FILE` | Optional PNG/JPEG/WebP, at most 2 MiB; SVG/HTML rejected |
 | `TICKETS_THEME_FILE` | Optional trusted CSS file, at most 256 KiB; appended after default stylesheet |
+| `TICKETS_LOGIN_IMAGE_FILE` | Optional decorative login PNG/JPEG/WebP, at most 2 MiB; the theme controls its placement and visibility |
+| `TICKETS_FONT_REGULAR_FILE`, `TICKETS_FONT_BOLD_FILE` | Optional local WOFF2 files, at most 512 KiB each; the theme can use `"Portal Brand"` at weights 400 and 700 |
 | `TICKETS_FOOTER_TEXT` | Escaped plain footer text, e.g. copyright/company name |
 | `TICKETS_IMPRINT_URL` | Impressum link |
 | `TICKETS_PRIVACY_URL` | Datenschutz link |
@@ -460,7 +462,8 @@ Footer links accept HTTP(S) or root-relative URLs, not protocol-relative or
 script URLs. Empty footer settings omit the footer entirely. Legal content is
 hosted separately; the portal does not create legal pages. Theme CSS and logos
 are loaded at startup and served at public `/style.css` and
-`/branding/logo`, not by exposing an operator directory. The themed file selector
+`/branding/logo`. The login image and fonts are also public, on fixed same-origin
+paths under `/branding/`; no operator directory is exposed. The themed file selector
 uses an authenticated same-origin script to display selected filenames; form
 uploads still work without JavaScript. CSP disallows inline/external scripts,
 external fonts/images/styles, frames and inline styles. Theme files must be
@@ -470,6 +473,10 @@ With Compose, put files in `ticket-branding/` at repository root (or set
 `TICKETS_BRANDING_DIR` to a private deployment directory), then use
 `TICKETS_THEME_FILE=/branding/theme.css` and
 `TICKETS_LOGO_FILE=/branding/logo.png`. Do not commit customer branding or secrets.
+For the Antares login layout, use `docker/branding/antares.css` as the theme and
+`docker/branding/antares-logo.png` as the logo. Mount the optional photo and fonts
+in the same branding directory and set their file variables to `/branding/<filename>`.
+Without them, the layout uses a plain background and system font fallback.
 Example `theme.css`:
 
 ```css

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -228,6 +229,12 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		w.Write(portalCSS)
 		w.Write([]byte("\n"))
+		if len(s.brand.FontRegular) > 0 {
+			io.WriteString(w, "@font-face{font-family:Portal Brand;src:url(/branding/font-regular.woff2) format('woff2');font-weight:400;font-display:swap}\n")
+		}
+		if len(s.brand.FontBold) > 0 {
+			io.WriteString(w, "@font-face{font-family:Portal Brand;src:url(/branding/font-bold.woff2) format('woff2');font-weight:700;font-display:swap}\n")
+		}
 		w.Write(s.brand.ThemeCSS)
 		return
 	}
@@ -236,13 +243,28 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write(portalAttachmentsJS)
 		return
 	}
-	if r.Method == "GET" && r.URL.Path == "/branding/logo" {
-		if len(s.brand.Logo) == 0 {
+	if r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/branding/") {
+		var asset []byte
+		var mime string
+		switch r.URL.Path {
+		case "/branding/logo":
+			asset = s.brand.Logo
+		case "/branding/login-image":
+			asset = s.brand.LoginImage
+		case "/branding/font-regular.woff2":
+			asset, mime = s.brand.FontRegular, "font/woff2"
+		case "/branding/font-bold.woff2":
+			asset, mime = s.brand.FontBold, "font/woff2"
+		}
+		if len(asset) == 0 {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", http.DetectContentType(s.brand.Logo))
-		w.Write(s.brand.Logo)
+		if mime == "" {
+			mime = http.DetectContentType(asset)
+		}
+		w.Header().Set("Content-Type", mime)
+		w.Write(asset)
 		return
 	}
 	if r.Method == "POST" && (s.origin == "" || r.Header.Get("Origin") != s.origin || r.Header.Get("Sec-Fetch-Site") == "cross-site") {

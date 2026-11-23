@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,11 +23,15 @@ func TestBrandingConfigurationAndHTTP(t *testing.T) {
 	dir := t.TempDir()
 	css := []byte(":root { --accent: #773366; --header-background: #281828; }")
 	logo := []byte("\x89PNG\r\n\x1a\nlogo-fixture")
+	photo := []byte("\xff\xd8\xffphoto-fixture")
+	regular, bold := []byte("wOF2regular-fixture"), []byte("wOF2bold-fixture")
 	for _, file := range []struct {
 		env, name string
 		data      []byte
 	}{
 		{"TICKETS_THEME_FILE", "theme.css", css}, {"TICKETS_LOGO_FILE", "logo.png", logo},
+		{"TICKETS_LOGIN_IMAGE_FILE", "photo.jpg", photo},
+		{"TICKETS_FONT_REGULAR_FILE", "regular.woff2", regular}, {"TICKETS_FONT_BOLD_FILE", "bold.woff2", bold},
 	} {
 		path := filepath.Join(dir, file.name)
 		if err := os.WriteFile(path, file.data, 0600); err != nil {
@@ -56,6 +61,28 @@ func TestBrandingConfigurationAndHTTP(t *testing.T) {
 	w := own(s, "GET", "/style.css", "")
 	if w.Code != 200 || !bytes.HasSuffix(w.Body.Bytes(), css) || w.Header().Get("Content-Type") != "text/css; charset=utf-8" {
 		t.Fatal("theme not applied after defaults")
+	}
+	if !strings.Contains(w.Body.String(), "/branding/font-regular.woff2") || !strings.Contains(w.Body.String(), "/branding/font-bold.woff2") {
+		t.Fatal("configured fonts not declared in stylesheet")
+	}
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest("GET", "/login", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `src="/branding/login-image"`) {
+		t.Fatal("configured image missing from public login")
+	}
+	for _, asset := range []struct {
+		path, mime string
+		data       []byte
+	}{
+		{"/branding/login-image", "image/jpeg", photo},
+		{"/branding/font-regular.woff2", "font/woff2", regular},
+		{"/branding/font-bold.woff2", "font/woff2", bold},
+	} {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest("GET", asset.path, nil))
+		if w.Code != 200 || w.Header().Get("Content-Type") != asset.mime || !bytes.Equal(w.Body.Bytes(), asset.data) {
+			t.Fatal("public branding asset response mismatch", asset.path, w.Code)
+		}
 	}
 	w = own(s, "GET", "/branding/logo", "")
 	if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), logo) || w.Header().Get("Content-Type") != "image/png" {
