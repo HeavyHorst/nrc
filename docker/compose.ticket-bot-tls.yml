@@ -1,0 +1,48 @@
+# Optional same-host WSS endpoint for DB-mode tickets. Use after compose.tickets.yml.
+services:
+  ticket-bot-tls:
+    image: caddy:2.11.4-alpine
+    network_mode: service:websocket-server
+    command: [caddy, run, --config, /etc/caddy/TicketBotCaddyfile, --adapter, caddyfile]
+    configs:
+      - source: ticket-bot-caddyfile
+        target: /etc/caddy/TicketBotCaddyfile
+    volumes:
+      - type: bind
+        source: /etc/nrc/ticket-bot-tls
+        target: /run/ticket-bot-tls
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      websocket-server:
+        condition: service_started
+        restart: true
+    restart: unless-stopped
+
+  tickets:
+    environment:
+      NRC_SERVER: wss://websocket-server:8443
+      SSL_CERT_FILE: /run/ticket-bot.crt
+    volumes:
+      - type: bind
+        source: /etc/nrc/ticket-bot-tls/server.crt
+        target: /run/ticket-bot.crt
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      ticket-bot-tls:
+        condition: service_started
+
+configs:
+  ticket-bot-caddyfile:
+    content: |
+      {
+        admin off
+        auto_https disable_redirects
+      }
+      https://websocket-server:8443 {
+        tls /run/ticket-bot-tls/server.crt /run/ticket-bot-tls/server.key
+        reverse_proxy 127.0.0.1:8080
+      }

@@ -420,6 +420,16 @@ proxy can forward to loopback 8096. Capabilities are dropped and the filesystem
 is read-only. The optional file-mode overlay mounts a private 0600 accounts file.
 The regular `docker/deploy.sh` does not manage the ticket overlay. Keep it in
 the portal deployment's Compose arguments for later rebuilds as well.
+
+For a same-host DB-mode deployment, add `compose.ticket-bot-tls.yml` after
+`compose.tickets.yml` instead of setting `NRC_TICKETS_SERVER`. The relay shares
+NRC's network namespace and forwards to `127.0.0.1:8080`. It does not publish
+a host port. Supply a TLS certificate with DNS SAN `websocket-server` and its
+private key as `/etc/nrc/ticket-bot-tls/server.crt` and `server.key`. A locally
+generated self-signed certificate is sufficient: the portal mounts and trusts
+that certificate, not the private key. Keep the key root-only. On rotation,
+recreate both the relay and the portal so both load the replacement.
+
 The `/tmp` tmpfs holds bounded multipart staging (112 MiB); limit concurrent
 uploads at the reverse proxy. Rebuild the proxy too when upgrading from the
 download-only bot listener: `docker compose ... build tailscale-proxy`, then
