@@ -4,7 +4,12 @@
 <body class="login-page">
 <div class="login-hero">
 {{if .Branding.LoginImage}}<img class="login-image" src="/branding/login-image" alt="" fetchpriority="high">{{end}}
-<header><div class="brand">{{if .Branding.Logo}}<img src="/branding/logo" alt="">{{end}}<span>{{.Branding.Brand}}</span></div></header>
+<header><div class="brand">{{if .Branding.Logo}}<img src="/branding/logo" alt="">{{end}}<span>{{.Branding.Brand}}</span></div>
+{{with .Branding}}{{if or .ImprintURL .PrivacyURL .TermsURL .ContactURL}}
+<nav aria-label="Rechtliches und Kontakt">
+{{if .ImprintURL}}<a href="{{.ImprintURL}}">Impressum</a>{{end}}{{if .PrivacyURL}}<a href="{{.PrivacyURL}}">Datenschutz</a>{{end}}
+{{if .TermsURL}}<a href="{{.TermsURL}}">Nutzungsbedingungen</a>{{end}}{{if .ContactURL}}<a href="{{.ContactURL}}">Kontakt</a>{{end}}
+</nav>{{end}}{{end}}</header>
 <main>
 <div class="login-intro"><p>{{.Branding.Brand}}</p><p>Zugang zu Ihren Anfragen und Abnahmen.</p></div>
 <form method="post" action="/login" aria-labelledby="login-title" aria-describedby="login-description">
@@ -15,10 +20,6 @@
 <label>Benutzername<input name="login" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
 <label>Passwort<input name="password" type="password" autocomplete="current-password" required></label>
 <button>Anmelden</button></form></main>
+{{with .Branding.FooterText}}<footer>{{.}}</footer>{{end}}
 </div>
-{{with .Branding}}{{if or .FooterText .ImprintURL .PrivacyURL .TermsURL .ContactURL}}
-<footer>{{if .FooterText}}<span>{{.FooterText}}</span>{{end}}<nav aria-label="Rechtliches und Kontakt">
-{{if .ImprintURL}}<a href="{{.ImprintURL}}">Impressum</a>{{end}}{{if .PrivacyURL}}<a href="{{.PrivacyURL}}">Datenschutz</a>{{end}}
-{{if .TermsURL}}<a href="{{.TermsURL}}">Nutzungsbedingungen</a>{{end}}{{if .ContactURL}}<a href="{{.ContactURL}}">Kontakt</a>{{end}}
-</nav></footer>{{end}}{{end}}
 </body></html>

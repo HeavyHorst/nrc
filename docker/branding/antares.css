@@ -113,6 +113,13 @@ textarea:focus-visible {
   background: transparent;
 }
 .login-page header .brand { color: var(--antares-navy); }
+.login-page header nav a {
+  color: var(--antares-navy);
+  font-size: 14px;
+  text-decoration: none;
+  border-bottom: 1px solid currentColor;
+}
+.login-page header nav a:hover { color: var(--accent); }
 .login-page .brand img { width: 128px; max-width: none; max-height: none; padding: 0; background: none; }
 .login-page .brand span { display: none; }
 .login-page main {
@@ -142,8 +149,6 @@ textarea:focus-visible {
 .login-page button { padding: 13px 22px; border-radius: 2px; font-size: 14px; background: var(--antares-navy); }
 .login-page button:hover { background: var(--accent); }
 .login-page footer { max-width: none; margin: 0; padding: 18px 20px; border-color: var(--line); }
-.login-page footer nav { margin-top: 0; }
-.login-page footer a { color: var(--antares-navy); }
 @media (max-width: 850px) {
   .login-page main { max-width: 460px; grid-template-columns: minmax(0, 1fr); gap: 24px; }
   .login-intro p:first-child { font-size: clamp(36px, 7vw, 48px); }

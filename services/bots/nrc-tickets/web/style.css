@@ -24,6 +24,9 @@ header a { color: var(--header-text); margin-right: 24px; }
 .login-page { min-height: 100vh; display: flex; flex-direction: column; background: var(--pale, var(--background)); }
 .login-hero { flex: 1; display: flex; flex-direction: column; }
 .login-intro, .login-image { display: none; }
+.login-page header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px; }
+.login-page header nav { display: flex; flex-wrap: wrap; gap: 4px 24px; }
+.login-page header nav a { display: block; margin: 0; padding-block: 8px; }
 .login-page header .brand, header:has(.account-nav) .brand { color: var(--header-text); }
 .login-page .brand img, header:has(.account-nav) .brand img { max-width: min(32vw, 150px); padding: 6px 8px; background: #fff; border-radius: 6px; }
 .login-page main { width: min(100%, 488px); flex: 1; display: grid; align-content: center; margin: 0 auto; padding: 40px 24px; }
@@ -34,7 +37,6 @@ header a { color: var(--header-text); margin-right: 24px; }
 .login-page button { width: 100%; margin-top: 8px; font-weight: 700; }
 .login-error { border-left: 3px solid #9e302b; background: #fff2f0; color: #812923; padding: 8px 12px; }
 .login-page footer { width: 100%; text-align: center; margin: 0 auto 24px; }
-.login-page footer nav { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 20px; }
 header .account-nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 24px; }
 header .account-nav a, header .account-nav form { margin: 0; }
 header .account-nav form { background: none; border: 0; padding: 0; }
