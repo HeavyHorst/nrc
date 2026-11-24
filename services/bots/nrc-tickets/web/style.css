@@ -84,13 +84,11 @@ table { width: 100%; border-collapse: collapse; background: var(--surface); }
 th, td { text-align: left; padding: 18px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
-.message-time { font-size: .875rem; font-weight: 400; white-space: nowrap; }
+.message-time { font-size: .875rem; font-weight: 400; }
 .ticket-heading { margin-bottom: 24px; }
-.ticket-heading p { margin: 14px 0 4px; }
-.ticket-heading h1 { margin: 0; }
+.ticket-heading p { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 14px 0 8px; }
+.account-page > main .ticket-heading h1 { margin: 0; font-size: clamp(1.75rem, 3vw, 2.25rem); }
 .ticket-callout { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 12px 16px; margin-bottom: 16px; border-radius: calc(var(--radius)/2); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
-.ticket-callout-waiting { background: #fff4da; color: #61440e; }
-.ticket-callout .button { padding: 8px 14px; }
 .ticket-tabs { display: flex; flex-wrap: wrap; column-gap: 20px; border-bottom: 1px solid var(--border); }
 .ticket-tabs a { color: var(--text); padding: 8px 0; border-bottom: 2px solid transparent; text-decoration: none; }
 .ticket-tabs a:hover, .ticket-tabs a[aria-current] { border-bottom-color: var(--accent); }
@@ -112,24 +110,40 @@ th, td { text-align: left; padding: 18px; border-bottom: 1px solid var(--border)
 .ticket-layout { display: grid; grid-template: "thread aside" / minmax(0, 2.3fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .ticket-thread { grid-area: thread; }
 .ticket-aside { grid-area: aside; }
-.ticket-thread, .ticket-aside details { padding: clamp(14px, 2.5vw, 22px); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
-.ticket-thread h2, .ticket-thread h3, .ticket-aside h3 { margin: 0 0 8px; }
-.ticket-thread h3 { overflow-wrap: anywhere; }
-.ticket-thread h3, .ticket-aside h3, .ticket-aside summary { font-size: 1rem; }
-.ticket-aside summary { cursor: pointer; font-weight: 700; }
-.ticket-aside dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; font-size: .875rem; }
+.ticket-history, .ticket-reply, .ticket-aside details { padding: clamp(14px, 2.5vw, 22px); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.ticket-history-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; margin-bottom: 16px; }
+.ticket-history-heading h2 { margin: 0; font-size: 1.4rem; }
+.ticket-history-heading a { font-size: .875rem; }
+.ticket-aside h3 { margin: 12px 0 8px; }
+.ticket-aside h3 { font-size: 1rem; }
+.ticket-aside summary { cursor: pointer; font-size: 1.25rem; font-weight: 700; }
+.ticket-aside dl { margin: 16px 0; font-size: .9375rem; }
+.ticket-aside dd + dt { margin-top: 10px; }
 .ticket-aside dt { font-weight: 700; }
-.ticket-aside dd { margin: 0; }
+.ticket-aside dd { margin: 0; color: var(--muted); }
 .ticket-files { margin: 0 0 14px; padding-left: 18px; font-size: .875rem; }
 .ticket-files li + li { margin-top: 6px; }
 .ticket-files:empty, .ticket-files:not(:empty) + .ticket-no-files, .ticket-copy[hidden], .ticket-direct-link[hidden] { display: none; }
 .ticket-direct-link, .ticket-copy-status { font-size: .875rem; }
 .ticket-copy:not([hidden]) { padding: 0; color: var(--accent); background: none; text-decoration: underline; text-align: left; font-size: .875rem; }
-.ticket-thread article, .ticket-thread form { margin: 0; padding: 14px 0; border: 0; border-radius: 0; }
-.ticket-thread article + article, .ticket-thread form { border-top: 1px solid var(--border); }
-.ticket-thread form > label { margin: 0 0 6px; }
-.ticket-thread form > button { margin-top: 8px; }
-.ticket-byline { margin: 0 0 4px; overflow-wrap: anywhere; }
+.ticket-timeline { --rail-inset: clamp(17px, 3vw, 31px); --entry-gap: 18px; display: grid; gap: var(--entry-gap); padding-inline-start: var(--rail-inset); }
+.ticket-timeline article:not(:last-child)::after { content: ""; position: absolute; inset-block: 29px calc(-1 * var(--entry-gap) - 9px); inset-inline-start: calc(3px - var(--rail-inset)); border-inline-start: 1px solid var(--border); }
+.ticket-timeline article { position: relative; min-width: 0; margin: 0; padding: 10px 14px; border-radius: calc(var(--radius)/1.5); }
+.ticket-timeline article::before { content: ""; position: absolute; inset-block-start: 15px; inset-inline-start: calc(-1 * var(--rail-inset) - 1px); inline-size: 9px; block-size: 9px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 3px var(--surface); }
+.ticket-timeline .ticket-support { background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+.ticket-timeline .ticket-support::before { background: color-mix(in srgb, var(--accent) 55%, var(--surface)); }
+.ticket-byline { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 12px; padding-bottom: 5px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
+.ticket-byline h3 { margin: 0; font-size: 1rem; min-width: 0; overflow-wrap: anywhere; }
+.ticket-reply { margin: 14px 0 0; }
+.ticket-reply > label { margin: 0 0 8px; font-size: 1.25rem; }
+.ticket-reply-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 14px; }
+.ticket-reply-actions button, .ticket-reply .file-upload.is-enhanced .button { padding: 9px 14px; font-size: .9375rem; font-weight: 700; border: 1px solid transparent; }
+.ticket-reply .file-upload.is-enhanced .button { background: var(--surface); color: var(--text); border-color: var(--input-border); }
+.ticket-reply .file-upload.is-enhanced:hover .button { background: var(--background); }
+.ticket-reply .attachment-upload > p { margin: 6px 0 0; font-size: .8125rem; }
+@media (max-width: 600px) {
+  .ticket-timeline article { padding-inline: 10px; }
+}
 @media (max-width: 760px) {
   .ticket-layout { grid-template: "aside" "thread" / minmax(0, 1fr); }
   .ticket-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }

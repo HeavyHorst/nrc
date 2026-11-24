@@ -310,7 +310,11 @@ func TestStaffReplyDisplayNames(t *testing.T) {
 		a.Preview = string(preview)
 		f.assets[10] = a
 		w := own(s, "GET", "/tickets/1", "")
-		if w.Code != 200 || !strings.Contains(w.Body.String(), "<strong>"+tc.display+"</strong>") {
+		suffix := "</h3>"
+		if tc.kind == "public_reply" {
+			suffix = ` <small class="muted">· Support</small></h3>`
+		}
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "<h3>"+tc.display+suffix) {
 			t.Fatalf("%s %q: expected display name %q, status %d", tc.kind, tc.author, tc.display, w.Code)
 		}
 		w = own(s, "GET", "/api/tickets/1", "")

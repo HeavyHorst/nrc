@@ -805,7 +805,7 @@ var ticketTimeZone = func() *time.Location {
 var page = template.Must(template.Must(template.New("portal").Funcs(template.FuncMap{
 	"ticketTime": func(ns int64) time.Time { return time.Unix(0, ns).In(ticketTimeZone) },
 }).Parse(`{{define "date"}}{{with ticketTime .}}<time datetime="{{.Format "2006-01-02T15:04:05Z07:00"}}">{{.Format "02.01.2006, 15:04"}} Uhr</time>{{end}}{{end}}
-{{define "created"}}{{if gt . 0}} <small class="muted message-time">· {{template "date" .}}</small>{{end}}{{end}}
+{{define "created"}}{{if gt . 0}}<small class="muted message-time">{{template "date" .}}</small>{{end}}{{end}}
 {{define "status"}}<span class="ticket-status {{.StatusKey}}">{{.Status}}</span>{{end}}
 {{define "file-links"}}{{range .}}<li><a href="{{.URL}}" download>{{.Filename}}</a> <small class="muted">({{.Size}} Byte)</small></li>{{end}}{{end}}<!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -833,22 +833,24 @@ var page = template.Must(template.Must(template.New("portal").Funcs(template.Fun
 {{template "upload"}}<button>Anfrage senden</button></form>
 {{else if .Ticket}}
 {{$query := .Filters.Query .Filters.Status}}
-<div class="ticket-heading"><a href="/{{$query}}">← Zur Anfragenliste</a><p class="muted">Anfrage #{{.Ticket.ID}} · {{if .Ticket.Shared}}Teamanfrage{{else}}Eigene Anfrage{{end}}</p><h1>{{.Ticket.Title}}</h1></div>
-{{if eq .Ticket.StatusKey "waiting_customer"}}<div class="ticket-callout ticket-callout-waiting"><strong>Ihre Antwort wird erwartet</strong><a class="button" href="#reply-body">Antwort schreiben</a></div>{{end}}
+<div class="ticket-heading"><a href="/{{$query}}">← Zur Anfragenliste</a><p class="muted"><span>Anfrage #{{.Ticket.ID}} · {{if .Ticket.Shared}}Teamanfrage{{else}}Eigene Anfrage{{end}}</span>{{template "status" .Ticket}}</p><h1>{{.Ticket.Title}}</h1></div>
 <div class="ticket-layout">
 <aside class="ticket-aside"><details open><summary>Zur Anfrage</summary>
-<dl><dt>Status</dt><dd>{{template "status" .Ticket}}</dd>{{if .Ticket.Category}}<dt>Kategorie</dt><dd>{{.Ticket.Category}}</dd>{{end}}{{if gt .Ticket.CreatedAt 0}}<dt>Erstellt</dt><dd>{{template "date" .Ticket.CreatedAt}}</dd>{{end}}</dl>
+{{if or .Ticket.Category (gt .Ticket.CreatedAt 0)}}<dl>{{if .Ticket.Category}}<dt>Kategorie</dt><dd>{{.Ticket.Category}}</dd>{{end}}{{if gt .Ticket.CreatedAt 0}}<dt>Erstellt</dt><dd>{{template "date" .Ticket.CreatedAt}}</dd>{{end}}</dl>{{end}}
 <h3>Dateien in dieser Anfrage</h3><ul class="ticket-files">{{template "file-links" .Ticket.Attachments}}{{range .Ticket.Entries}}{{template "file-links" .Attachments}}{{end}}</ul><p class="ticket-no-files muted">Keine Dateien angehängt.</p>
 <button class="ticket-copy" type="button" hidden>Link zur Anfrage kopieren</button><a class="ticket-direct-link" href="/tickets/{{.Ticket.ID}}">Direktlink zur Anfrage</a><div class="ticket-copy-status muted" role="status"></div>
 </details></aside>
-<section class="ticket-thread" aria-labelledby="ticket-thread-title">
-<h2 id="ticket-thread-title">Verlauf</h2>
-<article><h3>{{if .Ticket.Shared}}Teamanfrage{{if .Ticket.SubmittedBy}} von {{.Ticket.SubmittedBy}}{{end}}{{else}}Ihre Anfrage{{end}}{{template "created" .Ticket.CreatedAt}}</h3><div class="body">{{.Ticket.Body}}</div>{{template "attachments" .Ticket.Attachments}}</article>
-{{range .Ticket.Entries}}<article><p class="ticket-byline"><strong>{{.Author}}</strong>{{if .FromSupport}} <small class="muted">· Support</small>{{end}}{{template "created" .CreatedAt}}</p><div class="body">{{.Body}}</div>{{template "attachments" .Attachments}}</article>{{end}}
-<form method="post" action="/tickets/{{.Ticket.ID}}/reply{{$query}}" enctype="multipart/form-data">
-<label for="reply-body">Ihre Antwort</label><textarea id="reply-body" name="body" rows="5" maxlength="32000" required></textarea>
-{{template "upload"}}<button>Antwort senden</button></form>
-</section></div>
+<div class="ticket-thread">
+<section class="ticket-history" aria-labelledby="ticket-thread-title">
+<div class="ticket-history-heading"><h2 id="ticket-thread-title">Verlauf</h2><a href="#reply-body">Antwort schreiben</a></div>
+<div class="ticket-timeline">
+<article><div class="ticket-byline"><h3>{{if .Ticket.Shared}}Teamanfrage{{if .Ticket.SubmittedBy}} von {{.Ticket.SubmittedBy}}{{end}}{{else}}Ihre Anfrage{{end}}</h3>{{template "created" .Ticket.CreatedAt}}</div><div class="body">{{.Ticket.Body}}</div>{{template "attachments" .Ticket.Attachments}}</article>
+{{range .Ticket.Entries}}<article{{if .FromSupport}} class="ticket-support"{{end}}><div class="ticket-byline"><h3>{{.Author}}{{if .FromSupport}} <small class="muted">· Support</small>{{end}}</h3>{{template "created" .CreatedAt}}</div><div class="body">{{.Body}}</div>{{template "attachments" .Attachments}}</article>{{end}}
+</div></section>
+<form class="ticket-reply" method="post" action="/tickets/{{.Ticket.ID}}/reply{{$query}}" enctype="multipart/form-data">
+<label for="reply-body">Ihre Antwort</label><textarea id="reply-body" name="body" rows="4" maxlength="32000" required></textarea>
+{{template "upload" "Antwort senden"}}</form>
+</div></div>
 {{else}}
 <div class="requests-heading"><div><h1>Meine Anfragen</h1><p>Hier behalten Sie Ihre Anliegen und unsere Antworten im Blick.</p></div><a class="button" href="/new">+ Neue Anfrage</a></div>
 {{if .Waiting}}<div class="ticket-callout"><strong>{{if eq .Waiting 1}}1 Anfrage wartet auf Ihre Antwort{{else}}{{.Waiting}} Anfragen warten auf Ihre Antwort{{end}}</strong><a href="/?status=waiting">Anzeigen <span aria-hidden="true">→</span></a></div>{{end}}
@@ -869,5 +871,5 @@ var page = template.Must(template.Must(template.New("portal").Funcs(template.Fun
 {{if .ImprintURL}}<a href="{{.ImprintURL}}">Impressum</a>{{end}}{{if .PrivacyURL}}<a href="{{.PrivacyURL}}">Datenschutz</a>{{end}}
 {{if .TermsURL}}<a href="{{.TermsURL}}">Nutzungsbedingungen</a>{{end}}{{if .ContactURL}}<a href="{{.ContactURL}}">Kontakt</a>{{end}}
 </nav></footer>{{end}}{{end}}</body></html>
-{{define "upload"}}<div class="attachment-upload"><p>Anhänge (optional)</p><label class="file-upload"><span class="button">Dateien hinzufügen</span><input type="file" name="files" multiple aria-describedby="attachment-hint selected-files"></label><p class="muted" id="selected-files" aria-live="polite"></p><p class="muted attachment-hint" id="attachment-hint">Bis zu 10 Dateien, insgesamt maximal 100 MiB je Nachricht. Bitte keine Passwörter oder Zugangsdaten anhängen.</p></div>{{end}}
+{{define "upload"}}<div class="attachment-upload">{{if .}}<div class="ticket-reply-actions">{{else}}<p>Anhänge (optional)</p>{{end}}<label class="file-upload"><span class="button">Dateien hinzufügen</span><input type="file" name="files" multiple aria-describedby="attachment-hint selected-files"></label>{{if .}}<button type="submit">{{.}}</button></div>{{end}}<p class="muted" id="selected-files" aria-live="polite"></p><p class="muted attachment-hint" id="attachment-hint">Bis zu 10 Dateien, insgesamt maximal 100 MiB je Nachricht. Bitte keine Passwörter oder Zugangsdaten anhängen.</p></div>{{end}}
 {{define "attachments"}}{{if .}}<ul class="attachments" aria-label="Anhänge">{{range .}}<li>{{if .PreviewURL}}<a class="attachment-preview" href="{{.PreviewURL}}" target="_blank" rel="noopener" aria-label="Bild {{.Filename}} öffnen"><img src="{{.PreviewURL}}" alt="Vorschau: {{.Filename}}" loading="lazy" decoding="async"></a>{{end}}<a href="{{.URL}}" download>{{.Filename}}</a> <small class="muted">({{.Size}} Byte)</small></li>{{end}}</ul>{{end}}{{end}}`)).Parse(profileHTML))

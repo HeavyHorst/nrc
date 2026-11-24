@@ -148,6 +148,8 @@ try {
       await page.getByRole('button', { name: 'Filtern' }).click();
       await teamTicket.click();
       await page.getByRole('heading', { name: /Teamanfrage von/ }).waitFor();
+      assert.equal(await page.locator('.ticket-heading .ticket-status').innerText(), 'Ihre Antwort wird erwartet');
+      assert.equal(await page.locator('.ticket-aside .ticket-status').count(), 0);
       assert.doesNotMatch(await page.locator('main').textContent(), /INTERNAL_ONLY_DIAGNOSIS/);
       await page.getByRole('link', { name: 'Zur Anfragenliste' }).click();
       assert.equal(await page.getByLabel('Suche', { exact: true }).inputValue(), '#2');
