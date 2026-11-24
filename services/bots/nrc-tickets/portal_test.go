@@ -540,10 +540,19 @@ func TestBrowserFixture(t *testing.T) {
 		t.Skip("opt-in rendering fixture")
 	}
 	s, _ := fixture(t)
-	if os.Getenv("TICKETS_TEST_SHARING") == "1" {
-		s, _ = sharingFixture(t)
+	if mode := os.Getenv("TICKETS_TEST_SHARING"); mode == "1" || mode == "unavailable" {
+		var f *fakeSource
+		s, f = sharingFixture(t)
+		f.fail = mode == "unavailable"
 	}
 	if os.Getenv("TICKETS_TEST_PASSWORD") == "1" {
+		var f *fakeSource
+		s, f = sharingFixture(t)
+		company := f.assets[123]
+		company.Preview = `{"version":1,"title":"Nordwerk GmbH","ticket_groups":[{"id":"tech","name":"Technik","contact_ids":["51","52"]},{"id":"project","name":"Projektteam","contact_ids":["51","54"]}]}`
+		f.assets[123] = company
+		// This fixture peer serves only Anna's account, not legacy requester mappings.
+		delete(f.assets, 2)
 		s.accounts = passwordAccountPeer(t)
 	}
 	s.files = testFiles(t)

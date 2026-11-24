@@ -61,8 +61,10 @@ func sharingFixture(t *testing.T) (*portal, *fakeSource) {
 	a.CreatedAt = time.Date(2026, 6, 29, 8, 17, 0, 0, time.UTC).UnixNano()
 	f.assets[2] = a
 	f.assets[123] = p.Asset{AssetID: 123, AssetType: p.AssetTypeCustomerCompany, Preview: `{"version":1,"title":"Nordwerk","ticket_groups":[{"id":"tech","name":"Technik","contact_ids":["51","52"]},{"id":"project","name":"Projektteam","contact_ids":["52","53"]}]}`}
-	for _, id := range []uint64{51, 52, 53, 54} {
-		f.assets[id] = p.Asset{AssetID: id, AssetType: p.AssetTypeCustomerContact, Preview: `{"version":1,"title":"Contact"}`}
+	for i, title := range []string{"Anna Beispiel", "Bea Sommer", "Nicht direkt freigegeben", "Lea Muster"} {
+		id := uint64(51 + i)
+		preview, _ := json.Marshal(map[string]any{"version": 1, "title": title, "email": "private-peer@example.test"})
+		f.assets[id] = p.Asset{AssetID: id, AssetType: p.AssetTypeCustomerContact, Preview: string(preview)}
 		f.links = append(f.links, p.Edge{ConvID: 0, SourceType: 1, SourceID: id, TargetType: 1, TargetID: 123, Relation: p.RelationMemberOf})
 	}
 	// Reverse membership is equally valid, and is not a transitive group link.
@@ -81,6 +83,51 @@ func sharingFixture(t *testing.T) (*portal, *fakeSource) {
 		f.assets[id] = p.Asset{AssetID: id, AssetType: entryType, ParentType: 2, ParentID: 2, Preview: string(b), Payload: body, CreatedAt: time.Date(2026, 7, 2, 9+i, 40, 0, 0, time.UTC).UnixNano()}
 	}
 	return s, f
+}
+
+func TestProfileShowsOnlyCurrentDirectTicketGroups(t *testing.T) {
+	s, f := sharingFixture(t)
+	if w := call(s, "GET", "/konto", "", "", "", ""); w.Code != 303 || w.Header().Get("Location") != "/login?next=%2Fkonto" {
+		t.Fatalf("anonymous profile: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	w := own(s, "GET", "/konto", "")
+	if w.Code != 200 {
+		t.Fatalf("profile: %d", w.Code)
+	}
+	for _, text := range []string{"anna@example.test", "Nordwerk", "Technik", "Bea Sommer", `href="/?scope=team"`, `<title>Mein Konto · Ihr Kundenportal</title>`, `<ul role="list">`} {
+		if !strings.Contains(w.Body.String(), text) {
+			t.Errorf("profile missing %q", text)
+		}
+	}
+	for _, text := range []string{"Projektteam", "Nicht direkt freigegeben", "private-peer@example.test", "bea@example.test", "/konto/passwort", s.accounts.(fileAccounts)[0].PasswordHash} {
+		if strings.Contains(w.Body.String(), text) {
+			t.Errorf("profile contains unexpected %q", text)
+		}
+	}
+	for _, failure := range []string{"company", "edges", "contact"} {
+		t.Run(failure, func(t *testing.T) {
+			s, f := sharingFixture(t)
+			switch failure {
+			case "company":
+				delete(f.assets, 123)
+			case "edges":
+				f.fail = true
+			case "contact":
+				delete(f.assets, 52)
+			}
+			w := own(s, "GET", "/konto", "")
+			body := w.Body.String()
+			if w.Code != 200 || !strings.Contains(body, "Ticketfreigaben konnten nicht geladen werden.") || !strings.Contains(body, "anna@example.test") || strings.Contains(body, "Nur eigene Anfragen sichtbar.") || strings.Contains(body, "Teamanfragen ansehen") {
+				t.Fatal("profile did not distinguish a sharing lookup failure from no grants")
+			}
+		})
+	}
+	// Removing the reversed company membership must immediately affect the profile.
+	f.links = append(f.links[:1], f.links[2:]...)
+	w = own(s, "GET", "/konto", "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "Nur eigene Anfragen sichtbar.") || strings.Contains(w.Body.String(), "Bea Sommer") {
+		t.Fatal("profile retained revoked contact")
+	}
 }
 
 func TestSharedTicketsReadReplyFilesAndRevocation(t *testing.T) {

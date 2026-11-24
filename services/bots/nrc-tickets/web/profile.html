@@ -1,0 +1,43 @@
+{{define "profile"}}
+<div class="profile-heading"><h1>Mein Konto</h1><p>Ihr Profil und Ihre Ticketfreigaben im Überblick.</p></div>
+<div class="profile-layout">
+  <div class="profile-sidebar">
+    <section class="profile-panel" aria-labelledby="profile-title">
+      <h2 id="profile-title">Profil</h2>
+      {{with .Profile}}
+      <p class="profile-name">{{.Name}}</p>
+      {{if .Company}}<p class="muted profile-company">{{.Company}}</p>{{end}}
+      <dl class="profile-fields">
+        <dt>Benutzername</dt><dd>{{.Login}}</dd>
+        <dt>E-Mail für Anfragen</dt><dd>{{.Requester}}</dd>
+      </dl>
+      {{end}}
+    </section>
+    {{if .CanChangePassword}}
+    <section class="profile-panel" aria-labelledby="security-title">
+      <h2 id="security-title">Sicherheit</h2>
+      <a class="profile-action" href="/konto/passwort">Passwort ändern</a>
+    </section>
+    {{end}}
+  </div>
+  <section class="profile-panel profile-sharing" aria-labelledby="sharing-title">
+    <div class="profile-sharing-heading">
+      <h2 id="sharing-title">Ticketfreigaben</h2>
+      {{if .Profile.Groups}}<a href="/?scope=team">Teamanfragen ansehen</a>{{end}}
+    </div>
+    {{if .Profile.SharingUnavailable}}
+    <p class="muted">Ticketfreigaben konnten nicht geladen werden. Bitte versuchen Sie es später erneut.</p>
+    {{else if .Profile.Groups}}
+    <p class="muted">Mitglieder derselben Gruppe können die Anfragen der anderen lesen und beantworten.</p>
+    {{range .Profile.Groups}}
+    <div class="profile-group">
+      <h3>{{.Name}}</h3>
+      <ul role="list">{{range .Members}}<li>{{.}}</li>{{end}}</ul>
+    </div>
+    {{end}}
+    {{else}}
+    <p class="muted">Nur eigene Anfragen sichtbar.</p>
+    {{end}}
+  </section>
+</div>
+{{end}}

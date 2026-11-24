@@ -118,6 +118,7 @@ type view struct {
 	Filters           ticketFilters  `json:"-"`
 	Waiting           int            `json:"-"`
 	HasTickets        bool           `json:"-"`
+	Profile           *profileView   `json:"-"`
 	Password          bool           `json:"-"`
 	CanChangePassword bool           `json:"-"`
 	PasswordError     string         `json:"-"`
@@ -207,22 +208,46 @@ func (s *portal) sharedContacts(ctx context.Context, who account) map[string]boo
 	if who.Disabled || who.ContactID == "" || who.CompanyID == "" {
 		return nil
 	}
+	return s.ticketSharing(ctx, who, nil)
+}
+
+func (s *portal) ticketSharing(ctx context.Context, who account, profile *profileView) map[string]bool {
+	if who.Disabled || who.CompanyID == "" {
+		return nil
+	}
+	unavailable := func() {
+		if profile != nil && who.ContactID != "" {
+			profile.SharingUnavailable = true
+		}
+	}
 	id, _ := strconv.ParseUint(who.CompanyID, 10, 64)
 	company, err := s.source.get(ctx, id)
 	if err != nil || company.AssetID != id || company.ConvID != 0 || company.AssetType != p.AssetTypeCustomerCompany {
+		unavailable()
+		return nil
+	}
+	if profile != nil {
+		profile.Company = profileTitle(company.Preview)
+	}
+	if who.ContactID == "" {
 		return nil
 	}
 	groups, err := p.DecodeTicketGroups(company.Preview)
 	if err != nil {
+		unavailable()
 		return nil
 	}
 	peers := map[string]bool{}
+	var ownGroups []p.TicketGroup
 	for _, group := range groups {
 		member := false
 		for _, contact := range group.ContactIDs {
 			member = member || contact == who.ContactID
 		}
 		if member {
+			if profile != nil {
+				ownGroups = append(ownGroups, group)
+			}
 			for _, contact := range group.ContactIDs {
 				peers[contact] = true
 			}
@@ -233,6 +258,7 @@ func (s *portal) sharedContacts(ctx context.Context, who account) map[string]boo
 	}
 	edges, err := s.source.edges(ctx, id)
 	if err != nil {
+		unavailable()
 		return nil
 	}
 	linked := map[string]bool{}
@@ -248,15 +274,45 @@ func (s *portal) sharedContacts(ctx context.Context, who account) map[string]boo
 	}
 	// Re-read actual contacts: deleted contacts or removed company edges cannot
 	// leave a stale grant behind. This set lives for one HTTP request only.
+	var names map[string]string
+	if profile != nil {
+		names = make(map[string]string)
+	}
 	for contact := range peers {
+		if !linked[contact] {
+			delete(peers, contact)
+			continue
+		}
 		cid, _ := strconv.ParseUint(contact, 10, 64)
 		a, err := s.source.get(ctx, cid)
-		if !linked[contact] || err != nil || a.AssetID != cid || a.ConvID != 0 || a.AssetType != p.AssetTypeCustomerContact {
+		if err != nil {
+			unavailable()
+		}
+		if err != nil || a.AssetID != cid || a.ConvID != 0 || a.AssetType != p.AssetTypeCustomerContact {
 			delete(peers, contact)
+		} else if names != nil && contact != who.ContactID {
+			names[contact] = profileTitle(a.Preview)
 		}
 	}
 	if !peers[who.ContactID] {
 		return nil
+	}
+	if profile == nil || profile.SharingUnavailable {
+		return peers
+	}
+	for _, group := range ownGroups {
+		g := profileGroup{Name: group.Name}
+		for _, contact := range group.ContactIDs {
+			if name, exists := names[contact]; exists {
+				if name == "" || strings.Contains(name, "@") {
+					name = "Kontakt ohne Anzeigenamen"
+				}
+				g.Members = append(g.Members, name)
+			}
+		}
+		if len(g.Members) > 0 {
+			profile.Groups = append(profile.Groups, g)
+		}
 	}
 	return peers
 }
@@ -411,6 +467,10 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/abnahmen" || strings.HasPrefix(r.URL.Path, "/abnahmen/") {
 		s.accountReview(w, r, who)
+		return
+	}
+	if r.URL.Path == "/konto" {
+		s.profilePage(w, r, who)
 		return
 	}
 	if r.URL.Path == "/konto/passwort" {
@@ -742,17 +802,20 @@ var ticketTimeZone = func() *time.Location {
 	return zone
 }()
 
-var page = template.Must(template.New("portal").Funcs(template.FuncMap{
+var page = template.Must(template.Must(template.New("portal").Funcs(template.FuncMap{
 	"ticketTime": func(ns int64) time.Time { return time.Unix(0, ns).In(ticketTimeZone) },
 }).Parse(`{{define "date"}}{{with ticketTime .}}<time datetime="{{.Format "2006-01-02T15:04:05Z07:00"}}">{{.Format "02.01.2006, 15:04"}} Uhr</time>{{end}}{{end}}
 {{define "created"}}{{if gt . 0}} <small class="muted message-time">· {{template "date" .}}</small>{{end}}{{end}}
 {{define "status"}}<span class="ticket-status {{.StatusKey}}">{{.Status}}</span>{{end}}
 {{define "file-links"}}{{range .}}<li><a href="{{.URL}}" download>{{.Filename}}</a> <small class="muted">({{.Size}} Byte)</small></li>{{end}}{{end}}<!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Branding.Brand}}</title><link rel="stylesheet" href="/style.css"><script src="/attachments.js" defer></script></head><body class="account-page">
+<title>{{if .Profile}}Mein Konto · {{end}}{{.Branding.Brand}}</title><link rel="stylesheet" href="/style.css"><script src="/attachments.js" defer></script></head><body class="account-page">
 <header><a class="brand" href="/">{{if .Branding.Logo}}<img src="/branding/logo" alt="">{{end}}<span>{{.Branding.Brand}}</span></a>
-<nav class="account-nav" aria-label="Hauptnavigation"><a href="/"{{if not .Password}} aria-current="{{if or .New .Ticket}}true{{else}}page{{end}}"{{end}}>Meine Anfragen</a><a href="/abnahmen">Meine Abnahmen</a>{{if .CanChangePassword}}<a href="/konto/passwort"{{if .Password}} aria-current="page"{{end}}>Mein Konto</a>{{end}}<form method="post" action="/logout"><button>Abmelden</button></form></nav></header><main>
-{{if .Password}}
+<nav class="account-nav" aria-label="Hauptnavigation"><a href="/"{{if not (or .Profile .Password)}} aria-current="{{if or .New .Ticket}}true{{else}}page{{end}}"{{end}}>Meine Anfragen</a><a href="/abnahmen">Meine Abnahmen</a><a href="/konto"{{if .Profile}} aria-current="page"{{else if .Password}} aria-current="true"{{end}}>Mein Konto</a><form method="post" action="/logout"><button>Abmelden</button></form></nav></header><main>
+{{if .Profile}}
+{{template "profile" .}}
+{{else if .Password}}
+<a href="/konto">← Zurück zu Mein Konto</a>
 <h1>Passwort ändern</h1><p>Nach dem Wechsel werden alle bisherigen Sitzungen abgemeldet.</p>
 <form class="password-form" method="post" action="/konto/passwort" aria-label="Passwort ändern">
 {{if .PasswordError}}<p class="login-error" role="alert">{{.PasswordError}}</p>{{end}}
@@ -807,4 +870,4 @@ var page = template.Must(template.New("portal").Funcs(template.FuncMap{
 {{if .TermsURL}}<a href="{{.TermsURL}}">Nutzungsbedingungen</a>{{end}}{{if .ContactURL}}<a href="{{.ContactURL}}">Kontakt</a>{{end}}
 </nav></footer>{{end}}{{end}}</body></html>
 {{define "upload"}}<div class="attachment-upload"><p>Anhänge (optional)</p><label class="file-upload"><span class="button">Dateien hinzufügen</span><input type="file" name="files" multiple aria-describedby="attachment-hint selected-files"></label><p class="muted" id="selected-files" aria-live="polite"></p><p class="muted attachment-hint" id="attachment-hint">Bis zu 10 Dateien, insgesamt maximal 100 MiB je Nachricht. Bitte keine Passwörter oder Zugangsdaten anhängen.</p></div>{{end}}
-{{define "attachments"}}{{if .}}<ul class="attachments" aria-label="Anhänge">{{range .}}<li>{{if .PreviewURL}}<a class="attachment-preview" href="{{.PreviewURL}}" target="_blank" rel="noopener" aria-label="Bild {{.Filename}} öffnen"><img src="{{.PreviewURL}}" alt="Vorschau: {{.Filename}}" loading="lazy" decoding="async"></a>{{end}}<a href="{{.URL}}" download>{{.Filename}}</a> <small class="muted">({{.Size}} Byte)</small></li>{{end}}</ul>{{end}}{{end}}`))
+{{define "attachments"}}{{if .}}<ul class="attachments" aria-label="Anhänge">{{range .}}<li>{{if .PreviewURL}}<a class="attachment-preview" href="{{.PreviewURL}}" target="_blank" rel="noopener" aria-label="Bild {{.Filename}} öffnen"><img src="{{.PreviewURL}}" alt="Vorschau: {{.Filename}}" loading="lazy" decoding="async"></a>{{end}}<a href="{{.URL}}" download>{{.Filename}}</a> <small class="muted">({{.Size}} Byte)</small></li>{{end}}</ul>{{end}}{{end}}`)).Parse(profileHTML))

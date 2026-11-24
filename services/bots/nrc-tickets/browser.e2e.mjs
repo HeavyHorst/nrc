@@ -67,6 +67,14 @@ try {
       const other = await browser.newPage();
       await signIn(other);
       await page.getByRole('link', { name: 'Mein Konto' }).click();
+      await page.getByRole('heading', { name: 'Mein Konto' }).waitFor();
+      assert.deepEqual(await page.locator('.profile-group h3').allTextContents(), ['Technik', 'Projektteam']);
+      await shot('profile-desktop');
+      await page.setViewportSize({ width: 390, height: 900 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await shot('profile-mobile');
+      await page.setViewportSize({ width: 1440, height: 1100 });
+      await page.getByRole('link', { name: 'Passwort ändern' }).click();
       await page.getByRole('heading', { name: 'Passwort ändern' }).waitFor();
       await shot('password-desktop');
       await page.setViewportSize({ width: 390, height: 900 });
@@ -106,7 +114,11 @@ try {
       continue;
     }
     if (branded === 'team') {
-      await page.goto(base);
+      await page.getByRole('link', { name: 'Mein Konto' }).click();
+      await page.getByRole('link', { name: 'Teamanfragen ansehen' }).click();
+      assert.equal(await page.getByLabel('Sichtbarkeit').inputValue(), 'team');
+      assert.doesNotMatch(await page.locator('table').textContent(), /Meine Anfrage/);
+      await page.getByRole('link', { name: 'Meine Anfragen', exact: true }).click();
       const teamTicket = page.getByRole('link', { name: 'Rechnungsexport unvollständig', exact: true });
       await teamTicket.waitFor();
       assert.match(await page.locator('table').textContent(), /Team/);
@@ -179,6 +191,11 @@ try {
       await context.close();
       const closed = new Promise(r => server.once('exit', r)); server.kill('SIGTERM'); await closed; server = null;
       continue;
+    }
+    if (branded) {
+      await page.getByRole('link', { name: 'Mein Konto' }).click();
+      await page.getByText('Nur eigene Anfragen sichtbar.').waitFor();
+      await shot('profile-no-sharing');
     }
     await page.goto(`${base}/new`);
     assert.equal(await page.title(), branded ? 'Example & Co · Kundenservice' : 'Ihr Kundenportal');

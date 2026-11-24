@@ -178,7 +178,7 @@ textarea:focus-visible {
 .account-page .account-nav [aria-current] { border-bottom-color: var(--accent); }
 .account-page .account-nav a:hover, .account-page .account-nav button:hover { color: var(--accent); }
 .account-page > main:not(.review), .account-page > footer { width: calc(100% - 40px); max-width: 1040px; padding-inline: 0; }
-.account-page > main h1, .account-page .requests-empty h2 { font-family: Georgia, "Times New Roman", serif; letter-spacing: -.035em; }
+.account-page > main h1, .account-page .requests-empty h2, .account-page .profile-panel h2, .account-page .profile-name, .account-page .profile-group h3 { font-family: Georgia, "Times New Roman", serif; letter-spacing: -.035em; }
 .account-page > main h1 { font-size: clamp(32px, 4vw, 48px); }
 .account-page .requests-kicker { margin-bottom: 6px; }
 .account-page .requests-heading .button { border-radius: 2px; font-size: .875rem; }

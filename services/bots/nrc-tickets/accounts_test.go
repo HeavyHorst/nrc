@@ -122,7 +122,7 @@ func passwordAccountPeer(t *testing.T) dbAccounts {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := p.PortalAccount{ID: "9", Revision: "1", Login: "anna", Requester: "anna@example.test", Name: "Anna", PasswordHash: string(hash)}
+	a := p.PortalAccount{ID: "9", Revision: "1", Login: "anna", Requester: "anna@example.test", Name: "Anna Beispiel", CompanyID: "123", ContactID: "51", PasswordHash: string(hash)}
 	var mu sync.Mutex
 	return accountPeer(t, func(q p.PortalAccountRequest) (p.PortalAccountResponse, uint32) {
 		mu.Lock()
