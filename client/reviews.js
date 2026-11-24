@@ -46,16 +46,15 @@
         cursor=page.cursor;
       } while(cursor);
     } else {
-      const response=await fetch('/api/users/identities',{credentials:'same-origin',cache:'no-store'});
-      if(!response.ok)throw Error('Tailscale user directory unavailable');
-      for(const [login,name] of Object.entries(await response.json()))people.push({identity:login,name:name || login,login});
+      for(const {login,name} of await fetchUserIdentities())people.push({identity:login,name,login});
     }
     if(!people.length)throw Error('No accounts available to assign');
     people.sort((a,b)=>a.name.localeCompare(b.name) || a.login.localeCompare(b.login));
     return new Promise(resolve=>{
       const modal=NRCModal.create({title:source==='portal'?'ASSIGN PORTAL ACCOUNT':'ASSIGN STAFF',onCancel:()=>resolve(null)});
-      const label=document.createElement('label');label.className='detail-edit-field';label.textContent='ACCOUNT';
-      const select=document.createElement('select');select.className='filter-select';label.append(select);modal.actions.before(label);
+      const label=document.createElement('label');label.className='task-detail-row detail-edit-field';
+      const caption=document.createElement('span');caption.className='detail-edit-label';caption.textContent='ACCOUNT';
+      const select=document.createElement('select');select.className='task-detail-select';label.append(caption,select);modal.actions.before(label);
       for(const [i,person] of people.entries())select.add(new Option(person.name===person.login?person.name:`${person.name} · ${person.login}`,String(i)));
       const cancel=document.createElement('button');cancel.type='button';cancel.className='btn btn--ghost';cancel.textContent='Cancel';cancel.onclick=()=>modal.cancel();
       const submit=document.createElement('button');submit.type='button';submit.className='btn btn--primary';submit.textContent='Continue';submit.onclick=()=>{modal.close();resolve(people[Number(select.value)]);};

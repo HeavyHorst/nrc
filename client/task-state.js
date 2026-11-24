@@ -368,7 +368,7 @@ function getAssigneeFilterOptions() {
 
   for (const user of Array.from(users).sort()) {
     if (user && user !== myNickname) {
-      options.push({ label: user, value: user });
+      options.push({ label: window.NRCTasks?.personLabel?.(user) ?? user, value: user });
     }
   }
 
@@ -384,7 +384,7 @@ function populateAssigneeFilter() {
 
   const options = getAssigneeFilterOptions();
   if (currentValue && !options.some((option) => option.value === currentValue)) {
-    options.push({ label: currentValue, value: currentValue });
+    options.push({ label: window.NRCTasks?.personLabel?.(currentValue) ?? currentValue, value: currentValue });
   }
   for (const option of options) {
     const opt = document.createElement("option");

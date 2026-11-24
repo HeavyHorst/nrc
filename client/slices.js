@@ -348,16 +348,15 @@
     const owners = new Set(completeOwners.filter(owner => owner && owner !== me));
     const current = state.filters.owner;
     if (current !== null && current !== OWNER_MINE && current !== OWNER_UNASSIGNED) owners.add(current);
-    const listed = Array.from(owners).sort();
-    const signature = listed.join("\u0000");
+    const listed = Array.from(owners).sort().map(owner => `<option value="${escape(owner)}">${escape(window.NRCTasks?.personLabel?.(owner) ?? owner)}</option>`).join("");
     // The option set is rebuilt only when it changes: a refresh must not replace
     // the dropdown the reader has open.
-    if (signature !== ownerOptions) {
-      ownerOptions = signature;
+    if (listed !== ownerOptions) {
+      ownerOptions = listed;
       select.innerHTML = `<option value="">ALL</option>` +
         `<option value="${OWNER_MINE}">MY SLICES</option>` +
         `<option value="${OWNER_UNASSIGNED}">UNASSIGNED</option>` +
-        listed.map((owner) => `<option value="${escape(owner)}">${escape(owner)}</option>`).join("");
+        listed;
     }
     const value = state.filters.owner ?? "";
     if (select.value !== value) select.value = value;
@@ -1589,6 +1588,7 @@
 
     window.NRCDetailUI?.bindSuggestedInput(document.getElementById("sliceOwner"), {
       name: "OWNER",
+      person: true,
       suggestions: () => window.NRCTasks?.getFieldChoices?.("assignee", 0n) || [],
     });
 

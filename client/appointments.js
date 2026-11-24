@@ -281,7 +281,7 @@ window.NRCAppointments = (() => {
     metadata = { assignee: appointment.assignee, project: appointment.project };
     const token = generation;
     const field = name => window.NRCDetailUI.inlineField({ key: `appointment-${name}`, name: name.toUpperCase(), label: name.toUpperCase(),
-      value: metadata[name], display: metadata[name] || "—", suggestions: () => choices(name, metadata[name]),
+      value: metadata[name], display: metadata[name] || "—", suggestions: () => choices(name, metadata[name]), person: name === "assignee",
       save: value => {
         if (token !== generation || saving) throw new Error("APPOINTMENT CHANGED OR IS SAVING · CLOSE AND REOPEN THIS FIELD");
         metadata[name] = String(value).trim(); dirty = true;

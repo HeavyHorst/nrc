@@ -240,6 +240,16 @@ try {
     const accountPicker=page.getByRole('dialog').last();
     await accountPicker.getByLabel('ACCOUNT').selectOption({label:'Sam Example · sam@example.test'});
     await screenshot('staff-account-picker');
+    const beforePickerViewport=page.viewportSize();
+    const beforePickerTheme=await page.locator('html').getAttribute('data-theme');
+    await page.setViewportSize({width:390,height:844});
+    await page.evaluate(()=>document.documentElement.dataset.theme='matte-black');
+    await screenshot('staff-account-picker-mobile-dark');
+    await page.setViewportSize(beforePickerViewport);
+    await page.evaluate(theme=>{
+      if(theme===null)delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme=theme;
+    },beforePickerTheme);
     await accountPicker.getByRole('button',{name:'Continue',exact:true}).click();
     await accountPicker.getByRole('button',{name:'Cancel',exact:true}).click();
     await editor.getByText('STAFF PARTICIPANT ASSIGNED',{exact:true}).waitFor();

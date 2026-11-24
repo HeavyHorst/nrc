@@ -266,7 +266,7 @@
     const assigneeSelect = document.getElementById('ticketAssigneeFilter');
     if (assigneeSelect && people && peopleScope === peopleGeneration) {
       const names = [...new Set([...people, state.filters.owner].filter(Boolean))].sort();
-      const options = '<option value="">ALL ASSIGNEES</option>' + names.map(name => `<option value="${esc(name)}">${esc(name)}</option>`).join('');
+      const options = '<option value="">ALL ASSIGNEES</option>' + names.map(name => `<option value="${esc(name)}">${esc(window.NRCTasks?.personLabel?.(name) ?? name)}</option>`).join('');
       if (assigneeSelect.innerHTML !== options) assigneeSelect.innerHTML = options;
       assigneeSelect.value = state.filters.owner || '';
     }
@@ -530,7 +530,7 @@
     };
     root.innerHTML = `<div class="task-detail-doc-title">${esc(m.title)} ${control('title', 'TITLE', { label: '', display: 'RENAME', required: true, maxBytes: 256 })}</div>
       <div class="detail-read-register task-detail-read-register">${control('status', 'STATUS', { display: statusLabels[m.status], options: statuses.map(value => ({ value, label: statusLabels[value] })) })}
-      ${control('assignee', 'ASSIGNEE', { maxBytes: 64, suggestions: () => [...new Set([...(typeof userDirectory === 'function' ? userDirectory() : []), ...state.tickets.map(a => metadata(a).assignee)].filter(Boolean))] })}
+      ${control('assignee', 'ASSIGNEE', { maxBytes: 64, person: true, suggestions: () => [...new Set([...(typeof userDirectory === 'function' ? userDirectory() : []), ...state.tickets.map(a => metadata(a).assignee)].filter(Boolean))] })}
       ${control('priority', 'PRIORITY', { display: m.priority.toUpperCase(), options: priorities.map(value => ({ value, label: value.toUpperCase() })) })}
       ${control('category', 'CATEGORY', { display: categories[m.category || ''] || m.category, options: Object.entries(categories).map(([value, label]) => ({ value, label })) })}
       ${control('follow_up_at', 'FOLLOW-UP · LOCAL TIME', { type: 'datetime-local', clearable: !!m.follow_up_at, value: followUpInput(m.follow_up_at), display: followUpLabel(m.follow_up_at), save: value => saveMetadata(asset, { follow_up_at: followUpValue(value) }, identity) })}</div>

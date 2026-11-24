@@ -1635,6 +1635,7 @@ function taskFieldChoices(field, convId = 0n) {
 function fieldControl(task, field, { label, rename = false } = {}) {
   const spec = taskFieldSpec(task, field);
   if (field === "assignee" || field === "project") spec.suggestions = () => taskFieldChoices(field, task.convId);
+  if (field === "assignee") spec.person = true;
   if (field === "blockedBy") {
     spec.options = () => {
       const options = [{ value: "", label: "— NONE" }, ...Array.from(roomTasks.get(task.convId)?.values() || [])
@@ -3302,12 +3303,43 @@ let descriptionFocusDraft = null;
 
 let allUsers = [];
 let usersRequest = null;
+let identitiesRequest = null;
+const userIdentities = new Map();
+
+function fetchUserIdentities() {
+  if (!identitiesRequest) {
+    identitiesRequest = (async () => {
+      const response = await fetch("/api/users/identities", { credentials: "same-origin", cache: "no-store" });
+      if (!response.ok) throw new Error("Tailscale user directory unavailable");
+      const identities = Object.entries(await response.json()).map(([login, name]) => ({ login, name: name || login }));
+      for (const person of identities) {
+        const nickname = person.login.split("@", 1)[0];
+        // A short login shared by multiple accounts cannot identify either one.
+        userIdentities.set(nickname, userIdentities.has(nickname) ? null : person);
+      }
+      for (const person of identities) userIdentities.set(person.login, person);
+      return identities;
+    })().catch(error => {
+      identitiesRequest = null;
+      throw error;
+    });
+  }
+  return identitiesRequest;
+}
+
+function personLabel(value) {
+  const person = userIdentities.get(value);
+  return !person ? value : person.name === person.login ? person.login : `${person.name} · ${person.login}`;
+}
 
 // The directory is shared by every field that takes a person's name, so it is
 // requested once per page load and reused: a second field must not start a
 // second request, and it should still see the list when the first one lands.
 function fetchUsersList() {
   if (!usersRequest) {
+    fetchUserIdentities().then(() => {
+      if (typeof populateAssigneeFilter === "function") populateAssigneeFilter();
+    }).catch(() => {}); // Proxies without the staff directory still offer nicknames.
     usersRequest = (async () => {
       try {
         const response = await fetch("/api/users");
@@ -4628,6 +4660,7 @@ window.NRCTasks = {
   toggleMyTasksFilter,
   initFilterState,
   getFieldChoices: taskFieldChoices,
+  personLabel,
   fieldControl,
   openField,
   sendUpdateTask,

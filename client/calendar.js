@@ -170,7 +170,10 @@ window.NRCCalendar = (() => {
     const assignee = id === "calendarPerson";
     const choices = [...new Set([...values.filter(Boolean), ...(selected ? [selected] : [])])]
       .filter(value => !assignee || (value !== myNickname && value !== "me")).sort();
-    select.innerHTML = '<option value="">ALL</option>' + (assignee ? '<option value="me">MINE</option>' : "") + choices.map(value => `<option value="${escape(value)}">${escape(value)}</option>`).join("");
+    select.innerHTML = '<option value="">ALL</option>' + (assignee ? '<option value="me">MINE</option>' : "") + choices.map(value => {
+      const label = assignee ? window.NRCTasks?.personLabel?.(value) ?? value : value;
+      return `<option value="${escape(value)}">${escape(label)}</option>`;
+    }).join("");
     select.value = selected;
   }
   function render() {

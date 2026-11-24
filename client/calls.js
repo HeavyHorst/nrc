@@ -146,7 +146,7 @@
     field.innerHTML = '<span class="detail-edit-label">PERSON</span><nrc-select><select id="callInviteUser" class="task-detail-select" data-custom-select-wrap data-custom-select-search-placeholder="SEARCH PEOPLE..."></select></nrc-select>';
     const select = field.querySelector('select');
     for (const [id, dm] of [...activeDMs].filter(([, dm]) => !dm.optimistic && dm.username !== username).sort((a,b) => a[1].username.localeCompare(b[1].username))) {
-      select.add(new Option(dm.username, String(id)));
+      select.add(new Option(window.NRCTasks?.personLabel?.(dm.username) ?? dm.username, String(id)));
     }
     view.panel.insertBefore(field, view.actions);
     const hint = document.createElement('p'); hint.className = 'call-hint';

@@ -696,6 +696,7 @@
     }
     window.NRCDetailUI.bindSuggestedInput(el("customerFields")?.querySelector('input[name="assignee"]'), {
       name: "RESPONSIBLE",
+      person: true,
       suggestions: () => window.NRCTasks?.getFieldChoices?.("assignee", 0n) || [],
     });
     window.NRCDetailUI.setSaveState(editorBusy ? "SAVING" : editorStale ? "STALE" : editorDirty ? "UNSAVED" : inspection?.subview === "edit" || !inspection?.id ? "EDITING" : "READ", el("inspectorHeader"));

@@ -3151,9 +3151,9 @@ function filterDMUsers() {
   const users = currentPresence ? Array.from(currentPresence.keys()) : [];
 
   // Filter: exclude self, match query
-  const filtered = users.filter(
-    (user) => user.toLowerCase().includes(query) && user !== myNickname,
-  );
+  const filtered = users.filter(user => user !== myNickname)
+    .map(user => ({ user, label: window.NRCTasks?.personLabel?.(user) ?? user }))
+    .filter(({ label }) => label.toLowerCase().includes(query));
 
   dropdown.innerHTML = "";
 
@@ -3162,10 +3162,10 @@ function filterDMUsers() {
     return;
   }
 
-  filtered.forEach((user) => {
+  filtered.forEach(({ user, label }) => {
     const option = document.createElement("div");
     option.className = "dm-user-option";
-    option.textContent = user;
+    option.textContent = label;
     option.onclick = () => {
       sendStartDM(user);
       hideDMUserPicker();

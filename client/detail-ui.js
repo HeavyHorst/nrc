@@ -166,10 +166,12 @@
     let picker = null;
     if (suggestions || options) {
       const values = [...new Set((suggestions || []).map(value => String(value).trim()).filter(Boolean))];
+      const choices = values.map(value => ({ value, label: spec.person ? window.NRCTasks?.personLabel?.(value) ?? value : value }));
+      if (spec.person) choices.sort((a, b) => a.label.localeCompare(b.label));
       picker = window.CustomPicker.create({
         anchor: input,
         usePortal: false,
-        options: options || [{ value: "", label: "— CLEAR", alwaysVisible: true }, ...values.map(value => ({ value, label: value }))],
+        options: options || [{ value: "", label: "— CLEAR", alwaysVisible: true }, ...choices],
         selectedValue: input.value,
         allowCustomValue: !options,
         closeOnSelect: false,
@@ -269,11 +271,11 @@
 
   // Form-backed fields use the same editor as immediate-save metadata, but
   // commit into the form draft. Its own SAVE still owns the persistence write.
-  function bindSuggestedInput(input, { name, suggestions }) {
+  function bindSuggestedInput(input, { name, suggestions, person }) {
     if (!input) return;
     input.type = "hidden";
     const spec = {
-      name, value: input.value, suggestions,
+      name, value: input.value, suggestions, person,
       save(value) {
         if (!input.isConnected || input.readOnly || input.disabled || input.closest("[inert]")) {
           throw new Error("RECORD CHANGED OR IS SAVING · CLOSE AND REOPEN THIS FIELD");

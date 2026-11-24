@@ -458,6 +458,8 @@ try {
   await page.setViewportSize({ width: 1800, height: 1000 });
   const resize = page.locator('#ticketsTable th[data-sort="id"] [role="separator"]');
   await resize.focus();
+  // Let the register's ResizeObserver refit the columns before measuring the key step.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const width = Number(await resize.getAttribute('aria-valuenow'));
   await page.keyboard.press('ArrowRight');
   assert.equal(Number(await resize.getAttribute('aria-valuenow')), width + 8);

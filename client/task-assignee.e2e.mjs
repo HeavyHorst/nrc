@@ -15,6 +15,8 @@ page.on("pageerror", error => errors.push(error.message));
 const dropdown = () => page.locator(".inline-field-editor");
 const dropdownVisible = () => dropdown().isVisible();
 const options = () => dropdown().getByRole("option").allTextContents();
+const benLabel = "Benedikt Schulz · ben@example.test";
+const directoryOptions = ["— CLEAR", "anna", benLabel, "rene", "tester"];
 const assignee = page.locator(".inline-field-editor input");
 const outside = page.locator("#inspectorHeader .header-text");
 
@@ -33,8 +35,12 @@ try {
     catch { await route.fulfill({ status: 404, body: "Not found" }); }
   });
   await page.route("http://nrc.test/api/users", route => route.fulfill({ json: ["anna", "ben", "rene", "tester"] }));
+  await page.route("http://nrc.test/api/users/identities", route => route.fulfill({ json: {
+    "ben@example.test": "Benedikt Schulz", "rene@example.test": "Rene One", "rene@other.test": "Rene Two",
+  } }));
   await page.goto("http://nrc.test");
   await page.waitForFunction(() => window.NRCAssets && window.NRCViewManager && window.NRCInspector);
+  await page.waitForFunction(() => NRCTasks.personLabel('ben') !== 'ben');
   await page.evaluate(() => {
     currentRoomId = 7n;
     currentWorkspaceId = "task-assignee";
@@ -68,7 +74,7 @@ try {
   await assignee.click();
   await page.waitForTimeout(250);
   assert.equal(await dropdownVisible(), true, "the dropdown stays open after focusing the assignee field");
-  assert.deepEqual(await options(), ["— CLEAR", "anna", "ben", "rene", "tester"], "the directory from /api/users is listed");
+  assert.deepEqual(await options(), directoryOptions, "named accounts get labels; missing and ambiguous accounts keep their nicknames");
 
   // A later render of the same panel must not leave a stale dismissal handler.
   await page.keyboard.press("Escape");
@@ -105,6 +111,7 @@ try {
   await page.route("http://nrc.test/api/features", route => route.fulfill({ json: { customers: true } }));
   await page.reload();
   await page.waitForFunction(() => window.NRCCustomers?.isEnabled() && userDirectory().length === 4);
+  await page.waitForFunction(() => NRCTasks.personLabel('ben') !== 'ben');
   await page.evaluate(async () => {
     serverReady = true;
     currentWorkspaceId = "person-forms";
@@ -124,14 +131,15 @@ try {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
       await page.evaluate(() => NRCInspector.openEntity(NRCInspector.current()));
       await responsible().click();
-      assert.deepEqual(await options(), ["— CLEAR", "anna", "ben", "rene", "tester"]);
+      assert.deepEqual(await options(), directoryOptions);
       if (process.env.NRC_PERSON_SCREENSHOTS) await dropdown().screenshot({ path: `${process.env.NRC_PERSON_SCREENSHOTS}/customer-responsible-${theme}-${width}.png` });
       await page.keyboard.press("Escape");
     }
   }
   await responsible().click();
-  await assignee.fill("be");
-  await dropdown().getByRole("option", { name: "ben", exact: true }).click();
+  await assignee.fill("schulz");
+  assert.deepEqual(await options(), ["— CLEAR", benLabel]);
+  await dropdown().getByRole("option", { name: benLabel, exact: true }).click();
   assert.equal(await page.locator('input[name="assignee"]').inputValue(), "ben");
   assert.equal(await responsible().textContent(), "ben");
   assert.equal(await page.locator("#inspectorHeader .detail-save-state").textContent(), "UNSAVED");
