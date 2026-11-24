@@ -23,7 +23,10 @@ function client({prompts=[],canClose=false,reply=false}={}) {
   // Exercise private UI commands without adding a production test/debug API.
   const source=readFileSync(new URL('./reviews.js',import.meta.url),'utf8').replace('  window.NRCReviews={','  window.reviewTest={state,command,load,ticketDraft,comparisonMarkup,contributionMarkup,comparisonState,comparisonPoints,runStatus,setCurrent:fn=>current=fn,setRef:ref=>inspectorRef=ref};\n  window.NRCReviews={');
   vm.runInNewContext(source,context);
-  if(reply)context.sendPacket=buffer=>{const packet=new DataView(buffer);packets.push(packet);queueMicrotask(()=>context.window.NRCReviews.handlePage(frame(typeof reply==='function'?reply(packetBody(packet)):{status:'ok'})));};
+  if(reply)context.sendPacket=buffer=>{const packet=new DataView(buffer);packets.push(packet);queueMicrotask(()=>{
+    assert.equal(packet.getUint16(0),77);
+    context.window.NRCReviews.handlePage(frame(typeof reply==='function'?reply(packetBody(packet)):{status:'ok'}));
+  });};
   return {api:context.window.NRCReviews,packets,messages,opened,context,...context.window.reviewTest};
 }
 test('review frame leading correlation and lossless decimal identities; changed invalidation',()=>{
@@ -75,25 +78,40 @@ test('a different authenticated session does not inherit a reconnect draft or re
   assert.equal(c.state.ticket,'');assert.equal(c.state.answerId,'');assert.equal(c.state.predecessor,null);
 });
 const packetBody=view=>JSON.parse(new TextDecoder().decode(new Uint8Array(view.buffer,2,view.byteLength-6)));
-test('portal account assignment sends canonical requester, display name and explicit close permission',async()=>{
-  for(const canClose of [false,true]) {
-    const c=client({prompts:[' customer@example.test ',' Customer Contact '],canClose,reply:true});c.state.run={id:'41'};
-    await c.command('portal-participant');
-    assert.deepEqual(packetBody(c.packets[0]),{op:'participant_add',run_id:'41',source:'portal',identity:'customer@example.test',name:'Customer Contact',can_close:canClose});
-    assert.match(c.messages[0],/Canonical requester/);
-    assert.equal(c.state.notice,'PORTAL ACCOUNT ASSIGNED');
-  }
+test('self assignment uses the authenticated identity',async()=>{
+  const c=client({prompts:['Alex'],reply:true});c.state.run={id:'41'};c.setCurrent(()=>true);await c.command('join');
+  assert.equal(packetBody(c.packets[0]).source,'staff');assert.equal(packetBody(c.packets[0]).identity,'');
 });
-test('staff and self assignment remain distinct from portal account assignment',async()=>{
-  for(const [op,prompts,identity] of [['participant',['subject:alex','Alex'],'subject:alex'],['join',['Alex'],'']]) {
-    const c=client({prompts,reply:true});c.state.run={id:'41'};await c.command(op);
-    assert.equal(packetBody(c.packets[0]).source,'staff');assert.equal(packetBody(c.packets[0]).identity,identity);
-  }
+test('staff can assign a portal account from a later review page without the admin RPC',async()=>{
+  const c=client({canClose:true,reply:q=>q.op!=='participant_accounts'?{status:'ok'}:q.cursor?{status:'ok',cursor:'11',accounts:[{login:'customer',name:'Customer',requester:'customer@example.test'}]}:
+    {status:'ok',has_more:true,cursor:'10',accounts:[{login:'other',name:'Another contact',requester:'other@example.test'}]}});
+  const buttons=[], options=[];
+  c.context.Option=function(label,value){Object.assign(this,{label,value});};
+  c.context.document.createElement=tag=>{
+    const el={append(){},add(option){options.push(option);this.value=option.value;}};
+    if(tag==='button')buttons.push(el);
+    return el;
+  };
+  c.context.NRCModal={create:()=>({actions:{before(){},append(){}},close(){},show(){buttons.find(b=>b.textContent==='Continue').onclick();}})};
+  c.state.run={id:'41'};c.setCurrent(()=>true);
+  await c.command('portal-participant');
+  assert.deepEqual(options.map(o=>o.label),['Another contact · other','Customer · customer']);
+  assert.deepEqual(c.packets.slice(0,2).map(packetBody),[{op:'participant_accounts',run_id:'41',cursor:''},{op:'participant_accounts',run_id:'41',cursor:'10'}]);
+  assert.deepEqual(packetBody(c.packets[2]),{op:'participant_add',run_id:'41',source:'portal',identity:'customer@example.test',name:'Customer',can_close:true});
 });
-test('blank or cancelled portal identities never send an assignment',async()=>{
-  for(const identity of ['', '   ',null]) {
-    const c=client({prompts:[identity],reply:true});c.state.run={id:'41'};await c.command('portal-participant');assert.equal(c.packets.length,0);
-  }
+test('an unavailable account directory never sends an assignment',async()=>{
+  const c=client({reply:()=>({status:'forbidden'})});c.state.run={id:'41'};c.setCurrent(()=>true);
+  await c.command('portal-participant');
+  assert.deepEqual(c.packets.map(p=>packetBody(p).op),['participant_accounts']);
+  assert.match(c.state.notice,/forbidden/);
+});
+test('guest invitation uses the configured origin without prompting for a hostname',async()=>{
+  const c=client({prompts:['2099-01-01T00:00:00Z'],reply:()=>({status:'ok',invite_id:'73',token:'a'.repeat(64)})});
+  c.context.URL=URL;c.context.fetch=async path=>{assert.equal(path,'/api/features');return {ok:true,json:async()=>({review_portal_origin:'https://tickets.example.test'})};};
+  c.state.run={id:'41'};await c.command('invite');
+  assert.equal(c.messages.length,1);assert.match(c.messages[0],/Expiry/);
+  assert.match(c.state.notice,/https:\/\/tickets\.example\.test\/abnahmen\/einladung#/);
+  assert.equal(packetBody(c.packets[0]).op,'invite');
 });
 test('revoke remains a valid command for completed runs',async()=>{
   const c=client({prompts:['73'],reply:true});c.state.run={id:'41',decision:'completed'};await c.command('revoke');

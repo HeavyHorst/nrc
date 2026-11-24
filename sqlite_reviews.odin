@@ -10,6 +10,14 @@ import pr "protocol"
 import sql "sqlite"
 import db "workspace_db"
 
+Review_Form_Preview :: struct {
+	title:                  string,
+	build:                  string,
+	released_at:            string,
+	archived:               bool `json:"archived,omitempty"`,
+	requires_release_token: bool `json:"requires_release_token,omitempty"`,
+}
+
 sqlite_review_reply :: proc(output: ^db.Command_Output, correlation: u32, response: pr.Review_Response, allocator: mem.Allocator) -> c.int {
 	payload, err := json.marshal(response)
 	if err != nil do return sql.ERROR
@@ -46,6 +54,7 @@ sqlite_execute_review :: proc(store: ^db.Store, request: ^db.Request, output: ^d
 	if q.op == "run_create" ||
 	   q.op == "run_get" ||
 	   q.op == "run_list" ||
+	   q.op == "participant_accounts" ||
 	   q.op == "participant_add" ||
 	   q.op == "answer" ||
 	   q.op == "close" ||
@@ -59,6 +68,7 @@ sqlite_execute_review :: proc(store: ^db.Store, request: ^db.Request, output: ^d
 	creating := q.op == "create" || q.op == "copy"
 	old: pr.Asset
 	form := q.form
+	metadata: Review_Form_Preview
 	if q.op != "create" {
 		id, _ := pr.chronicle_decimal(q.form_id)
 		found: bool
@@ -69,7 +79,9 @@ sqlite_execute_review :: proc(store: ^db.Store, request: ^db.Request, output: ^d
 		if old.payload_encoding != .Plain ||
 		   json.unmarshal(old.payload, &form, spec = .JSON) != nil ||
 		   !pr.validate_review_form(form, form.released_at != "") {return sql.CORRUPT}
+		if json.unmarshal(old.preview, &metadata, spec = .JSON) != nil do return sql.CORRUPT
 		if q.op == "get" {
+			form.archived = metadata.archived
 			r = {
 				status   = "ok",
 				form_id  = q.form_id,
@@ -79,8 +91,23 @@ sqlite_execute_review :: proc(store: ^db.Store, request: ^db.Request, output: ^d
 			return sqlite_review_reply(output, correlation, r, backing)
 		}
 		if !creating {
-			if form.released_at != "" {r.status = "released"; return sqlite_review_reply(output, correlation, r, backing)}
+			lifecycle := q.op == "unrelease" || q.op == "archive" || q.op == "restore"
+			if !lifecycle && form.released_at != "" {r.status = "released"; return sqlite_review_reply(output, correlation, r, backing)}
 			if q.if_revision != fmt.aprintf("%d", old.updated_at) {r.status = "conflict"; return sqlite_review_reply(output, correlation, r, backing)}
+			if lifecycle && (form.released_at == "" || metadata.archived != (q.op == "restore")) do return sqlite_review_reply(output, correlation, r, backing)
+			if q.op == "unrelease" {
+				s, query_rc := sqlite_chronicle_statement(store, `SELECT 1 FROM review_runs WHERE workspace=?1 AND form_id=?2 LIMIT 1`, request.workspace, {id})
+				if query_rc != sql.OK do return query_rc
+				defer sql.finalize(s)
+				query_rc = sql.step(s)
+				if query_rc == sql.ROW {r.status = "has_runs"; return sqlite_review_reply(output, correlation, r, backing)}
+				if query_rc != sql.DONE do return query_rc
+			}
+		}
+		if q.op == "delete_draft" {
+			context.allocator = backing
+			if rc = sqlite_review_reply(output, correlation, {status = "ok", form_id = q.form_id}, backing); rc != sql.OK do return rc
+			return sqlite_delete_record(store, request, output, review_draft_id = id)
 		}
 	}
 	if request.timestamp <= 0 || (!creating && old.updated_at == max(i64)) do return sql.FULL
@@ -90,19 +117,35 @@ sqlite_execute_review :: proc(store: ^db.Store, request: ^db.Request, output: ^d
 		form = q.form
 	case "copy":
 		form.released_at = ""
+		metadata = {}
+	case "unrelease":
+		form.released_at = ""
+		metadata.requires_release_token = true
+	case "archive", "restore":
+		metadata.archived = q.op == "archive"
 	case "release":
 		if !pr.validate_review_form(form, true) do return sqlite_review_reply(output, correlation, r, backing)
 		form.released_at = fmt.aprintf("%d", revision)
 	}
-	payload, je := json.marshal(form)
-	if je != nil do return sql.ERROR
-	if len(payload) > pr.MAX_REVIEW_FORM_BYTES do return sqlite_review_reply(output, correlation, r, backing)
-	preview, pe := json.marshal(struct {
-		title:       string,
-		build:       string,
-		released_at: string,
-	}{form.title, form.build, form.released_at})
+	payload := old.payload
+	if q.op != "archive" && q.op != "restore" {
+		encoded, je := json.marshal(form)
+		if je != nil do return sql.ERROR
+		if len(encoded) > pr.MAX_REVIEW_FORM_BYTES do return sqlite_review_reply(output, correlation, r, backing)
+		payload = encoded
+	}
+	metadata.title, metadata.build, metadata.released_at = form.title, form.build, form.released_at
+	preview, pe := json.marshal(metadata)
 	if pe != nil do return sql.ERROR
+	if len(preview) > pr.MAX_PREVIEW_LENGTH {
+		// The canonical text is kept above. Limit only the display build so
+		// title + build fit even when each byte expands to a six-byte escape.
+		end := min(len(metadata.build), pr.MAX_TASK_TITLE_LENGTH)
+		for end < len(metadata.build) && metadata.build[end] & 0xc0 == 0x80 do end -= 1
+		metadata.build = metadata.build[:end]
+		preview, pe = json.marshal(metadata)
+		if pe != nil do return sql.ERROR
+	}
 	a := old
 	if creating {
 		id, rc := db.next_id(store, .Asset)
@@ -118,6 +161,7 @@ sqlite_execute_review :: proc(store: ^db.Store, request: ^db.Request, output: ^d
 	a.preview = preview; a.payload = payload; a.payload_raw_len = u32(len(payload)); a.payload_encoding = .Plain
 	if rc := sqlite_put_asset(store, request.workspace, &a, insert_only = creating); rc != sql.OK do return rc
 	if rc := sqlite_asset_history(store, request, &old, &a, creating); rc != sql.OK do return rc
+	form.archived = metadata.archived
 	r = {
 		status   = "ok",
 		form_id  = fmt.aprintf("%d", a.asset_id),

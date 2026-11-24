@@ -1,26 +1,89 @@
 /* Review composition reuses register, inspector fields and resource controls. */
 .app-sidebar #reviewsBtn { --sidebar-icon: var(--icon-carbon-tasks); }
+@media (min-width: 769px) {
+    #reviewsPanel .header-filter-cell:has(> .filter-select) { flex-basis: 9rem; }
+}
 #reviewsPanel .task-table { display: table; width: 100%; min-width: 0; table-layout: fixed; }
 #reviewsPanel .task-table :is(thead, tbody) { display: table-row-group; }
 #reviewsPanel .task-table tr { display: table-row; }
+#reviewsPanel .task-table tr[data-review] { cursor: pointer; }
 #reviewsPanel .task-table :is(th, td) { display: table-cell; padding: 0.5rem; overflow-wrap: anywhere; width: auto; }
 #reviewsPanel .task-table :is(th, td):first-child { width: 5rem; }
 #reviewsPanel .task-table :is(th, td):nth-child(2) { width: 45%; }
-#reviewEditor { font: var(--font-sm)/1.5 var(--font-sans); overflow-wrap: anywhere; }
+#reviewEditor { container: review-record / inline-size; font: var(--font-sm)/1.5 var(--font-sans); min-width: 0; overflow-wrap: anywhere; }
 #reviewEditor :is(form, fieldset, section) { min-width: 0; }
 #reviewEditor fieldset { border: var(--content-border); margin: 0.75rem 0; padding: 0.5rem; }
 #reviewEditor legend { font: 500 var(--font-xs)/1.5 var(--font-mono); }
 #reviewEditor .task-detail-row { display: grid; gap: 0.25rem; margin-block: 0.5rem; }
 #reviewEditor .customer-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 0.375rem; margin-block: 0.5rem; }
 #reviewEditor :is(input, textarea, select) { max-width: 100%; box-sizing: border-box; }
-#reviewEditor .document-resources { padding-block: 0.75rem; border-top: var(--content-border); }
 #reviewEditor h3 { font: 600 var(--font-base)/1.5 var(--font-sans); }
-#reviewEditor .review-read-value { white-space: pre-wrap; }
-#reviewEditor .review-answer-selected { outline: 2px solid var(--focus-interactive); outline-offset: 2px; }
-#reviewEditor .review-form-points { margin-block: 0.75rem; }
-#reviewEditor .review-form-points summary { cursor: pointer; font: 500 var(--font-xs)/1.5 var(--font-mono); }
 #reviewEditor #reviewNotice:empty { display: none; }
-#reviewEditor #reviewNotice { white-space: pre-wrap; user-select: text; }
+#reviewEditor #reviewNotice { color: var(--text-primary); white-space: pre-wrap; user-select: text; }
+#reviewEditor #reviewNotice.review-notice-error { color: var(--accent-danger); }
+
+.review-release { padding-top: 0.5rem; }
+.review-release h2 { margin: 0; font: 650 var(--font-lg)/1.25 var(--font-sans); }
+.review-facts { display: flex; flex-wrap: wrap; column-gap: 1rem; row-gap: 0.2rem; margin: 0.375rem 0 0.75rem; font: var(--font-xs)/1.5 var(--font-mono); }
+.review-facts > div { display: flex; flex-wrap: wrap; gap: 0.375rem; min-width: 0; }
+.review-facts dt { font-weight: 700; }
+.review-facts dd, .review-definition :is(h3, dl, dd, p) { margin: 0; }
+.review-facts dd { white-space: pre-wrap; }
+.review-form-points { border: var(--content-border); }
+.review-form-points summary { padding: 0.4rem 0.5rem; background: var(--surface-panel); cursor: pointer; font: 600 var(--font-xs)/1.5 var(--font-mono); }
+.review-released-point { padding: 0.5rem; border-top: var(--content-border); }
+.review-runs { display: flex; flex-wrap: wrap; align-items: end; gap: 0.5rem; margin-block: 0.875rem 0.5rem; }
+.review-runs > label { flex: 1 1 14rem; min-width: 0; }
+#reviewRunSelect { text-overflow: ellipsis; }
+.review-runs select, .review-answer-form select { width: 100%; min-width: 0; }
+#reviewEditor :is(.review-runs, .review-run-access) .customer-actions { margin: 0; }
+.review-run-access { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.375rem 0.625rem; padding: 0.5rem; border: var(--content-border); background: var(--surface-panel); }
+.review-run-facts { flex: 1 1 16rem; min-width: 0; }
+.review-run-facts p { margin: 0; }
+.review-run-facts strong { color: var(--text-primary); }
+#reviewAccess { padding: 0.5rem; border: var(--content-border); border-top: 0; }
+#reviewAccess ul { margin: 0; padding-inline-start: 1.125rem; font: var(--font-xs)/1.55 var(--font-mono); }
+.review-close-record { white-space: pre-wrap; }
+.review-results-table { margin-block: 0.625rem; border: var(--content-border); border-collapse: collapse; width: 100%; table-layout: fixed; text-align: left; }
+.review-results-table :is(th, td) { padding: 0.3rem 0.5rem; border-bottom: var(--content-border); }
+.review-results-table thead { background: var(--surface-panel); }
+.review-results-table thead th, .review-check-row td { font: 600 var(--font-xs)/1.35 var(--font-mono); }
+.review-results-table th:first-child { width: 2.4rem; }
+.review-results-table th:nth-child(3) { width: 8.8rem; }
+.review-results-table thead th:last-child { width: 5.25rem; }
+.review-results-table .review-check-row > th { padding: 0; }
+.review-check-row { cursor: pointer; }
+.review-check-row:hover { background: var(--bg-hover); }
+.review-check-row:has([aria-expanded="true"]) { background: var(--selected-row-bg); color: var(--selected-row-text); }
+.review-check-toggle { width: 100%; padding: 0.4rem 0.5rem; border: 0; background: transparent; color: inherit; font: 650 var(--font-sm)/1.35 var(--font-sans); text-align: start; overflow-wrap: anywhere; cursor: pointer; }
+.review-check-toggle::before { content: ''; display: inline-block; margin-inline-end: 0.45em; border-block: 0.29em solid transparent; border-inline-start: 0.44em solid currentColor; vertical-align: 0.06em; }
+.review-check-toggle[aria-expanded="true"]::before { transform: rotate(90deg); }
+.review-check-toggle:focus-visible, .review-form-points summary:focus-visible, .review-answer-selected { outline: 2px solid var(--focus-interactive); outline-offset: -2px; }
+.review-result--pass { color: var(--accent-success); }
+.review-result--fail { color: var(--accent-danger); }
+.review-check-detail-row > td { padding: 0; }
+.review-check-detail { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; padding: 0.5rem; }
+.review-check-detail > .review-definition { align-self: start; padding: 0.5rem; border: var(--content-border); }
+.review-definition h3 { line-height: 1.35; }
+.review-definition dl > div { margin-top: 0.5rem; }
+.review-definition dd, .review-answer-comment { white-space: pre-wrap; }
+.review-check-contributions { min-width: 0; border: var(--content-border); }
+.review-check-answer, .review-answer-form, .review-self-assign { padding: 0.5rem; }
+.review-check-answer + :is(.review-check-answer, .review-answer-form, .review-self-assign) { border-top: var(--content-border); }
+.review-check-answer p { margin: 0.125rem 0 0.375rem; }
+.review-check-answer > strong { font: 650 var(--font-xs)/1.5 var(--font-mono); }
+.review-self-assign { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.review-check-answer .btn, .review-self-assign .btn { white-space: normal; }
+@container review-record (min-width: 560px) {
+    .review-check-detail { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+}
+@container review-record (max-width: 420px) {
+    .review-results-table th:first-child { width: 2ch; }
+    .review-results-table th:nth-child(3) { width: 12ch; }
+    .review-results-table thead th:last-child { width: 9ch; white-space: nowrap; }
+    .review-results-table :is(th, td):not(:only-child), .review-check-toggle { padding-inline: 0.25rem; }
+    .review-results-table .review-check-row > th { padding-inline: 0; }
+}
 .review-comparison-scroll { max-width: 100%; max-height: 65vh; overflow: auto; border: var(--content-border); }
 .review-comparison-table { border-collapse: collapse; width: 100%; font: inherit; text-align: left; }
 .review-comparison-table caption { padding: 0.5rem; text-align: left; }
@@ -53,7 +116,10 @@
     .review-comparison-table th:first-child { min-width: 10rem; width: 10rem; }
     .review-comparison-controls :is(input, select) { font-size: 16px; }
     #reviewEditor { font-size: var(--mobile-font-sm); }
+    .review-release h2 { font-size: var(--mobile-font-lg); }
     #reviewEditor :is(input, textarea, select) { font-size: 16px; }
+    .review-check-toggle { min-height: 2.5rem; font-size: var(--mobile-font-sm); }
+    .review-results-table thead th, .review-check-row td, .review-form-points summary, .review-facts { font-size: var(--mobile-font-xs); }
     #reviewsPanel .task-table :is(th, td) { font-size: var(--mobile-font-sm); padding: 0.5rem 0.25rem; }
     #reviewsPanel .task-table :is(th, td):first-child { width: 3.5rem; }
 }

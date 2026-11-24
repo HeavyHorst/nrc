@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -363,6 +362,10 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
 	}
+	if r.Method == "GET" && r.URL.Path == "/abnahmen/navigation.js" {
+		servePortalAsset(w, r, "text/javascript; charset=utf-8", reviewNavigationJS)
+		return
+	}
 	if r.URL.Path == "/abnahmen/einladung" || r.URL.Path == "/abnahmen/einladung.js" || r.URL.Path == "/abnahmen/gast" || strings.HasPrefix(r.URL.Path, "/abnahmen/gast/") {
 		s.guestReview(w, r)
 		return
@@ -372,21 +375,15 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "GET" && r.URL.Path == "/style.css" {
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-		w.Write(portalCSS)
-		w.Write([]byte("\n"))
-		if len(s.brand.FontRegular) > 0 {
-			io.WriteString(w, "@font-face{font-family:Portal Brand;src:url(/branding/font-regular.woff2) format('woff2');font-weight:400;font-display:swap}\n")
-		}
-		if len(s.brand.FontBold) > 0 {
-			io.WriteString(w, "@font-face{font-family:Portal Brand;src:url(/branding/font-bold.woff2) format('woff2');font-weight:700;font-display:swap}\n")
-		}
-		w.Write(s.brand.ThemeCSS)
+		servePortalAsset(w, r, "text/css; charset=utf-8", s.brand.stylesheet())
 		return
 	}
 	if r.Method == "GET" && r.URL.Path == "/attachments.js" {
-		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		w.Write(portalAttachmentsJS)
+		servePortalAsset(w, r, "text/javascript; charset=utf-8", portalAttachmentsJS)
+		return
+	}
+	if r.Method == "GET" && r.URL.Path == "/list-filters.js" {
+		servePortalAsset(w, r, "text/javascript; charset=utf-8", listFiltersJS)
 		return
 	}
 	if r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/branding/") {
@@ -409,8 +406,7 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if mime == "" {
 			mime = http.DetectContentType(asset)
 		}
-		w.Header().Set("Content-Type", mime)
-		w.Write(asset)
+		servePortalAsset(w, r, mime, asset)
 		return
 	}
 	if r.Method == "POST" && (s.origin == "" || r.Header.Get("Origin") != s.origin || r.Header.Get("Sec-Fetch-Site") == "cross-site") {
@@ -455,6 +451,11 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else if target := formReturnPath(r.URL.Path); target != "" {
 			if strings.HasPrefix(target, "/tickets/") {
 				f := readTicketFilters(r.URL.Query())
+				if filtered := loginDestination(target + f.Query(f.Status)); filtered != "/" {
+					target = filtered
+				}
+			} else if strings.HasPrefix(target, "/abnahmen/") {
+				f := readReviewFilters(r.URL.Query())
 				if filtered := loginDestination(target + f.Query(f.Status)); filtered != "/" {
 					target = filtered
 				}
@@ -787,12 +788,17 @@ func (s *portal) render(w http.ResponseWriter, api bool, v view) {
 		v.Branding.Brand = "Ihr Kundenportal"
 	}
 	_, v.CanChangePassword = s.accounts.(passwordAccountStore)
+	if v.ListPage() {
+		w.Header().Set("Content-Security-Policy", w.Header().Get("Content-Security-Policy")+"; connect-src 'self'")
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if v.Status != 0 {
 		w.WriteHeader(v.Status)
 	}
 	page.Execute(w, v)
 }
+
+func (v view) ListPage() bool { return !v.New && v.Ticket == nil && v.Profile == nil && !v.Password }
 
 var ticketTimeZone = func() *time.Location {
 	zone, err := time.LoadLocation("Europe/Berlin")
@@ -803,14 +809,16 @@ var ticketTimeZone = func() *time.Location {
 }()
 
 var page = template.Must(template.Must(template.New("portal").Funcs(template.FuncMap{
-	"ticketTime": func(ns int64) time.Time { return time.Unix(0, ns).In(ticketTimeZone) },
+	"ticketTime":     func(ns int64) time.Time { return time.Unix(0, ns).In(ticketTimeZone) },
+	"attachmentsURL": func() string { return attachmentsURL },
+	"listFiltersURL": func() string { return listFiltersURL },
 }).Parse(`{{define "date"}}{{with ticketTime .}}<time datetime="{{.Format "2006-01-02T15:04:05Z07:00"}}">{{.Format "02.01.2006, 15:04"}} Uhr</time>{{end}}{{end}}
 {{define "created"}}{{if gt . 0}}<small class="muted message-time">{{template "date" .}}</small>{{end}}{{end}}
 {{define "status"}}<span class="ticket-status {{.StatusKey}}">{{.Status}}</span>{{end}}
 {{define "file-links"}}{{range .}}<li><a href="{{.URL}}" download>{{.Filename}}</a> <small class="muted">({{.Size}} Byte)</small></li>{{end}}{{end}}<!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{if .Profile}}Mein Konto · {{end}}{{.Branding.Brand}}</title><link rel="stylesheet" href="/style.css"><script src="/attachments.js" defer></script></head><body class="account-page">
-<header><a class="brand" href="/">{{if .Branding.Logo}}<img src="/branding/logo" alt="">{{end}}<span>{{.Branding.Brand}}</span></a>
+<title>{{if .Profile}}Mein Konto · {{end}}{{.Branding.Brand}}</title><link rel="stylesheet" href="{{.Branding.StyleURL}}"><script src="{{attachmentsURL}}" defer></script>{{if .ListPage}}<script src="{{listFiltersURL}}" defer></script>{{end}}</head><body class="account-page">
+<header><a class="brand" href="/">{{if .Branding.Logo}}<img src="{{.Branding.LogoURL}}" alt="">{{end}}<span>{{.Branding.Brand}}</span></a>
 <nav class="account-nav" aria-label="Hauptnavigation"><a href="/"{{if not (or .Profile .Password)}} aria-current="{{if or .New .Ticket}}true{{else}}page{{end}}"{{end}}>Meine Anfragen</a><a href="/abnahmen">Meine Abnahmen</a><a href="/konto"{{if .Profile}} aria-current="page"{{else if .Password}} aria-current="true"{{end}}>Mein Konto</a><form method="post" action="/logout"><button>Abmelden</button></form></nav></header><main>
 {{if .Profile}}
 {{template "profile" .}}
@@ -853,6 +861,7 @@ var page = template.Must(template.Must(template.New("portal").Funcs(template.Fun
 </div></div>
 {{else}}
 <div class="requests-heading"><div><h1>Meine Anfragen</h1><p>Hier behalten Sie Ihre Anliegen und unsere Antworten im Blick.</p></div><a class="button" href="/new">+ Neue Anfrage</a></div>
+<div data-list-filters="/">
 {{if .Waiting}}<div class="ticket-callout"><strong>{{if eq .Waiting 1}}1 Anfrage wartet auf Ihre Antwort{{else}}{{.Waiting}} Anfragen warten auf Ihre Antwort{{end}}</strong><a href="/?status=waiting">Anzeigen <span aria-hidden="true">→</span></a></div>{{end}}
 {{if .HasTickets}}
 <nav class="ticket-tabs" aria-label="Anfragen nach Status filtern"><a href="/{{.Filters.Query ""}}"{{if not .Filters.Status}} aria-current="page"{{end}}>Alle</a><a href="/{{.Filters.Query "waiting"}}"{{if eq .Filters.Status "waiting"}} aria-current="page"{{end}}>Antwort von Ihnen</a><a href="/{{.Filters.Query "active"}}"{{if eq .Filters.Status "active"}} aria-current="page"{{end}}>Offen / In Bearbeitung</a><a href="/{{.Filters.Query "done"}}"{{if eq .Filters.Status "done"}} aria-current="page"{{end}}>Erledigt</a></nav>
@@ -865,6 +874,7 @@ var page = template.Must(template.Must(template.New("portal").Funcs(template.Fun
 {{if .Tickets}}{{$query := .Filters.Query .Filters.Status}}<table class="ticket-table"><thead><tr><th scope="col">Anfrage</th><th scope="col">Status</th><th scope="col" class="ticket-date">Erstellt</th></tr></thead><tbody>{{range .Tickets}}<tr><td><span class="ticket-number muted">#{{.ID}} · </span><a href="/tickets/{{.ID}}{{$query}}">{{.Title}}</a><br><small class="muted">{{if .Shared}}Teamanfrage{{if .SubmittedBy}} · {{.SubmittedBy}}{{end}}{{else}}Meine Anfrage{{end}}</small>{{if gt .CreatedAt 0}}<small class="ticket-date-compact muted">Erstellt: {{template "date" .CreatedAt}}</small>{{end}}</td><td>{{template "status" .}}</td><td class="ticket-date">{{if gt .CreatedAt 0}}{{template "date" .CreatedAt}}{{else}}—{{end}}</td></tr>{{end}}</tbody></table>
 {{else}}<section class="requests-empty"><h2>Keine passenden Anfragen</h2><p><a href="/">Filter zurücksetzen</a></p></section>{{end}}
 {{else}}<section class="requests-empty"><h2>Noch keine Anfragen</h2><p>Sobald Sie eine Anfrage stellen, erscheint sie hier.</p></section>{{end}}
+</div>
 {{end}}</main>
 {{with .Branding}}{{if or .FooterText .ImprintURL .PrivacyURL .TermsURL .ContactURL}}
 <footer>{{if .FooterText}}<span>{{.FooterText}}</span>{{end}}<nav aria-label="Rechtliches und Kontakt">

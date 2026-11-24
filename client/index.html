@@ -17,7 +17,7 @@
     <link rel="stylesheet" href="css/main.css?v=20261124ticketstatus2">
     <link rel="stylesheet" href="css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="css/voice.css?v=20261105voice12">
-    <link rel="stylesheet" href="css/reviews.css?v=20261122reviewfix1">
+    <link rel="stylesheet" href="css/reviews.css?v=20261124reviewlifecycle1">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 </head>
 <body class="mobile-chat-view">
@@ -146,6 +146,7 @@
                                 <div class="header-register-identity-row"><span class="header-register-title">REVIEWS / ACCEPTANCE</span><span id="reviewsStatus" class="header-register-state" role="status">NOT LOADED</span></div>
                                 <div class="header-register-control-row"><div class="header-control-scroll">
                                     <label class="header-filter-cell"><span class="filter-label">SEARCH</span><input id="reviewsSearch" class="filter-input" type="search" placeholder="TITLE / ID"></label>
+                                    <label class="header-filter-cell"><span class="filter-label">STATE</span><select id="reviewsScope" class="filter-select"><option value="current">CURRENT</option><option value="archived">ARCHIVED</option></select></label>
                                     <button id="reviewsRefresh" class="btn header-operation" type="button">REFRESH</button><button id="reviewNew" class="btn btn--primary header-operation" type="button">+ FORM</button>
                                 </div></div>
                             </header>
@@ -727,14 +728,14 @@
     <script src="https://cdn.jsdelivr.net/npm/@oneidentity/zstd-js@1.0.3/asm/index.umd.js"></script>
     <script src="attachments.js?v=20261008files1"></script>
     <script src="protocol.js?v=20261023protocol2"></script>
-    <script src="frames.js?v=20261121reviews1"></script>
+    <script src="frames.js?v=20261124reviewlifecycle1"></script>
     <script src="db-retry.js?v=20261119incidentretry1"></script>
     <script src="assets.js?v=20261122reviewfix1"></script>
     <script src="transactions.js?v=20261114overload1"></script>
     <script src="edges.js?v=20261114overload1"></script>
     <script src="files.js?v=20261022cancel1"></script>
     <script src="links-ui.js?v=20261122reviewfix1"></script>
-    <script src="inspector.js?v=20261121reviews1"></script>
+    <script src="inspector.js?v=20261123reviewrail1"></script>
     <script src="view-manager.js?v=20261121reviews1"></script>
     <script src="list-navigation.js?v=20260805b"></script>
     <script src="virtual-list.js?v=20260908a"></script>
@@ -786,7 +787,7 @@
     <script src="newsletter.js?v=20261022cancel1"></script>
     <script src="customers.js?v=20261116pickers1"></script>
     <script src="tickets.js?v=20261124ticketstatus1"></script>
-    <script src="reviews.js?v=20261123reconnect1"></script>
+    <script src="reviews.js?v=20261124reviewaccounts2"></script>
     <script src="mobile-shell.js?v=20261019registers1"></script>
     <script>
         if ("serviceWorker" in navigator) {

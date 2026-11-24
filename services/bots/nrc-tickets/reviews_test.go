@@ -219,7 +219,7 @@ func TestPortalAccountReviews(t *testing.T) {
 	if w = reviewRequest(s, "POST", "/abnahmen/71/answer", answer, nil, true); w.Code != 303 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	w = reviewRequest(s, "GET", "/abnahmen/71", nil, nil, true)
+	w = reviewRequest(s, "GET", "/abnahmen/71?point=1", nil, nil, true)
 	if !strings.Contains(w.Body.String(), "Widersprüchliche Teamantworten") || !strings.Contains(w.Body.String(), "1 / 2") || strings.Contains(w.Body.String(), "<script>own") {
 		t.Fatal("progress, escaping or conflict missing")
 	}
@@ -429,7 +429,7 @@ func TestGuestInvitationSwitchesPreserveOwnAnswersAndScope(t *testing.T) {
 		if active() != g {
 			t.Fatal("switch changed identity, participant, rights context, or absolute expiry")
 		}
-		body := request("/abnahmen/gast", nil, 200)
+		body := request("/abnahmen/gast?point=2", nil, 200)
 		if !strings.Contains(body, "Original "+strings.TrimPrefix(g.Name, "Guest ")) || strings.Contains(body, "Ihr Name") {
 			t.Fatal("own saved answer not restored")
 		}
@@ -556,6 +556,11 @@ func TestReviewBrowserFixture(t *testing.T) {
 	closed.run.ID, closed.run.Decision, closed.run.ClosedName, closed.run.ClosedSource, closed.run.ClosedAt = "74", "conditional", "Anna Weber", "portal", "1790000000000000000"
 	closed.run.Comment = "Die Steuerzeile im mobilen PDF muss korrigiert werden."
 	s.source = reviewBrowserSource{reviewFixtureSource: short, long: long, closed: closed}
+	brand, err := loadBranding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.brand = brand
 	s.origin = "http://" + addr
 	if origin := os.Getenv("TICKETS_REVIEW_TEST_ORIGIN"); origin != "" {
 		s.origin = origin
@@ -660,8 +665,8 @@ func TestReviewLongNavigationAndReport(t *testing.T) {
 	}
 	f.form.Points = f.form.Points[:8]
 	w = reviewRequest(s, "GET", "/abnahmen/71", nil, nil, true)
-	if strings.Contains(w.Body.String(), `aria-label="Abschnitte"`) || strings.Count(w.Body.String(), `name="point_id"`) != 8 {
-		t.Fatal("short legacy gained navigation")
+	if strings.Contains(w.Body.String(), `aria-label="Abschnitte"`) || strings.Count(w.Body.String(), `name="point_id"`) != 1 || strings.Count(w.Body.String(), `#point-`) != 8 {
+		t.Fatal("short form should have one editor and eight point links")
 	}
 }
 

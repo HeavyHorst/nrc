@@ -148,6 +148,33 @@ sqlite_review_run_command :: proc(
 		if source == "portal" && identity == "" {r.status = "forbidden"; return sqlite_review_reply(output, correlation, r, backing)}
 	}
 	run_id, _ := pr.chronicle_decimal(q.run_id)
+	if q.op == "participant_accounts" {
+		if request.portal_account_bot {r.status = "forbidden"; return sqlite_review_reply(output, correlation, r, backing)}
+		run, _, found, rc := sqlite_review_read_run(store, request.workspace, run_id, false)
+		if rc != sql.OK do return rc
+		if !found {r.status = "not_found"; return sqlite_review_reply(output, correlation, r, backing)}
+		if run.decision != "" {r.status = "closed"; return sqlite_review_reply(output, correlation, r, backing)}
+		cursor, _ := pr.chronicle_decimal(q.cursor)
+		s, query_rc := sqlite_chronicle_statement(store,
+			`SELECT id,requester,name,login FROM portal_accounts WHERE workspace=?1 AND id>?2 AND disabled=0 ORDER BY id LIMIT ?3`,
+			request.workspace, {cursor, i64(pr.PORTAL_ACCOUNT_PAGE_SIZE + 1)})
+		if query_rc != sql.OK do return query_rc
+		defer sql.finalize(s)
+		accounts := make([]pr.Review_Account_Choice, pr.PORTAL_ACCOUNT_PAGE_SIZE)
+		count := 0
+		for {
+			query_rc = sql.step(s)
+			if query_rc == sql.DONE do break
+			if query_rc != sql.ROW do return query_rc
+			if count == len(accounts) {r.has_more = true; break}
+			id, id_rc := sql.column_id(s, 0)
+			if id_rc != sql.OK do return id_rc
+			accounts[count] = {strings.clone(string(sql.column_bytes_view(s, 1))), strings.clone(string(sql.column_bytes_view(s, 2))), strings.clone(string(sql.column_bytes_view(s, 3)))}
+			count += 1; r.cursor = fmt.aprintf("%d", id)
+		}
+		r.status = "ok"; r.accounts = accounts[:count]
+		return sqlite_review_reply(output, correlation, r, backing)
+	}
 	invite_id: u64
 	invite_close := false
 	if !staff && source == "guest" {
@@ -223,6 +250,16 @@ sqlite_review_run_command :: proc(
 		if rc != sql.OK do return rc
 		form: pr.Review_Form
 		if !found || a.asset_type != .ReviewForm || json.unmarshal(a.payload, &form, spec = .JSON) != nil || !pr.validate_review_form(form, true) || form.released_at == "" do return sqlite_review_reply(output, correlation, r, backing)
+		metadata: Review_Form_Preview
+		if json.unmarshal(a.preview, &metadata, spec = .JSON) != nil do return sql.CORRUPT
+		if metadata.archived {
+			r.status = q.if_released_at == "" ? "conflict" : "archived"
+			return sqlite_review_reply(output, correlation, r, backing)
+		}
+		// Before withdrawal, legacy callers can only have seen this one release.
+		if (q.if_released_at != "" || metadata.requires_release_token) && q.if_released_at != form.released_at {
+			r.status = "conflict"; return sqlite_review_reply(output, correlation, r, backing)
+		}
 		previous, _ := pr.chronicle_decimal(q.previous_run)
 		if previous != 0 {
 			old, _, exists, old_rc := sqlite_review_read_run(store, request.workspace, previous, false)

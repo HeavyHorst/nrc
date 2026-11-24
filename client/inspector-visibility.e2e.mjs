@@ -34,6 +34,15 @@ try {
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      await page.locator("#reviewsBtn").evaluate(button => button.click());
+      assert.equal(await rail.isHidden(), true, `reviews has no empty rail (${theme}/${width})`);
+      await capture(`reviews-closed-${theme}-${width}`);
+      await page.locator("#reviewNew").click();
+      await page.locator("#reviewForm").waitFor({ state: "visible" });
+      assert.equal(await rail.isVisible(), true, "a review draft opens the rail");
+      await capture(`review-open-${theme}-${width}`);
+      await page.locator("#reviewClose").click();
+      assert.equal(await rail.isHidden(), true, "closing the review draft hides the rail");
       for (const view of ["chat", "kanban", "notes", "customers", "reminders", "attention", "calendar"]) {
         await page.evaluate(view => view === "notes" ? NRCNotes.showNotesView() : NRCViewManager.setActiveView(view), view);
         assert.equal(await rail.isHidden(), true, `${view} has no empty rail (${theme}/${width})`);
@@ -79,7 +88,7 @@ try {
     }
   }
   assert.deepEqual(errors, []);
-  console.log("PASS inspector visibility: seven views including chat, flat/slices, open/close/back, view switching, light/dark, desktop/mobile");
+  console.log("PASS inspector visibility: eight views including reviews, flat/slices, open/close/back, view switching, light/dark, desktop/mobile");
 } finally {
   await browser.close();
 }

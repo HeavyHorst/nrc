@@ -80,7 +80,7 @@ if args[0] == "compose":
 elif args[:2] == ["image", "inspect"]:
     pass
 elif args[0] == "ps":
-    if "label=com.docker.compose.service=newsletter" not in args:
+    if not {"label=com.docker.compose.service=" + name for name in ("newsletter", "tickets", "ticket-bot-tls")}.intersection(args):
         print("running-container")
         if "--all" in args or any(a.startswith("-") and not a.startswith("--") and "a" in a for a in args):
             print("stopped-container")

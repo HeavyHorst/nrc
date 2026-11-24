@@ -51,18 +51,21 @@ const save = async comment => {
   const box = await field.boundingBox();
   await page.mouse.move(70, 200, { steps: 12 });
   await page.mouse.move(box.x + 40, box.y + 12, { steps: 18 });
-  await page.getByLabel('Meine Antwort', { exact: true }).selectOption('no');
+  const radio = page.getByRole('radio', { name: 'Abweichung', exact: true });
+  if (await radio.count()) await radio.check();
+  else await page.getByLabel('Meine Antwort', { exact: true }).selectOption('no');
   await field.fill(comment);
   const button = page.getByRole('button', { name: 'Eigene Antwort speichern', exact: true });
   await button.scrollIntoViewIfNeeded();
   const buttonBox = await button.boundingBox();
   await page.mouse.move(buttonBox.x + 30, buttonBox.y + 15, { steps: 15 });
   await button.click();
-  await page.locator('.review-own .body').filter({ hasText: comment }).waitFor();
+  await page.locator('.review-own').filter({ hasText: /Gespeichert: Nein|Eigene gespeicherte Antwort: Nein/ }).waitFor();
+  assert.equal(await page.getByLabel('Mein Kommentar', { exact: true }).inputValue(), comment);
 };
 const hasOwn = async comment => await page.getByLabel('Mein Kommentar', { exact: true }).count() === 1 &&
   await page.getByLabel('Mein Kommentar', { exact: true }).inputValue() === comment;
-const canClose = async () => await page.getByRole('button', { name: 'Abschlussvorschau öffnen', exact: true }).count() === 1;
+const canClose = async () => await page.locator('form[action$="/preview"]').count() === 1;
 try {
   assert.equal((await exchange(tokenA)).status(), 204);
   assert.equal(await joinIfNeeded(), true);

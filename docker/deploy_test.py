@@ -60,6 +60,10 @@ case "$1" in
   compose) exec "$REAL_DOCKER" "$@" ;;
   ps)
     [[ "$*" == *service=newsletter* ]] && exit 0
+    if [[ "$*" == *service=tickets* || "$*" == *service=ticket-bot-tls* ]]; then
+      [[ ${TICKETS_RUNNING:-false} == true ]] && echo ticket-service-id
+      exit 0
+    fi
     if [[ "$*" == *service=incidents* ]]; then
       [[ ${MONITORING_RUNNING:-true} == true ]] && echo incidents-id
       exit 0
@@ -307,6 +311,17 @@ exec "$REAL_RSYNC" "${args[@]}"
             result = self.deploy("--dry-run")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Services to rebuild: ai chronicle\n", result.stdout)
+
+    def test_ticket_overlay_is_preserved_and_portal_is_rebuilt(self):
+        self.configure("docker_sqlite-migrated")
+        self.env.update(TICKETS_RUNNING="true", NRC_TICKETS_WORKSPACE="workspace1",
+                        TICKETS_ORIGIN="https://tickets.example.test")
+        for name in ("compose.tickets.yml", "compose.ticket-bot-tls.yml"):
+            shutil.copyfile(SOURCE / name, self.remote / "docker" / name)
+        self.tool("rsync", "cat >/dev/null; echo services/bots/nrc-tickets/portal.go")
+        result = self.deploy("--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Services to rebuild: tickets\n", result.stdout)
 
     def test_compose_uses_custom_project_and_graceful_shutdown(self):
         self.configure()

@@ -24,12 +24,14 @@ Review_Form :: struct {
 	build:       string,
 	environment: string,
 	released_at: string,
+	archived:    bool `json:"archived,omitempty"`,
 	points:      []Review_Point,
 }
 Review_Request :: struct {
 	op:                                     string,
 	form_id:                                string,
 	if_revision:                            string,
+	if_released_at:                         string,
 	form:                                   Review_Form,
 	run_id, label, kind, previous_run:      string,
 	source, identity, name:                 string,
@@ -54,6 +56,7 @@ Review_Run :: struct {
 	answers:                                                             []Review_Answer,
 	answered_points:                                                     int,
 }
+Review_Account_Choice :: struct {requester, name, login: string}
 Review_Response :: struct {
 	status:                           string,
 	form_id:                          string,
@@ -61,6 +64,7 @@ Review_Response :: struct {
 	form:                             Review_Form,
 	run:                              Review_Run,
 	runs:                             []Review_Run,
+	accounts:                         []Review_Account_Choice `json:"accounts,omitempty"`,
 	token, invite_id, participant_id: string,
 	cursor:                           string,
 	has_more:                         bool,
@@ -76,6 +80,7 @@ validate_review_form :: proc(form: Review_Form, released := false) -> bool {
 	   !review_text_valid(form.build, 512, released) ||
 	   !review_text_valid(form.environment, 2048) ||
 	   len(form.points) > MAX_REVIEW_POINTS ||
+	   (form.archived && form.released_at == "") ||
 	   (released && len(form.points) == 0) {return false}
 	if form.released_at != "" {
 		n, ok := chronicle_decimal(form.released_at)
@@ -129,11 +134,16 @@ parseReviewRequest :: proc(data: []byte, allocator := context.allocator) -> (q: 
 	case "create",
 	     "update",
 	     "release",
+	     "unrelease",
+	     "archive",
+	     "restore",
+	     "delete_draft",
 	     "copy",
 	     "get",
 	     "run_create",
 	     "run_get",
 	     "run_list",
+	     "participant_accounts",
 	     "participant_add",
 	     "answer",
 	     "close",
@@ -147,15 +157,20 @@ parseReviewRequest :: proc(data: []byte, allocator := context.allocator) -> (q: 
 	for id in ([7]string{q.form_id, q.run_id, q.previous_run, q.point_id, q.invite_id, q.if_revision, q.cursor}) {
 		if id != "" {_, ok := chronicle_decimal(id); if !ok do return {}, correlation, .InvalidValue}
 	}
-	if (q.op == "update" || q.op == "release" || q.op == "copy" || q.op == "get" || q.op == "run_create") && (q.form_id == "" || q.form_id == "0") do return {}, correlation, .InvalidValue
-	if (q.op == "run_get" || q.op == "participant_add" || q.op == "answer" || q.op == "close" || q.op == "invite" || q.op == "revoke") && (q.run_id == "" || q.run_id == "0") do return {}, correlation, .InvalidValue
+	changes_form := q.op == "update" || q.op == "release" || q.op == "unrelease" || q.op == "archive" || q.op == "restore" || q.op == "delete_draft"
+	if (changes_form || q.op == "copy" || q.op == "get" || q.op == "run_create") && (q.form_id == "" || q.form_id == "0") do return {}, correlation, .InvalidValue
+	if (q.op == "run_get" || q.op == "participant_add" || q.op == "participant_accounts" || q.op == "answer" || q.op == "close" || q.op == "invite" || q.op == "revoke") && (q.run_id == "" || q.run_id == "0") do return {}, correlation, .InvalidValue
 	for text in ([8]string{q.label, q.identity, q.name, q.token, q.guest_id, q.expires_at, q.kind, q.source}) {
 		if !review_text_valid(text, 512) do return {}, correlation, .InvalidValue
 	}
 	if !review_text_valid(q.comment, 4096) || !review_text_valid(q.result, 16) || !review_text_valid(q.decision, 32) do return {}, correlation, .InvalidValue
-	if q.op == "update" || q.op == "release" {
+	if changes_form {
 		n, ok := chronicle_decimal(q.if_revision)
 		if !ok || n == 0 || n > u64(max(i64)) do return {}, correlation, .InvalidValue
+	}
+	if q.if_released_at != "" {
+		n, ok := chronicle_decimal(q.if_released_at)
+		if q.op != "run_create" || !ok || n == 0 || n > u64(max(i64)) do return {}, correlation, .InvalidValue
 	}
 	if q.op == "create" || q.op == "update" {
 		if !validate_review_form(q.form) || q.form.released_at != "" do return {}, correlation, .InvalidValue

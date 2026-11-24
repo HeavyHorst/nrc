@@ -135,10 +135,20 @@ test_review_form_release_copy_and_restart :: proc(t: ^testing.T) {
 	testing.expect_value(t, r.form.released_at, "")
 	testing.expect_value(t, r.form.points[0].id, "3")
 	testing.expect_value(t, r.form.points[1].section, "Beträge & Steuern")
+	draft_id, draft_revision := r.form_id, r.revision
 	form.points[1].section = "Neue Steuerprüfung"
 	r, _ = sqlite_review_test_call(t, &store, {op = "update", form_id = r.form_id, if_revision = r.revision, form = form})
 	testing.expect_value(t, r.status, "ok")
 	testing.expect_value(t, r.form.build, "build-43")
+	updated_revision := r.revision
+	r, _ = sqlite_review_test_call(t, &store, {op = "delete_draft", form_id = draft_id, if_revision = draft_revision})
+	testing.expect_value(t, r.status, "conflict")
+	r, _ = sqlite_review_test_call(t, &store, {op = "delete_draft", form_id = id, if_revision = released.revision})
+	testing.expect_value(t, r.status, "released")
+	r, _ = sqlite_review_test_call(t, &store, {op = "delete_draft", form_id = draft_id, if_revision = updated_revision})
+	testing.expect_value(t, r.status, "ok")
+	r, _ = sqlite_review_test_call(t, &store, {op = "get", form_id = draft_id})
+	testing.expect_value(t, r.status, "not_found")
 	// If response preparation fails, neither a form nor its consumed ID commits.
 	_, failed_rc := sqlite_review_test_call(t, &store, {op = "create", form = form}, limit = 1)
 	testing.expect_value(t, failed_rc, sql.TOOBIG)
@@ -157,6 +167,54 @@ test_review_form_release_copy_and_restart :: proc(t: ^testing.T) {
 	testing.expect_value(t, r.status, "ok")
 	testing.expect_value(t, r.form.points[0].section, "")
 	testing.expect_value(t, r.form.points[0].question, "Export korrekt?")
+	// Seed a release exactly at the content limit, as compact wire JSON can
+	// expand when default fields are serialized for storage.
+	large := pr.Review_Form {version = 1, title = fmt.aprintf("L%s", strings.repeat("\x01", 255)), released_at = "50"}
+	meta := Review_Form_Preview {title = large.title, build = strings.repeat("x", 512), released_at = large.released_at}
+	initial_preview, _ := json.marshal(meta)
+	escaped := (pr.MAX_PREVIEW_LENGTH - len(initial_preview)) / 5
+	large.build = fmt.aprintf("%s%s", strings.repeat("\x01", escaped), strings.repeat("x", 512 - escaped))
+	meta.build = large.build
+	large_preview, _ := json.marshal(meta)
+	testing.expect(t, len(large_preview) > pr.MAX_PREVIEW_LENGTH - 5 && len(large_preview) <= pr.MAX_PREVIEW_LENGTH)
+	large.points = make([]pr.Review_Point, 24)
+	for &point, i in large.points {
+		point.id = fmt.aprintf("%d", i + 1)
+		point.question = "Check"
+	}
+	payload, _ := json.marshal(large)
+	remaining := pr.MAX_REVIEW_FORM_BYTES - len(payload)
+	for &point in large.points {
+		n := min(2048, remaining)
+		point.instruction = strings.repeat("x", n)
+		remaining -= n
+	}
+	payload, _ = json.marshal(large)
+	testing.expect_value(t, len(payload), pr.MAX_REVIEW_FORM_BYTES)
+	if !testing.expect(t, pr.validate_review_form(large, true)) do return
+	legacy.payload = payload; legacy.payload_raw_len = u32(len(payload))
+	legacy.preview = large_preview
+	testing.expect_value(t, db.begin(&store), sql.OK)
+	// Use a fresh ID: subsequent form allocations already advanced the sequence.
+	legacy.asset_id, rc = db.next_id(&store, .Asset)
+	testing.expect_value(t, rc, sql.OK)
+	testing.expect_value(t, sqlite_put_asset(&store, "reviews", &legacy, true), sql.OK)
+	testing.expect_value(t, db.commit(&store), sql.OK)
+	large_id := fmt.aprintf("%d", legacy.asset_id)
+	run, _ := sqlite_review_test_call(t, &store, {op = "run_create", form_id = large_id, if_released_at = "50", label = "QA", kind = "qa"})
+	testing.expect_value(t, run.status, "ok")
+	r, _ = sqlite_review_test_call(t, &store, {op = "archive", form_id = large_id, if_revision = "49"})
+	testing.expect_value(t, r.status, "conflict")
+	r, _ = sqlite_review_test_call(t, &store, {op = "archive", form_id = large_id, if_revision = "50"})
+	testing.expect_value(t, r.status, "ok")
+	testing.expect(t, r.form.archived)
+	testing.expect_value(t, r.form.build, large.build)
+	r, _ = sqlite_review_test_call(t, &store, {op = "run_get", run_id = run.run.id})
+	testing.expect_value(t, r.status, "ok")
+	testing.expect(t, !r.form.archived)
+	stored, stored_found, stored_rc := sqlite_read_asset(&store, "reviews", "alice", legacy.asset_id, true)
+	testing.expect_value(t, stored_rc, sql.OK)
+	testing.expect(t, stored_found && string(stored.payload) == string(payload))
 	existing, found, read_rc := db.get_task(&store, "reviews", 0, 41)
 	testing.expect_value(t, read_rc, sql.OK)
 	testing.expect(t, found)
@@ -190,6 +248,26 @@ test_review_teams_guests_revision_fence_and_frozen_report :: proc(t: ^testing.T)
 	b, _ := sqlite_review_test_call(t, &store, {op = "run_create", form_id = form_id, label = "Kunde B", kind = "customer"})
 	if !testing.expect_value(t, a.status, "ok") || !testing.expect_value(t, b.status, "ok") do return
 	aid, bid := a.run.id, b.run.id
+	for workspace, i in ([3]string{"reviews", "reviews", "other"}) {
+		rc = sqlite_chronicle_execute(&store,
+			`INSERT INTO portal_accounts(workspace,id,revision,login,requester,name,company_id,contact_id,password_hash,disabled)
+			 VALUES(?1,?2,1,?3,?4,?5,?6,?6,?7,?8)`, workspace,
+			{u64(i+1), fmt.aprintf("customer%d", i), fmt.aprintf("customer%d@example.test", i), "Customer", u64(0), strings.repeat("x", 60), i64(i == 1 ? 1 : 0)})
+		if !testing.expect_value(t, rc, sql.OK) do return
+	}
+	choices := pr.Review_Request{op = "participant_accounts", run_id = aid}
+	r, rc = sqlite_review_test_call(t, &store, choices)
+	if !testing.expect_value(t, rc, sql.OK) || !testing.expect_value(t, r.status, "ok") || !testing.expect_value(t, len(r.accounts), 1) do return
+	testing.expect_value(t, r.accounts[0].requester, "customer0@example.test")
+	testing.expect_value(t, r.accounts[0].name, "Customer")
+	testing.expect_value(t, r.accounts[0].login, "customer0")
+	r, _ = sqlite_review_test_call(t, &store, choices, workspace = "other")
+	testing.expect_value(t, r.status, "not_found")
+	choices.source = "portal"
+	choices.identity = "customer0@example.test"
+	r, _ = sqlite_review_test_call(t, &store, choices, portal = true)
+	testing.expect_value(t, r.status, "forbidden")
+	testing.expect_value(t, len(r.accounts), 0)
 	for run_id in ([2]string{aid, bid}) {
 		r, _ = sqlite_review_test_call(
 			t,

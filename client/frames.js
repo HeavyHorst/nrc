@@ -1353,7 +1353,7 @@ function decodeServerFrame(view) {
       let page;
       try { page = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes(view, 6, view.byteLength - 6))); }
       catch { throw new ProtocolError('Invalid review JSON'); }
-      if (!page || !['ok', 'changed', 'invalid', 'conflict', 'released', 'forbidden', 'closed', 'not_found'].includes(page.status)) throw new ProtocolError('Invalid review status');
+      if (!page || !['ok', 'changed', 'invalid', 'conflict', 'released', 'forbidden', 'closed', 'not_found', 'has_runs', 'archived'].includes(page.status)) throw new ProtocolError('Invalid review status');
       return { opcode, kind: 'review', correlationId, page };
     }
     case 169: // S_TicketPage

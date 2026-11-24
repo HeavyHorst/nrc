@@ -28,11 +28,14 @@ SQLITE_DELETE_COUNTS :: `SELECT
  (SELECT count(*) FROM temp.nrc_asset_delete d CROSS JOIN assets a ON a.workspace=?1 AND a.id=d.id WHERE a.asset_type=?2),
  (SELECT count(*) FROM temp.nrc_edge_delete)`
 
-sqlite_delete_record :: proc(store: ^db.Store, request: ^db.Request, output: ^db.Command_Output, transaction_batch := false) -> c.int {
+sqlite_delete_record :: proc(store: ^db.Store, request: ^db.Request, output: ^db.Command_Output, transaction_batch := false, review_draft_id: u64 = 0) -> c.int {
 	task_root := request.opcode == .C_DeleteTask
 	root_id: u64
 	correlation: u32
-	if task_root {
+	if review_draft_id != 0 {
+		// The review command already checked the form state and revision in this transaction.
+		root_id = review_draft_id
+	} else if task_root {
 		req, err := pr.parseDeleteTaskRequest(request.body)
 		if err != nil || req.conv_id != 0 do return sql.CONSTRAINT
 		root_id = req.task_id; correlation = req.correlation_id
@@ -121,6 +124,10 @@ sqlite_delete_record :: proc(store: ^db.Store, request: ^db.Request, output: ^db
 			a, exists, read_rc := sqlite_read_asset(store, request.workspace, request.actor, id, false, check_visibility = false)
 			if read_rc != sql.OK do return read_rc
 			if !exists do return sql.CORRUPT
+			if review_draft_id != 0 {
+				if id != review_draft_id || a.asset_type != .ReviewForm do return sql.CONSTRAINT
+				continue
+			}
 			if a.asset_type == .ReviewForm || a.asset_type == .ReviewAnswer {
 				if transaction_batch do return sql.CONSTRAINT
 				context.allocator = backing
@@ -313,7 +320,7 @@ sqlite_delete_record :: proc(store: ^db.Store, request: ^db.Request, output: ^db
 		)
 		if frame_rc != sql.OK do return frame_rc
 		if pr.serializeAssetDeletedMessage(msg, buf) != len(buf) do return sql.CONSTRAINT
-		if !transaction_batch && !task_root && id == root_id {
+		if !transaction_batch && !task_root && id == root_id && review_draft_id == 0 {
 			msg.correlation_id = correlation
 			buf, frame_rc = db.command_frame(output, pr.getSizeAssetDeletedMessage(msg)); if frame_rc != sql.OK do return frame_rc
 			if pr.serializeAssetDeletedMessage(msg, buf) != len(buf) do return sql.CONSTRAINT

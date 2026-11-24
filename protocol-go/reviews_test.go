@@ -72,6 +72,34 @@ func TestReviewResponseWire(t *testing.T) {
 	}
 }
 
+func TestDecodeReviewDraftDeletion(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload string
+		valid         bool
+	}{
+		{"ack", `{"status":"ok","form_id":"9007199254740993","revision":"","form":{"version":0,"title":"","build":"","environment":"","released_at":"","points":null}}`, true},
+		{"invalid ID", `{"status":"ok","form_id":"0"}`, false},
+		{"missing revision on form", `{"status":"ok","form_id":"1","form":{"version":1,"title":"Draft"}}`, false},
+		{"missing form on revision", `{"status":"ok","form_id":"1","revision":"2"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := DecodeReviewResponse(append(binary.BigEndian.AppendUint32(nil, 42), tc.payload...))
+			if !tc.valid {
+				if err == nil {
+					t.Fatal("invalid response accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != "ok" || got.FormID != "9007199254740993" || got.CorrelationID != 42 {
+				t.Fatalf("incorrect deletion acknowledgement: %+v", got)
+			}
+		})
+	}
+}
+
 func TestReviewRejectsInvalidRequests(t *testing.T) {
 	for _, q := range []ReviewRequest{
 		{Op: "unknown"}, {Op: "run_get", RunID: "01"}, {Op: "run_get"},

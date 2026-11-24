@@ -67,6 +67,16 @@ try {
     await page.locator('[data-review-op="compare"]').waitFor({state:'visible'});
   };
   await reviews();
+  if(!before) {
+    await page.getByRole('button',{name:'REFERENCES',exact:true}).click();
+    await page.getByRole('button',{name:'+ LINK TASK / TICKET',exact:true}).click();
+    const picker=page.locator('.note-link-picker:visible');
+    await picker.getByText('Review navigation task',{exact:true}).waitFor();
+    await picker.getByRole('button',{name:'TICKET',exact:true}).click();
+    await picker.getByText('Review navigation ticket',{exact:true}).waitFor();
+    await page.keyboard.press('Escape');
+    await picker.waitFor({state:'hidden'});
+  }
   await page.locator('[data-review-op="compare"]').click();
   for(const point of ['1','2','3']) {
     const answer=fixture.answers.find(a=>a.point_id===point);
@@ -159,6 +169,200 @@ try {
   await follow(page.locator(`button[data-target-id="${fixture.noteId}"]`));
   await page.getByText('Original note control body',{exact:false}).first().waitFor();
   results.push({navigation:'task → Note',outcome:'original note rendered'});
+  if(!before) {
+    // A separate, small synthetic review for the released Inspector layout.
+    await boot();await page.locator('#reviewsBtn').click();await page.locator('#reviewNew').click();
+    const editor=page.locator('#reviewEditor'), op=verb=>editor.locator(`[data-review-op="${verb}"]`);
+    const confirm=()=>page.getByRole('dialog').last().getByRole('button',{name:'Confirm',exact:true}).click();
+    const prompt=async (value,submit='Create')=>{
+      const dialog=page.getByRole('dialog').last();await dialog.locator('input').fill(value);
+      await dialog.getByRole('button',{name:submit,exact:true}).click();
+    };
+    assert.equal(await op('delete-draft').count(),0);
+    await editor.locator('[name="title"]').fill('Customer portal acceptance');
+    await editor.locator('[name="build"]').fill('2.8');
+    await editor.locator('[name="environment"]').fill('Staging');
+    for(const [index,question] of ['Can customers view their profile?','Do ticket search and filters work?','Can customers read the message timeline?','Can staff save an acceptance result?'].entries()) {
+      await op('add').click();
+      const point=editor.locator('fieldset').last();
+      await point.locator('[name="question"]').fill(question);
+      if(index===0) {
+        await point.locator('[name="instruction"]').fill('Sign in with a test account. Open My profile and verify the name, email address and organization.');
+        await point.locator('[name="expected"]').fill('The profile shows the correct account details.');
+      }
+    }
+    await op('save').click();await op('release').click();await confirm();
+    const definitions=editor.locator('.review-form-points');
+    await definitions.waitFor();
+    assert.equal(await op('delete-draft').count(),0);
+    const lifecycleId=await page.evaluate(()=>String(NRCInspector.current().id));
+    const lifecycleRow=page.locator(`tr[data-review="${lifecycleId}"]`);
+    const captureLifecycle=async name=>{
+      const action=op(name==='archived'?'restore':'unrelease');
+      for(const [width,theme] of [[1440,'white'],[390,'dark']]) {
+        await page.setViewportSize({width,height:900});
+        if(width===390)await page.evaluate(()=>NRCInspector.openEntity(NRCInspector.current()));
+        await page.evaluate(theme=>setTheme(theme,false),theme);
+        await action.scrollIntoViewIfNeeded();
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+        await screenshot(`lifecycle-${name}-${theme}`);
+      }
+      await page.setViewportSize({width:1440,height:1000});
+      await action.waitFor();
+    };
+    await captureLifecycle('released');
+    const firstRelease=await page.evaluate(id=>NRCReviews.request('get',{form_id:id}).then(p=>p.form.released_at),lifecycleId);
+    const lifecycleDialog=page.getByRole('dialog').last();
+    await op('unrelease').click();
+    await lifecycleDialog.getByRole('button',{name:'Cancel',exact:true}).click();
+    await op('unrelease').click();
+    await lifecycleDialog.getByRole('button',{name:'Withdraw release',exact:true}).click();
+    await editor.locator('[name="build"]').fill('2.8.1');
+    assert.equal(await page.evaluate(()=>String(NRCInspector.current().id)),lifecycleId);
+    await op('save').click();await op('release').click();await confirm();
+    const newRelease=await page.evaluate(id=>NRCReviews.request('get',{form_id:id}).then(p=>p.form.released_at),lifecycleId);
+    assert.notEqual(firstRelease,newRelease);
+    const createRun=(token)=>page.evaluate(({id,token})=>NRCReviews.request('run_create',{form_id:id,if_released_at:token,label:'Another run',kind:'qa'}),{id:lifecycleId,token});
+    await assert.rejects(createRun(firstRelease),/CONFLICT/);
+    await assert.rejects(createRun(undefined),/CONFLICT/);
+    const refresh=page.locator('#reviewReload');
+    assert.equal(await refresh.evaluate(el=>el.offsetHeight),await page.locator('#reviewClose').evaluate(el=>el.offsetHeight));
+    await definitions.locator('summary').click();assert.equal(await definitions.getAttribute('open'),'');
+    await definitions.locator('summary').click();
+    await op('customer').click();await prompt('Customer QA');
+    const join=op('join'), checks=editor.locator('[data-review-check]');
+    await join.waitFor();assert.equal(await join.count(),1);assert.equal(await editor.locator('[data-answer]').count(),0);
+    assert.equal(await op('close').isDisabled(),true);
+    const access=editor.locator('#reviewAccessToggle');await access.click();
+    for(const verb of ['participant','portal-participant','invite','revoke'])assert.equal(await op(verb).isVisible(),true);
+    await page.route('**/api/users/identities',route=>route.fulfill({json:{'alex@example.test':'Alex Example','sam@example.test':'Sam Example'}}));
+    await op('participant').click();
+    const accountPicker=page.getByRole('dialog').last();
+    await accountPicker.getByLabel('ACCOUNT').selectOption({label:'Sam Example · sam@example.test'});
+    await screenshot('staff-account-picker');
+    await accountPicker.getByRole('button',{name:'Continue',exact:true}).click();
+    await accountPicker.getByRole('button',{name:'Cancel',exact:true}).click();
+    await editor.getByText('STAFF PARTICIPANT ASSIGNED',{exact:true}).waitFor();
+    const assigned=await page.evaluate(id=>NRCReviews.request('run_get',{run_id:id}),await page.locator('#reviewRunSelect').inputValue());
+    assert.ok(assigned.run.participants.some(person=>person.identity==='sam@example.test' && person.name==='Sam Example' && !person.can_close));
+    await access.click();
+    const visualOutput=path.resolve('.amp/in/artifacts/review-concept-b');
+    await fs.mkdir(visualOutput,{recursive:true});
+    const desktopWidth=await page.locator('#inspector').evaluate(el=>el.clientWidth);
+    const separator=page.getByRole('separator',{name:'Resize Inspector'});
+    for(let i=0;i<Math.max(0,Math.ceil((690-desktopWidth)/16));i++)await separator.press('ArrowLeft');
+    const capture=async (name,focus=null)=>{
+      await editor.evaluate(el=>{
+        for(let node=el;node;node=node.parentElement)node.scrollTop=0;
+        document.activeElement?.blur();
+      });
+      if(focus)await focus.scrollIntoViewIfNeeded();
+      await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+      assert.equal(await editor.locator('table').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'results do not overflow');
+      await page.screenshot({path:path.join(visualOutput,`${name}.png`)});
+    };
+    for(const theme of ['white','dark']) {
+      await page.evaluate(theme=>setTheme(theme,false),theme);
+      await capture(`unassigned-desktop-${theme}`);
+    }
+    await checks.first().press('ArrowDown');
+    assert.equal(await checks.nth(1).evaluate(el=>el===document.activeElement),true);
+    await page.keyboard.press('Enter');
+    assert.equal(await checks.nth(1).getAttribute('aria-expanded'),'true');
+    assert.equal(await checks.first().getAttribute('aria-expanded'),'false');
+    await page.keyboard.press('Enter');
+    assert.equal(await editor.locator('[data-review-check][aria-expanded="true"]').count(),0);
+    assert.equal(await join.count(),1);
+    await checks.first().press('Enter');
+    await join.click();await prompt('Alex Example','Continue');
+    await page.getByRole('dialog').last().getByRole('button',{name:'Cancel',exact:true}).click();
+    const answerForm=editor.locator('[data-answer]');await answerForm.waitFor();
+    assert.equal(await join.count(),0);assert.equal(await op('close').isDisabled(),true);
+    await answerForm.locator('select').selectOption('yes');
+    await answerForm.locator('textarea').fill('Name, email and organization match the test account.');
+    await checks.nth(1).click();await checks.first().click();
+    assert.match(await answerForm.locator('textarea').inputValue(),/match the test account/);
+    await answerForm.getByRole('button',{name:'SAVE MY ANSWER'}).click();
+    await editor.getByText('ANSWER SAVED',{exact:true}).waitFor();
+    assert.match(await editor.locator('.review-check-row').first().innerText(),/PASSED\s+1/);
+    assert.equal(await op('unrelease').count(),0);
+    await assert.rejects(page.evaluate(async id=>{
+      const form=await NRCReviews.request('get',{form_id:id});
+      return NRCReviews.request('unrelease',{form_id:id,if_revision:form.revision});
+    },lifecycleId),/A run already exists/);
+    const peer=await context.newPage();
+    await peer.goto(`${url}/?fresh=${Date.now()}#workspace=${fixture.workspace}`);
+    await peer.waitForFunction(()=>serverReady);
+    await peer.locator('#reviewsBtn').click();
+    const peerRow=peer.locator(`tr[data-review="${lifecycleId}"]`);
+    await peerRow.waitFor();
+    const reportId=await page.locator('#reviewRunSelect').inputValue();
+    const readReport=()=>page.evaluate(id=>NRCReviews.request('run_get',{run_id:id}),reportId);
+    const reportBefore=await readReport();
+    await op('archive').click();
+    await lifecycleDialog.getByRole('button',{name:'Archive',exact:true}).click();
+    await lifecycleRow.waitFor({state:'detached'});
+    assert.equal(await op('customer').count(),0);
+    assert.match(await editor.locator('.review-check-row').first().innerText(),/PASSED\s+1/);
+    const scope=page.locator('#reviewsScope');
+    await scope.selectOption('archived');
+    await lifecycleRow.getByText('ARCHIVED',{exact:true}).waitFor();
+    await peerRow.waitFor({state:'detached'});
+    await peer.locator('#reviewsScope').selectOption('archived');
+    await peerRow.getByText('ARCHIVED',{exact:true}).waitFor();
+    assert.deepEqual(await readReport(),reportBefore,'archive must not change the existing report response');
+    await assert.rejects(createRun(newRelease),/archived/);
+    await assert.rejects(createRun(undefined),/CONFLICT/);
+    await captureLifecycle('archived');
+    await op('restore').click();
+    await lifecycleRow.waitFor({state:'detached'});
+    await peerRow.waitFor({state:'detached'});
+    await peer.close();
+    await scope.selectOption('current');
+    await lifecycleRow.getByText('RELEASED',{exact:true}).waitFor();
+    assert.equal((await createRun(newRelease)).status,'ok');
+    await capture('assigned-desktop-dark');
+    const syntheticId=(await page.locator('#inspectorHeader .identity-reference').innerText()).match(/#(\d+)/)[1];
+    const syntheticRun=await page.locator('#reviewRunSelect').inputValue();
+    await page.setViewportSize({width:390,height:844});
+    await boot();
+    await page.locator('#reviewsBtn').evaluate(button=>button.click());
+    await page.locator(`tr[data-review="${syntheticId}"] td`).last().click();
+    await page.locator('#reviewRunSelect').selectOption(syntheticRun);
+    await answerForm.waitFor();
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    assert.equal(await answerForm.locator('textarea').evaluate(el=>getComputedStyle(el).fontSize),'16px');
+    for(const theme of ['white','dark']) {
+      await page.evaluate(theme=>setTheme(theme,false),theme);
+      await capture(`assigned-narrow-${theme}`);
+    }
+    await capture('assigned-narrow-dark-answer',answerForm.getByRole('button',{name:'SAVE MY ANSWER'}));
+    await op('copy').click();
+    const deleteDraft=op('delete-draft');
+    await deleteDraft.waitFor();
+    const draftId=await page.evaluate(()=>String(NRCInspector.current().id));
+    const dialog=page.getByRole('dialog').last();
+    for(const theme of ['white','dark']) {
+      await page.evaluate(theme=>setTheme(theme,false),theme);
+      await deleteDraft.scrollIntoViewIfNeeded();
+      await page.screenshot({path:path.join(visualOutput,`delete-draft-narrow-${theme}.png`)});
+    }
+    await page.setViewportSize({width:1440,height:1000});
+    for(const theme of ['white','dark']) {
+      await page.evaluate(theme=>setTheme(theme,false),theme);
+      await deleteDraft.click();
+      await dialog.getByRole('button',{name:'Delete draft',exact:true}).waitFor();
+      await page.screenshot({path:path.join(visualOutput,`delete-draft-dialog-${theme}.png`)});
+      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+      assert.equal(await page.evaluate(()=>String(NRCInspector.current().id)),draftId);
+    }
+    await deleteDraft.click();
+    await dialog.getByRole('button',{name:'Delete draft',exact:true}).click();
+    await editor.waitFor({state:'hidden'});
+    await page.locator(`[data-review="${draftId}"]`).waitFor({state:'detached'});
+    await assert.rejects(page.evaluate(id=>NRCReviews.request('get',{form_id:id}),draftId),/not_found/);
+    results.push({inspector:'Concept B',checks:4,keyboard:true,accessDisclosure:true,unassignedHasOneAction:true,assignedAnswerSaved:true,narrowInputs:16});
+  }
   assert.deepEqual(errors,[],'no page errors');
   await fs.writeFile(path.join(output,`${phase}-results.json`),JSON.stringify({phase,results,errors},null,2));
   console.log(JSON.stringify({phase,results,errors},null,2));

@@ -14,6 +14,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -107,9 +108,9 @@ func (s *portal) readGuestCookie(r *http.Request, name string) (g guestSession, 
 	return g, nil
 }
 
-func reviewFields(w http.ResponseWriter, r *http.Request, allowed ...string) (url.Values, bool) {
+func reviewFields(w http.ResponseWriter, r *http.Request, allowListQuery bool, allowed ...string) (url.Values, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
-	if err := r.ParseForm(); err != nil || len(r.URL.RawQuery) != 0 {
+	if err := r.ParseForm(); err != nil || !allowListQuery && r.URL.RawQuery != "" {
 		http.Error(w, "Ungültiges Formular.", 400)
 		return nil, false
 	}
@@ -157,7 +158,7 @@ func (s *portal) guestReview(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Ungültiger Formularursprung.", 403)
 			return
 		}
-		values, ok := reviewFields(w, r, "token")
+		values, ok := reviewFields(w, r, false, "token")
 		if !ok {
 			return
 		}
@@ -231,7 +232,7 @@ func (s *portal) guestReview(w http.ResponseWriter, r *http.Request) {
 			s.renderReview(w, reviewView{Guest: true, Join: true, Title: res.Form.Title, CSRF: g.CSRF, Base: "/abnahmen/gast"})
 			return
 		}
-		v, ok := reviewFields(w, r, "name", "csrf")
+		v, ok := reviewFields(w, r, false, "name", "csrf")
 		if !ok {
 			return
 		}
@@ -289,6 +290,15 @@ func (s *portal) callReview(w http.ResponseWriter, r *http.Request, q p.ReviewRe
 	return res, true
 }
 
+func readReviewFilters(q url.Values) ticketFilters {
+	f := readTicketFilters(q)
+	f.Scope = ""
+	if f.Status == "waiting" {
+		f.Status = ""
+	}
+	return f
+}
+
 func (s *portal) accountReview(w http.ResponseWriter, r *http.Request, who account) {
 	q := p.ReviewRequest{Source: "portal", Identity: who.Requester, Name: who.Name}
 	if r.URL.Path == "/abnahmen" {
@@ -297,7 +307,9 @@ func (s *portal) accountReview(w http.ResponseWriter, r *http.Request, who accou
 			return
 		}
 		q.Op = "run_list"
-		v := reviewView{Base: "/abnahmen"}
+		filters := readReviewFilters(r.URL.Query())
+		v := reviewView{Base: "/abnahmen", Filters: filters}
+		search := strings.ToLower(filters.Search)
 		for pages := 0; ; pages++ {
 			if pages >= 1000 {
 				http.Error(w, "Zu viele Abnahmen.", 502)
@@ -308,7 +320,14 @@ func (s *portal) accountReview(w http.ResponseWriter, r *http.Request, who accou
 				return
 			}
 			for _, run := range res.Runs {
-				v.Runs = append(v.Runs, reviewSummary{ID: run.ID, Label: run.Label, Title: run.Title, Decision: run.Decision, Kind: run.Kind, Answered: run.AnsweredPoints})
+				v.HasRuns = true
+				if filters.Status == "active" && run.Decision != "" || filters.Status == "done" && run.Decision == "" {
+					continue
+				}
+				if search != "" && !strings.Contains(strings.ToLower(run.Title), search) && !strings.Contains(strings.ToLower(run.Label), search) && run.ID != strings.TrimPrefix(search, "#") {
+					continue
+				}
+				v.Runs = append(v.Runs, reviewSummary{ID: run.ID, Label: run.Label, Title: run.Title, Decision: run.Decision, Answered: run.AnsweredPoints})
 			}
 			if !res.HasMore {
 				break
@@ -318,6 +337,10 @@ func (s *portal) accountReview(w http.ResponseWriter, r *http.Request, who accou
 				return
 			}
 			q.Cursor = res.Cursor
+		}
+		// run_list is ordered by increasing run ID across all pages.
+		if filters.Sort != "oldest" {
+			slices.Reverse(v.Runs)
 		}
 		s.renderReview(w, v)
 		return
@@ -335,14 +358,17 @@ func (s *portal) accountReview(w http.ResponseWriter, r *http.Request, who accou
 	if r.Method == "POST" && (action == "/answer" || action == "/close") {
 		q.PortalProof = s.writeProof(who)
 	}
-	s.reviewRun(w, r, q, "/abnahmen/"+q.RunID, action, "", "", false)
+	// Bind in-page answers and drafts to the logged-in session. Never expose
+	// the cookie itself. Ordinary forms still use the existing Origin check.
+	session := sha256.Sum256([]byte(accountSessionToken(r)))
+	s.reviewRun(w, r, q, "/abnahmen/"+q.RunID, action, hex.EncodeToString(session[:]), "", false)
 }
 
 // Only this deliberately public view reaches templates: no raw assets, tokens,
 // participant account identities or staff graph records.
 type reviewSummary struct {
-	ID, Label, Title, Decision, Kind string
-	Answered                         int
+	ID, Label, Title, Decision string
+	Answered                   int
 }
 type reviewContribution struct{ ID, Name, Source, Result, Comment, UpdatedAt string }
 type reviewPointView struct {
@@ -350,7 +376,7 @@ type reviewPointView struct {
 	Section, Classification, Next                        string
 	SavedResult, SavedComment                            string
 	Number                                               int
-	Active, Visible, Changed, Unanswered, Unable         bool
+	Active, Changed, Unanswered, Unable                  bool
 	Contributions                                        []reviewContribution
 	Contradicting                                        bool
 }
@@ -364,6 +390,8 @@ type reviewView struct {
 	Guest, Join, Preview, CanClose                                                                                                                  bool
 	Base, CSRF, Label, Title, Build, Environment, ReleasedAt, Revision, Decision, Comment, ClosedName, ClosedSource, ClosedAt, PreviousRun, Message string
 	Runs                                                                                                                                            []reviewSummary
+	HasRuns                                                                                                                                         bool
+	Filters                                                                                                                                         ticketFilters
 	Points                                                                                                                                          []reviewPointView
 	Answered, Total, Contradicting, TeamUnable                                                                                                      int
 	Kind                                                                                                                                            string
@@ -376,8 +404,19 @@ type reviewView struct {
 	UnableStart, UnansweredStart                                                                                                                    int
 }
 
-// More than eight points uses server-rendered navigation. Legacy forms are
-// batched in groups of eight in the view only; immutable form JSON is untouched.
+func (v reviewView) ListQuery() string { return v.Filters.Query(v.Filters.Status) }
+
+func (v reviewView) PointURL(id string) string {
+	query := v.ListQuery()
+	separator := "&"
+	if query == "" {
+		separator = "?"
+	}
+	return v.Base + query + separator + "point=" + url.QueryEscape(id) + "#point-" + id
+}
+
+// Open runs use server-rendered navigation. Larger forms are grouped in the
+// view only; immutable form JSON is untouched.
 func (v *reviewView) navigate(pointID string) {
 	v.Long = v.Total > 8 && !v.Preview && !v.ReviewAgain && v.Decision == ""
 	active := 0
@@ -426,9 +465,6 @@ func (v *reviewView) navigate(pointID string) {
 		if p.Result != "" {
 			v.Sections[idx].Answered++
 		}
-	}
-	for i := range v.Points {
-		v.Points[i].Visible = !v.Long || v.Points[i].Section == v.ActiveSection
 	}
 	for i := range v.Sections {
 		v.Sections[i].Active = v.Sections[i].Name == v.ActiveSection
@@ -524,6 +560,9 @@ func (s *portal) reviewRun(w http.ResponseWriter, r *http.Request, q p.ReviewReq
 	}
 	v := reviewView{Guest: q.Source == "guest", Base: base, CSRF: csrf, Label: res.Run.Label, Title: res.Form.Title, Build: res.Form.Build, Environment: res.Form.Environment, ReleasedAt: reviewTime(res.Form.ReleasedAt), Revision: res.Run.Revision, Decision: res.Run.Decision, Comment: res.Run.Comment, ClosedName: res.Run.ClosedName, ClosedSource: reviewProvenance(res.Run.ClosedSource), ClosedAt: reviewTime(res.Run.ClosedAt), PreviousRun: res.Run.PreviousRun}
 	v.Kind = res.Run.Kind
+	if !v.Guest {
+		v.Filters = readReviewFilters(r.URL.Query())
+	}
 	if res.ParticipantID != "" {
 		participantID = res.ParticipantID
 	}
@@ -583,11 +622,11 @@ func (s *portal) reviewRun(w http.ResponseWriter, r *http.Request, q p.ReviewReq
 	v.Snapshot = reviewSnapshot(v.Points)
 	v.navigate(r.URL.Query().Get("point"))
 	if r.Method == "POST" {
-		values, ok := reviewFields(w, r, "point_id", "result", "comment", "decision", "if_revision", "csrf", "snapshot", "reviewed")
+		values, ok := reviewFields(w, r, !v.Guest, "point_id", "result", "comment", "decision", "if_revision", "csrf", "snapshot", "reviewed")
 		if !ok {
 			return
 		}
-		if csrf != "" && subtle.ConstantTimeCompare([]byte(values.Get("csrf")), []byte(csrf)) != 1 {
+		if (q.Source == "guest" || r.Header.Get("X-NRC-Review-Navigation") == "1") && subtle.ConstantTimeCompare([]byte(values.Get("csrf")), []byte(csrf)) != 1 {
 			http.Error(w, "Ungültige Sitzung.", 403)
 			return
 		}
@@ -635,13 +674,11 @@ func (s *portal) reviewRun(w http.ResponseWriter, r *http.Request, q p.ReviewReq
 				s.renderReview(w, v)
 				return
 			}
-			target := base
-			if v.Long {
-				for _, p := range v.Points {
-					if p.ID == q.PointID {
-						target += "?point=" + url.QueryEscape(p.Next) + "#point-" + p.Next
-						break
-					}
+			target := base + v.ListQuery()
+			for _, p := range v.Points {
+				if p.ID == q.PointID {
+					target = v.PointURL(p.Next)
+					break
 				}
 			}
 			http.Redirect(w, r, target, http.StatusSeeOther)
@@ -688,7 +725,7 @@ func (s *portal) reviewRun(w http.ResponseWriter, r *http.Request, q p.ReviewReq
 				s.renderReview(w, v)
 				return
 			}
-			http.Redirect(w, r, base, http.StatusSeeOther)
+			http.Redirect(w, r, base+v.ListQuery(), http.StatusSeeOther)
 			return
 		}
 		v.Preview, v.Decision, v.Comment = true, q.Decision, q.Comment
@@ -700,11 +737,15 @@ func (s *portal) reviewRun(w http.ResponseWriter, r *http.Request, q p.ReviewReq
 //go:embed web/reviews.html
 var reviewHTML string
 
+//go:embed web/review-navigation.js
+var reviewNavigationJS []byte
+
 //go:embed web/invitation.js
 var invitationJS []byte
 var reviewPage = template.Must(template.New("reviews").Funcs(template.FuncMap{
 	"decisionLabel": reviewDecision, "resultLabel": reviewResult, "reviewTime": reviewTime,
-	"subtract": func(a, b int) int { return a - b },
+	"listFiltersURL":      func() string { return listFiltersURL },
+	"reviewNavigationURL": func() string { return assetURL("/abnahmen/navigation.js", reviewNavigationJS) },
 }).Parse(reviewHTML))
 
 func (s *portal) renderReview(w http.ResponseWriter, v reviewView) {
@@ -712,6 +753,13 @@ func (s *portal) renderReview(w http.ResponseWriter, v reviewView) {
 	if v.Branding.Brand == "" {
 		v.Branding.Brand = "Ihr Kundenportal"
 	}
+	if v.WorkingReview() || v.Title == "" {
+		w.Header().Set("Content-Security-Policy", w.Header().Get("Content-Security-Policy")+"; connect-src 'self'")
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	reviewPage.Execute(w, v)
+}
+
+func (v reviewView) WorkingReview() bool {
+	return v.Title != "" && !v.Join && !v.Preview && !v.ReviewAgain && v.Decision == ""
 }

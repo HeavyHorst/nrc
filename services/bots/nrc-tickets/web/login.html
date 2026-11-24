@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Anmelden · {{.Branding.Brand}}</title><link rel="stylesheet" href="/style.css"></head>
+<title>Anmelden · {{.Branding.Brand}}</title><link rel="stylesheet" href="{{.Branding.StyleURL}}"></head>
 <body class="login-page">
 <div class="login-hero">
-{{if .Branding.LoginImage}}<img class="login-image" src="/branding/login-image" alt="" fetchpriority="high">{{end}}
-<header><div class="brand">{{if .Branding.Logo}}<img src="/branding/logo" alt="">{{end}}<span>{{.Branding.Brand}}</span></div>
+{{if .Branding.LoginImage}}<img class="login-image" src="{{.Branding.LoginImageURL}}" alt="" fetchpriority="high">{{end}}
+<header><div class="brand">{{if .Branding.Logo}}<img src="{{.Branding.LogoURL}}" alt="">{{end}}<span>{{.Branding.Brand}}</span></div>
 {{with .Branding}}{{if or .ImprintURL .PrivacyURL .TermsURL .ContactURL}}
 <nav aria-label="Rechtliches und Kontakt">
 {{if .ImprintURL}}<a href="{{.ImprintURL}}">Impressum</a>{{end}}{{if .PrivacyURL}}<a href="{{.PrivacyURL}}">Datenschutz</a>{{end}}

@@ -97,6 +97,12 @@ chronicle_enabled=$(ssh "$DEPLOY_HOST" "if test -f '$REMOTE_DIR/chronicle.env'; 
 if $chronicle_enabled; then
     COMPOSE_ARGS+=" --env-file chronicle.env -f docker/compose.chronicle.yml --profile chronicle"
 fi
+tickets_enabled=$(ssh "$DEPLOY_HOST" "docker ps -aq --filter label=com.docker.compose.project=docker --filter label=com.docker.compose.service=tickets")
+if [[ -n $tickets_enabled ]]; then
+    COMPOSE_ARGS+=" -f docker/compose.tickets.yml"
+    ticket_relay=$(ssh "$DEPLOY_HOST" "docker ps -aq --filter label=com.docker.compose.project=docker --filter label=com.docker.compose.service=ticket-bot-tls")
+    [[ -z $ticket_relay ]] || COMPOSE_ARGS+=" -f docker/compose.ticket-bot-tls.yml"
+fi
 monitoring_running=$(ssh "$DEPLOY_HOST" "docker ps --filter label=com.docker.compose.project=docker --filter label=com.docker.compose.service=incidents --format '{{.ID}}'")
 # Keep managed sidecars in the model, including newsletter's search dependency.
 COMPOSE_ARGS+=" --profile search --profile ai --profile metrics"
@@ -201,6 +207,7 @@ protocol_go=false
 publish=false
 newsletter=false
 incidents=false
+tickets=false
 
 if $full; then
     server=true
@@ -215,6 +222,7 @@ if $full; then
     publish=$publish_enabled
     [[ -z $newsletter_enabled ]] || newsletter=true
     incidents=$monitoring_enabled
+    [[ -z $tickets_enabled ]] || tickets=true
 else
     for path in "${changed_files[@]}"; do
         case "$path" in
@@ -274,6 +282,10 @@ else
                 publish=$publish_enabled
                 [[ -z $newsletter_enabled ]] || newsletter=true
                 incidents=$monitoring_enabled
+                [[ -z $tickets_enabled ]] || tickets=true
+                ;;
+            services/bots/nrc-tickets/*|docker/branding/*|docker/compose.tickets.yml|docker/compose.ticket-bot-tls.yml)
+                [[ -z $tickets_enabled ]] || tickets=true
                 ;;
             services/bots/nrc-incidents/*) incidents=$monitoring_enabled ;;
             services/bots/nrc-newsletter/*) [[ -z $newsletter_enabled ]] || newsletter=true ;;
@@ -304,6 +316,7 @@ $nginx && services+=(nginx)
 $publish && services+=(publish)
 $newsletter && services+=(newsletter)
 $incidents && services+=(incidents)
+$tickets && services+=(tickets)
 # Chronicle shares the AI image, but never Sullivan's runtime or credentials.
 if $ai && $chronicle_enabled; then services+=(chronicle); fi
 
@@ -397,6 +410,9 @@ if ! $skip_tests; then
     if $tailscale; then
         (cd services/auth/tailscale-proxy && go test ./...)
     fi
+    if $tickets; then
+        (cd services/bots/nrc-tickets && go test ./...)
+    fi
     if $publish; then
         (cd services/bots/nrc-publish && go test -race ./... && go vet ./...)
     fi
@@ -484,6 +500,9 @@ if $publish_enabled; then
 fi
 if [[ -n $newsletter_enabled ]]; then
     ssh "$DEPLOY_HOST" 'curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8097/health'
+fi
+if [[ -n $tickets_enabled ]]; then
+    ssh "$DEPLOY_HOST" 'curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8096/health'
 fi
 
 source_changes | \

@@ -1208,13 +1208,15 @@ func handleFeatures(allowed customerUsers, localClient whoIsClient) http.Handler
 			workspace = ""
 		}
 		_, calls := callsBackend(os.Getenv("NRC_CALLS_BACKEND"))
+		reviewPortalOrigin := strings.TrimSpace(os.Getenv("TICKETS_ORIGIN"))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
 			Customers           bool   `json:"customers"`
 			Calls               bool   `json:"calls,omitempty"`
 			Newsletter          bool   `json:"newsletter,omitempty"`
 			NewsletterWorkspace string `json:"newsletter_workspace,omitempty"`
-		}{Customers: customers, Calls: calls, Newsletter: newsletter, NewsletterWorkspace: workspace})
+			ReviewPortalOrigin   string `json:"review_portal_origin,omitempty"`
+		}{Customers: customers, Calls: calls, Newsletter: newsletter, NewsletterWorkspace: workspace, ReviewPortalOrigin: reviewPortalOrigin})
 	}
 }
 
@@ -1223,6 +1225,29 @@ func proxyHandler(proxy http.Handler, localClient tailscaleClient, policy worksp
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/users", func(w http.ResponseWriter, r *http.Request) {
 		handleGetUsers(w, r, localClient)
+	})
+	mux.HandleFunc("GET /api/users/identities", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		whois, err := localClient.WhoIs(r.Context(), net.JoinHostPort(extractRemoteIP(r), "1"))
+		if err != nil || whois == nil || whois.Node == nil || whois.Node.IsTagged() || whois.UserProfile == nil || whois.UserProfile.LoginName == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		status, err := localClient.Status(ctx)
+		if err != nil || status == nil {
+			http.Error(w, "user directory unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		people := make(map[string]string)
+		for _, profile := range status.User {
+			if profile.LoginName != "" {
+				people[profile.LoginName] = profile.DisplayName
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(people)
 	})
 	mux.HandleFunc("/api/features", handleFeatures(parseCustomerUsers(os.Getenv("NRC_CUSTOMERS_USERS")), localClient))
 	mux.Handle("/api/subsystems/", subsystemHealth(map[string]string{

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
 	"fmt"
 	"io"
@@ -17,12 +18,50 @@ var portalCSS []byte
 //go:embed web/attachments.js
 var portalAttachmentsJS []byte
 
+//go:embed web/list-filters.js
+var listFiltersJS []byte
+
 // Same operator-owned theme/logo/footer contract as nrc-publish. CSS stays a
 // stylesheet response, never trusted HTML interpolated into the page.
 type branding struct {
 	Brand, FooterText, ImprintURL, PrivacyURL, TermsURL, ContactURL string
 	ThemeCSS, Logo, LoginImage, FontRegular, FontBold               []byte
 }
+
+func assetVersion(data []byte) string { return fmt.Sprintf("%x", sha256.Sum256(data)) }
+
+func assetURL(path string, data []byte) string { return path + "?v=" + assetVersion(data) }
+
+func servePortalAsset(w http.ResponseWriter, r *http.Request, mime string, data []byte) {
+	if r.URL.RawQuery == "v="+assetVersion(data) {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
+	w.Header().Set("Content-Type", mime)
+	w.Write(data)
+}
+
+func (b branding) stylesheet() []byte {
+	var css bytes.Buffer
+	css.Write(portalCSS)
+	for _, font := range []struct {
+		name, weight string
+		data         []byte
+	}{{"regular", "400", b.FontRegular}, {"bold", "700", b.FontBold}} {
+		if len(font.data) > 0 {
+			fmt.Fprintf(&css, "\n@font-face{font-family:Portal Brand;src:url(%s) format('woff2');font-weight:%s;font-display:swap}\n", assetURL("/branding/font-"+font.name+".woff2", font.data), font.weight)
+		}
+	}
+	css.WriteByte('\n')
+	css.Write(b.ThemeCSS)
+	return css.Bytes()
+}
+
+func (b branding) StyleURL() string      { return assetURL("/style.css", b.stylesheet()) }
+func (b branding) LogoURL() string       { return assetURL("/branding/logo", b.Logo) }
+func (b branding) LoginImageURL() string { return assetURL("/branding/login-image", b.LoginImage) }
+
+var attachmentsURL = assetURL("/attachments.js", portalAttachmentsJS)
+var listFiltersURL = assetURL("/list-filters.js", listFiltersJS)
 
 func loadBranding() (branding, error) {
 	b := branding{Brand: os.Getenv("TICKETS_BRAND"), FooterText: os.Getenv("TICKETS_FOOTER_TEXT"),

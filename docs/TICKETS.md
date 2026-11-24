@@ -429,8 +429,9 @@ private network and bot secret, publishes only loopback 8096 and mounts operator
 branding. It does not mount attachments, a DB, or staff files. A host TLS
 proxy can forward to loopback 8096. Capabilities are dropped and the filesystem
 is read-only. The optional file-mode overlay mounts a private 0600 accounts file.
-The regular `docker/deploy.sh` does not manage the ticket overlay. Keep it in
-the portal deployment's Compose arguments for later rebuilds as well.
+On `lti1`, `docker/deploy.sh` and `docker/backup.sh` include the ticket and
+TLS relay overlays when their containers already exist. Include the overlays
+explicitly when provisioning the portal for the first time.
 
 For a same-host DB-mode deployment, add `compose.ticket-bot-tls.yml` after
 `compose.tickets.yml` instead of setting `NRC_TICKETS_SERVER`. The relay shares

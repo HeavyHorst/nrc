@@ -130,22 +130,44 @@ try {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await shot('tickets-team-list-narrow');
       await page.setViewportSize({ width: 1440, height: 1100 });
+      await page.evaluate(() => { window.listHeading = document.querySelector('h1'); });
+      const sameHeading = () => page.evaluate(() => window.listHeading === document.querySelector('h1'));
+      const filtered = () => page.locator('[data-list-filters][aria-busy]').waitFor({ state: 'detached' });
       await page.getByLabel('Sortierung').selectOption('oldest');
       await page.getByRole('button', { name: 'Filtern' }).click();
+      await filtered();
       assert.match(await page.locator('tbody tr').first().textContent(), /Rechnungsexport unvollständig/);
+      await page.route(url => url.searchParams.get('status') === 'done', async route => {
+        try {
+          assert(await sameHeading());
+          assert.match(await page.locator('tbody tr').first().textContent(), /Rechnungsexport unvollständig/);
+        } finally {
+          await route.continue();
+        }
+      }, { times: 1 });
       await page.getByRole('link', { name: 'Erledigt', exact: true }).click();
       await page.getByRole('heading', { name: 'Keine passenden Anfragen' }).waitFor();
+      assert(await sameHeading());
       await shot('tickets-filter-empty');
+      await page.goBack();
+      await teamTicket.waitFor();
+      assert(await sameHeading());
+      await page.goForward();
+      await page.getByRole('heading', { name: 'Keine passenden Anfragen' }).waitFor();
       await page.getByRole('link', { name: 'Filter zurücksetzen' }).click();
+      await filtered();
       await page.getByLabel('Suche', { exact: true }).fill('UNVOLLSTÄNDIG');
       await page.getByRole('button', { name: 'Filtern' }).click();
+      await filtered();
       assert.equal(await page.locator('tbody tr').count(), 1);
       await teamTicket.waitFor();
       await page.getByRole('link', { name: 'Anzeigen' }).click();
+      await filtered();
       assert.equal(await page.locator('tbody tr').count(), 1);
       await page.getByLabel('Suche', { exact: true }).fill('#2');
       await page.getByLabel('Sichtbarkeit').selectOption('team');
       await page.getByRole('button', { name: 'Filtern' }).click();
+      await filtered();
       await teamTicket.click();
       await page.getByRole('heading', { name: /Teamanfrage von/ }).waitFor();
       assert.equal(await page.locator('.ticket-heading .ticket-status').innerText(), 'Ihre Antwort wird erwartet');

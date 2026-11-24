@@ -25,30 +25,32 @@ type ReviewForm struct {
 	Build       string        `json:"build"`
 	Environment string        `json:"environment"`
 	ReleasedAt  string        `json:"released_at"`
+	Archived    bool          `json:"archived,omitempty"`
 	Points      []ReviewPoint `json:"points"`
 }
 type ReviewRequest struct {
-	Op          string     `json:"op"`
-	FormID      string     `json:"form_id"`
-	IfRevision  string     `json:"if_revision"`
-	Form        ReviewForm `json:"form"`
-	RunID       string     `json:"run_id,omitempty"`
-	Label       string     `json:"label,omitempty"`
-	Kind        string     `json:"kind,omitempty"`
-	PreviousRun string     `json:"previous_run,omitempty"`
-	Source      string     `json:"source,omitempty"`
-	Identity    string     `json:"identity,omitempty"`
-	Name        string     `json:"name,omitempty"`
-	CanClose    bool       `json:"can_close,omitempty"`
-	PointID     string     `json:"point_id,omitempty"`
-	Result      string     `json:"result,omitempty"`
-	Comment     string     `json:"comment,omitempty"`
-	Decision    string     `json:"decision,omitempty"`
-	Token       string     `json:"token,omitempty"`
-	GuestID     string     `json:"guest_id,omitempty"`
-	ExpiresAt   string     `json:"expires_at,omitempty"`
-	InviteID    string     `json:"invite_id,omitempty"`
-	Cursor      string     `json:"cursor,omitempty"`
+	Op           string     `json:"op"`
+	FormID       string     `json:"form_id"`
+	IfRevision   string     `json:"if_revision"`
+	IfReleasedAt string     `json:"if_released_at,omitempty"`
+	Form         ReviewForm `json:"form"`
+	RunID        string     `json:"run_id,omitempty"`
+	Label        string     `json:"label,omitempty"`
+	Kind         string     `json:"kind,omitempty"`
+	PreviousRun  string     `json:"previous_run,omitempty"`
+	Source       string     `json:"source,omitempty"`
+	Identity     string     `json:"identity,omitempty"`
+	Name         string     `json:"name,omitempty"`
+	CanClose     bool       `json:"can_close,omitempty"`
+	PointID      string     `json:"point_id,omitempty"`
+	Result       string     `json:"result,omitempty"`
+	Comment      string     `json:"comment,omitempty"`
+	Decision     string     `json:"decision,omitempty"`
+	Token        string     `json:"token,omitempty"`
+	GuestID      string     `json:"guest_id,omitempty"`
+	ExpiresAt    string     `json:"expires_at,omitempty"`
+	InviteID     string     `json:"invite_id,omitempty"`
+	Cursor       string     `json:"cursor,omitempty"`
 
 	PortalProof *PortalWriteProof `json:"-"`
 }
@@ -86,19 +88,26 @@ type ReviewRun struct {
 	Answers        []ReviewAnswer      `json:"answers"`
 	AnsweredPoints int                 `json:"answered_points"`
 }
+type ReviewAccountChoice struct {
+	Requester string `json:"requester"`
+	Name      string `json:"name"`
+	Login     string `json:"login"`
+}
+
 type ReviewResponse struct {
-	CorrelationID uint32      `json:"-"`
-	Status        string      `json:"status"`
-	FormID        string      `json:"form_id"`
-	Revision      string      `json:"revision"`
-	Form          ReviewForm  `json:"form"`
-	Run           ReviewRun   `json:"run"`
-	Runs          []ReviewRun `json:"runs"`
-	Token         string      `json:"token"`
-	InviteID      string      `json:"invite_id"`
-	ParticipantID string      `json:"participant_id"`
-	Cursor        string      `json:"cursor"`
-	HasMore       bool        `json:"has_more"`
+	CorrelationID uint32                `json:"-"`
+	Status        string                `json:"status"`
+	FormID        string                `json:"form_id"`
+	Revision      string                `json:"revision"`
+	Form          ReviewForm            `json:"form"`
+	Run           ReviewRun             `json:"run"`
+	Runs          []ReviewRun           `json:"runs"`
+	Accounts      []ReviewAccountChoice `json:"accounts,omitempty"`
+	Token         string                `json:"token"`
+	InviteID      string                `json:"invite_id"`
+	ParticipantID string                `json:"participant_id"`
+	Cursor        string                `json:"cursor"`
+	HasMore       bool                  `json:"has_more"`
 }
 
 func reviewTextValid(s string, limit int, required bool) bool {
@@ -128,21 +137,27 @@ func ValidateReviewForm(f ReviewForm, released bool) error {
 // correlation ID, requests a trailing one, matching the Chronicle transport.
 func EncodeReviewRequest(q ReviewRequest, correlation uint32) ([]byte, error) {
 	switch q.Op {
-	case "create", "update", "release", "copy", "get", "run_create", "run_list", "run_get", "participant_add", "invite", "revoke", "invitation_info", "guest_join", "answer", "close":
+	case "create", "update", "release", "unrelease", "archive", "restore", "delete_draft", "copy", "get", "run_create", "run_list", "run_get", "participant_add", "participant_accounts", "invite", "revoke", "invitation_info", "guest_join", "answer", "close":
 	default:
 		return nil, fmt.Errorf("review: unknown operation")
 	}
-	if q.Op == "update" || q.Op == "release" || q.Op == "copy" || q.Op == "get" || q.Op == "run_create" {
+	changesForm := q.Op == "update" || q.Op == "release" || q.Op == "unrelease" || q.Op == "archive" || q.Op == "restore" || q.Op == "delete_draft"
+	if changesForm || q.Op == "copy" || q.Op == "get" || q.Op == "run_create" {
 		if n, ok := chronicleDecimal(q.FormID); !ok || n == 0 {
 			return nil, fmt.Errorf("review: invalid form ID")
 		}
 	}
-	if q.Op == "update" || q.Op == "release" || q.Op == "close" {
+	if changesForm || q.Op == "close" {
 		if n, ok := chronicleDecimal(q.IfRevision); !ok || n == 0 || n > 1<<63-1 {
 			return nil, fmt.Errorf("review: invalid revision")
 		}
 	}
-	if q.Op == "run_get" || q.Op == "answer" || q.Op == "close" || q.Op == "participant_add" || q.Op == "invite" || q.Op == "revoke" {
+	if q.IfReleasedAt != "" {
+		if n, ok := chronicleDecimal(q.IfReleasedAt); q.Op != "run_create" || !ok || n == 0 || n > 1<<63-1 {
+			return nil, fmt.Errorf("review: invalid release token")
+		}
+	}
+	if q.Op == "run_get" || q.Op == "answer" || q.Op == "close" || q.Op == "participant_add" || q.Op == "participant_accounts" || q.Op == "invite" || q.Op == "revoke" {
 		if n, ok := chronicleDecimal(q.RunID); !ok || n == 0 {
 			return nil, fmt.Errorf("review: invalid run ID")
 		}
@@ -174,8 +189,8 @@ func EncodeReviewRequest(q ReviewRequest, correlation uint32) ([]byte, error) {
 		if err := ValidateReviewForm(q.Form, false); err != nil {
 			return nil, err
 		}
-		if q.Form.ReleasedAt != "" {
-			return nil, fmt.Errorf("review: release requires a separate command")
+		if q.Form.ReleasedAt != "" || q.Form.Archived {
+			return nil, fmt.Errorf("review: release and archive require separate commands")
 		}
 	}
 	payload, err := json.Marshal(q)
@@ -212,16 +227,24 @@ func DecodeReviewResponse(body []byte) (*ReviewResponse, error) {
 		return nil, fmt.Errorf("review: missing response status")
 	}
 	r.CorrelationID = binary.BigEndian.Uint32(body)
-	// Form operations return a top-level identity; run/list/invite operations
-	// may instead return a run or an empty list without a top-level form.
+	// Deleting a draft acknowledges the ID but has no remaining form or revision.
 	if r.Status == "ok" && r.FormID != "" {
 		id, ok := chronicleDecimal(r.FormID)
-		revision, valid := chronicleDecimal(r.Revision)
-		if !ok || id == 0 || !valid || revision == 0 || revision > 1<<63-1 {
+		if !ok || id == 0 {
 			return nil, fmt.Errorf("review: invalid result identity")
 		}
-		if err := ValidateReviewForm(r.Form, r.Form.ReleasedAt != ""); err != nil {
-			return nil, err
+		deleteAck := r.Revision == "" && r.Form.Version == 0 && r.Form.Title == "" &&
+			r.Form.Build == "" && r.Form.Environment == "" && r.Form.ReleasedAt == "" &&
+			!r.Form.Archived && len(r.Form.Points) == 0 && r.Run.ID == "" && r.Runs == nil &&
+			r.Token == "" && r.InviteID == "" && r.ParticipantID == "" && r.Cursor == "" && !r.HasMore
+		if !deleteAck {
+			revision, valid := chronicleDecimal(r.Revision)
+			if !valid || revision == 0 || revision > 1<<63-1 {
+				return nil, fmt.Errorf("review: invalid result identity")
+			}
+			if err := ValidateReviewForm(r.Form, r.Form.ReleasedAt != ""); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if r.Status == "ok" {

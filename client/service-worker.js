@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261124ticketstatus2";
+const CACHE_NAME = "nrc-terminal-20261124ticketreview1";
 
 const APP_SHELL = [
   "./",
@@ -20,21 +20,21 @@ const APP_SHELL = [
   "./css/mobile.css?v=20261102gap1",
   "./css/custom-select.css?v=20261019compact1",
   "./css/voice.css?v=20261105voice12",
-  "./css/reviews.css?v=20261122reviewfix1",
+  "./css/reviews.css?v=20261124reviewlifecycle1",
   "./dialog.js?v=20261021taskslice1",
   "./portal.js?v=20261116pickers1",
   "./custom-picker.js?v=20260927appointment2",
   "./custom-select.js?v=20261019customerwidth1",
   "./attachments.js?v=20261008files1",
   "./protocol.js?v=20261023protocol2",
-  "./frames.js?v=20261121reviews1",
+  "./frames.js?v=20261124reviewlifecycle1",
   "./db-retry.js?v=20261119incidentretry1",
   "./assets.js?v=20261122reviewfix1",
   "./transactions.js?v=20261114overload1",
   "./edges.js?v=20261114overload1",
   "./files.js?v=20261022cancel1",
   "./links-ui.js?v=20261122reviewfix1",
-  "./inspector.js?v=20261121reviews1",
+  "./inspector.js?v=20261123reviewrail1",
   "./view-manager.js?v=20261121reviews1",
   "./list-navigation.js?v=20260805b",
   "./virtual-list.js?v=20260908a",
@@ -72,7 +72,7 @@ const APP_SHELL = [
   "./newsletter.js?v=20261022cancel1",
   "./customers.js?v=20261116pickers1",
   "./tickets.js?v=20261124ticketstatus1",
-  "./reviews.js?v=20261123reconnect1",
+  "./reviews.js?v=20261124reviewaccounts2",
   "./mobile-shell.js?v=20261019registers1",
   "./latency-worker.js",
 ];

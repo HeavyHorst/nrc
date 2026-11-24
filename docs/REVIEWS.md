@@ -3,19 +3,26 @@
 The NRC register **Abnahmen** creates a form independently of a ticket or task.
 Drafts contain a title, build, environment and ordered points with stable local
 IDs. Reordering does not renumber points. Release requires a build and at least
-one question and freezes the complete form. Copying creates an editable draft;
-a new build uses that copy, not an edit of the released form.
+one question and freezes the complete form. Staff can withdraw an active release
+only before its first run exists; that returns the same form to an editable
+draft. Copying creates an editable draft; a new build uses that copy, not an edit
+of a form already used in a run.
+
+Staff can archive a released form and restore it from the **Archived** register
+filter. Archiving hides the form from the default register and prevents new runs.
+Existing runs, reports, access and references are unchanged.
 
 Each point may have an author-defined `section` label (at most 256 UTF-8 bytes).
 It is part of the form JSON and freezes together with the question at release.
 Copying and reordering retain the label. Empty or omitted labels are valid, so
 existing forms need no rewrite or additional database migration.
 
-The portal shows forms with more than eight points as sections with one active
-answer form and **Speichern und weiter**. Author-defined section labels take
-precedence; unlabeled long forms receive display-only groups of eight. Short
-forms keep all points together without section navigation. Personal progress
-counts the current participant's answered points, not the team's contributions.
+The portal shows one editable point at a time, with point navigation and
+**Speichern und weiter** until the last point. Longer forms group the navigation
+by author-defined section, or use display-only groups of eight for unlabeled
+points. Personal progress counts the current participant's saved answers, not
+the team's contributions. Team contributions and the separate closure form can
+be expanded without JavaScript.
 
 The internal comparison opens a wide point-by-team table with question/section
 search and result filtering across teams. Selecting a cell shows each person's
@@ -55,6 +62,9 @@ the same account and browser session as the ticket portal. Only explicit run ass
 does not gain access through a company membership or a ticket reference.
 The portal receives form fields and the assigned team's contributions, never
 internal graph links, invitation hashes or participant account identities.
+Internal staff can select active portal accounts from the current workspace
+when assigning participants to an open run. This does not grant access to
+portal account administration.
 
 Guests use `/abnahmen/einladung#TOKEN`. The fragment is exchanged in a same-origin
 POST and immediately removed; it is not sent as a URL query, redirect or Referer.
@@ -69,6 +79,8 @@ encoded as 64 hex characters. Keep it stable across restarts; rotating it ends
 existing guest sessions. Without this setting account access works, but guest
 routes return 503. TLS termination and the existing `TICKETS_ORIGIN` remain
 required. Do not log request bodies, fragment-exchange payloads or cookies.
+Set the same `TICKETS_ORIGIN` in the Tailscale proxy's environment (Compose `.env`)
+so the Inspector generates public invitation URLs without asking users for a host.
 
 Invitation links default to participation only. Granting guest closure explicitly
 allows any link holder to decide under a self-declared name; the report labels
@@ -92,11 +104,18 @@ form and an optional internal edge, not a required ticket dependency.
 timestamps are canonical decimal strings, including in JavaScript. The exact
 DTOs are in `protocol/reviews.odin` and `protocol-go/reviews.go`.
 
-Operations: `create`, `get`, `update`, `release`, `copy`, `run_create`, `run_get`,
-`run_list`, `participant_add`, `answer`, `close`, `invite`, `revoke`,
+Operations: `create`, `get`, `update`, `release`, `unrelease`, `archive`, `restore`, `delete_draft`, `copy`, `run_create`, `run_get`,
+`run_list`, `participant_add`, `participant_accounts`, `answer`, `close`, `invite`, `revoke`,
 `invitation_info`, `guest_join`.
-`update`, `release` and `close` require `if_revision`. Statuses include `ok`,
-`invalid`, `not_found`, `forbidden`, `conflict`, `released` and `closed`.
+`participant_accounts` requires a `run_id` and returns paged account choices
+with only requester identity, display name and login.
+`update`, `release`, `unrelease`, `archive`, `restore`, `delete_draft` and `close`
+require `if_revision`. A release with a run returns `has_runs` on withdrawal;
+`run_create` sends the observed `released_at` as `if_released_at`. A stale token
+returns `conflict`. Tokenless older clients get `conflict` for archived forms
+or releases issued after a withdrawal; otherwise their request still works.
+Token-aware callers get `archived` for archived forms. Archive state is stored
+in the record preview, not the frozen form or run response.
 `run_list` supports an optional `form_id` and an exclusive `cursor`, returning
 `cursor` and `has_more`. Pages stop at 50 runs or a 64 KiB serialized row budget.
 There are at most 100 questions and 64 participants per run. Requests/forms
@@ -106,6 +125,9 @@ unreadable. Keep forms and comments concise.
 
 `ReviewForm` (18) and `ReviewAnswer` (19) are linkable assets, but generic create,
 update, delete and transaction patch commands cannot bypass domain protection.
+`delete_draft` requires the current form revision and removes only an unpublished
+form and its links. The Inspector asks for confirmation. Released forms and
+their reports cannot be deleted this way.
 Private SQLite tables hold runs, memberships, invitation hashes and the unique
 person/run/point answer mapping. Only the verified `nrc-tickets` bot can submit
 portal or guest identities; ordinary NRC clients cannot impersonate them.

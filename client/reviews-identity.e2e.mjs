@@ -68,7 +68,7 @@ try {
       assert.equal(await title.inputValue(),'Ungespeicherter Entwurf · nach Verbindungsabbruch erhalten');
       await shot('reconnect-after-preserved');
       const start=sent.length;
-      const refresh=page.locator('#inspectorHeader [data-review-op="reload"]');
+      const refresh=page.locator('#reviewReload');
       const saveBox=await op('save').boundingBox();await page.mouse.move(saveBox.x+saveBox.width/2,saveBox.y+saveBox.height/2,{steps:60});
       const refreshBox=await refresh.boundingBox();await page.mouse.move(refreshBox.x+refreshBox.width/2,refreshBox.y+refreshBox.height/2,{steps:60});await refresh.click();
       const cancel=page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true});await cancel.waitFor();
@@ -94,7 +94,8 @@ try {
     } else {
       await original();
       if(kind==='retest') {
-        await op(`run:${fixture.runId}`).click();await idle();
+        if(before)await op(`run:${fixture.runId}`).click();else await page.locator('#reviewRunSelect').selectOption(fixture.runId);
+        await idle();
         await op('close').click();await prompt('conditional');await prompt('Retest identity regression');await confirm();await op('retest').waitFor();
       }
       await op(kind).click();await idle();
@@ -132,7 +133,8 @@ try {
       if(kind==='retest') {
         assert.equal(returned.predecessor.id,fixture.runId);
         await op('release').click();await confirm();await op('qa').waitFor();await idle();
-        const start=sent.length;await op('qa').click();await page.locator('[data-answer]').first().waitFor();await idle();
+        const start=sent.length;await op('qa').click();await op('join').waitFor();await idle();
+        assert.equal(await page.locator('[data-answer]').count(),0,'unassigned retest has no answer form');
         const create=sent.slice(start).find(q=>q.op==='run_create');assert.equal(create.previous_run,fixture.runId);assert.equal(create.kind,'customer');assert.equal(create.label,'Customer Alpha');
         const run=received.findLast(q=>q.run?.form_id===id)?.run;assert.equal(run.previous_run,fixture.runId);result.newRun=run;
         await roundtrip();assert.equal((await ref()).runId,run.id);assert.ok(!((await ref()).predecessor));

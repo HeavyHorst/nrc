@@ -45,6 +45,12 @@ fi
 if [[ -f chronicle.env ]]; then
   COMPOSE_ARGS+=(--env-file chronicle.env -f docker/compose.chronicle.yml)
 fi
+if [[ -n $(docker ps -aq --filter label=com.docker.compose.project=docker --filter label=com.docker.compose.service=tickets) ]]; then
+  COMPOSE_ARGS+=(-f docker/compose.tickets.yml)
+  if [[ -n $(docker ps -aq --filter label=com.docker.compose.project=docker --filter label=com.docker.compose.service=ticket-bot-tls) ]]; then
+    COMPOSE_ARGS+=(-f docker/compose.ticket-bot-tls.yml)
+  fi
+fi
 # Model every running profiled service, but restart only the captured set below.
 COMPOSE_ARGS+=(--profile '*')
 docker compose "${COMPOSE_ARGS[@]}" config -q
