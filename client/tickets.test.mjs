@@ -64,6 +64,16 @@ test('ticket register displays category labels and unclassified tickets', async 
   }
 });
 
+test('ticket register shows reply debt separately from workflow status', async () => {
+  const f = fixture();
+  f.records[0].preview = JSON.stringify({ ...JSON.parse(f.records[0].preview), status: 'waiting_customer' });
+  f.records[1].preview = JSON.stringify({ ...JSON.parse(f.records[1].preview), status: 'in_progress' });
+  await f.api.reload();
+  const html = f.elements.get('ticketsList').innerHTML;
+  assert.match(html, /data-status="waiting_customer">WAITING ON CUSTOMER<\/span><\/td>/);
+  assert.match(html, /data-status="in_progress">IN PROGRESS<\/span><span class="customer-meta">CUSTOMER WAITING<\/span>/);
+});
+
 test('ticket assignee filter uses the complete index rather than cached tickets and retains selection', async () => {
   const f = fixture();
   const select = { innerHTML: '', value: '' }; f.elements.set('ticketAssigneeFilter', select);

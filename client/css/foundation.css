@@ -133,6 +133,9 @@
     --ticket-category-unclear: #ffd000;
     --ticket-category-text: #ffffff;
     --ticket-category-unclear-text: #111111;
+    --ticket-status-resolved: #00a651;
+    --ticket-status-closed: #939598;
+    --ticket-status-dark-text: #111111;
     /* Task status ramp. This is the single source of truth for what a task's
        status looks like as a mark or a badge, so a status reads the same in a
        slice strip, a task row and a detail panel. It is deliberately NOT an

@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261123reconnect1";
+const CACHE_NAME = "nrc-terminal-20261124ticketstatus2";
 
 const APP_SHELL = [
   "./",
@@ -11,8 +11,8 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261119monitorheader2",
-  "./css/foundation.css?v=20261116ticketcategory3",
+  "./css/main.css?v=20261124ticketstatus2",
+  "./css/foundation.css?v=20261124ticketstatus2",
   "./css/workspace.css?v=20261116monitor5",
   "./css/entities.css?v=20261108memory9",
   "./css/ledger.css?v=20261118reminderactions1",
@@ -71,7 +71,7 @@ const APP_SHELL = [
   "./calls.js?v=20261022cancel1",
   "./newsletter.js?v=20261022cancel1",
   "./customers.js?v=20261116pickers1",
-  "./tickets.js?v=20261121reviews3",
+  "./tickets.js?v=20261124ticketstatus1",
   "./reviews.js?v=20261123reconnect1",
   "./mobile-shell.js?v=20261019registers1",
   "./latency-worker.js",
