@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+	_ "time/tzdata"
 	"unicode"
 	"unicode/utf8"
 
@@ -98,18 +100,88 @@ type publicTicket struct {
 	Body        string             `json:"body,omitempty"`
 	Entries     []publicEntry      `json:"entries,omitempty"`
 	Attachments []publicAttachment `json:"attachments,omitempty"`
+	CreatedAt   int64              `json:"-"`
+	StatusKey   string             `json:"-"`
 }
 type publicEntry struct {
 	Author      string             `json:"author"`
 	Body        string             `json:"body"`
 	Attachments []publicAttachment `json:"attachments,omitempty"`
+	CreatedAt   int64              `json:"-"`
+	FromSupport bool               `json:"-"`
 }
 type view struct {
-	Branding branding       `json:"-"`
-	New      bool           `json:"-"`
-	Ticket   *publicTicket  `json:"ticket,omitempty"`
-	Tickets  []publicTicket `json:"tickets,omitempty"`
+	Branding          branding       `json:"-"`
+	New               bool           `json:"-"`
+	Ticket            *publicTicket  `json:"ticket,omitempty"`
+	Tickets           []publicTicket `json:"tickets,omitempty"`
+	Filters           ticketFilters  `json:"-"`
+	Waiting           int            `json:"-"`
+	HasTickets        bool           `json:"-"`
+	Password          bool           `json:"-"`
+	CanChangePassword bool           `json:"-"`
+	PasswordError     string         `json:"-"`
+	Status            int            `json:"-"`
 }
+
+type ticketFilters struct{ Search, Status, Scope, Sort string }
+
+func readTicketFilters(q url.Values) ticketFilters {
+	f := ticketFilters{Search: strings.TrimSpace(q.Get("q"))}
+	switch s := q.Get("status"); s {
+	case "waiting", "active", "done":
+		f.Status = s
+	}
+	switch s := q.Get("scope"); s {
+	case "own", "team":
+		f.Scope = s
+	}
+	if q.Get("sort") == "oldest" {
+		f.Sort = "oldest"
+	}
+	return f
+}
+
+func (f ticketFilters) Query(status string) string {
+	q := url.Values{}
+	for key, value := range map[string]string{"q": f.Search, "status": status, "scope": f.Scope, "sort": f.Sort} {
+		if value != "" {
+			q.Set(key, value)
+		}
+	}
+	if len(q) == 0 {
+		return ""
+	}
+	return "?" + q.Encode()
+}
+
+func (f ticketFilters) Matches(t publicTicket) bool {
+	if (f.Scope == "own" && t.Shared) || (f.Scope == "team" && !t.Shared) {
+		return false
+	}
+	switch f.Status {
+	case "waiting":
+		if t.StatusKey != "waiting_customer" {
+			return false
+		}
+	case "active":
+		if t.StatusKey != "open" && t.StatusKey != "in_progress" {
+			return false
+		}
+	case "done":
+		if t.StatusKey != "resolved" && t.StatusKey != "closed" {
+			return false
+		}
+	}
+	if f.Search == "" {
+		return true
+	}
+	if id, err := strconv.ParseUint(strings.TrimPrefix(f.Search, "#"), 10, 64); err == nil {
+		return t.ID == id || (!strings.HasPrefix(f.Search, "#") && strings.Contains(t.Title, f.Search))
+	}
+	return strings.Contains(strings.ToLower(t.Title), strings.ToLower(f.Search))
+}
+
 type portal struct {
 	source   source
 	files    fileStore
@@ -220,7 +292,7 @@ func (s *portal) project(ctx context.Context, a p.Asset, who account, peers map[
 		return publicTicket{}, false, nil
 	}
 	category := map[string]string{"bug": "Bug", "support": "Support", "feature": "Feature", "unclear": "Unklar"}[v.Category]
-	return publicTicket{ID: a.AssetID, Title: v.Title, Status: status, Category: category, Body: a.Payload, Shared: shared, SubmittedBy: v.RequesterName}, true, nil
+	return publicTicket{ID: a.AssetID, Title: v.Title, Status: status, Category: category, Body: a.Payload, Shared: shared, SubmittedBy: v.RequesterName, CreatedAt: a.CreatedAt, StatusKey: v.Status}, true, nil
 }
 func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -299,10 +371,7 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		s.sessions.revoke(accountSessionToken(r))
-		cookie := accountSessionCookie("")
-		cookie.MaxAge = -1
-		http.SetCookie(w, cookie)
+		s.endSession(w, r)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
@@ -328,6 +397,12 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else if r.Method == http.MethodGet {
 			http.Redirect(w, r, "/login?next="+url.QueryEscape(loginDestination(r.URL.RequestURI())), http.StatusSeeOther)
 		} else if target := formReturnPath(r.URL.Path); target != "" {
+			if strings.HasPrefix(target, "/tickets/") {
+				f := readTicketFilters(r.URL.Query())
+				if filtered := loginDestination(target + f.Query(f.Status)); filtered != "/" {
+					target = filtered
+				}
+			}
 			http.Redirect(w, r, "/login?unsaved=1&next="+url.QueryEscape(target), http.StatusSeeOther)
 		} else {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -336,6 +411,10 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/abnahmen" || strings.HasPrefix(r.URL.Path, "/abnahmen/") {
 		s.accountReview(w, r, who)
+		return
+	}
+	if r.URL.Path == "/konto/passwort" {
+		s.passwordPage(w, r, who)
 		return
 	}
 	if path == "/tickets" && r.Method == "POST" {
@@ -406,9 +485,9 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !api && preview.Kind == "public_reply" {
 				preview.Author = staffReplyDisplayName(preview.Author)
 			}
-			v.Entries = append(v.Entries, publicEntry{preview.Author, full.Payload, publicAttachments(id, full.AssetID, full.Attachments)})
+			v.Entries = append(v.Entries, publicEntry{Author: preview.Author, Body: full.Payload, Attachments: publicAttachments(id, full.AssetID, full.Attachments), CreatedAt: full.CreatedAt, FromSupport: preview.Kind == "public_reply"})
 		}
-		s.render(w, api, view{Ticket: &v})
+		s.render(w, api, view{Ticket: &v, Filters: readTicketFilters(r.URL.Query())})
 		return
 	}
 	if r.Method != "GET" {
@@ -445,8 +524,35 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			list = append(list, v)
 		}
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].ID > list[j].ID })
-	s.render(w, api, view{Tickets: list})
+	if api {
+		sort.Slice(list, func(i, j int) bool { return list[i].ID > list[j].ID })
+		s.render(w, true, view{Tickets: list})
+		return
+	}
+	f := readTicketFilters(r.URL.Query())
+	v := view{Filters: f, HasTickets: len(list) > 0}
+	for _, t := range list {
+		if t.StatusKey == "waiting_customer" {
+			v.Waiting++
+		}
+		if f.Matches(t) {
+			v.Tickets = append(v.Tickets, t)
+		}
+	}
+	sort.Slice(v.Tickets, func(i, j int) bool {
+		a, b := v.Tickets[i], v.Tickets[j]
+		if a.CreatedAt == b.CreatedAt || (a.CreatedAt <= 0 && b.CreatedAt <= 0) {
+			return a.ID > b.ID
+		}
+		if a.CreatedAt <= 0 || b.CreatedAt <= 0 {
+			return a.CreatedAt > 0
+		}
+		if f.Sort == "oldest" {
+			return a.CreatedAt < b.CreatedAt
+		}
+		return a.CreatedAt > b.CreatedAt
+	})
+	s.render(w, false, v)
 }
 func (s *portal) unavailable(w http.ResponseWriter) {
 	http.Error(w, "Der Dienst ist vorübergehend nicht verfügbar. Bei Sendeproblemen kann Ihre Nachricht bereits gespeichert sein. Bitte prüfen Sie die Übersicht, bevor Sie erneut senden.", 503)
@@ -607,7 +713,8 @@ func (s *portal) write(w http.ResponseWriter, r *http.Request, who account, pare
 		}{id})
 		return
 	}
-	http.Redirect(w, r, fmt.Sprintf("/tickets/%d", id), http.StatusSeeOther)
+	f := readTicketFilters(r.URL.Query())
+	http.Redirect(w, r, fmt.Sprintf("/tickets/%d%s", id, f.Query(f.Status)), http.StatusSeeOther)
 }
 func (s *portal) render(w http.ResponseWriter, api bool, v view) {
 	if api {
@@ -619,16 +726,42 @@ func (s *portal) render(w http.ResponseWriter, api bool, v view) {
 	if v.Branding.Brand == "" {
 		v.Branding.Brand = "Ihr Kundenportal"
 	}
+	_, v.CanChangePassword = s.accounts.(passwordAccountStore)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if v.Status != 0 {
+		w.WriteHeader(v.Status)
+	}
 	page.Execute(w, v)
 }
 
-var page = template.Must(template.New("portal").Parse(`<!doctype html>
+var ticketTimeZone = func() *time.Location {
+	zone, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		panic(err)
+	}
+	return zone
+}()
+
+var page = template.Must(template.New("portal").Funcs(template.FuncMap{
+	"ticketTime": func(ns int64) time.Time { return time.Unix(0, ns).In(ticketTimeZone) },
+}).Parse(`{{define "date"}}{{with ticketTime .}}<time datetime="{{.Format "2006-01-02T15:04:05Z07:00"}}">{{.Format "02.01.2006, 15:04"}} Uhr</time>{{end}}{{end}}
+{{define "created"}}{{if gt . 0}} <small class="muted message-time">· {{template "date" .}}</small>{{end}}{{end}}
+{{define "status"}}<span class="ticket-status {{.StatusKey}}">{{.Status}}</span>{{end}}
+{{define "file-links"}}{{range .}}<li><a href="{{.URL}}" download>{{.Filename}}</a> <small class="muted">({{.Size}} Byte)</small></li>{{end}}{{end}}<!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Branding.Brand}}</title><link rel="stylesheet" href="/style.css"><script src="/attachments.js" defer></script></head><body class="account-page">
 <header><a class="brand" href="/">{{if .Branding.Logo}}<img src="/branding/logo" alt="">{{end}}<span>{{.Branding.Brand}}</span></a>
-<nav class="account-nav" aria-label="Hauptnavigation"><a href="/"{{if not (or .New .Ticket)}} aria-current="page"{{end}}>Meine Anfragen</a><a href="/abnahmen">Meine Abnahmen</a><form method="post" action="/logout"><button>Abmelden</button></form></nav></header><main>
-{{if .New}}
+<nav class="account-nav" aria-label="Hauptnavigation"><a href="/"{{if not .Password}} aria-current="{{if or .New .Ticket}}true{{else}}page{{end}}"{{end}}>Meine Anfragen</a><a href="/abnahmen">Meine Abnahmen</a>{{if .CanChangePassword}}<a href="/konto/passwort"{{if .Password}} aria-current="page"{{end}}>Mein Konto</a>{{end}}<form method="post" action="/logout"><button>Abmelden</button></form></nav></header><main>
+{{if .Password}}
+<h1>Passwort ändern</h1><p>Nach dem Wechsel werden alle bisherigen Sitzungen abgemeldet.</p>
+<form class="password-form" method="post" action="/konto/passwort" aria-label="Passwort ändern">
+{{if .PasswordError}}<p class="login-error" role="alert">{{.PasswordError}}</p>{{end}}
+<label>Aktuelles Passwort<input type="password" name="current" autocomplete="current-password" required></label>
+<label>Neues Passwort<input type="password" name="new" autocomplete="new-password" aria-describedby="password-hint" required></label>
+<p class="muted" id="password-hint">14 bis 72 Bytes. Umlaute und andere Sonderzeichen können mehr als ein Byte belegen.</p>
+<label>Neues Passwort wiederholen<input type="password" name="repeat" autocomplete="new-password" required></label>
+<button>Passwort ändern</button></form>
+{{else if .New}}
 <h1>Wie können wir Ihnen helfen?</h1><p>Schildern Sie uns Ihr Anliegen. Wir kümmern uns darum.</p>
 <form method="post" action="/tickets" enctype="multipart/form-data">
 <label>Betreff<input name="title" maxlength="200" required></label>
@@ -636,17 +769,38 @@ var page = template.Must(template.New("portal").Parse(`<!doctype html>
 <label>Ihre Nachricht<textarea name="body" rows="8" maxlength="32000" required></textarea></label>
 {{template "upload"}}<button>Anfrage senden</button></form>
 {{else if .Ticket}}
-<a href="/">← Alle Anfragen</a><h1>{{.Ticket.Title}}</h1><p class="muted">Anfrage #{{.Ticket.ID}} · {{.Ticket.Status}}{{if .Ticket.Category}} · {{.Ticket.Category}}{{end}}</p>
-<article><h2>{{if .Ticket.Shared}}Teamanfrage{{if .Ticket.SubmittedBy}} von {{.Ticket.SubmittedBy}}{{end}}{{else}}Ihre Anfrage{{end}}</h2><div class="body">{{.Ticket.Body}}</div>{{template "attachments" .Ticket.Attachments}}</article>
-{{range .Ticket.Entries}}<article><strong>{{.Author}}</strong><div class="body">{{.Body}}</div>{{template "attachments" .Attachments}}</article>{{end}}
-<form method="post" action="/tickets/{{.Ticket.ID}}/reply" enctype="multipart/form-data">
-<label>Ihre Antwort<textarea name="body" rows="5" maxlength="32000" required></textarea></label>
+{{$query := .Filters.Query .Filters.Status}}
+<div class="ticket-heading"><a href="/{{$query}}">← Zur Anfragenliste</a><p class="muted">Anfrage #{{.Ticket.ID}} · {{if .Ticket.Shared}}Teamanfrage{{else}}Eigene Anfrage{{end}}</p><h1>{{.Ticket.Title}}</h1></div>
+{{if eq .Ticket.StatusKey "waiting_customer"}}<div class="ticket-callout ticket-callout-waiting"><strong>Ihre Antwort wird erwartet</strong><a class="button" href="#reply-body">Antwort schreiben</a></div>{{end}}
+<div class="ticket-layout">
+<aside class="ticket-aside"><details open><summary>Zur Anfrage</summary>
+<dl><dt>Status</dt><dd>{{template "status" .Ticket}}</dd>{{if .Ticket.Category}}<dt>Kategorie</dt><dd>{{.Ticket.Category}}</dd>{{end}}{{if gt .Ticket.CreatedAt 0}}<dt>Erstellt</dt><dd>{{template "date" .Ticket.CreatedAt}}</dd>{{end}}</dl>
+<h3>Dateien in dieser Anfrage</h3><ul class="ticket-files">{{template "file-links" .Ticket.Attachments}}{{range .Ticket.Entries}}{{template "file-links" .Attachments}}{{end}}</ul><p class="ticket-no-files muted">Keine Dateien angehängt.</p>
+<button class="ticket-copy" type="button" hidden>Link zur Anfrage kopieren</button><a class="ticket-direct-link" href="/tickets/{{.Ticket.ID}}">Direktlink zur Anfrage</a><div class="ticket-copy-status muted" role="status"></div>
+</details></aside>
+<section class="ticket-thread" aria-labelledby="ticket-thread-title">
+<h2 id="ticket-thread-title">Verlauf</h2>
+<article><h3>{{if .Ticket.Shared}}Teamanfrage{{if .Ticket.SubmittedBy}} von {{.Ticket.SubmittedBy}}{{end}}{{else}}Ihre Anfrage{{end}}{{template "created" .Ticket.CreatedAt}}</h3><div class="body">{{.Ticket.Body}}</div>{{template "attachments" .Ticket.Attachments}}</article>
+{{range .Ticket.Entries}}<article><p class="ticket-byline"><strong>{{.Author}}</strong>{{if .FromSupport}} <small class="muted">· Support</small>{{end}}{{template "created" .CreatedAt}}</p><div class="body">{{.Body}}</div>{{template "attachments" .Attachments}}</article>{{end}}
+<form method="post" action="/tickets/{{.Ticket.ID}}/reply{{$query}}" enctype="multipart/form-data">
+<label for="reply-body">Ihre Antwort</label><textarea id="reply-body" name="body" rows="5" maxlength="32000" required></textarea>
 {{template "upload"}}<button>Antwort senden</button></form>
+</section></div>
 {{else}}
-<div class="requests-heading"><div><p class="requests-kicker">Kundenportal</p><h1>Meine Anfragen</h1><p>Hier behalten Sie Ihre Anliegen und unsere Antworten im Blick.</p></div><a class="button" href="/new">+ Neue Anfrage</a></div>
-{{if .Tickets}}<table><thead><tr><th scope="col">Anfrage</th><th scope="col">Status</th></tr></thead><tbody>{{range .Tickets}}<tr><td><a href="/tickets/{{.ID}}">{{.Title}}</a><br><small>#{{.ID}} · {{if .Shared}}Team{{if .SubmittedBy}} · {{.SubmittedBy}}{{end}}{{else}}Meine Anfrage{{end}}</small></td><td>{{.Status}}</td></tr>{{end}}</tbody></table>
+<div class="requests-heading"><div><h1>Meine Anfragen</h1><p>Hier behalten Sie Ihre Anliegen und unsere Antworten im Blick.</p></div><a class="button" href="/new">+ Neue Anfrage</a></div>
+{{if .Waiting}}<div class="ticket-callout"><strong>{{if eq .Waiting 1}}1 Anfrage wartet auf Ihre Antwort{{else}}{{.Waiting}} Anfragen warten auf Ihre Antwort{{end}}</strong><a href="/?status=waiting">Anzeigen <span aria-hidden="true">→</span></a></div>{{end}}
+{{if .HasTickets}}
+<nav class="ticket-tabs" aria-label="Anfragen nach Status filtern"><a href="/{{.Filters.Query ""}}"{{if not .Filters.Status}} aria-current="page"{{end}}>Alle</a><a href="/{{.Filters.Query "waiting"}}"{{if eq .Filters.Status "waiting"}} aria-current="page"{{end}}>Antwort von Ihnen</a><a href="/{{.Filters.Query "active"}}"{{if eq .Filters.Status "active"}} aria-current="page"{{end}}>Offen / In Bearbeitung</a><a href="/{{.Filters.Query "done"}}"{{if eq .Filters.Status "done"}} aria-current="page"{{end}}>Erledigt</a></nav>
+<form class="ticket-filters" method="get" action="/">
+{{if .Filters.Status}}<input type="hidden" name="status" value="{{.Filters.Status}}">{{end}}
+<label>Suche<input type="search" name="q" value="{{.Filters.Search}}" placeholder="Betreff oder Ticketnummer"></label>
+<label>Sichtbarkeit<select name="scope"><option value="">Eigene und Teamanfragen</option><option value="own"{{if eq .Filters.Scope "own"}} selected{{end}}>Nur eigene Anfragen</option><option value="team"{{if eq .Filters.Scope "team"}} selected{{end}}>Nur Teamanfragen</option></select></label>
+<label>Sortierung<select name="sort"><option value="">Neueste zuerst</option><option value="oldest"{{if eq .Filters.Sort "oldest"}} selected{{end}}>Älteste zuerst</option></select></label><button>Filtern</button>
+</form>
+{{if .Tickets}}{{$query := .Filters.Query .Filters.Status}}<table class="ticket-table"><thead><tr><th scope="col">Anfrage</th><th scope="col">Status</th><th scope="col" class="ticket-date">Erstellt</th></tr></thead><tbody>{{range .Tickets}}<tr><td><span class="ticket-number muted">#{{.ID}} · </span><a href="/tickets/{{.ID}}{{$query}}">{{.Title}}</a><br><small class="muted">{{if .Shared}}Teamanfrage{{if .SubmittedBy}} · {{.SubmittedBy}}{{end}}{{else}}Meine Anfrage{{end}}</small>{{if gt .CreatedAt 0}}<small class="ticket-date-compact muted">Erstellt: {{template "date" .CreatedAt}}</small>{{end}}</td><td>{{template "status" .}}</td><td class="ticket-date">{{if gt .CreatedAt 0}}{{template "date" .CreatedAt}}{{else}}—{{end}}</td></tr>{{end}}</tbody></table>
+{{else}}<section class="requests-empty"><h2>Keine passenden Anfragen</h2><p><a href="/">Filter zurücksetzen</a></p></section>{{end}}
 {{else}}<section class="requests-empty"><h2>Noch keine Anfragen</h2><p>Sobald Sie eine Anfrage stellen, erscheint sie hier.</p></section>{{end}}
-{{end}}<p class="muted">Sie sehen eigene Anfragen und ausdrücklich freigegebene Teamanfragen mit öffentlichen Antworten und Anhängen. Auf Teamanfragen können Sie ebenfalls antworten. Interne Notizen sind nicht sichtbar.</p></main>
+{{end}}</main>
 {{with .Branding}}{{if or .FooterText .ImprintURL .PrivacyURL .TermsURL .ContactURL}}
 <footer>{{if .FooterText}}<span>{{.FooterText}}</span>{{end}}<nav aria-label="Rechtliches und Kontakt">
 {{if .ImprintURL}}<a href="{{.ImprintURL}}">Impressum</a>{{end}}{{if .PrivacyURL}}<a href="{{.PrivacyURL}}">Datenschutz</a>{{end}}

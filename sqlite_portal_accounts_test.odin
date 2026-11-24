@@ -14,6 +14,7 @@ import db "workspace_db"
 PORTAL_TEST_HASH :: "$2a$12$....................................................."
 PORTAL_TEST_NEW_HASH :: "$2a$13$....................................................."
 PORTAL_TEST_KEY :: "5678567856785678567856785678567856785678567856785678567856785678"
+PORTAL_TEST_SELF_HASH :: "$2a$14$....................................................."
 
 sqlite_portal_test_call :: proc(
 	t: ^testing.T,
@@ -108,11 +109,35 @@ test_sqlite_portal_accounts :: proc(t: ^testing.T) {
 	call(t, &store, q, "not_found", admin = false, bot = true)
 	mapped := call(t, &store, {op = "mapping", requester = account.requester, service_key = PORTAL_TEST_KEY}, "ok", admin = false, bot = true)
 	testing.expect(t, mapped.account.disabled)
+	change := pr.Portal_Account_Request {
+		op            = "change_password",
+		id            = "1",
+		requester     = account.requester,
+		if_revision   = "2",
+		service_key   = PORTAL_TEST_KEY,
+		password_hash = PORTAL_TEST_NEW_HASH,
+	}
+	call(t, &store, change, "forbidden", admin = false, bot = true)
 	call(t, &store, {op = "reset_password", id = "1", if_revision = "2", password_hash = "plaintext"}, "invalid")
 	call(t, &store, {op = "reset_password", id = "1", if_revision = "2", password_hash = PORTAL_TEST_NEW_HASH}, "ok")
 	call(t, &store, {op = "enable", id = "1", if_revision = "3"}, "ok")
 	got = call(t, &store, q, "ok", admin = false, bot = true)
 	testing.expect_value(t, got.account.password_hash, PORTAL_TEST_NEW_HASH)
+	change.if_revision = "4"
+	call(t, &store, change, "forbidden")
+	change.service_key = ""
+	call(t, &store, change, "forbidden", admin = false, bot = true)
+	change.service_key = PORTAL_TEST_KEY
+	call(t, &store, change, "not_found", workspace = "other", admin = false, bot = true)
+	change.requester = "other@example.test"
+	call(t, &store, change, "forbidden", admin = false, bot = true)
+	change.requester = account.requester
+	change.password_hash = PORTAL_TEST_SELF_HASH
+	call(t, &store, change, "ok", admin = false, bot = true)
+	call(t, &store, change, "conflict", admin = false, bot = true)
+	got = call(t, &store, q, "ok", admin = false, bot = true)
+	testing.expect_value(t, got.account.password_hash, PORTAL_TEST_SELF_HASH)
+	testing.expect_value(t, got.account.revision, "5")
 
 	batch: [50]pr.Portal_Account
 	for &a, i in batch {

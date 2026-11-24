@@ -284,6 +284,16 @@ the same transaction that saves a ticket, reply, or review submission. A request
 that started before a suspension or password reset cannot save afterward. The
 original sender can still answer their own ticket by mail with a valid reply token.
 
+In database mode, customers can change their own password under **Mein Konto**.
+The portal verifies the current password and sends only the new bcrypt hash to
+NRC. The writer verifies the portal service credentials and the enabled
+account's workspace, ID, requester and revision before committing the change.
+The audit uses `reset_password` with a `portal:<requester>` actor and stores no
+password or hash. Previous browser sessions are invalidated by the new revision.
+File-mode accounts and guests have no self-service change; forgotten passwords
+still use the separate admin reset. No schema migration is needed; deploy the
+updated NRC server before the updated portal.
+
 In the private `portal-accounts.env` next to the host `.env`, set
 `NRC_PORTAL_ACCOUNT_SERVICE_KEY` to a separate random 32-byte key encoded as
 64 hex characters. Keep the file at mode `0600`. The deployment loads it only

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	p "github.com/heavyhorst/nrc/protocol-go"
 	"golang.org/x/crypto/bcrypt"
@@ -54,8 +55,10 @@ func sharingFixture(t *testing.T) (*portal, *fakeSource) {
 	var original ticketPreview
 	json.Unmarshal([]byte(a.Preview), &original)
 	original.Title, original.RequesterName = "Rechnungsexport unvollständig", "Bea Sommer"
+	original.Status, original.Category = "waiting_customer", "bug"
 	preview, _ := json.Marshal(original)
 	a.Preview, a.Payload = string(preview), "Seit dem letzten Update enthält unser CSV-Export nur noch die Kopfzeile. Können Sie das bitte prüfen?"
+	a.CreatedAt = time.Date(2026, 6, 29, 8, 17, 0, 0, time.UTC).UnixNano()
 	f.assets[2] = a
 	f.assets[123] = p.Asset{AssetID: 123, AssetType: p.AssetTypeCustomerCompany, Preview: `{"version":1,"title":"Nordwerk","ticket_groups":[{"id":"tech","name":"Technik","contact_ids":["51","52"]},{"id":"project","name":"Projektteam","contact_ids":["52","53"]}]}`}
 	for _, id := range []uint64{51, 52, 53, 54} {
@@ -68,14 +71,14 @@ func sharingFixture(t *testing.T) (*portal, *fakeSource) {
 		id               uint64
 		contact, company string
 	}{{3, "53", "123"}, {4, "54", "123"}, {5, "52", "999"}} {
-		b, _ := json.Marshal(ticketPreview{Version: 1, Title: fmt.Sprintf("Ticket %d", v.id), CompanyID: v.company, ContactID: v.contact, Requester: fmt.Sprintf("person%d@example.test", v.id), Status: "open"})
+		b, _ := json.Marshal(ticketPreview{Version: 1, Title: fmt.Sprintf("Ticket %d", v.id), CompanyID: v.company, ContactID: v.contact, Requester: fmt.Sprintf("person%d@example.test", v.id), Status: "waiting_customer"})
 		f.assets[v.id] = p.Asset{AssetID: v.id, AssetType: ticketType, Preview: string(b), Payload: "Team original"}
 	}
 	for i, kind := range []string{"public_reply", "internal_note", "customer_reply"} {
 		id := uint64(30 + i)
 		b, _ := json.Marshal(entryPreview{1, kind, "Bea"})
 		body := []string{"Wir prüfen den Export und melden uns mit einer Lösung.", "INTERNAL_ONLY_DIAGNOSIS", "Vielen Dank. Die betroffenen Rechnungen stammen aus September."}[i]
-		f.assets[id] = p.Asset{AssetID: id, AssetType: entryType, ParentType: 2, ParentID: 2, Preview: string(b), Payload: body}
+		f.assets[id] = p.Asset{AssetID: id, AssetType: entryType, ParentType: 2, ParentID: 2, Preview: string(b), Payload: body, CreatedAt: time.Date(2026, 7, 2, 9+i, 40, 0, 0, time.UTC).UnixNano()}
 	}
 	return s, f
 }
@@ -101,6 +104,9 @@ func TestSharedTicketsReadReplyFilesAndRevocation(t *testing.T) {
 	}
 	if got := list("bea"); !slices.Equal(got, []uint64{3, 2, 1}) {
 		t.Fatal("mutual/direct overlap access", got)
+	}
+	if w := own(s, "GET", "/?status=waiting", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "1 Anfrage wartet auf Ihre Antwort") || strings.Count(w.Body.String(), "<tr>") != 2 {
+		t.Fatal("waiting count or filtered rows include unauthorized tickets", w.Code, w.Body)
 	}
 	w := own(s, "GET", "/api/tickets/2", "")
 	if w.Code != 200 || strings.Contains(w.Body.String(), "INTERNAL_ONLY_DIAGNOSIS") || !strings.Contains(w.Body.String(), "Wir prüfen den Export") || !strings.Contains(w.Body.String(), `"shared":true`) {
@@ -137,6 +143,9 @@ func TestSharedTicketsReadReplyFilesAndRevocation(t *testing.T) {
 		}
 	}
 	private := fmt.Sprintf("/tickets/2/attachments/31/%s", file.FileId)
+	if w := own(s, "GET", "/tickets/2", ""); w.Code != 200 || strings.Contains(w.Body.String(), private) || !strings.Contains(w.Body.String(), fmt.Sprintf("/tickets/2/attachments/201/%s", file.FileId)) {
+		t.Fatal("portal must render public but not internal attachment links", w.Code, w.Body)
+	}
 	if w := own(s, "GET", private, ""); w.Code != 404 {
 		t.Fatal("internal attachment leaked", w.Code)
 	}

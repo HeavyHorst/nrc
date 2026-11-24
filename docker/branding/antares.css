@@ -175,7 +175,7 @@ textarea:focus-visible {
 .account-page > header .brand:has(img) span { position: absolute; clip-path: inset(50%); }
 .account-page .account-nav { column-gap: clamp(12px, 3vw, 28px); font-size: .875rem; }
 .account-page .account-nav a, .account-page .account-nav button { display: block; padding: 8px 0; text-decoration: none; border-bottom: 2px solid transparent; }
-.account-page .account-nav [aria-current="page"] { border-bottom-color: var(--accent); }
+.account-page .account-nav [aria-current] { border-bottom-color: var(--accent); }
 .account-page .account-nav a:hover, .account-page .account-nav button:hover { color: var(--accent); }
 .account-page > main:not(.review), .account-page > footer { width: calc(100% - 40px); max-width: 1040px; padding-inline: 0; }
 .account-page > main h1, .account-page .requests-empty h2 { font-family: Georgia, "Times New Roman", serif; letter-spacing: -.035em; }

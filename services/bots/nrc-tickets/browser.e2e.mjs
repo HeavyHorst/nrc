@@ -35,14 +35,16 @@ try {
   browser = await chromium.launch();
   const theme = join(scratch, 'theme.css');
   writeFileSync(theme, ':root { --accent:#744b88; --accent-hover:#573766; --header-background:#30223c; --background:#f6f3f8; --text:#282331; --border:#ded5e5; --radius:8px; }');
-  for (const branded of [false, true, 'team']) {
+  for (const branded of [false, true, 'team', 'password']) {
     let logs = '';
     server = spawn(binary, ['-test.run', '^TestBrowserFixture$', '-test.timeout', '0'], {
       cwd, env: { ...process.env, TMPDIR: scratch, TICKETS_TEST_ADDR: '127.0.0.1:18196', TICKETS_TEST_ORIGIN: base,
         TICKETS_TEST_SHARING: branded === 'team' ? '1' : '',
-        TICKETS_BRAND: branded ? 'Example & Co · Kundenservice' : '',
-        TICKETS_THEME_FILE: branded ? theme : '', TICKETS_LOGO_FILE: branded ? resolve(cwd, '../../../logo/favicon.png') : '',
-        TICKETS_FOOTER_TEXT: branded ? '© Example & Co · Wir helfen Ihnen weiter.' : '',
+        TICKETS_TEST_PASSWORD: branded === 'password' ? '1' : '',
+        TICKETS_BRAND: branded === 'team' ? 'Antares Kundenportal' : branded ? 'Example & Co · Kundenservice' : '',
+        TICKETS_THEME_FILE: typeof branded === 'string' ? resolve(cwd, '../../../docker/branding/antares.css') : branded ? theme : '',
+        TICKETS_LOGO_FILE: typeof branded === 'string' ? resolve(cwd, '../../../docker/branding/antares-logo.png') : branded ? resolve(cwd, '../../../logo/favicon.png') : '',
+        TICKETS_FOOTER_TEXT: branded === true ? '© Example & Co · Wir helfen Ihnen weiter.' : '',
         TICKETS_IMPRINT_URL: branded ? 'https://example.org/impressum' : '',
         TICKETS_PRIVACY_URL: branded ? 'https://example.org/datenschutz' : '',
         TICKETS_CONTACT_URL: branded ? 'https://example.org/kontakt' : '', TICKETS_TERMS_URL: '',
@@ -61,28 +63,117 @@ try {
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     const shot = async name => { if (artifacts) await page.screenshot({ path: resolve(artifacts, `${name}-images.png`), fullPage: true }); };
     await signIn(page);
+    if (branded === 'password') {
+      const other = await browser.newPage();
+      await signIn(other);
+      await page.getByRole('link', { name: 'Mein Konto' }).click();
+      await page.getByRole('heading', { name: 'Passwort ändern' }).waitFor();
+      await shot('password-desktop');
+      await page.setViewportSize({ width: 390, height: 900 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await shot('password-mobile');
+      const newPassword = 'replacement-fixture-passphrase';
+      const change = async (current, repeat = newPassword) => {
+        await page.getByLabel('Aktuelles Passwort', { exact: true }).fill(current);
+        await page.getByLabel('Neues Passwort', { exact: true }).fill(newPassword);
+        await page.getByLabel('Neues Passwort wiederholen', { exact: true }).fill(repeat);
+        return (await Promise.all([
+          page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/konto/passwort')),
+          page.getByRole('button', { name: 'Passwort ändern' }).click(),
+        ]))[0];
+      };
+      assert.equal((await change(auth.password, 'different-fixture-passphrase')).status(), 400);
+      assert.equal((await change('wrong-fixture-password')).status(), 400);
+      await page.getByRole('alert').filter({ hasText: 'Das aktuelle Passwort ist falsch.' }).waitFor();
+      await shot('password-error');
+      assert.equal((await change(auth.password)).status(), 303);
+      await page.getByRole('status').filter({ hasText: 'Passwort geändert' }).waitFor();
+      await shot('password-changed');
+      await other.reload();
+      await other.getByRole('heading', { name: 'Anmelden' }).waitFor();
+      await page.getByLabel('Benutzername').fill(auth.username);
+      await page.getByLabel('Passwort', { exact: true }).fill(auth.password);
+      await page.getByRole('button', { name: 'Anmelden' }).click();
+      await page.getByText('Benutzername oder Passwort ist falsch.').waitFor();
+      await page.getByLabel('Benutzername').fill(auth.username);
+      await page.getByLabel('Passwort', { exact: true }).fill(newPassword);
+      await page.getByRole('button', { name: 'Anmelden' }).click();
+      await page.getByRole('heading', { name: 'Meine Anfragen' }).waitFor();
+      assert.deepEqual(errors, []);
+      await other.close();
+      await context.close();
+      const closed = new Promise(r => server.once('exit', r)); server.kill('SIGTERM'); await closed; server = null;
+      continue;
+    }
     if (branded === 'team') {
       await page.goto(base);
-      await page.getByRole('link', { name: 'Rechnungsexport unvollständig', exact: true }).waitFor();
+      const teamTicket = page.getByRole('link', { name: 'Rechnungsexport unvollständig', exact: true });
+      await teamTicket.waitFor();
       assert.match(await page.locator('table').textContent(), /Team/);
       assert.match(await page.locator('table').textContent(), /Meine Anfrage/);
       assert.doesNotMatch(await page.locator('table').textContent(), /Ticket 3|Ticket 4|Ticket 5/);
+      assert.match(await page.locator('tbody tr').first().textContent(), /Meine Rechnung/);
       await shot('tickets-team-list');
-      await page.getByRole('link', { name: 'Rechnungsexport unvollständig', exact: true }).click();
+      await page.setViewportSize({ width: 390, height: 1000 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await shot('tickets-team-list-narrow');
+      await page.setViewportSize({ width: 1440, height: 1100 });
+      await page.getByLabel('Sortierung').selectOption('oldest');
+      await page.getByRole('button', { name: 'Filtern' }).click();
+      assert.match(await page.locator('tbody tr').first().textContent(), /Rechnungsexport unvollständig/);
+      await page.getByRole('link', { name: 'Erledigt', exact: true }).click();
+      await page.getByRole('heading', { name: 'Keine passenden Anfragen' }).waitFor();
+      await shot('tickets-filter-empty');
+      await page.getByRole('link', { name: 'Filter zurücksetzen' }).click();
+      await page.getByLabel('Suche', { exact: true }).fill('UNVOLLSTÄNDIG');
+      await page.getByRole('button', { name: 'Filtern' }).click();
+      assert.equal(await page.locator('tbody tr').count(), 1);
+      await teamTicket.waitFor();
+      await page.getByRole('link', { name: 'Anzeigen' }).click();
+      assert.equal(await page.locator('tbody tr').count(), 1);
+      await page.getByLabel('Suche', { exact: true }).fill('#2');
+      await page.getByLabel('Sichtbarkeit').selectOption('team');
+      await page.getByRole('button', { name: 'Filtern' }).click();
+      await teamTicket.click();
       await page.getByRole('heading', { name: /Teamanfrage von/ }).waitFor();
       assert.doesNotMatch(await page.locator('main').textContent(), /INTERNAL_ONLY_DIAGNOSIS/);
+      await page.getByRole('link', { name: 'Zur Anfragenliste' }).click();
+      assert.equal(await page.getByLabel('Suche', { exact: true }).inputValue(), '#2');
+      assert.equal(await page.getByLabel('Sichtbarkeit').inputValue(), 'team');
+      await teamTicket.click();
+      await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+      await page.getByRole('button', { name: 'Link zur Anfrage kopieren' }).click();
+      await page.getByText('Link kopiert.', { exact: true }).waitFor();
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), `${base}/tickets/2`);
+      await page.getByRole('link', { name: 'Antwort schreiben' }).click();
+      assert.equal(new URL(page.url()).hash, '#reply-body');
+      await page.evaluate(() => { navigator.clipboard.writeText = async () => { throw new Error('denied'); }; });
+      await page.getByRole('button', { name: 'Link zur Anfrage kopieren' }).click();
+      await page.getByRole('status').filter({ hasText: 'Automatisches Kopieren fehlgeschlagen' }).waitFor();
+      assert.equal(await page.locator('.ticket-direct-link').innerText(), `${base}/tickets/2`);
+      await shot('tickets-copy-fallback');
       await page.getByLabel('Ihre Antwort', { exact: true }).fill('Ich ergänze die Diagnose für unser Technikteam.');
       await page.getByLabel('Dateien hinzufügen', { exact: true }).setInputFiles({ name: 'Teamdiagnose.txt', mimeType: 'text/plain', buffer: Buffer.from('Team diagnosis') });
       await page.getByRole('button', { name: 'Antwort senden' }).click();
       await page.getByText('Ich ergänze die Diagnose für unser Technikteam.', { exact: true }).waitFor();
       await page.reload();
-      const link = page.getByRole('link', { name: 'Teamdiagnose.txt', exact: true });
+      assert.equal(new URL(page.url()).searchParams.get('q'), '#2');
+      const link = page.locator('.ticket-files').getByRole('link', { name: 'Teamdiagnose.txt', exact: true });
       assert.equal(await (await portalGet(context, base + await link.getAttribute('href'))).text(), 'Team diagnosis');
       assert.match(await page.locator('article').last().textContent(), /Anna/);
       await shot('tickets-team-detail');
       await page.setViewportSize({ width: 390, height: 1000 });
+      await page.locator('.ticket-aside details:not([open])').waitFor({ state: 'attached' });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await shot('tickets-team-narrow');
+      assert.equal(await link.isVisible(), false);
+      await page.getByText('Zur Anfrage', { exact: true }).click();
+      assert.equal(await link.isVisible(), true);
+      await shot('tickets-team-files-narrow');
+      const heading = page.getByRole('heading', { name: /Teamanfrage von/ });
+      await heading.evaluate(h => { h.firstChild.textContent = `Teamanfrage von ${'LangerName'.repeat(12)}`; });
+      assert.equal(await heading.evaluate(h => h.scrollWidth <= h.clientWidth), true);
+      await shot('tickets-long-name-narrow');
       assert.equal((await portalGet(context, `${base}/tickets/3`)).status(), 404);
       assert.deepEqual(errors, []);
       await context.close();
@@ -124,7 +215,7 @@ try {
     await shot(branded ? 'tickets-branded-new' : 'tickets-default-new');
     await page.getByRole('button', { name: 'Anfrage senden' }).click();
     await page.waitForURL('**/tickets/21');
-    const link = page.getByRole('link', { name: 'Rechnungsexport.csv', exact: true });
+    const link = page.locator('.ticket-thread').getByRole('link', { name: 'Rechnungsexport.csv', exact: true });
     const response = await portalGet(context, base + await link.getAttribute('href'));
     assert.equal(response.status(), 200);
     assert.deepEqual(await response.body(), data);
@@ -146,9 +237,9 @@ try {
     await choose([{ name: 'Browserdiagnose.txt', mimeType: 'text/plain', buffer: Buffer.from('Browserdiagnose: Export liefert null Datensätze.\n') }, { name: 'Antwort-Screenshot.png', mimeType: 'image/png', buffer: png }], true);
     await page.getByRole('button', { name: 'Antwort senden' }).click();
     await page.waitForURL('**/tickets/21');
-    await page.getByRole('link', { name: 'Browserdiagnose.txt', exact: true }).waitFor();
+    await page.locator('.ticket-files').getByRole('link', { name: 'Browserdiagnose.txt', exact: true }).waitFor();
     await page.reload();
-    assert.equal(await page.getByRole('link', { name: /Rechnungsexport.csv|Browserdiagnose.txt/ }).count(), 2);
+    assert.equal(await page.locator('.ticket-files').getByRole('link', { name: /Rechnungsexport.csv|Browserdiagnose.txt/ }).count(), 2);
     for (const img of await page.locator('.attachment-preview img').all()) {
       await img.scrollIntoViewIfNeeded(); await img.evaluate(img => img.decode());
     }
@@ -186,7 +277,10 @@ try {
       if (artifacts) await form.screenshot({ path: resolve(artifacts, 'tickets-no-js-upload.png'), fullPage: true });
       await form.getByRole('button', { name: 'Anfrage senden' }).click();
       await form.waitForURL('**/tickets/25');
-      const link = form.getByRole('link', { name: 'Ohne-JavaScript.txt', exact: true });
+      assert.equal(await form.locator('.ticket-copy').isVisible(), false);
+      assert.equal(await form.getByRole('link', { name: 'Direktlink zur Anfrage' }).getAttribute('href'), '/tickets/25');
+      if (artifacts) await form.screenshot({ path: resolve(artifacts, 'tickets-no-js-detail.png'), fullPage: true });
+      const link = form.locator('.ticket-thread').getByRole('link', { name: 'Ohne-JavaScript.txt', exact: true });
       const download = await portalGet(plain, base + await link.getAttribute('href'));
       assert.deepEqual(await download.body(), data);
       await plain.close();

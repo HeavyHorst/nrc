@@ -9,3 +9,30 @@ for (const input of document.querySelectorAll('.file-upload input[type=file]')) 
   update();
   input.closest('.file-upload').classList.add('is-enhanced');
 }
+
+const ticketDetails = document.querySelector('.ticket-aside details');
+if (ticketDetails) {
+  const narrow = matchMedia('(max-width: 760px)');
+  const layout = () => { ticketDetails.open = !narrow.matches; };
+  narrow.addEventListener('change', layout);
+  layout();
+}
+
+const copyTicket = document.querySelector('.ticket-copy');
+if (copyTicket && navigator.clipboard?.writeText) {
+  const link = document.querySelector('.ticket-direct-link');
+  const status = document.querySelector('.ticket-copy-status');
+  copyTicket.hidden = false;
+  link.hidden = true;
+  copyTicket.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(link.href);
+      link.hidden = true;
+      status.textContent = 'Link kopiert.';
+    } catch {
+      link.textContent = link.href;
+      link.hidden = false;
+      status.textContent = 'Automatisches Kopieren fehlgeschlagen. Kopieren Sie den angezeigten Direktlink.';
+    }
+  });
+}

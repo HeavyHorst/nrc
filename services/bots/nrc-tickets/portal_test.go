@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	p "github.com/heavyhorst/nrc/protocol-go"
 	"golang.org/x/crypto/bcrypt"
@@ -100,6 +102,9 @@ func (f *fakeSource) create(_ context.Context, a p.Asset) (p.Asset, error) {
 	}
 	f.next++
 	a.AssetID = f.next
+	if a.CreatedAt == 0 {
+		a.CreatedAt = time.Date(2026, 11, 24, 9, 50, 0, 0, time.UTC).UnixNano()
+	}
 	f.assets[a.AssetID] = a
 	return a, nil
 }
@@ -112,18 +117,22 @@ func fixture(t *testing.T) (*portal, *fakeSource) {
 	f := &fakeSource{assets: map[uint64]p.Asset{}, next: 20}
 	add := func(id uint64, requester, title string) {
 		v, _ := json.Marshal(ticketPreview{Version: 1, Title: title, CompanyID: "123", Requester: requester, RequesterName: "Kundin", Status: "open", Assignee: "HIDDEN_ASSIGNEE"})
-		f.assets[id] = p.Asset{AssetID: id, AssetType: ticketType, Preview: string(v), Payload: "Originalanfrage <script>alert(1)</script>"}
+		f.assets[id] = p.Asset{AssetID: id, AssetType: ticketType, Preview: string(v), Payload: "Originalanfrage <script>alert(1)</script>", CreatedAt: time.Date(2026, 7, 3, 21, 48, 12, 0, time.UTC).UnixNano()}
 	}
 	add(1, "anna@example.test", "Meine Rechnung")
 	add(2, "bea@example.test", "PRIVATE_OTHER_TITLE")
 	for i, kind := range []string{"public_reply", "internal_note", "customer_reply"} {
-		v, _ := json.Marshal(entryPreview{1, kind, "Serviceteam"})
+		author := "Serviceteam"
+		if kind == "customer_reply" {
+			author = "Anna"
+		}
+		v, _ := json.Marshal(entryPreview{1, kind, author})
 		body := "Vielen Dank für Ihre Nachricht."
 		if kind == "internal_note" {
 			body = "HIDDEN_INTERNAL_NOTE"
 		}
 		id := uint64(10 + i)
-		f.assets[id] = p.Asset{AssetID: id, AssetType: entryType, ParentType: 2, ParentID: 1, Preview: string(v), Payload: body, Attachments: []p.Attachment{{Filename: "HIDDEN_FILENAME"}}}
+		f.assets[id] = p.Asset{AssetID: id, AssetType: entryType, ParentType: 2, ParentID: 1, Preview: string(v), Payload: body, Attachments: []p.Attachment{{Filename: "HIDDEN_FILENAME"}}, CreatedAt: time.Date(2026, 11, 24, 8, 41+i, 15, 0, time.UTC).UnixNano()}
 	}
 	return &portal{source: f, accounts: fileAccounts{{Login: "anna", PasswordHash: string(h), Requester: "anna@example.test", Name: "Anna", CompanyID: "123"}}, origin: "https://portal.example.test"}, f
 }
@@ -211,6 +220,8 @@ func TestLostSessionReturnsToUnsubmittedForm(t *testing.T) {
 	const warning = "Ihre Eingaben wurden nicht gespeichert."
 	for path, destination := range map[string]string{
 		"/tickets": "/new", "/tickets/1/reply": "/tickets/1",
+		"/tickets/1/reply?status=waiting&q=%232&scope=team&sort=oldest&ignored=discard": "/tickets/1?q=%232&scope=team&sort=oldest&status=waiting",
+		"/tickets/1/reply?q=" + strings.Repeat("x", 2048):                               "/tickets/1",
 		"/abnahmen/71/answer": "/abnahmen/71", "/abnahmen/71/preview": "/abnahmen/71", "/abnahmen/71/close": "/abnahmen/71",
 	} {
 		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader("body=UNSAVED_DRAFT&comment=UNSAVED_DRAFT"))
@@ -233,7 +244,7 @@ func TestLostSessionReturnsToUnsubmittedForm(t *testing.T) {
 			t.Fatal("unsaved warning lost after failed login")
 		}
 		fresh := call(s, "POST", "/login", login+form, s.origin, "", "")
-		if fresh.Code != 303 || fresh.Header().Get("Location") != destination || !strings.Contains(page.Body.String(), `name="next" value="`+destination+`"`) {
+		if fresh.Code != 303 || fresh.Header().Get("Location") != destination || !strings.Contains(page.Body.String(), `name="next" value="`+html.EscapeString(destination)+`"`) {
 			t.Fatalf("%s: did not return to %s", path, destination)
 		}
 	}
@@ -261,7 +272,7 @@ func TestTicketCategorySelection(t *testing.T) {
 				t.Fatalf("selection lost: %+v", v)
 			}
 			if category == "unclear" {
-				if body := own(s, "GET", w.Header().Get("Location"), "").Body.String(); !strings.Contains(body, "· Unklar") {
+				if body := own(s, "GET", w.Header().Get("Location"), "").Body.String(); !strings.Contains(body, "<dt>Kategorie</dt><dd>Unklar</dd>") {
 					t.Fatal("manual Unklar not displayed")
 				}
 			}
@@ -278,7 +289,7 @@ func TestRequestsOverview(t *testing.T) {
 		w := own(s, "GET", "/", "")
 		body := w.Body.String()
 		if w.Code != 200 || !strings.Contains(body, `href="/" aria-current="page"`) ||
-			strings.Contains(body, "<table>") != hasTickets ||
+			strings.Contains(body, "<table") != hasTickets ||
 			strings.Contains(body, "Noch keine Anfragen") == hasTickets {
 			t.Fatalf("unexpected overview with hasTickets=%t: %d %s", hasTickets, w.Code, body)
 		}
@@ -306,6 +317,34 @@ func TestStaffReplyDisplayNames(t *testing.T) {
 		if w.Code != 200 || !strings.Contains(w.Body.String(), `"author":"`+tc.author+`"`) {
 			t.Fatalf("API no longer returns original author %q: %d", tc.author, w.Code)
 		}
+	}
+}
+
+func TestTicketMessageCreationTimes(t *testing.T) {
+	s, f := fixture(t)
+	a := f.assets[12]
+	a.UpdatedAt = time.Date(2026, 11, 25, 9, 10, 0, 0, time.UTC).UnixNano()
+	f.assets[12] = a
+	w := own(s, "GET", "/tickets/1", "")
+	for _, want := range []string{
+		`datetime="2026-07-03T23:48:12&#43;02:00">03.07.2026, 23:48 Uhr`,
+		`datetime="2026-11-24T09:41:15&#43;01:00">24.11.2026, 09:41 Uhr`,
+		`datetime="2026-11-24T09:43:15&#43;01:00">24.11.2026, 09:43 Uhr`,
+	} {
+		if w.Code != 200 || !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("ticket detail is missing creation time %q (HTTP %d)", want, w.Code)
+		}
+	}
+	if strings.Count(w.Body.String(), "message-time") != 3 {
+		t.Fatal("expected timestamps for the original request and both public replies only")
+	}
+	a.CreatedAt = 0
+	f.assets[12] = a
+	if w = own(s, "GET", "/tickets/1", ""); w.Code != 200 || strings.Count(w.Body.String(), "message-time") != 2 {
+		t.Fatal("missing timestamps should not render a date")
+	}
+	if w = own(s, "GET", "/api/tickets/1", ""); w.Code != 200 || strings.Contains(w.Body.String(), "created_at") || strings.Contains(w.Body.String(), "CreatedAt") {
+		t.Fatal("HTML timestamps should not change the JSON API")
 	}
 }
 
@@ -503,6 +542,9 @@ func TestBrowserFixture(t *testing.T) {
 	s, _ := fixture(t)
 	if os.Getenv("TICKETS_TEST_SHARING") == "1" {
 		s, _ = sharingFixture(t)
+	}
+	if os.Getenv("TICKETS_TEST_PASSWORD") == "1" {
+		s.accounts = passwordAccountPeer(t)
 	}
 	s.files = testFiles(t)
 	var err error

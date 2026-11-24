@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -101,7 +102,7 @@ func accountPeer(t *testing.T, respond func(p.PortalAccountRequest) (p.PortalAcc
 			t.Error("invalid portal account request")
 			return
 		}
-		if q.ServiceKey != key || q.PasswordHash != "" || len(q.Accounts) != 0 {
+		if q.ServiceKey != key || (q.Op != "change_password" && q.PasswordHash != "") || len(q.Accounts) != 0 {
 			t.Error("unexpected portal account credentials or payload")
 			return
 		}
@@ -113,6 +114,34 @@ func accountPeer(t *testing.T, respond func(p.PortalAccountRequest) (p.PortalAcc
 	}))
 	t.Cleanup(server.Close)
 	return dbAccounts{nrcSource{strings.Replace(server.URL, "http:", "ws:", 1), "tickets", "bot-secret"}, key}
+}
+
+func passwordAccountPeer(t *testing.T) dbAccounts {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte("fixture-password-only"), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := p.PortalAccount{ID: "9", Revision: "1", Login: "anna", Requester: "anna@example.test", Name: "Anna", PasswordHash: string(hash)}
+	var mu sync.Mutex
+	return accountPeer(t, func(q p.PortalAccountRequest) (p.PortalAccountResponse, uint32) {
+		mu.Lock()
+		defer mu.Unlock()
+		if q.Op == "login" && q.Login == a.Login {
+			snapshot := a
+			return p.PortalAccountResponse{Status: "ok", Account: &snapshot}, 1
+		}
+		if q.Op == "change_password" && q.ID == a.ID && q.Requester == a.Requester && q.IfRevision == a.Revision && q.Login == "" {
+			if cost, err := bcrypt.Cost([]byte(q.PasswordHash)); err != nil || cost != 12 {
+				t.Error("expected a bcrypt hash, not the plaintext password")
+				return p.PortalAccountResponse{Status: "invalid"}, 1
+			}
+			a.Revision, a.PasswordHash = "2", q.PasswordHash
+			return p.PortalAccountResponse{Status: "ok"}, 1
+		}
+		t.Error("unexpected account operation or identity")
+		return p.PortalAccountResponse{Status: "invalid"}, 1
+	})
 }
 
 func TestDBPortalAccountsAuthorizeEachRequest(t *testing.T) {

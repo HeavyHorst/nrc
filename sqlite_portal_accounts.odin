@@ -170,7 +170,7 @@ sqlite_portal_account_import :: proc(store: ^db.Store, request: ^db.Request, q: 
 sqlite_portal_account_dispatch :: proc(store: ^db.Store, request: ^db.Request, q: ^pr.Portal_Account_Request, r: ^pr.Portal_Account_Response) -> c.int {
 	workspace := request.workspace
 	switch q.op {
-	case "login", "mapping":
+	case "login", "mapping", "change_password":
 		if !request.portal_account_bot || !portal_account_key_matches(portal_account_service_key, q.service_key) {
 			r.status = "forbidden"
 			return sql.OK
@@ -183,13 +183,14 @@ sqlite_portal_account_dispatch :: proc(store: ^db.Store, request: ^db.Request, q
 	case:
 		return sql.OK
 	}
-	if (q.id != "" && q.op != "get" && q.op != "disable" && q.op != "enable" && q.op != "reset_password") ||
+	self_change := q.op == "change_password"
+	if (q.id != "" && q.op != "get" && q.op != "disable" && q.op != "enable" && q.op != "reset_password" && !self_change) ||
 	   (q.cursor != "" && q.op != "list") ||
 	   (q.login != "" && q.op != "login") ||
-	   (q.requester != "" && q.op != "mapping") ||
-	   (q.service_key != "" && q.op != "login" && q.op != "mapping") ||
-	   (q.password_hash != "" && q.op != "reset_password") ||
-	   (q.if_revision != "" && q.op != "disable" && q.op != "enable" && q.op != "reset_password") ||
+	   (q.requester != "" && q.op != "mapping" && !self_change) ||
+	   (q.service_key != "" && q.op != "login" && q.op != "mapping" && !self_change) ||
+	   (q.password_hash != "" && q.op != "reset_password" && !self_change) ||
+	   (q.if_revision != "" && q.op != "disable" && q.op != "enable" && q.op != "reset_password" && !self_change) ||
 	   (len(q.accounts) != 0 && q.op != "create" && q.op != "import") ||
 	   (q.dry_run && q.op != "import") {return sql.OK}
 
@@ -250,13 +251,15 @@ sqlite_portal_account_dispatch :: proc(store: ^db.Store, request: ^db.Request, q
 		r.account = a
 		r.status = "ok"
 		return sql.OK
-	case "get", "disable", "enable", "reset_password":
+	case "get", "disable", "enable", "reset_password", "change_password":
 		id, valid_id := pr.portal_account_id(q.id)
 		if !valid_id do return sql.OK
+		if self_change && !pr.portal_account_requester_valid(q.requester) do return sql.OK
+		password_write := q.op == "reset_password" || self_change
 		if q.op != "get" {
 			expected, valid_revision := pr.portal_account_id(q.if_revision)
 			if !valid_revision || expected > u64(max(i64)) do return sql.OK
-			if q.op == "reset_password" && !pr.portal_account_hash_valid(q.password_hash) do return sql.OK
+			if password_write && !pr.portal_account_hash_valid(q.password_hash) do return sql.OK
 		}
 		a, found, rc := sqlite_portal_account_lookup(
 			store,
@@ -266,12 +269,13 @@ sqlite_portal_account_dispatch :: proc(store: ^db.Store, request: ^db.Request, q
 		)
 		if rc != sql.OK do return rc
 		if !found {r.status = "not_found"; return sql.OK}
+		if self_change && (a.requester != q.requester || a.disabled) {r.status = "forbidden"; return sql.OK}
 		if q.op != "get" {
 			if a.revision != q.if_revision {r.status = "conflict"; return sql.OK}
 			old, _ := pr.portal_account_id(a.revision)
 			if old >= u64(max(i64)) do return sql.FULL
 			revision := i64(old) + 1
-			if q.op == "reset_password" {
+			if password_write {
 				rc = sqlite_chronicle_execute(
 					store,
 					`UPDATE portal_accounts SET revision=?3,password_hash=?4 WHERE workspace=?1 AND id=?2`,
@@ -288,6 +292,14 @@ sqlite_portal_account_dispatch :: proc(store: ^db.Store, request: ^db.Request, q
 				)
 			}
 			if rc != sql.OK do return rc
+			if self_change {
+				// Reuse schema 12's password audit operation, keeping the customer actor distinct.
+				audit_request := request^
+				audit_request.subject = strings.concatenate({"portal:", a.requester})
+				if rc = sqlite_portal_account_audit(store, &audit_request, id, revision, "reset_password"); rc != sql.OK do return rc
+				r.status = "ok"
+				return sql.OK
+			}
 			if rc = sqlite_portal_account_audit(store, request, id, revision, q.op); rc != sql.OK do return rc
 			a.revision = fmt.aprintf("%d", revision)
 		}

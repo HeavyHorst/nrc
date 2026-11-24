@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -86,6 +88,13 @@ func accountSessionToken(r *http.Request) string {
 	return c.Value
 }
 
+func (s *portal) endSession(w http.ResponseWriter, r *http.Request) {
+	s.sessions.revoke(accountSessionToken(r))
+	cookie := accountSessionCookie("")
+	cookie.MaxAge = -1
+	http.SetCookie(w, cookie)
+}
+
 func (s *portal) verifyPassword(ctx context.Context, login, password string) (account, bool, error) {
 	if s.accounts == nil || !validAccountLogin(login) || len(password) == 0 || len(password) > 72 {
 		return account{}, false, nil
@@ -124,6 +133,68 @@ func (s *portal) loggedIn(r *http.Request, api, attachment bool) (account, bool,
 	return a, true, nil
 }
 
+type passwordAccountStore interface {
+	changePassword(context.Context, account, string) error
+}
+
+func (s *portal) passwordPage(w http.ResponseWriter, r *http.Request, who account) {
+	store, ok := s.accounts.(passwordAccountStore)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	show := func(status int, message string) {
+		s.render(w, false, view{Password: true, PasswordError: message, Status: status})
+	}
+	if r.Method == http.MethodGet {
+		show(http.StatusOK, "")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+	if err := r.ParseForm(); err != nil {
+		show(http.StatusBadRequest, "Das Formular konnte nicht verarbeitet werden.")
+		return
+	}
+	current, password := r.PostForm.Get("current"), r.PostForm.Get("new")
+	if len(password) < 14 || len(password) > 72 || !utf8.ValidString(password) || strings.ContainsFunc(password, unicode.IsControl) {
+		show(http.StatusBadRequest, "Das neue Passwort muss 14 bis 72 Bytes lang sein und darf keine Steuerzeichen enthalten.")
+		return
+	}
+	if password != r.PostForm.Get("repeat") || password == current {
+		show(http.StatusBadRequest, "Wählen Sie ein anderes Passwort und wiederholen Sie es exakt.")
+		return
+	}
+	checked, valid, err := s.verifyPassword(r.Context(), who.Login, current)
+	if err != nil {
+		show(http.StatusServiceUnavailable, "Die Passwortprüfung ist vorübergehend nicht verfügbar.")
+		return
+	}
+	if !valid {
+		show(http.StatusBadRequest, "Das aktuelle Passwort ist falsch.")
+		return
+	}
+	if checked.PortalID != who.PortalID || checked.PortalRevision != who.PortalRevision || checked.Requester != who.Requester {
+		s.endSession(w, r)
+		http.Redirect(w, r, "/login?unsaved=1&next=%2Fkonto%2Fpasswort", http.StatusSeeOther)
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	if err != nil {
+		show(http.StatusServiceUnavailable, "Das Passwort konnte nicht geändert werden.")
+		return
+	}
+	switch store.changePassword(r.Context(), who, string(hash)) {
+	case nil:
+		s.endSession(w, r)
+		http.Redirect(w, r, "/login?password_changed=1", http.StatusSeeOther)
+	case errAccountChanged:
+		s.endSession(w, r)
+		http.Redirect(w, r, "/login?unsaved=1&next=%2Fkonto%2Fpasswort", http.StatusSeeOther)
+	default:
+		show(http.StatusServiceUnavailable, "Die Änderung konnte nicht bestätigt werden. Prüfen Sie bei der nächsten Anmeldung, welches Passwort gilt.")
+	}
+}
+
 func loginDestination(target string) string {
 	if len(target) > 2048 || !strings.HasPrefix(target, "/") {
 		return "/"
@@ -140,6 +211,9 @@ func loginDestination(target string) string {
 func formReturnPath(path string) string {
 	if path == "/tickets" {
 		return "/new"
+	}
+	if path == "/konto/passwort" {
+		return path
 	}
 	parts := strings.Split(path, "/")
 	if len(parts) == 4 && parts[2] != "" && decimal(parts[2]) {
@@ -163,16 +237,20 @@ func (s *portal) renderLogin(w http.ResponseWriter, status int, target, message 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = loginPage.Execute(w, struct {
-		Branding      branding
-		Next, Message string
-		Unsaved       bool
-	}{b, loginDestination(target), message, unsaved})
+		Branding         branding
+		Next, Message    string
+		Unsaved, Success bool
+	}{b, loginDestination(target), message, unsaved, status == http.StatusOK})
 }
 
 func (s *portal) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		q := r.URL.Query()
-		s.renderLogin(w, http.StatusOK, q.Get("next"), "", q.Get("unsaved") == "1")
+		message := ""
+		if q.Get("password_changed") == "1" {
+			message = "Passwort geändert. Melden Sie sich mit dem neuen Passwort an."
+		}
+		s.renderLogin(w, http.StatusOK, q.Get("next"), message, q.Get("unsaved") == "1")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)

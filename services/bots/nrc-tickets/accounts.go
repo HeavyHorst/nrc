@@ -100,20 +100,47 @@ func (s dbAccounts) mapping(ctx context.Context, requester string) (account, boo
 }
 
 var errAccountLookup = errors.New("portal account lookup unavailable")
+var errAccountChanged = errors.New("portal account changed")
 
-func (s dbAccounts) lookup(ctx context.Context, q p.PortalAccountRequest) (account, bool, error) {
+func (s dbAccounts) accountRequest(ctx context.Context, q p.PortalAccountRequest) (*p.PortalAccountResponse, error) {
 	const correlation = 1
 	wire, err := p.EncodePortalAccountRequest(q, correlation)
 	if err != nil {
-		return account{}, false, errAccountLookup
+		return nil, errAccountLookup
 	}
 	body, err := s.source.request(ctx, p.C_PortalAccount, wire[2:], p.S_PortalAccount)
 	if err != nil {
-		return account{}, false, errAccountLookup
+		return nil, errAccountLookup
 	}
 	r, err := p.DecodePortalAccountResponse(body)
 	if err != nil || r == nil || r.CorrelationID != correlation || r.Cursor != "" || len(r.Accounts) != 0 {
-		return account{}, false, errAccountLookup
+		return nil, errAccountLookup
+	}
+	return r, nil
+}
+
+func (s dbAccounts) changePassword(ctx context.Context, who account, hash string) error {
+	r, err := s.accountRequest(ctx, p.PortalAccountRequest{
+		Op: "change_password", ID: who.PortalID, IfRevision: who.PortalRevision,
+		Requester: who.Requester, ServiceKey: s.key, PasswordHash: hash,
+	})
+	if err != nil || r.Account != nil {
+		return errAccountLookup
+	}
+	switch r.Status {
+	case "ok":
+		return nil
+	case "conflict", "forbidden", "not_found":
+		return errAccountChanged
+	default:
+		return errAccountLookup
+	}
+}
+
+func (s dbAccounts) lookup(ctx context.Context, q p.PortalAccountRequest) (account, bool, error) {
+	r, err := s.accountRequest(ctx, q)
+	if err != nil {
+		return account{}, false, err
 	}
 	if r.Status == "not_found" && r.Account == nil {
 		return account{}, false, nil

@@ -362,6 +362,7 @@ type reviewSection struct {
 type reviewView struct {
 	Branding                                                                                                                                        branding
 	Guest, Join, Preview, CanClose                                                                                                                  bool
+	CanChangePassword                                                                                                                               bool
 	Base, CSRF, Label, Title, Build, Environment, ReleasedAt, Revision, Decision, Comment, ClosedName, ClosedSource, ClosedAt, PreviousRun, Message string
 	Runs                                                                                                                                            []reviewSummary
 	Points                                                                                                                                          []reviewPointView
@@ -709,6 +710,7 @@ var reviewPage = template.Must(template.New("reviews").Funcs(template.FuncMap{
 
 func (s *portal) renderReview(w http.ResponseWriter, v reviewView) {
 	v.Branding = s.brand
+	_, v.CanChangePassword = s.accounts.(passwordAccountStore)
 	if v.Branding.Brand == "" {
 		v.Branding.Brand = "Ihr Kundenportal"
 	}
