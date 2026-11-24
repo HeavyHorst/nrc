@@ -285,6 +285,30 @@ func TestRequestsOverview(t *testing.T) {
 	}
 }
 
+func TestStaffReplyDisplayNames(t *testing.T) {
+	s, f := fixture(t)
+	for _, tc := range []struct{ author, display, kind string }{
+		{"rene.michaelis", "Rene Michaelis", "public_reply"},
+		{"özlem.öztürk", "Özlem Öztürk", "public_reply"},
+		{"Rene Michaelis", "Rene Michaelis", "public_reply"},
+		{"support@example.test", "support@example.test", "public_reply"},
+		{"rene.michaelis", "rene.michaelis", "customer_reply"},
+	} {
+		a := f.assets[10]
+		preview, _ := json.Marshal(entryPreview{1, tc.kind, tc.author})
+		a.Preview = string(preview)
+		f.assets[10] = a
+		w := own(s, "GET", "/tickets/1", "")
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "<strong>"+tc.display+"</strong>") {
+			t.Fatalf("%s %q: expected display name %q, status %d", tc.kind, tc.author, tc.display, w.Code)
+		}
+		w = own(s, "GET", "/api/tickets/1", "")
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `"author":"`+tc.author+`"`) {
+			t.Fatalf("API no longer returns original author %q: %d", tc.author, w.Code)
+		}
+	}
+}
+
 func TestPrivacyAndRendering(t *testing.T) {
 	s, f := fixture(t)
 	privateEntry := f.assets[11]

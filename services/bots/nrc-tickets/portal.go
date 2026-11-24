@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	p "github.com/heavyhorst/nrc/protocol-go"
 )
@@ -32,6 +34,22 @@ type entryPreview struct {
 	Version int    `json:"version"`
 	Kind    string `json:"kind"`
 	Author  string `json:"author"`
+}
+
+// Format staff login names for display without rewriting stored attribution.
+func staffReplyDisplayName(author string) string {
+	parts := strings.Split(author, ".")
+	if len(parts) < 2 {
+		return author
+	}
+	for i, part := range parts {
+		if part == "" || strings.ContainsFunc(part, func(r rune) bool { return !unicode.IsLower(r) }) {
+			return author
+		}
+		first, size := utf8.DecodeRuneInString(part)
+		parts[i] = string(unicode.ToTitle(first)) + part[size:]
+	}
+	return strings.Join(parts, " ")
 }
 
 // encoding/json's struct matching is case-insensitive; NRC metadata is not.
@@ -384,6 +402,9 @@ func (s *portal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			preview, ok := publicReply(full, id)
 			if !ok {
 				continue
+			}
+			if !api && preview.Kind == "public_reply" {
+				preview.Author = staffReplyDisplayName(preview.Author)
 			}
 			v.Entries = append(v.Entries, publicEntry{preview.Author, full.Payload, publicAttachments(id, full.AssetID, full.Attachments)})
 		}
