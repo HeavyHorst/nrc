@@ -269,6 +269,22 @@ func TestTicketCategorySelection(t *testing.T) {
 	}
 }
 
+func TestRequestsOverview(t *testing.T) {
+	s, f := fixture(t)
+	for _, hasTickets := range []bool{true, false} {
+		if !hasTickets {
+			delete(f.assets, 1) // The other customer's ticket must not count.
+		}
+		w := own(s, "GET", "/", "")
+		body := w.Body.String()
+		if w.Code != 200 || !strings.Contains(body, `href="/" aria-current="page"`) ||
+			strings.Contains(body, "<table>") != hasTickets ||
+			strings.Contains(body, "Noch keine Anfragen") == hasTickets {
+			t.Fatalf("unexpected overview with hasTickets=%t: %d %s", hasTickets, w.Code, body)
+		}
+	}
+}
+
 func TestPrivacyAndRendering(t *testing.T) {
 	s, f := fixture(t)
 	privateEntry := f.assets[11]

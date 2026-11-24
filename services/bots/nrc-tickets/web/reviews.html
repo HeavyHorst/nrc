@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Abnahmen · {{.Branding.Brand}}</title><link rel="stylesheet" href="{{if .Guest}}/abnahmen/gast/style.css{{else}}/style.css{{end}}"></head><body class="review-page">
+<title>Abnahmen · {{.Branding.Brand}}</title><link rel="stylesheet" href="{{if .Guest}}/abnahmen/gast/style.css{{else}}/style.css{{end}}"></head><body class="review-page{{if not .Guest}} account-page{{end}}">
 <header><a class="brand" href="{{if .Guest}}/abnahmen/gast{{else}}/{{end}}">{{if .Branding.Logo}}<img src="{{if .Guest}}/abnahmen/gast/logo{{else}}/branding/logo{{end}}" alt="">{{end}}<span>{{.Branding.Brand}}</span></a>
-{{if not .Guest}}<nav class="account-nav" aria-label="Hauptnavigation"><a href="/">Meine Anfragen</a><a href="/new">Neue Anfrage</a><a href="/abnahmen">Meine Abnahmen</a><form method="post" action="/logout"><button>Abmelden</button></form></nav>{{end}}</header><main class="review">
+{{if not .Guest}}<nav class="account-nav" aria-label="Hauptnavigation"><a href="/">Meine Anfragen</a><a href="/abnahmen"{{if not .Title}} aria-current="page"{{end}}>Meine Abnahmen</a><form method="post" action="/logout"><button>Abmelden</button></form></nav>{{end}}</header><main class="review">
 {{if and .Guest (not .Join)}}<p class="muted">Gastzugang · Gastnamen sind Selbstangaben, keine verifizierten Konten.</p>{{end}}
 {{if .Message}}<p role="alert">{{.Message}}</p>{{end}}
 {{if .Join}}

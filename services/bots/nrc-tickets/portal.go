@@ -604,9 +604,9 @@ func (s *portal) render(w http.ResponseWriter, api bool, v view) {
 
 var page = template.Must(template.New("portal").Parse(`<!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Branding.Brand}}</title><link rel="stylesheet" href="/style.css"><script src="/attachments.js" defer></script></head><body>
+<title>{{.Branding.Brand}}</title><link rel="stylesheet" href="/style.css"><script src="/attachments.js" defer></script></head><body class="account-page">
 <header><a class="brand" href="/">{{if .Branding.Logo}}<img src="/branding/logo" alt="">{{end}}<span>{{.Branding.Brand}}</span></a>
-<nav class="account-nav" aria-label="Hauptnavigation"><a href="/">Meine Anfragen</a><a href="/new">Neue Anfrage</a><a href="/abnahmen">Meine Abnahmen</a><form method="post" action="/logout"><button>Abmelden</button></form></nav></header><main>
+<nav class="account-nav" aria-label="Hauptnavigation"><a href="/"{{if not (or .New .Ticket)}} aria-current="page"{{end}}>Meine Anfragen</a><a href="/abnahmen">Meine Abnahmen</a><form method="post" action="/logout"><button>Abmelden</button></form></nav></header><main>
 {{if .New}}
 <h1>Wie können wir Ihnen helfen?</h1><p>Schildern Sie uns Ihr Anliegen. Wir kümmern uns darum.</p>
 <form method="post" action="/tickets" enctype="multipart/form-data">
@@ -622,9 +622,9 @@ var page = template.Must(template.New("portal").Parse(`<!doctype html>
 <label>Ihre Antwort<textarea name="body" rows="5" maxlength="32000" required></textarea></label>
 {{template "upload"}}<button>Antwort senden</button></form>
 {{else}}
-<h1>Meine Anfragen</h1><p>Willkommen! Hier behalten Sie Ihre Anliegen und unsere Antworten im Blick.</p>
-<p><a class="button" href="/new">+ Neue Anfrage</a></p>
-<table><thead><tr><th>Anfrage</th><th>Status</th></tr></thead><tbody>{{range .Tickets}}<tr><td><a href="/tickets/{{.ID}}">{{.Title}}</a><br><small>#{{.ID}} · {{if .Shared}}Team{{if .SubmittedBy}} · {{.SubmittedBy}}{{end}}{{else}}Meine Anfrage{{end}}</small></td><td>{{.Status}}</td></tr>{{else}}<tr><td colspan="2">Noch keine Anfragen. Wie können wir Ihnen helfen?</td></tr>{{end}}</tbody></table>
+<div class="requests-heading"><div><p class="requests-kicker">Kundenportal</p><h1>Meine Anfragen</h1><p>Hier behalten Sie Ihre Anliegen und unsere Antworten im Blick.</p></div><a class="button" href="/new">+ Neue Anfrage</a></div>
+{{if .Tickets}}<table><thead><tr><th scope="col">Anfrage</th><th scope="col">Status</th></tr></thead><tbody>{{range .Tickets}}<tr><td><a href="/tickets/{{.ID}}">{{.Title}}</a><br><small>#{{.ID}} · {{if .Shared}}Team{{if .SubmittedBy}} · {{.SubmittedBy}}{{end}}{{else}}Meine Anfrage{{end}}</small></td><td>{{.Status}}</td></tr>{{end}}</tbody></table>
+{{else}}<section class="requests-empty"><h2>Noch keine Anfragen</h2><p>Sobald Sie eine Anfrage stellen, erscheint sie hier.</p></section>{{end}}
 {{end}}<p class="muted">Sie sehen eigene Anfragen und ausdrücklich freigegebene Teamanfragen mit öffentlichen Antworten und Anhängen. Auf Teamanfragen können Sie ebenfalls antworten. Interne Notizen sind nicht sichtbar.</p></main>
 {{with .Branding}}{{if or .FooterText .ImprintURL .PrivacyURL .TermsURL .ContactURL}}
 <footer>{{if .FooterText}}<span>{{.FooterText}}</span>{{end}}<nav aria-label="Rechtliches und Kontakt">

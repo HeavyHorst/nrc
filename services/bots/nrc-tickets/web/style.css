@@ -41,6 +41,11 @@ header .account-nav { display: flex; flex-wrap: wrap; align-items: baseline; gap
 header .account-nav a, header .account-nav form { margin: 0; }
 header .account-nav form { background: none; border: 0; padding: 0; }
 header .account-nav button { background: none; color: var(--header-text); text-decoration: underline; padding: 0; }
+.requests-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 24px; margin-bottom: 28px; }
+.requests-heading h1, .requests-heading p, .requests-empty h2 { margin: 0; }
+.requests-heading h1 + p, .requests-empty p { margin: 8px 0 0; }
+.requests-kicker { color: var(--accent); font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; font-weight: 700; }
+.requests-empty { padding: clamp(24px, 5vw, 48px) 16px; text-align: center; background: var(--pale, var(--background)); border: 1px solid var(--border); }
 h1, h2 { line-height: 1.2; overflow-wrap: anywhere; }
 article, form { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; margin: 20px 0; }
 label { display: block; font-weight: 600; margin: 16px 0; }

@@ -156,3 +156,31 @@ textarea:focus-visible {
   .login-intro p + p { margin-top: 12px; }
   .login-image { width: 100%; object-position: 65% center; mask-image: linear-gradient(0deg, #000, transparent 65%); }
 }
+
+/* Signed-in ticket and review pages, not the guest review or login. */
+.account-page { --font-family: "Portal Brand", Arial, sans-serif; --text: var(--ink); --border: var(--line); }
+.account-page > header {
+  --header-text: var(--antares-navy);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 24px;
+  padding: 10px max(20px, (100% - 1040px) / 2);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.account-page > header .brand { margin: 0; font-size: .875rem; }
+.account-page > header .brand img { width: 104px; max-width: none; padding: 0; background: none; }
+.account-page > header .brand:has(img) span { position: absolute; clip-path: inset(50%); }
+.account-page .account-nav { column-gap: clamp(12px, 3vw, 28px); font-size: .875rem; }
+.account-page .account-nav a, .account-page .account-nav button { display: block; padding: 8px 0; text-decoration: none; border-bottom: 2px solid transparent; }
+.account-page .account-nav [aria-current="page"] { border-bottom-color: var(--accent); }
+.account-page .account-nav a:hover, .account-page .account-nav button:hover { color: var(--accent); }
+.account-page > main:not(.review), .account-page > footer { width: calc(100% - 40px); max-width: 1040px; padding-inline: 0; }
+.account-page > main h1, .account-page .requests-empty h2 { font-family: Georgia, "Times New Roman", serif; letter-spacing: -.035em; }
+.account-page > main h1 { font-size: clamp(32px, 4vw, 48px); }
+.account-page .requests-kicker { margin-bottom: 6px; }
+.account-page .requests-heading .button { border-radius: 2px; font-size: .875rem; }
+.account-page .requests-empty { background: var(--antares-paper); }
+.account-page > footer { font-size: .875rem; }
