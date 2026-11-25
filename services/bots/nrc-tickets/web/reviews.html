@@ -32,14 +32,19 @@
 {{if .Changed}}<p class="review-change"><strong>Seit Ihrer Durchsicht geändert</strong></p>{{end}}{{if .Unanswered}}<p>Im Team noch unbeantwortet</p>{{end}}{{if .Unable}}<p>Mindestens ein Teambeitrag: Nicht prüfbar</p>{{end}}{{if .Contradicting}}<p>Widersprüchliche Teamantworten</p>{{end}}
 <h3>Antworten Ihres Teams</h3>{{template "review-contributions" .}}</article>{{end}}
 {{else}}
-<section class="review-progress" aria-label="Eigener Fortschritt"><strong>{{.Answered}} / {{.Total}} beantwortet</strong><progress value="{{.Answered}}" max="{{.Total}}" aria-label="Eigener Fortschritt"></progress><p><strong>Team:</strong> {{.Unanswered}} offen · {{.TeamUnable}} nicht prüfbar · {{.Deviating}} mit Abweichung{{if .Contradicting}} · {{.Contradicting}} widersprüchlich{{end}}</p></section>
+<section class="review-progress" aria-label="Fortschritt">
+<strong>{{.Answered}} von {{.Total}} beantwortet</strong>
+<div class="review-progress-track" role="progressbar" aria-label="Eigener Fortschritt" aria-valuemin="0" aria-valuemax="{{.Total}}" aria-valuenow="{{.Answered}}" aria-valuetext="{{.Answered}} von {{.Total}} beantwortet">{{range .Points}}<span{{if .SavedResult}} class="is-answered"{{end}}></span>{{end}}</div>
+<p><strong>Team:</strong> {{.Participants}} {{if eq .Participants 1}}Person{{else}}Personen{{end}} · {{.Answers}} {{if eq .Answers 1}}Beitrag{{else}}Beiträge{{end}}</p>
+{{if or .TeamUnable .Deviating .Contradicting}}<p class="review-progress-issues">{{.Unanswered}} im Team offen{{if .TeamUnable}} · {{.TeamUnable}} nicht prüfbar{{end}}{{if .Deviating}} · {{.Deviating}} mit Abweichung{{end}}{{if .Contradicting}} · {{.Contradicting}} widersprüchlich{{end}}</p>{{end}}
+</section>
 <noscript><p class="muted">Speichern Sie Ihre Eingaben, bevor Sie zu einem anderen Prüfpunkt wechseln.</p></noscript>
 {{if and .Long .Contradicting}}<details class="review-team"><summary>Widersprüchliche Prüfpunkte · {{.Contradicting}}</summary><ul class="review-issue-links">{{range .Points}}{{if .Contradicting}}<li><a href="{{$.PointURL .ID}}">{{.Number}} · {{.Question}}</a></li>{{end}}{{end}}</ul></details>{{end}}
 <div class="review-layout">
 <div class="review-work">{{range .Points}}{{if .Active}}
 <article id="point-{{.ID}}" class="review-point" tabindex="-1">
-<p class="review-kicker">Punkt {{.Number}} von {{$.Total}}{{if $.Long}} · {{.Section}}{{end}}</p>
-{{template "review-question" .}}
+{{if $.Long}}<p class="review-kicker">{{.Section}}</p>{{end}}
+<h2>{{printf "%02d" .Number}} · {{.Question}}</h2>{{template "review-instructions" .}}
 <form method="post" action="{{$.Base}}/answer{{$.ListQuery}}">
 <input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="point_id" value="{{.ID}}">
 <fieldset><legend>Meine Antwort</legend><div class="review-options">
@@ -53,7 +58,7 @@
 {{end}}{{end}}</div>
 <aside class="review-aside">
 {{if .Long}}<nav class="review-sections" aria-label="Abschnitte"><h2>Abschnitte</h2>{{range .Sections}}<a href="{{$.PointURL .First}}" {{if .Active}}aria-current="step"{{end}}><span>{{.Name}}</span><span>{{.Answered}} / {{.Total}}</span></a>{{end}}</nav>{{end}}
-<nav class="review-points" aria-label="Prüfpunkte"><h2>Prüfpunkte</h2><ol>{{range .Points}}{{if or (not $.Long) (eq .Section $.ActiveSection)}}<li><a href="{{$.PointURL .ID}}" {{if .Active}}aria-current="step"{{end}}><span class="review-point-state" aria-hidden="true">{{if .SavedResult}}✓{{else}}○{{end}}</span><span><strong>{{.Number}} · {{.Question}}</strong><small>{{if .SavedResult}}{{resultLabel .SavedResult}}{{else if .Active}}Aktueller Prüfpunkt{{else}}Offen{{end}}{{if .Contradicting}} · Widerspruch im Team{{end}}</small></span></a></li>{{end}}{{end}}</ol></nav>
+<nav class="review-points" aria-label="Prüfpunkte"><h2>Prüfpunkte</h2><ol>{{range .Points}}{{if or (not $.Long) (eq .Section $.ActiveSection)}}<li><a href="{{$.PointURL .ID}}" {{if .Active}}aria-current="step"{{end}}><span class="review-point-state" data-result="{{.SavedResult}}" aria-hidden="true">{{if eq .SavedResult "yes"}}✓{{else if eq .SavedResult "no"}}!{{else if eq .SavedResult "unable"}}–{{end}}</span><span><strong>{{printf "%02d" .Number}} · {{.Question}}</strong><small>{{if .SavedResult}}{{resultLabel .SavedResult}}{{else if .Active}}In Bearbeitung{{else}}Offen{{end}}{{if .Contradicting}} · Widerspruch im Team{{end}}</small></span></a></li>{{end}}{{end}}</ol></nav>
 {{if .CanClose}}<details class="review-finish"><summary>Abschluss prüfen</summary><form method="post" action="{{.Base}}/preview{{.ListQuery}}"><input type="hidden" name="csrf" value="{{.CSRF}}">
 <label for="decision">Entscheidung</label><select id="decision" name="decision" required><option value="">Bitte wählen</option>{{if eq .Kind "qa"}}<option value="completed">QA abgeschlossen</option>{{else}}<option value="accepted">Abgenommen</option><option value="conditional">Mit Vorbehalt</option><option value="rejected">Abgelehnt</option>{{end}}</select><label for="close-comment">Abschlusskommentar</label><textarea id="close-comment" name="comment" rows="3" maxlength="4096"></textarea><button>Abschlussvorschau öffnen</button></form></details>
 {{else}}<p class="muted review-permission">Sie können Antworten beitragen, aber die Abnahme nicht abschließen.</p>{{end}}
@@ -83,5 +88,6 @@
 {{end}}</main>
 {{with .Branding}}{{if or .FooterText .ImprintURL .PrivacyURL .TermsURL .ContactURL}}<footer>{{.FooterText}}<nav aria-label="Rechtliches und Kontakt">{{if .ImprintURL}}<a href="{{.ImprintURL}}">Impressum</a>{{end}}{{if .PrivacyURL}}<a href="{{.PrivacyURL}}">Datenschutz</a>{{end}}{{if .TermsURL}}<a href="{{.TermsURL}}">Nutzungsbedingungen</a>{{end}}{{if .ContactURL}}<a href="{{.ContactURL}}">Kontakt</a>{{end}}</nav></footer>{{end}}{{end}}
 </body></html>
-{{define "review-question"}}<h2>{{.Question}}</h2>{{if .Instruction}}<p>{{.Instruction}}</p>{{end}}{{if .Expected}}<p class="review-expected"><strong>Erwartetes Ergebnis</strong>{{.Expected}}</p>{{end}}{{end}}
+{{define "review-question"}}<h2>{{.Question}}</h2>{{template "review-instructions" .}}{{end}}
+{{define "review-instructions"}}{{if .Instruction}}<p>{{.Instruction}}</p>{{end}}{{if .Expected}}<p class="review-expected"><strong>Erwartetes Ergebnis</strong>{{.Expected}}</p>{{end}}{{end}}
 {{define "review-contributions"}}<ul class="review-contributions">{{range .Contributions}}<li><strong>{{.Name}}</strong> · {{.Source}} · {{.Result}}{{if .Comment}}<div class="body">{{.Comment}}</div>{{end}}<small>{{reviewTime .UpdatedAt}}</small></li>{{else}}<li>Noch keine Beiträge.</li>{{end}}</ul>{{end}}

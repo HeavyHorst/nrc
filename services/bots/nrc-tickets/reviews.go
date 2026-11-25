@@ -394,6 +394,7 @@ type reviewView struct {
 	Filters                                                                                                                                         ticketFilters
 	Points                                                                                                                                          []reviewPointView
 	Answered, Total, Contradicting, TeamUnable                                                                                                      int
+	Participants, Answers                                                                                                                           int
 	Kind                                                                                                                                            string
 	Long                                                                                                                                            bool
 	Sections                                                                                                                                        []reviewSection
@@ -560,6 +561,7 @@ func (s *portal) reviewRun(w http.ResponseWriter, r *http.Request, q p.ReviewReq
 	}
 	v := reviewView{Guest: q.Source == "guest", Base: base, CSRF: csrf, Label: res.Run.Label, Title: res.Form.Title, Build: res.Form.Build, Environment: res.Form.Environment, ReleasedAt: reviewTime(res.Form.ReleasedAt), Revision: res.Run.Revision, Decision: res.Run.Decision, Comment: res.Run.Comment, ClosedName: res.Run.ClosedName, ClosedSource: reviewProvenance(res.Run.ClosedSource), ClosedAt: reviewTime(res.Run.ClosedAt), PreviousRun: res.Run.PreviousRun}
 	v.Kind = res.Run.Kind
+	v.Participants, v.Answers = len(res.Run.Participants), len(res.Run.Answers)
 	if !v.Guest {
 		v.Filters = readReviewFilters(r.URL.Query())
 	}

@@ -220,7 +220,7 @@ func TestPortalAccountReviews(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	w = reviewRequest(s, "GET", "/abnahmen/71?point=1", nil, nil, true)
-	if !strings.Contains(w.Body.String(), "Widersprüchliche Teamantworten") || !strings.Contains(w.Body.String(), "1 / 2") || strings.Contains(w.Body.String(), "<script>own") {
+	if !strings.Contains(w.Body.String(), "Widersprüchliche Teamantworten") || !strings.Contains(w.Body.String(), "1 von 2 beantwortet") || strings.Contains(w.Body.String(), "<script>own") {
 		t.Fatal("progress, escaping or conflict missing")
 	}
 	preview := url.Values{"decision": {"conditional"}, "comment": {"Bitte nachtesten"}, "reviewed": {"yes"}}
@@ -625,7 +625,7 @@ func TestReviewLongNavigationAndReport(t *testing.T) {
 	invoiceReviewFixture(f)
 	w := reviewRequest(s, "GET", "/abnahmen/71", nil, nil, true)
 	body := w.Body.String()
-	if w.Code != 200 || strings.Count(body, `name="point_id"`) != 1 || !strings.Contains(body, `value="19"`) || !strings.Contains(body, "18 / 48") || !strings.Contains(body, "Beträge &amp; Steuern") {
+	if w.Code != 200 || strings.Count(body, `name="point_id"`) != 1 || !strings.Contains(body, `value="19"`) || !strings.Contains(body, "18 von 48 beantwortet") || !strings.Contains(body, "Beträge &amp; Steuern") {
 		t.Fatal("long form navigation", body)
 	}
 	v := url.Values{"point_id": {"19"}, "result": {""}, "comment": {"Entwurf"}}

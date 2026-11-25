@@ -72,7 +72,12 @@ func TestReviewRealStackWalkthrough(t *testing.T) {
 		}
 		reviewCall(t, staff, p.ReviewRequest{Op: "answer", RunID: run, PointID: strconv.Itoa(i), Result: result, Comment: comment}, "ok")
 	}
-	shortForm := p.ReviewForm{Version: 1, Title: "Kurzabnahme · Bestandsbogen", Build: "legacy-7", Environment: "Abnahmeumgebung", Points: []p.ReviewPoint{{ID: "1", Question: "Ist die Hilfe erreichbar?", Expected: "Die Hilfeseite öffnet sich."}, {ID: "2", Question: "Ist der Kontakt aktuell?", Expected: "Die Supportadresse ist erreichbar."}}}
+	shortForm := p.ReviewForm{Version: 1, Title: "Kurzabnahme · Bestandsbogen", Build: "legacy-7", Environment: "Abnahmeumgebung", Points: []p.ReviewPoint{
+		{ID: "1", Question: "Ist die Hilfe erreichbar?", Expected: "Die Hilfeseite öffnet sich."},
+		{ID: "2", Question: "Ist der Kontakt aktuell?", Instruction: "Öffnen Sie die Kontaktseite und prüfen Sie die dort angegebene Supportadresse.", Expected: "Die Supportadresse ist erreichbar."},
+		{ID: "3", Question: "Sind die Anleitungen lesbar?", Expected: "Die Anleitungen lassen sich vollständig öffnen."},
+		{ID: "4", Question: "Funktioniert die Abmeldung?", Expected: "Das Portal zeigt wieder die Anmeldeseite."},
+	}}
 	shortRun := create(shortForm, "Bestandskunde · kurzer Kontrollbogen")
 	invite := reviewCall(t, staff, p.ReviewRequest{Op: "invite", RunID: run, ExpiresAt: strconv.FormatInt(time.Now().Add(8*time.Hour).UnixNano(), 10)}, "ok")
 	portal, _ := reviewPortal(t, workspace)
