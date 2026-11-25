@@ -138,6 +138,7 @@ const CustomPicker = {
             div.setAttribute('data-index', index);
             div.setAttribute('data-value', option.value);
             div.textContent = label;
+            div.title = label;
 
             if (String(option.value) === String(instance.selectedValue)) {
                 div.classList.add('custom-select__option--selected');

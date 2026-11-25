@@ -221,6 +221,7 @@ const CustomSelect = {
             trigger.append(value);
         }
         value.textContent = selectedText;
+        trigger.title = selectedText;
         if (instance.ariaLabelPrefix) {
             trigger.setAttribute('aria-label', selectedText
                 ? `${instance.ariaLabelPrefix}: ${selectedText}`

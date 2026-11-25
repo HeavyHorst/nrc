@@ -81,9 +81,11 @@ try {
 
   await page.getByRole("button", { name: /^STATE Draft/ }).click();
   await page.locator(".portal-wrapper input").fill("review");
+  assert.equal(await page.locator(".portal-wrapper").getByRole("option", { name: "Review" }).getAttribute("title"), "Review");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   assert.deepEqual(await page.evaluate(() => changes), [["native", "review"]], "one bubbling native change per selection");
+  assert.equal(await page.locator("#host button").getAttribute("title"), "Review");
   assert.equal(await page.locator("#host button").getAttribute("aria-expanded"), "false");
 
   await page.locator("#host button").click();

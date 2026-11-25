@@ -46,6 +46,7 @@ try {
   assert.equal(await page.evaluate(() => CustomSelect.instances.get(first.relationSelect).portal.config.boundary === editor), true, "nested select retains the editor boundary after portal reparenting");
   assert.deepEqual(await page.locator(".portal-wrapper [data-kind]").allTextContents(), ["NOTE", "TASK", "FILE"]);
   assert.deepEqual(await page.locator(".note-link-picker-item-title").allTextContents(), ["Architecture", "Runbook"]);
+  assert.equal(await page.locator(".note-link-picker-item").filter({ hasText: "Architecture" }).getAttribute("title"), "Architecture");
   assert.equal(await page.getByRole("textbox", { name: "Search link targets" }).evaluate(el => document.activeElement === el), true);
 
   // Cursor retries retain the cursor, and changing kind invalidates an old page.

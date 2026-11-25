@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261125findinglinks1";
+const CACHE_NAME = "nrc-terminal-20261125pickerhover1";
 
 const APP_SHELL = [
   "./",
@@ -23,8 +23,8 @@ const APP_SHELL = [
   "./css/reviews.css?v=20261125findingactions1",
   "./dialog.js?v=20261125datetime1",
   "./portal.js?v=20261116pickers1",
-  "./custom-picker.js?v=20260927appointment2",
-  "./custom-select.js?v=20261019customerwidth1",
+  "./custom-picker.js?v=20261125pickerhover1",
+  "./custom-select.js?v=20261125pickerhover1",
   "./attachments.js?v=20261008files1",
   "./protocol.js?v=20261023protocol2",
   "./frames.js?v=20261125slicereviews1",
@@ -33,7 +33,7 @@ const APP_SHELL = [
   "./transactions.js?v=20261114overload1",
   "./edges.js?v=20261114overload1",
   "./files.js?v=20261022cancel1",
-  "./links-ui.js?v=20261125slicereviews1",
+  "./links-ui.js?v=20261125pickerhover1",
   "./inspector.js?v=20261123reviewrail1",
   "./view-manager.js?v=20261121reviews1",
   "./list-navigation.js?v=20260805b",

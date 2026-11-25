@@ -380,6 +380,7 @@ class NRCLinkPicker extends HTMLElement {
         el.classList.add("highlighted");
       }
       el.dataset.index = index;
+      el.title = item.title;
 
       const idSpan = document.createElement("span");
       idSpan.className = "note-link-picker-item-id";
