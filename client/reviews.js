@@ -290,7 +290,6 @@
       <dl><div><dt class="detail-edit-label">INSTRUCTIONS</dt><dd>${esc(point.instruction) || '—'}</dd></div>
       <div><dt class="detail-edit-label">EXPECTED OUTCOME</dt><dd>${esc(point.expected) || '—'}</dd></div></dl></div>`;
   }
-  const selfAssign = () => `<div class="review-self-assign"><span>Assign yourself to contribute.</span>${btn('join','ASSIGN MYSELF')}</div>`;
   function checkDetail(point, run, member) {
     const own=point.answers.find(a=>a.participant_id===member?.id);
     const draft=recordView.drafts.get(`${run.id}:${point.id}`) || own;
@@ -307,22 +306,28 @@
         <label class="detail-edit-field"><span class="detail-edit-label">MY RESULT</span><select class="filter-select" name="result" required>
           <option value="">CHOOSE…</option>${[['yes','YES'],['no','NO'],['unable','UNABLE TO TEST']].map(([value,label])=>`<option value="${value}" ${draft?.result===value?'selected':''}>${label}</option>`).join('')}
         </select></label>${field('comment','MY COMMENT',draft?.comment || '','textarea')}<button id="reviewAnswerSave" class="btn" type="submit">SAVE MY ANSWER</button></form>`:
-        !member ? selfAssign() : '<p class="customer-meta review-check-answer">Only assigned staff can save answers here.</p>'}
+        '<p class="customer-meta review-check-answer">Only assigned staff can save answers here.</p>'}
       </section></div>`;
   }
   function runResults(run, member, p) {
     const focused=recordView.point ?? p.points.find(point=>point.answers.some(a=>a.id===state.answerId))?.id ?? p.points[0]?.id;
     return `<section class="review-run-results" aria-label="Run results">
-      <div class="review-run-access"><div class="review-run-facts">
-        <p class="customer-meta"><strong>${esc(run.label)}</strong> · RUN #${esc(run.id)} · ${esc(run.kind==='qa'?'TEAM QA':'CUSTOMER ACCEPTANCE')} · ${esc(run.decision?.toUpperCase() || 'OPEN')}</p>
-        <p class="customer-meta">${p.answered}/${p.points.length} POINTS ANSWERED · ${p.open} OPEN · ${p.conflicts} CONFLICTING · ${p.failed} NOT ALL YES</p>
-        <p class="customer-meta">${member?`YOU · ${esc(member.name)} · ${memberLabel(member)}`:'YOU · NOT ASSIGNED'}${run.previous_run?` · RETEST OF RUN #${esc(run.previous_run)}`:''}</p></div>
-        <div class="customer-actions"><button class="btn" type="button" id="reviewAccessToggle" aria-expanded="${recordView.access}" aria-controls="reviewAccess">MANAGE ACCESS</button>${run.decision?btn('retest','RETEST FOR NEW BUILD'):btn('close','PREVIEW CLOSE',!member?.can_close)}</div></div>
+      <div class="review-run-summary">
+        <div class="review-run-access">
+          <div class="review-run-identity"><h3>${esc(run.label)}</h3><span class="customer-meta">RUN #${esc(run.id)} · ${run.kind==='qa'?'TEAM QA':'CUSTOMER ACCEPTANCE'}${run.previous_run?` · RETEST OF RUN #${esc(run.previous_run)}`:''}</span><span class="review-run-state">${esc(run.decision?.toUpperCase() || 'OPEN')}</span></div>
+          <div class="customer-actions"><button class="btn" type="button" id="reviewAccessToggle" aria-expanded="${recordView.access}" aria-controls="reviewAccess">MANAGE ACCESS</button>${run.decision?btn('retest','RETEST FOR NEW BUILD'):btn('close','PREVIEW CLOSE',!member?.can_close)}</div>
+        </div>
+        <div class="review-run-progress">
+          <div class="review-run-track" aria-hidden="true">${p.points.map(point=>`<span${point.open?'':' class="is-answered"'}></span>`).join('')}</div>
+          <ul class="review-run-counts" aria-label="Team progress"><li><strong>${p.answered}/${p.points.length}</strong> ANSWERED</li><li><strong>${p.open}</strong> OPEN</li><li><strong>${p.conflicts}</strong> CONFLICTING</li><li><strong>${p.failed}</strong> NOT ALL YES</li></ul>
+          <p class="review-run-role">${member?`YOU · ${esc(member.name)} · ${memberLabel(member)}`:'YOU · NOT ASSIGNED'}</p>
+        </div>
+      </div>
       <section id="reviewAccess" ${recordView.access?'':'hidden'} aria-label="Manage run access">
         <ul>${(run.participants || []).map(m=>`<li><strong>${esc(m.name)}</strong> · #${esc(m.id)} · ${memberLabel(m)}</li>`).join('') || '<li>NO PARTICIPANTS</li>'}</ul>
         <div class="customer-actions">${run.decision?'':btn('participant','+ STAFF PARTICIPANT')+btn('portal-participant','+ PORTAL ACCOUNT')+btn('invite','GUEST INVITE')}${btn('revoke','REVOKE INVITE')}</div>
       </section>
-      ${run.decision?`<p class="review-close-record">Closed by ${esc(run.closed_name)} (${esc(run.closed_source)}) · ${esc(formatDate(run.closed_at))}<br>${esc(run.comment)}</p>`:!member && !focused?selfAssign():''}
+      ${run.decision?`<p class="review-close-record">Closed by ${esc(run.closed_name)} (${esc(run.closed_source)}) · ${esc(formatDate(run.closed_at))}<br>${esc(run.comment)}</p>`:''}
       <table class="review-results-table" aria-label="Review checks"><thead><tr><th scope="col">#</th><th scope="col">CHECK</th><th scope="col">TEAM RESULT</th><th scope="col">ANSWERS</th></tr></thead><tbody>
         ${p.points.map((point,i)=>{
           const id=esc(point.id), expanded=point.id===focused;
@@ -453,10 +458,10 @@
         state.predecessor=null;selectRun(page);await load();
       }
       if(verb==='run') selectRun(await request('run_get',{run_id:id}));
-      if(['join','participant','portal-participant'].includes(verb)) {
+      if(['participant','portal-participant'].includes(verb)) {
         const source=verb==='portal-participant'?'portal':'staff';
         const run=state.run, ref=inspectorRef;
-        const person=verb==='join'?{identity:'',name:await window.NRCDialog.prompt('Participant display name',{title:'ASSIGN STAFF',submitLabel:'Continue'})}:await chooseParticipant(source,run.id);
+        const person=await chooseParticipant(source,run.id);
         if(!person?.name || !current() || inspectorRef!==ref)return;
         const can_close=await window.NRCDialog.confirm('Allow this participant to explicitly close the run? Cancel assigns contribute-only rights.',{title:'CLOSE PERMISSION'});
         if(!current() || inspectorRef!==ref || state.run!==run)return;

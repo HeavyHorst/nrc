@@ -78,10 +78,6 @@ test('a different authenticated session does not inherit a reconnect draft or re
   assert.equal(c.state.ticket,'');assert.equal(c.state.answerId,'');assert.equal(c.state.predecessor,null);
 });
 const packetBody=view=>JSON.parse(new TextDecoder().decode(new Uint8Array(view.buffer,2,view.byteLength-6)));
-test('self assignment uses the authenticated identity',async()=>{
-  const c=client({prompts:['Alex'],reply:true});c.state.run={id:'41'};c.setCurrent(()=>true);await c.command('join');
-  assert.equal(packetBody(c.packets[0]).source,'staff');assert.equal(packetBody(c.packets[0]).identity,'');
-});
 test('staff can assign a portal account from a later review page without the admin RPC',async()=>{
   const c=client({canClose:true,reply:q=>q.op!=='participant_accounts'?{status:'ok'}:q.cursor?{status:'ok',cursor:'11',accounts:[{login:'customer',name:'Customer',requester:'customer@example.test'}]}:
     {status:'ok',has_more:true,cursor:'10',accounts:[{login:'other',name:'Another contact',requester:'other@example.test'}]}});

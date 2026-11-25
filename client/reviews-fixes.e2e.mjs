@@ -230,12 +230,14 @@ try {
     await definitions.locator('summary').click();assert.equal(await definitions.getAttribute('open'),'');
     await definitions.locator('summary').click();
     await op('customer').click();await prompt('Customer QA');
-    const join=op('join'), checks=editor.locator('[data-review-check]');
-    await join.waitFor();assert.equal(await join.count(),1);assert.equal(await editor.locator('[data-answer]').count(),0);
+    const checks=editor.locator('[data-review-check]');
+    const selfAssign=editor.getByRole('button',{name:'ASSIGN MYSELF',exact:true});
+    await editor.getByText('Only assigned staff can save answers here.',{exact:true}).waitFor();
+    assert.equal(await selfAssign.count(),0);assert.equal(await editor.locator('[data-answer]').count(),0);
     assert.equal(await op('close').isDisabled(),true);
     const access=editor.locator('#reviewAccessToggle');await access.click();
     for(const verb of ['participant','portal-participant','invite','revoke'])assert.equal(await op(verb).isVisible(),true);
-    await page.route('**/api/users/identities',route=>route.fulfill({json:{'alex@example.test':'Alex Example','sam@example.test':'Sam Example'}}));
+    await page.route('**/api/users/identities',route=>route.fulfill({json:{alice:'Alex Example','sam@example.test':'Sam Example'}}));
     await op('participant').click();
     const accountPicker=page.getByRole('dialog').last();
     await accountPicker.getByLabel('ACCOUNT').selectOption({label:'Sam Example · sam@example.test'});
@@ -269,8 +271,11 @@ try {
       if(focus)await focus.scrollIntoViewIfNeeded();
       await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
       assert.equal(await editor.locator('table').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'results do not overflow');
+      assert.equal(await editor.locator('.review-run-summary').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'run summary does not overflow');
       await page.screenshot({path:path.join(visualOutput,`${name}.png`)});
     };
+    const teamProgress=editor.getByRole('list',{name:'Team progress'});
+    await teamProgress.getByText('0/4 ANSWERED',{exact:true}).waitFor();
     for(const theme of ['white','dark']) {
       await page.evaluate(theme=>setTheme(theme,false),theme);
       await capture(`unassigned-desktop-${theme}`);
@@ -282,12 +287,15 @@ try {
     assert.equal(await checks.first().getAttribute('aria-expanded'),'false');
     await page.keyboard.press('Enter');
     assert.equal(await editor.locator('[data-review-check][aria-expanded="true"]').count(),0);
-    assert.equal(await join.count(),1);
+    assert.equal(await selfAssign.count(),0);
     await checks.first().press('Enter');
-    await join.click();await prompt('Alex Example','Continue');
+    await access.click();
+    await op('participant').click();
+    await accountPicker.getByLabel('ACCOUNT').selectOption({label:'Alex Example · alice'});
+    await accountPicker.getByRole('button',{name:'Continue',exact:true}).click();
     await page.getByRole('dialog').last().getByRole('button',{name:'Cancel',exact:true}).click();
     const answerForm=editor.locator('[data-answer]');await answerForm.waitFor();
-    assert.equal(await join.count(),0);assert.equal(await op('close').isDisabled(),true);
+    assert.equal(await op('close').isDisabled(),true);
     await answerForm.locator('select').selectOption('yes');
     await answerForm.locator('textarea').fill('Name, email and organization match the test account.');
     await checks.nth(1).click();await checks.first().click();
@@ -295,6 +303,10 @@ try {
     await answerForm.getByRole('button',{name:'SAVE MY ANSWER'}).click();
     await editor.getByText('ANSWER SAVED',{exact:true}).waitFor();
     assert.match(await editor.locator('.review-check-row').first().innerText(),/PASSED\s+1/);
+    await teamProgress.getByText('1/4 ANSWERED',{exact:true}).waitFor();
+    assert.equal(await editor.locator('.review-run-track span').count(),4);
+    assert.equal(await editor.locator('.review-run-track .is-answered').count(),1);
+    await capture('run-summary-answered-desktop-dark');
     assert.equal(await op('unrelease').count(),0);
     await assert.rejects(page.evaluate(async id=>{
       const form=await NRCReviews.request('get',{form_id:id});
@@ -371,7 +383,7 @@ try {
     await editor.waitFor({state:'hidden'});
     await page.locator(`[data-review="${draftId}"]`).waitFor({state:'detached'});
     await assert.rejects(page.evaluate(id=>NRCReviews.request('get',{form_id:id}),draftId),/not_found/);
-    results.push({inspector:'Concept B',checks:4,keyboard:true,accessDisclosure:true,unassignedHasOneAction:true,assignedAnswerSaved:true,narrowInputs:16});
+    results.push({inspector:'Concept B',checks:4,keyboard:true,accessDisclosure:true,assignedViaStaffPicker:true,assignedAnswerSaved:true,narrowInputs:16});
   }
   assert.deepEqual(errors,[],'no page errors');
   await fs.writeFile(path.join(output,`${phase}-results.json`),JSON.stringify({phase,results,errors},null,2));

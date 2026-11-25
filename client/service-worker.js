@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261124personlabels1";
+const CACHE_NAME = "nrc-terminal-20261125runsummary1";
 
 const APP_SHELL = [
   "./",
@@ -20,7 +20,7 @@ const APP_SHELL = [
   "./css/mobile.css?v=20261102gap1",
   "./css/custom-select.css?v=20261019compact1",
   "./css/voice.css?v=20261105voice12",
-  "./css/reviews.css?v=20261124reviewlifecycle1",
+  "./css/reviews.css?v=20261125runsummary1",
   "./dialog.js?v=20261021taskslice1",
   "./portal.js?v=20261116pickers1",
   "./custom-picker.js?v=20260927appointment2",
@@ -72,7 +72,7 @@ const APP_SHELL = [
   "./newsletter.js?v=20261022cancel1",
   "./customers.js?v=20261124personlabels1",
   "./tickets.js?v=20261124personlabels1",
-  "./reviews.js?v=20261124personlabels1",
+  "./reviews.js?v=20261125runsummary1",
   "./mobile-shell.js?v=20261019registers1",
   "./latency-worker.js",
 ];
