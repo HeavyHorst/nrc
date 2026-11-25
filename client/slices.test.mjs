@@ -108,7 +108,7 @@ function sliceFields({ outcome = "", owner = "" } = {}) {
 
 // The wire layout below mirrors protocol/tasks.odin serializeTaskSliceList, so a
 // change to one side without the other fails here rather than in the browser.
-function encodeSliceList({ convId = 0n, success = true, hasMore = false, nextCursor = null, total = 0, assignedTasks = 0, unassignedTasks = 0, error = "", correlationId = 7, slices = [] } = {}) {
+function encodeSliceList({ convId = 0n, success = true, hasMore = false, nextCursor = null, total = 0, assignedTasks = 0, unassignedTasks = 0, error = "", correlationId = 7, slices = [], reviewCounts = null } = {}) {
   const encoder = new TextEncoder();
   const errorBytes = encoder.encode(error);
   const encoded = slices.map((slice) => ({
@@ -116,7 +116,7 @@ function encodeSliceList({ convId = 0n, success = true, hasMore = false, nextCur
     owner: encoder.encode(slice.owner ?? ""),
     slice,
   }));
-  let size = 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + errorBytes.length + 4;
+  let size = 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + errorBytes.length + 4 + (reviewCounts?.length ?? 0) * 4;
   for (const entry of encoded) size += 2 + entry.name.length + 8 + 2 + entry.owner.length + 1 + 16 + 16;
   const buffer = new ArrayBuffer(size);
   const view = new DataView(buffer);
@@ -154,6 +154,7 @@ function encodeSliceList({ convId = 0n, success = true, hasMore = false, nextCur
   view.setUint16(offset, errorBytes.length, false); offset += 2;
   new Uint8Array(buffer, offset, errorBytes.length).set(errorBytes); offset += errorBytes.length;
   view.setUint32(offset, correlationId, false); offset += 4;
+  reviewCounts?.forEach(count => { view.setUint32(offset, count, false); offset += 4; });
   assert.equal(offset, size, "encoder must fill the declared frame exactly");
   return new DataView(buffer);
 }
@@ -173,12 +174,26 @@ test("slice list request uses opcode 56 with the include_closed flag and correla
   assert.equal(view.getUint16(17, false), 100, "the register draws a page at a time");
   assert.equal(view.getUint8(19), 0, "the first page carries no cursor");
   assert.equal(view.getUint32(20, false), 7);
-  assert.equal(view.byteLength, 24, "the request is the fields it carries");
+  assert.equal(view.getUint16(24, false), 0, "the empty project occupies its length field");
+  assert.equal(view.getUint8(26), 1, "request review counts after the project");
+  assert.equal(view.byteLength, 27, "the request is the fields it carries");
 
   slices.setIncludeClosed(true);
   const view2 = new DataView(slices.__sent[1]);
   assert.equal(view2.getUint8(10), 1);
   assert.equal(view2.getUint32(20, false), 7);
+});
+
+test("review trailer uses per-row uint32 counts after correlation without altering task counts", () => {
+  const slices = loadSlices();
+  slices.requestList({ force: true });
+  const rows = [{ name: "Alpha", sliceId: 5n, todo: 2 }, { name: "Beta", sliceId: 6n, done: 3 }];
+  assert.throws(() => slices.handleSliceList(encodeSliceList({ slices: rows, reviewCounts: [1] })), /invalid slice review counts/);
+  slices.handleSliceList(encodeSliceList({ slices: rows, reviewCounts: [65537, 7] }));
+  const [alpha, beta] = slices.getState().slices;
+  assert.deepEqual([alpha.reviews, beta.reviews], [65537, 7]);
+  assert.deepEqual([slices.memberCount(alpha), slices.memberCount(beta)], [65539, 10]);
+  assert.deepEqual([slices.taskCount(alpha), slices.openCount(alpha), slices.taskCount(beta), slices.openCount(beta)], [2, 2, 3, 0]);
 });
 
 test("slice list decode reads counters, closure and the work counters", () => {
@@ -315,7 +330,7 @@ test("deleting a slice names what it releases before anything is sent", async ()
   assert.equal(dialogs[0].options.title, "DELETE SLICE");
   assert.match(dialogs[0].message, /Delete slice “Alpha”\?/);
   assert.match(dialogs[0].message, /1 membership is released/);
-  assert.match(dialogs[0].message, /The tasks, notes and files themselves stay/);
+  assert.match(dialogs[0].message, /The member records themselves stay/);
 
   assert.equal(deleted.length, 1, "one delete is sent");
   assert.equal(deleted[0].convId, 0n, "a slice lives in the workspace scope");
@@ -1596,6 +1611,7 @@ test("a filter change asks the server with the filter in the request", async () 
   slices.setProjectFilter("NRC");
   const project = sliceRequest(new DataView(slices.__sent[4]));
   assert.equal(project.project, "NRC");
+  assert.equal(new DataView(slices.__sent[4]).getUint8(project.length - 1), 1);
   assert.equal(project.name, "shard");
   assert.equal(project.hasOwner, true);
 

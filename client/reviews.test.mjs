@@ -103,11 +103,13 @@ test('an unavailable account directory never sends an assignment',async()=>{
 });
 test('guest invitation uses the configured origin without prompting for a hostname',async()=>{
   const c=client({prompts:['2099-01-01T00:00:00Z'],reply:()=>({status:'ok',invite_id:'73',token:'a'.repeat(64)})});
+  c.context.window.NRCDateTime={pick:async options=>{assert.equal(options.futureOnly,true);return Date.parse('2099-01-01T00:00:00Z');}};
   c.context.URL=URL;c.context.fetch=async path=>{assert.equal(path,'/api/features');return {ok:true,json:async()=>({review_portal_origin:'https://tickets.example.test'})};};
   c.state.run={id:'41'};await c.command('invite');
-  assert.equal(c.messages.length,1);assert.match(c.messages[0],/Expiry/);
+  assert.equal(c.messages.length,0);
   assert.match(c.state.notice,/https:\/\/tickets\.example\.test\/abnahmen\/einladung#/);
   assert.equal(packetBody(c.packets[0]).op,'invite');
+  assert.equal(packetBody(c.packets[0]).expires_at,String(BigInt(Date.parse('2099-01-01T00:00:00Z'))*1000000n));
 });
 test('revoke remains a valid command for completed runs',async()=>{
   const c=client({prompts:['73'],reply:true});c.state.run={id:'41',decision:'completed'};await c.command('revoke');
@@ -150,7 +152,7 @@ test('comparison includes all contributions, open points, conflicts and closing 
   const c=client(),point={id:'1',question:'<Question>'},run={id:'11',label:'Team A',kind:'qa',answered_points:1,decision:'completed',closed_name:'Closer',closed_source:'staff',comment:'Reviewed',participants:[{id:'21',source:'guest',can_close:false},{id:'22',source:'staff',can_close:true}],answers:[{id:'81',point_id:'1',participant_id:'21',name:'Alex',result:'yes',comment:'Works'},{id:'82',point_id:'1',participant_id:'22',name:'Alex',result:'no',comment:'<broken>'}]};
   const html=c.comparisonMarkup({points:[point,{id:'2',question:'Other'}]},[run])+c.contributionMarkup(point,run);
   for(const expected of ['CONFLICTING','OPEN','COMPLETED','Closer','Reviewed','Alex · #21','Alex · #22','Works','&lt;broken&gt;','&lt;Question&gt;','tabindex="0"'])assert.ok(html.includes(expected),expected);
-  for(const expected of ['GUEST · SELF-DECLARED NAME · CONTRIBUTE ONLY','STAFF · VERIFIED ACCOUNT · MAY CLOSE','ANSWER ASSET #81','finding:82'])assert.ok(html.includes(expected),expected);
+  for(const expected of ['GUEST · SELF-DECLARED NAME · CONTRIBUTE ONLY','STAFF · VERIFIED ACCOUNT · MAY CLOSE','ANSWER ASSET #81','data-finding-references="82"'])assert.ok(html.includes(expected),expected);
   assert.equal(html.includes('<broken>'),false);
 });
 test('sections group nonadjacent points without renumbering and search/filter match any team',()=>{

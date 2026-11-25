@@ -97,6 +97,28 @@ with the same team label and kind. It has fresh answers and assignments; the
 old run remains unchanged. Starting from a ticket creates the same editable
 form and an optional internal edge, not a required ticket dependency.
 
+## Work slices
+
+Use **Assign review** in the Slice Inspector or `nrc slice assign <slice-id>
+--review <form-id>`. A form can belong to several slices and remains a member
+after release or archival. Runs and individual answers are not slice members.
+Unassigning removes only the membership; deleting a draft also removes its
+membership edges. Membership does not grant access to portal reports.
+
+The Slice register includes forms in its member count, not its task counts or
+task coverage. Opted-in `C_ListTaskSlices` requests append byte `1` after the
+length-prefixed project filter (which can be empty). `S_TaskSliceList` then
+appends a big-endian u32 review count per row after the existing correlation ID.
+Legacy requests get the original response. Counts use the existing indexed
+membership projection and need no schema migration. New memberships and edits
+to the form itself contribute to Slice movement, not changes to runs or answers.
+Existing memberships gain that timestamp when the form is next edited; past
+activity is not replayed.
+
+Update the server before serving the new web client: older servers reject the
+opt-in request. The CLI can retry slice listings in the legacy format, without
+review counts.
+
 ## Wire contract and storage
 
 `C_Review` (77) is opcode u16 big-endian + JSON + correlation u32 big-endian.

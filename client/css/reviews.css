@@ -117,7 +117,8 @@
 .review-section th { font-weight: 600; }
 .review-comparison-answer { border-top: var(--content-border); margin-top: 0.5rem; padding-top: 0.5rem; }
 .review-comparison-answer p { white-space: pre-wrap; margin-block: 0.25rem; }
-.review-comparison-answer .btn { margin: 0.25rem 0.25rem 0.25rem 0; white-space: normal; }
+.review-comparison-answer .customer-actions { justify-content: flex-start; flex-wrap: wrap; margin-block: 0.5rem; }
+.review-comparison-answer .btn { white-space: normal; }
 @media (max-width: 1050px) {
     .review-comparison-layout { grid-template-columns: minmax(0, 1fr); }
     .review-comparison-scroll { max-height: 48dvh; }

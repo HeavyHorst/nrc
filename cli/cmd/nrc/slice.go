@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -99,6 +100,7 @@ type sliceEntry struct {
 	Notes          uint16 `json:"notes"`
 	Files          uint16 `json:"files"`
 	Tickets        uint16 `json:"tickets"`
+	Reviews        uint32 `json:"reviews"`
 	Open           uint32 `json:"open"`
 	Backlog        uint16 `json:"backlog"`
 	Todo           uint16 `json:"todo"`
@@ -129,6 +131,7 @@ func toSliceEntry(slice protocol.TaskSlice, record *sliceRecord) sliceEntry {
 		Notes:          slice.Notes,
 		Files:          slice.Files,
 		Tickets:        slice.Tickets,
+		Reviews:        slice.Reviews,
 		Open:           slice.OpenCount(),
 		Backlog:        slice.Backlog,
 		Todo:           slice.Todo,
@@ -162,12 +165,18 @@ type sliceListing struct {
 // workspace counters belong to the first page, which is the one that folds them.
 func fetchTaskSlices(s *conn.Session, query protocol.SliceQuery) (sliceListing, error) {
 	var listing sliceListing
+	query.IncludeReviews = true
 	for {
 		resp, err := s.SendAndRecv(&protocol.Message{
 			Opcode: protocol.C_ListTaskSlices,
 			Data:   protocol.EncodeListTaskSlices(protocol.WorkspaceDataConvID, query, 0),
 		})
 		if err != nil {
+			var reply *conn.ServerError
+			if query.IncludeReviews && errors.As(err, &reply) && reply.OriginOpcode == protocol.C_ListTaskSlices && reply.Message == "Failed to parse request" {
+				query.IncludeReviews = false
+				continue
+			}
 			return listing, err
 		}
 		if resp.Opcode != protocol.S_TaskSliceList {
@@ -296,6 +305,7 @@ func resolveMemberKinds(cmd *cobra.Command) ([]sliceMemberKind, error) {
 		{"task", "task", protocol.TargetTypeTask},
 		{"note", "note", protocol.TargetTypeAsset},
 		{"file", "file", protocol.TargetTypeAsset},
+		{"review", "review", protocol.TargetTypeAsset},
 	}
 	var kinds []sliceMemberKind
 	for _, kind := range flags {
@@ -314,7 +324,7 @@ func resolveMemberKinds(cmd *cobra.Command) ([]sliceMemberKind, error) {
 		kinds = append(kinds, sliceMemberKind{name: kind.name, targetType: kind.targetType, ids: ids})
 	}
 	if len(kinds) == 0 {
-		return nil, fmt.Errorf("name the members with --task, --note or --file")
+		return nil, fmt.Errorf("name the members with --task, --note, --file or --review")
 	}
 	return kinds, nil
 }
@@ -322,27 +332,35 @@ func resolveMemberKinds(cmd *cobra.Command) ([]sliceMemberKind, error) {
 // sliceMemberEdges returns the member-of edges of a slice, so a caller can match
 // one against the member it wants to remove.
 func sliceMemberEdges(s *conn.Session, sliceID uint64) ([]protocol.Edge, error) {
-	resp, err := s.SendAndRecv(&protocol.Message{
-		Opcode: protocol.C_ListEdges,
-		Data:   protocol.EncodeListEdges(protocol.WorkspaceDataConvID, protocol.TargetTypeAsset, sliceID),
-	})
-	if err != nil {
-		return nil, err
-	}
-	if resp.Opcode != protocol.S_EdgeList {
-		return nil, fmt.Errorf("unexpected response: %d", resp.Opcode)
-	}
-	edges, err := protocol.DecodeEdgeList(resp.Data)
-	if err != nil {
-		return nil, fmt.Errorf("parsing slice members: %w", err)
-	}
-	members := make([]protocol.Edge, 0, len(edges))
-	for _, edge := range edges {
-		if edge.Relation == protocol.RelationMemberOf {
-			members = append(members, edge)
+	var members []protocol.Edge
+	for after := uint64(0); ; {
+		resp, err := s.SendAndRecv(&protocol.Message{
+			Opcode: protocol.C_ListEdgesPaged,
+			Data:   protocol.EncodeListEdgesPaged(protocol.WorkspaceDataConvID, protocol.TargetTypeAsset, sliceID, 200, after, 1),
+		})
+		if err != nil {
+			return nil, err
 		}
+		if resp.Opcode != protocol.S_EdgeListPage {
+			return nil, fmt.Errorf("unexpected edge page response: %d", resp.Opcode)
+		}
+		page, err := protocol.DecodeEdgeListPage(resp.Data)
+		if err != nil {
+			return nil, fmt.Errorf("parsing slice members: %w", err)
+		}
+		for _, edge := range page.Edges {
+			if edge.Relation == protocol.RelationMemberOf {
+				members = append(members, edge)
+			}
+		}
+		if !page.HasMore {
+			return members, nil
+		}
+		if page.NextEdgeID <= after {
+			return nil, fmt.Errorf("slice member cursor did not advance")
+		}
+		after = page.NextEdgeID
 	}
-	return members, nil
 }
 
 // edgeMemberMatches reports whether an edge joins this slice to the given member.
@@ -416,11 +434,12 @@ var sliceListCmd = &cobra.Command{
 				strconv.FormatUint(uint64(entry.Blocked), 10),
 				strconv.FormatUint(uint64(entry.Done), 10),
 				strconv.FormatUint(uint64(entry.Tickets), 10),
+				strconv.FormatUint(uint64(entry.Reviews), 10),
 				sliceAge(entry.LastMovedAt),
 				sliceState(entry),
 			})
 		}
-		table := tablewriter.NewTable(os.Stdout, tablewriter.WithHeader([]string{"ID", "SLICE", "MEM", "OPEN", "BLK", "DONE", "TICKETS", "MOVED", "STATE"}))
+		table := tablewriter.NewTable(os.Stdout, tablewriter.WithHeader([]string{"ID", "SLICE", "MEM", "OPEN", "BLK", "DONE", "TICKETS", "REVIEWS", "MOVED", "STATE"}))
 		for _, row := range rows {
 			table.Append(row)
 		}
@@ -471,6 +490,7 @@ var sliceGetCmd = &cobra.Command{
 			{"NOTES", strconv.FormatUint(uint64(entry.Notes), 10)},
 			{"FILES", strconv.FormatUint(uint64(entry.Files), 10)},
 			{"TICKETS", strconv.FormatUint(uint64(entry.Tickets), 10)},
+			{"REVIEWS", strconv.FormatUint(uint64(entry.Reviews), 10)},
 			{"OLDEST OPEN", sliceAge(entry.OldestActiveAt)},
 			{"LAST MOVED", sliceAge(entry.LastMovedAt)},
 			{"OUTCOME", sliceOrDash(entry.Outcome)},
@@ -772,9 +792,22 @@ var sliceCreateCmd = &cobra.Command{
 	},
 }
 
+func validateSliceReview(s *conn.Session, kind string, id uint64) {
+	if kind != "review" {
+		return
+	}
+	asset, err := fetchAsset(s, id)
+	if err != nil {
+		conn.Fatal("Could not read review form %d: %v", id, err)
+	}
+	if asset.AssetType != protocol.AssetTypeReviewForm {
+		conn.FatalInvalid("Asset %d is not a review form", id)
+	}
+}
+
 var sliceAssignCmd = &cobra.Command{
-	Use:         "assign <id> --task <id> | --note <id> | --file <id>",
-	Short:       "Assign tasks, notes or files to a slice",
+	Use:         "assign <id> --task <id> | --note <id> | --file <id> | --review <id>",
+	Short:       "Assign tasks, notes, files or review forms to a slice",
 	Args:        cobra.ExactArgs(1),
 	Annotations: map[string]string{"mutation": "true"},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -798,6 +831,7 @@ var sliceAssignCmd = &cobra.Command{
 		assigned := make([]string, 0)
 		for _, kind := range members {
 			for _, memberID := range kind.ids {
+				validateSliceReview(s, kind.name, memberID)
 				resp, err := s.SendAndRecv(&protocol.Message{
 					Opcode: protocol.C_CreateEdge,
 					Data: protocol.EncodeCreateEdgeWithCorrelation(
@@ -826,8 +860,8 @@ var sliceAssignCmd = &cobra.Command{
 }
 
 var sliceUnassignCmd = &cobra.Command{
-	Use:         "unassign <id> --task <id> | --note <id> | --file <id>",
-	Short:       "Remove tasks, notes or files from a slice",
+	Use:         "unassign <id> --task <id> | --note <id> | --file <id> | --review <id>",
+	Short:       "Remove tasks, notes, files or review forms from a slice",
 	Args:        cobra.ExactArgs(1),
 	Annotations: map[string]string{"mutation": "true"},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -855,6 +889,7 @@ var sliceUnassignCmd = &cobra.Command{
 		removed := make([]string, 0)
 		for _, kind := range members {
 			for _, memberID := range kind.ids {
+				validateSliceReview(s, kind.name, memberID)
 				edgeID := uint64(0)
 				for _, edge := range edges {
 					if edgeMemberMatches(edge, slice.SliceID, kind.targetType, memberID) {
@@ -1175,9 +1210,11 @@ func init() {
 	sliceAssignCmd.Flags().StringSlice("task", nil, "Task IDs to assign")
 	sliceAssignCmd.Flags().StringSlice("note", nil, "Note IDs to assign")
 	sliceAssignCmd.Flags().StringSlice("file", nil, "File IDs to assign")
+	sliceAssignCmd.Flags().StringSlice("review", nil, "Review form IDs to assign")
 	sliceUnassignCmd.Flags().StringSlice("task", nil, "Task IDs to remove")
 	sliceUnassignCmd.Flags().StringSlice("note", nil, "Note IDs to remove")
 	sliceUnassignCmd.Flags().StringSlice("file", nil, "File IDs to remove")
+	sliceUnassignCmd.Flags().StringSlice("review", nil, "Review form IDs to remove")
 	sliceCmd.AddCommand(
 		sliceListCmd,
 		sliceGetCmd,

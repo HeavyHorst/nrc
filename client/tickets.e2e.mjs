@@ -2,12 +2,13 @@
 // This fixture owns disposable data and a fake staff identity; never production.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import fs from 'node:fs/promises';
 
 const url = process.env.NRC_TICKETS_TEST_URL;
 if (!url) throw new Error('Set NRC_TICKETS_TEST_URL to the disposable real-server fixture');
 const browser = await chromium.launch();
 try {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 2, serviceWorkers: 'block' });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 2, serviceWorkers: 'block', timezoneId: 'Europe/Berlin' });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${url}/#workspace=tickets-browser-${Date.now()}`);
@@ -51,6 +52,33 @@ try {
   await page.fill('[name=requester]', 'customer@example.test');
   await page.fill('[name=requester_name]', 'Customer');
   await page.fill('[name=body]', 'Original request');
+  await fs.mkdir('.amp/in/artifacts', { recursive: true });
+  for (const theme of ['light', 'dark']) {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.evaluate(async theme => {
+        document.documentElement.dataset.theme = theme;
+        await NRCInspector.openEntity({ type: 'ticket', id: 0n });
+      }, theme);
+      await page.locator('#ticketFollowUp').locator('..').screenshot({ path: `.amp/in/artifacts/ticket-follow-up-create-${theme}-${width}.png` });
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => NRCInspector.openEntity({ type: 'ticket', id: 0n }));
+  const dateDialog = page.locator('dialog.nrc-dialog-backdrop');
+  await page.locator('[data-ticket-follow-up]').click();
+  assert.equal(await dateDialog.getByRole('radio', { name: '7 days', exact: true }).isChecked(), true);
+  await dateDialog.getByRole('radio', { name: '1 day', exact: true }).check();
+  await dateDialog.getByRole('button', { name: 'Apply', exact: true }).click();
+  assert.notEqual(await page.inputValue('[name=follow_up_at]'), '');
+  const draftedFollowUp = await page.inputValue('[name=follow_up_at]');
+  await page.locator('[data-ticket-follow-up]').click();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.inputValue('[name=follow_up_at]'), draftedFollowUp, 'cancel keeps the unsaved follow-up');
+  await page.locator('[data-ticket-follow-up]').click();
+  await dateDialog.getByRole('button', { name: 'No date', exact: true }).click();
+  assert.equal(await page.inputValue('[name=follow_up_at]'), '');
+  assert.equal(await page.inputValue('[name=body]'), 'Original request', 'date selection retains the original-request draft');
   const attach = async (name, text) => {
     assert.equal(await page.locator('[data-ticket-files]').isVisible(), false);
     const chooser = page.waitForEvent('filechooser');
@@ -131,10 +159,25 @@ try {
   await page.getByRole('button', { name: /^Edit PRIORITY:/ }).click();
   await page.locator('.inline-field-editor').getByRole('option', { name: 'URGENT', exact: true }).click();
   await page.waitForFunction(() => !NRCTickets.state.pending && !document.querySelector('.inline-field-editor'));
-  await inline('FOLLOW-UP · LOCAL TIME', '2020-01-02T13:45');
+  await page.getByRole('button', { name: /^Edit FOLLOW-UP/ }).click();
+  assert.equal(await dateDialog.getByRole('radio', { name: '7 days', exact: true }).isChecked(), true);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('.inline-field-editor'));
+  assert.equal(await page.evaluate(async id => JSON.parse((await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0].preview).follow_up_at || '', id), '', 'cancel does not persist a default follow-up');
+  const past = await page.evaluate(() => {
+    const date = new Date(); date.setDate(date.getDate()-3); date.setHours(13,45,0,0);
+    return { key: `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`, ms: String(date.getTime()) };
+  });
+  await page.getByRole('button', { name: /^Edit FOLLOW-UP/ }).click();
+  await dateDialog.getByRole('radio', { name: 'Custom date', exact: true }).check();
+  if (!await dateDialog.getByRole('button', { name: past.key, exact: true }).count()) await dateDialog.getByRole('button', { name: 'Previous month', exact: true }).click();
+  await dateDialog.getByRole('button', { name: past.key, exact: true }).click();
+  await dateDialog.locator('input[type=time]').fill('13:45');
+  await dateDialog.getByRole('button', { name: 'Apply', exact: true }).click();
+  await page.waitForFunction(() => !NRCTickets.state.pending && !document.querySelector('.inline-field-editor'));
   const schedule = await page.evaluate(async id => JSON.parse((await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0].preview), id);
   assert.equal(schedule.priority, 'urgent');
-  assert.equal(schedule.follow_up_at, String(new Date(2020, 0, 2, 13, 45).getTime()));
+  assert.equal(schedule.follow_up_at, past.ms);
   await page.locator('#ticketsPanel [data-filter="priority"]').selectOption('normal');
   await page.waitForFunction(() => !NRCTickets.state.loading && NRCTickets.state.rows.length === 0);
   await page.locator('#ticketsPanel [data-filter="priority"]').selectOption('urgent');
@@ -146,7 +189,10 @@ try {
   await page.locator('#ticketsPanel [data-filter="search"]').fill('');
   await page.locator('#ticketsPanel [data-filter="priority"]').selectOption('');
   await page.locator('#ticketsPanel [data-filter="follow_up"]').selectOption('');
-  await inline('FOLLOW-UP · LOCAL TIME', '');
+  await page.getByRole('button', { name: /^Edit FOLLOW-UP/ }).click();
+  assert.equal(await dateDialog.getByRole('radio', { name: 'Custom date', exact: true }).isChecked(), true);
+  await dateDialog.getByRole('button', { name: 'No date', exact: true }).click();
+  await page.waitForFunction(() => !NRCTickets.state.pending && !document.querySelector('.inline-field-editor'));
   // The wire supports dates beyond JavaScript Date: CLEAR must still write.
   await page.evaluate(async id => {
     const asset = (await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0];
@@ -155,10 +201,28 @@ try {
     await NRCTickets.reload();
   }, id);
   await page.getByRole('button', { name: /^Edit FOLLOW-UP/ }).click();
-  assert.equal(await page.locator('.inline-field-editor input').inputValue(), '');
-  await page.locator('.inline-field-editor').getByRole('button', { name: 'CLEAR', exact: true }).click();
+  await dateDialog.getByRole('button', { name: 'No date', exact: true }).click();
   await page.waitForFunction(() => !NRCTickets.state.pending && !document.querySelector('.inline-field-editor'));
   assert.equal(await page.evaluate(async id => JSON.parse((await NRCAssets.requestAssetsByIds(0n, [BigInt(id)], { force: true }))[0].preview).follow_up_at, id), '');
+  for (const theme of ['light', 'dark']) {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.evaluate(async ({ theme, id }) => {
+        document.documentElement.dataset.theme = theme;
+        await NRCInspector.close();
+        await NRCInspector.openEntity({ roomId: 0n, type: 'ticket', id: BigInt(id) });
+      }, { theme, id });
+      await page.getByRole('button', { name: /^Edit FOLLOW-UP/ }).click();
+      for (const mode of ['default', 'custom']) {
+        if (mode === 'custom') await dateDialog.getByRole('radio', { name: 'Custom date', exact: true }).check();
+        assert.ok(await dateDialog.locator('.nrc-dialog').evaluate(el => { const r=el.getBoundingClientRect(); return r.left>=0 && r.right<=innerWidth && r.bottom<=innerHeight; }));
+        await dateDialog.locator('.nrc-dialog').screenshot({ path: `.amp/in/artifacts/ticket-follow-up-${mode}-${theme}-${width}.png` });
+      }
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => !document.querySelector('.inline-field-editor'));
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.locator('#inspectorHeader [data-history-kind]').click();
   await page.waitForFunction(() => document.querySelector('#historyStatus').textContent.includes('EVENTS'));
   assert.match(await page.textContent('#historyBody'), /Changed Details/);

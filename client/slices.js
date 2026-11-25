@@ -2,7 +2,7 @@
 // NRC SLICE VIEW
 // =============================================================================
 // A slice is an explicit work stream: an asset of type `AssetType.Slice` whose
-// members are the tasks, notes, files and tickets linked with a `member-of` edge.
+// members are the tasks, notes, files, tickets and review forms linked with a `member-of` edge.
 //
 // This module derives nothing. The server lists the records and folds each one's
 // counters from its membership edges, so the register, the record and the CLI
@@ -17,6 +17,7 @@
   const NOTE_ASSET_TYPE = 5;
   const FILE_ASSET_TYPE = 3;
   const TICKET_ASSET_TYPE = 13;
+  const REVIEW_FORM_ASSET_TYPE = 18;
 
   const MAX_PROJECT_LENGTH = 128;
   const MAX_OWNER_LENGTH = 32;
@@ -79,6 +80,7 @@
     notes: { mode: "idle", assets: [] },
     files: { mode: "idle", assets: [] },
     tickets: { mode: "idle", assets: [] },
+    reviews: { mode: "idle", assets: [] },
     createOpen: false,
     writeError: "",
     refreshError: "",
@@ -193,7 +195,7 @@
 
   // Only tasks contribute to status shares; MEM also includes other members.
   function memberCount(slice) {
-    return taskCount(slice) + slice.notes + slice.files + (slice.tickets ?? 0);
+    return taskCount(slice) + slice.notes + slice.files + (slice.tickets ?? 0) + (slice.reviews ?? 0);
   }
 
   function ageHours(timestamp) {
@@ -423,8 +425,9 @@
     const projectBytes = encoder.encode(filters.project || "");
     const hasName = nameBytes.length > 0;
     // opcode, conv id, the two flags, the owner and its length, the name flag and
-    // its length, the page bound, the cursor flag and the correlation id.
-    const buffer = new ArrayBuffer(24 + ownerBytes.length + nameBytes.length + (cursor ? 17 : 0) + (projectBytes.length ? 2 + projectBytes.length : 0));
+    // its length, the page bound, the cursor flag, the correlation id, the
+    // project and its length, and the review counts opt-in.
+    const buffer = new ArrayBuffer(27 + ownerBytes.length + nameBytes.length + (cursor ? 17 : 0) + projectBytes.length);
     const view = new DataView(buffer);
     view.setUint16(0, LIST_TASK_SLICES, false);
     view.setBigUint64(2, state.roomId, false);
@@ -454,10 +457,10 @@
     }
     view.setUint32(offset, correlationId, false);
     offset += 4;
-    if (projectBytes.length) {
-      view.setUint16(offset, projectBytes.length, false);
-      new Uint8Array(buffer, offset + 2, projectBytes.length).set(projectBytes);
-    }
+    view.setUint16(offset, projectBytes.length, false);
+    offset += 2;
+    new Uint8Array(buffer, offset, projectBytes.length).set(projectBytes);
+    view.setUint8(offset + projectBytes.length, 1);
     return buffer;
   }
 
@@ -629,27 +632,22 @@
     headlessReads.clear();
   }
 
-  // readSlicePage parses one S_TaskSliceList frame: the rows and the facts that
-  // belong to the page. The register's window and a headless read read one frame the
-  // same way, so a change to the wire lands in both.
-  function readSlicePage(dataView) {
-    return window.NRCFrames.decodeTaskSliceList(dataView);
-  }
-
+  // Both the register and headless reads use the decoded correlation: a review
+  // count trailer may follow it.
   function handleSliceList(dataView) {
-    const correlationId = dataView.getUint32(dataView.byteLength - 4, false);
+    const page = window.NRCFrames.decodeTaskSliceList(dataView);
+    const { correlationId } = page;
     // A headless read owns its correlation id, so a derived view can walk the whole
     // listing while the register asks for its own pages.
     const headless = headlessReads.get(correlationId);
     if (headless) {
       headlessReads.delete(correlationId);
       clearTimeout(headless.timer);
-      headless.resolve(readSlicePage(dataView));
+      headless.resolve(page);
       return;
     }
     if (!pendingList || correlationId !== pendingList.correlationId) return;
 
-    const page = readSlicePage(dataView);
     if (page.roomId !== state.roomId) return;
     const { success, hasMore, cursor, total, assignedTasks, unassignedTasks, error } = page;
 
@@ -706,7 +704,7 @@
     if (first) {
       const signature = state.slices.map((slice) => [slice.sliceId, slice.name, slice.owner, slice.flags,
         slice.backlog, slice.todo, slice.inProgress, slice.done, slice.blocked, slice.notes,
-        slice.files, slice.tickets, slice.lastMovedAt].join(":")).join("|");
+        slice.files, slice.tickets, slice.reviews ?? 0, slice.lastMovedAt].join(":")).join("|");
       if (signature !== listSignature) {
         listSignature = signature;
         if (typeof document?.dispatchEvent === "function") {
@@ -852,7 +850,7 @@
   // ---------------------------------------------------------------------------
 
   // memberRefs reads the slice's membership out of the edge cache. The caller
-  // loads the page first; everything after that is local, so rendering a member
+  // loads every page first; everything after that is local, so rendering a member
   // list costs no request.
   function memberRefs(sliceId) {
     const targetType = edgeTargets().Asset;
@@ -908,6 +906,7 @@
       state.notes = { mode: "idle", assets: [] };
       state.files = { mode: "idle", assets: [] };
       state.tickets = { mode: "idle", assets: [] };
+      state.reviews = { mode: "idle", assets: [] };
       state.refreshError = "";
       render();
       return;
@@ -928,6 +927,7 @@
       state.notes = { mode: "loading", assets: [] };
       state.files = { mode: "loading", assets: [] };
       state.tickets = { mode: "loading", assets: [] };
+      state.reviews = { mode: "loading", assets: [] };
       state.refreshError = "";
     }
     render();
@@ -953,12 +953,7 @@
       });
     });
 
-    // One edge read answers what the slice carries. The entities behind the
-    // edges come from the caches the other views already fill, and only what is
-    // missing is fetched.
-    const members = window.NRCEdges.requestEdgePage(
-      0n, edgeTargets().Asset, slice.sliceId, { limit: MEMBER_PAGE_LIMIT },
-    ).then(() => resolveMembers(slice));
+    const members = resolveMembers(slice, () => generation !== detailGeneration);
 
     Promise.all([record, members])
       .then(([, resolved]) => {
@@ -968,6 +963,7 @@
         state.notes = { mode: "ready", assets: resolved.notes };
         state.files = { mode: "ready", assets: resolved.files };
         state.tickets = { mode: "ready", assets: resolved.tickets };
+        state.reviews = { mode: "ready", assets: resolved.reviews };
         state.detail = { mode: "ready", error: "" };
         state.refreshError = "";
         detailLoading = false;
@@ -989,11 +985,20 @@
         state.notes = { mode: "error", assets: [] };
         state.files = { mode: "error", assets: [] };
         state.tickets = { mode: "error", assets: [] };
+        state.reviews = { mode: "error", assets: [] };
         render();
       });
   }
 
-  async function resolveMembers(slice) {
+  async function resolveMembers(slice, isCancelled) {
+    let page;
+    do {
+      page = await window.NRCEdges.requestEdgePage(0n, edgeTargets().Asset, slice.sliceId, {
+        limit: MEMBER_PAGE_LIMIT, session: page?.session, isCancelled,
+      });
+      if (isCancelled()) return;
+    } while (page?.hasMore);
+
     const refs = memberRefs(slice.sliceId);
     const workOrder = taskSort === "workOrder";
     const [result, assets] = await Promise.all([
@@ -1009,6 +1014,7 @@
       notes: assets.filter(asset => asset.assetType === NOTE_ASSET_TYPE),
       files: assets.filter(asset => asset.assetType === FILE_ASSET_TYPE),
       tickets: assets.filter(asset => asset.assetType === TICKET_ASSET_TYPE),
+      reviews: assets.filter(asset => asset.assetType === REVIEW_FORM_ASSET_TYPE),
     };
   }
 
@@ -1297,7 +1303,7 @@
     }
     const members = memberCount(slice);
     const message = members
-      ? `Delete slice “${slice.name}”? Its ${members} ${members === 1 ? "membership is" : "memberships are"} released and the record, including its outcome, is gone. The tasks, notes and files themselves stay.`
+      ? `Delete slice “${slice.name}”? Its ${members} ${members === 1 ? "membership is" : "memberships are"} released and the record, including its outcome, is gone. The member records themselves stay.`
       : `Delete slice “${slice.name}”? The record is gone, and nothing was assigned to it.`;
     const confirmed = await window.NRCDialog.confirm(message, { title: "DELETE SLICE", confirmLabel: "Delete slice" });
     if (!confirmed) return false;
@@ -1350,9 +1356,11 @@
       state.notes = { mode: "idle", assets: [] };
       state.files = { mode: "idle", assets: [] };
       state.tickets = { mode: "idle", assets: [] };
+      state.reviews = { mode: "idle", assets: [] };
       state.refreshError = "";
     }
     state.tickets.assets = state.tickets.assets.filter(ticket => ticket.assetId !== assetId);
+    state.reviews.assets = state.reviews.assets.filter(review => review.assetId !== assetId);
     invalidate({ debounce: false });
     render();
   }
@@ -1366,6 +1374,15 @@
   // and ticket mutations also affect other slices and their project choices.
   function onAssetChanged(asset, reason, correlationId) {
     if (reason !== "mutation" || asset?.convId !== state.roomId) return;
+    if (asset.assetType === REVIEW_FORM_ASSET_TYPE) {
+      invalidate();
+      const index = state.reviews.assets.findIndex(review => review.assetId === asset.assetId);
+      if (index !== -1) {
+        state.reviews.assets[index] = asset;
+        render();
+      }
+      return;
+    }
     if (asset.assetType === TICKET_ASSET_TYPE) {
       invalidate();
       const index = state.tickets.assets.findIndex(ticket => ticket.assetId === asset.assetId);
@@ -1453,6 +1470,7 @@
       kinds: [kind],
       relation: { value: edgeRelations().MemberOf, label: "member-of" },
       className: "slice-member-picker",
+      excludedIds: kind === "review" ? new Set(state.reviews.assets.map(asset => asset.assetId)) : null,
       onSelect: (item, relation, isCancelled) => new Promise((resolve, reject) => {
         if (isCancelled()) return resolve();
         const sent = window.NRCEdges.sendCreateEdge(
@@ -1683,6 +1701,10 @@
         <div class="panel-header"><div><span>TICKETS / ${slice.tickets ?? 0}</span><button class="btn" data-slice-action="assign" data-slice-kind="ticket" ${state.writePending ? "disabled" : ""}>+ ASSIGN TICKET</button></div></div>
         ${renderTickets(state.tickets)}
       </section>
+      <section class="slice-section">
+        <div class="panel-header"><div><span>REVIEWS / ${slice.reviews ?? 0}</span><button class="btn" data-slice-action="assign" data-slice-kind="review" ${state.writePending ? "disabled" : ""}>+ ASSIGN REVIEW</button></div></div>
+        ${renderReviews(state.reviews)}
+      </section>
       ${inspectorRecord ? `<div class="slice-identity-actions" aria-label="Slice lifecycle">
         <button class="btn" data-slice-action="${closed ? "reopen" : "close"}" ${locked ? "disabled" : ""}>${closed ? "REOPEN" : "CLOSE"} SLICE</button>
         <button class="btn btn--danger" data-slice-action="delete" ${locked ? "disabled" : ""}>DELETE SLICE</button>
@@ -1702,6 +1724,25 @@
         <span class="slice-dim">${escape(metadata.status || "—")}</span>
         <span class="slice-dim">${escape(metadata.assignee || "—")}</span>
         <button type="button" class="btn btn--row" data-slice-unassign="ticket" data-slice-member="${asset.assetId}" ${state.writePending ? "disabled" : ""}>UNASSIGN</button>
+      </div>`;
+    }).join("");
+    return `<div class="slice-members">${head}${rows}</div>`;
+  }
+
+  function renderReviews(reviews) {
+    if (!reviews.assets.length) return `<p class="slice-empty">No reviews are assigned to this slice.</p>`;
+    const head = `<div class="slice-member-head slice-member--plain slice-member--review"><span>ID</span><span>TITLE</span><span>STATUS</span><span>BUILD</span><span></span></div>`;
+    const rows = reviews.assets.map(asset => {
+      let metadata = {};
+      try { metadata = JSON.parse(asset.preview) || {}; } catch { /* retain ID fallback */ }
+      const identity = `review:${asset.assetId}`;
+      const selected = activeMember?.sliceId === state.detailSliceId && activeMember.open === identity;
+      return `<div class="slice-member slice-member--plain slice-member--review${selected ? " slice-member-selected" : ""}" data-member-review="${asset.assetId}">
+        <span class="slice-dim">#${asset.assetId}</span>
+        <button type="button" class="slice-member-open" data-member-open="${identity}"${selected ? ' aria-current="true"' : ""}>${escape(metadata.title || `Review #${asset.assetId}`)}</button>
+        <span class="slice-dim">${metadata.archived ? "ARCHIVED" : metadata.released_at ? "RELEASED" : "DRAFT"}</span>
+        <span class="slice-dim">${escape(metadata.build || "—")}</span>
+        <button type="button" class="btn btn--row" data-slice-unassign="review" data-slice-member="${asset.assetId}" ${state.writePending ? "disabled" : ""}>UNASSIGN</button>
       </div>`;
     }).join("");
     return `<div class="slice-members">${head}${rows}</div>`;
@@ -2005,7 +2046,7 @@
         if (task) window.NRCTasks?.openTaskStatusMenu?.(statusToken, task);
         return;
       }
-      const member = event.target.closest("[data-member-task], [data-member-note], [data-member-file], [data-member-ticket]");
+      const member = event.target.closest("[data-member-task], [data-member-note], [data-member-file], [data-member-ticket], [data-member-review]");
       if (member) {
         // A member is a reference to an entity that lives in its own view, so it
         // opens in the inspector like every other reference in the client. The
@@ -2101,6 +2142,7 @@
     state.notes = { mode: "idle", assets: [] };
     state.files = { mode: "idle", assets: [] };
     state.tickets = { mode: "idle", assets: [] };
+    state.reviews = { mode: "idle", assets: [] };
     activeMember = null;
     state.createOpen = false;
     state.refreshError = "";

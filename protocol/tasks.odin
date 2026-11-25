@@ -1346,6 +1346,7 @@ TaskSlice :: struct {
 	notes:            u16, // Note members.
 	files:            u16, // File members.
 	tickets:          u16, // Ticket members, not TicketEntry records.
+	reviews:          u32, // ReviewForm members, only sent to opted-in readers.
 	oldest_active_at: i64, // created_at of the oldest non-Done task member, 0 if none.
 	last_moved_at:    i64, // updated_at of the most recently changed member.
 }
@@ -1388,6 +1389,7 @@ ListTaskSlicesRequest :: struct {
 	correlation_id:  u32,
 	// Optional trailing exact project filter; absent in older requests.
 	project:         []byte,
+	include_reviews: bool,
 }
 
 parseListTaskSlicesRequest :: proc(data: []byte) -> (result: ListTaskSlicesRequest, err: ProtocolParseError) {
@@ -1450,9 +1452,14 @@ parseListTaskSlicesRequest :: proc(data: []byte) -> (result: ListTaskSlicesReque
 		if !project_ok do return result, .TooShort
 		offset += 2
 		if int(project_len) > MAX_PROJECT_LENGTH do return result, .InvalidValue
-		if offset + int(project_len) != len(data) do return result, .ContentLengthMismatch
-		result.project = data[offset:]
+		end := offset + int(project_len)
+		if end > len(data) do return result, .ContentLengthMismatch
+		result.project = data[offset:end]
 		if !utf8.valid_string(string(result.project)) do return result, .InvalidValue
+		if end != len(data) {
+			if end + 1 != len(data) || data[end] != 1 do return result, .ContentLengthMismatch
+			result.include_reviews = true
+		}
 	}
 	return result, nil
 }
@@ -1476,6 +1483,7 @@ TaskSliceList :: struct {
 	unassigned_tasks:     u32, // Tasks that belong to none, so work cannot hide.
 	error:                []byte,
 	correlation_id:       u32,
+	include_reviews:      bool,
 }
 
 getSizeTaskSlice :: proc(slice: TaskSlice) -> int {
@@ -1486,6 +1494,7 @@ getSizeTaskSlice :: proc(slice: TaskSlice) -> int {
 getSizeTaskSliceList :: proc(msg: TaskSliceList) -> int {
 	size := 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + len(msg.error) + 4
 	for slice in msg.slices do size += getSizeTaskSlice(slice)
+	if msg.include_reviews do size += 4 * len(msg.slices)
 	return size
 }
 
@@ -1528,7 +1537,10 @@ serializeTaskSliceList :: proc(msg: TaskSliceList, buf: []byte) -> int {
 	endian.put_u32(buf[offset:], .Big, msg.unassigned_tasks); offset += 4
 	endian.put_u16(buf[offset:], .Big, u16(len(msg.error))); offset += 2
 	copy(buf[offset:], msg.error); offset += len(msg.error)
-	endian.put_u32(buf[offset:], .Big, msg.correlation_id)
+	endian.put_u32(buf[offset:], .Big, msg.correlation_id); offset += 4
+	if msg.include_reviews {
+		for slice in msg.slices {endian.put_u32(buf[offset:], .Big, slice.reviews); offset += 4}
+	}
 	return total
 }
 
@@ -1593,7 +1605,11 @@ parseTaskSliceList :: proc(data: []byte, allocator := context.allocator) -> (Tas
 	if offset + int(error_len) + 4 > len(data) do return result, .TooShort
 	result.error = data[offset:offset + int(error_len)]; offset += int(error_len)
 	result.correlation_id, _ = endian.get_u32(data[offset:], .Big); offset += 4
-	if offset != len(data) do return result, .ContentLengthMismatch
+	if offset != len(data) {
+		if offset + 4 * int(count) != len(data) do return result, .ContentLengthMismatch
+		result.include_reviews = true
+		for &slice in result.slices {slice.reviews, _ = endian.get_u32(data[offset:], .Big); offset += 4}
+	}
 	return result, nil
 }
 
@@ -1608,7 +1624,7 @@ task_slice_open_count :: proc(slice: TaskSlice) -> u16 {
 // status, notes, files and tickets. It is widened because the counters are independent
 // and their sum is not bounded by any single one of them.
 task_slice_member_count :: proc(slice: TaskSlice) -> int {
-	return int(slice.backlog) + int(slice.todo) + int(slice.in_progress) + int(slice.done) + int(slice.notes) + int(slice.files) + int(slice.tickets)
+	return int(slice.backlog) + int(slice.todo) + int(slice.in_progress) + int(slice.done) + int(slice.notes) + int(slice.files) + int(slice.tickets) + int(slice.reviews)
 }
 
 getSizeTaskListPage :: proc(msg: TaskListPage) -> int {

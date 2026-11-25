@@ -223,12 +223,18 @@
       }).join('')}</tr>`;}).join('') || `<tr><td colspan="${runs.length+1}">NO MATCHING POINTS</td></tr>`}
       <tr><th scope="row">DECISION</th>${runs.map(run=>`<td><strong>${run.decision?esc(run.decision.toUpperCase()):'NOT CLOSED'}</strong>${run.decision?`<p>${esc(run.closed_name)} · ${esc(run.closed_source)}</p><p>${esc(run.comment)}</p>`:''}</td>`).join('')}</tr></tbody></table></div></section>`;
   }
+  function findingReferences(id) {
+    return `<section data-finding-references="${esc(id)}"></section>`;
+  }
+  function loadFindingReferences(root) {
+    root.querySelectorAll('[data-finding-references]').forEach(el=>references(el.dataset.findingReferences,null,el));
+  }
   function contributionMarkup(point,run) {
     return `<header class="panel-header"><div><span>POINT #${esc(point.id)} · ${esc(run.label)}</span></div></header><h3>${esc(point.question)}</h3><p>${esc(point.instruction)}</p><p>EXPECTED · ${esc(point.expected) || '—'}</p>${(run.answers || []).filter(a=>a.point_id===point.id).map(a=>{
       const member=run.participants?.find(p=>p.id===a.participant_id);
       const source=member?.source || a.source;
       const provenance=source==='guest'?'GUEST · SELF-DECLARED NAME':source==='staff'?'STAFF · VERIFIED ACCOUNT':source==='portal'?'PORTAL · ASSIGNED ACCOUNT':'UNSPECIFIED SOURCE';
-      return `<section class="review-comparison-answer"><strong>${esc(a.name)} · #${esc(a.participant_id)} · ${esc(a.result.toUpperCase())}</strong><p>${provenance} · ${member?member.can_close?'MAY CLOSE':'CONTRIBUTE ONLY':'CLOSE AUTHORITY UNKNOWN'} · ANSWER ASSET #${esc(a.id)}</p><p>${esc(a.comment) || 'NO COMMENT'}</p>${btn('finding:'+a.id,'CREATE TASK FROM THIS FINDING')}${btn('refs:'+a.id,'FINDINGS / REFERENCES')}</section>`;
+      return `<section class="review-comparison-answer"><strong>${esc(a.name)} · #${esc(a.participant_id)} · ${esc(a.result.toUpperCase())}</strong><p>${provenance} · ${member?member.can_close?'MAY CLOSE':'CONTRIBUTE ONLY':'CLOSE AUTHORITY UNKNOWN'} · ANSWER ASSET #${esc(a.id)}</p><p>${esc(a.comment) || 'NO COMMENT'}</p>${findingReferences(a.id)}</section>`;
     }).join('') || '<p>OPEN · No contributions in this snapshot.</p>'}`;
   }
   function paintComparison() {
@@ -237,11 +243,12 @@
     content.innerHTML=`<div class="review-comparison-layout">${comparisonMarkup(state.form,state.comparison)}<aside class="review-contribution" aria-label="Selected contribution details" tabindex="-1"></aside></div>`;
     const point=state.form.points.find(p=>p.id===comparisonState.point),run=state.comparison.find(r=>r.id===comparisonState.run);
     content.querySelector('aside').innerHTML=point && run?contributionMarkup(point,run):'<p>Select a point × team cell to inspect each person’s contribution and create a finding task.</p>';
+    loadFindingReferences(content);
   }
   function showComparison() {
     if(comparisonView){paintComparison();return;}
     comparisonView=NRCModal.create({title:`${state.form.title} · TEAM COMPARISON`,className:'review-comparison-dialog',closeButton:true,onCancel:()=>{comparisonView=null;host()?.querySelector('[data-review-op="compare"]')?.focus({preventScroll:true});}});
-    comparisonView.panel.insertAdjacentHTML('beforeend',`<div class="review-comparison-controls"><label class="detail-edit-field"><span class="detail-edit-label">SEARCH POINTS / SECTIONS</span><input type="search" class="filter-input" data-comparison-search value="${esc(comparisonState.query)}"></label><label class="detail-edit-field"><span class="detail-edit-label">RESULT IN ANY TEAM</span><select class="filter-select" data-comparison-filter>${['all','OPEN','CONFLICTING','NO','UNABLE TO TEST','YES'].map(v=>`<option value="${v}">${v==='all'?'ALL RESULTS':v}</option>`).join('')}</select></label>${btn('compare','REFRESH SNAPSHOT')}</div><p class="overview-note" data-comparison-status role="status">${state.form.points.length} POINTS · ${state.comparison.length} RUNS · EXPLICIT SNAPSHOT</p><div data-comparison-content></div><section id="reviewComparisonReferences"></section>`);
+    comparisonView.panel.insertAdjacentHTML('beforeend',`<div class="review-comparison-controls"><label class="detail-edit-field"><span class="detail-edit-label">SEARCH POINTS / SECTIONS</span><input type="search" class="filter-input" data-comparison-search value="${esc(comparisonState.query)}"></label><label class="detail-edit-field"><span class="detail-edit-label">RESULT IN ANY TEAM</span><select class="filter-select" data-comparison-filter>${['all','OPEN','CONFLICTING','NO','UNABLE TO TEST','YES'].map(v=>`<option value="${v}">${v==='all'?'ALL RESULTS':v}</option>`).join('')}</select></label>${btn('compare','REFRESH SNAPSHOT')}</div><p class="overview-note" data-comparison-status role="status">${state.form.points.length} POINTS · ${state.comparison.length} RUNS · EXPLICIT SNAPSHOT</p><div data-comparison-content></div>`);
     comparisonView.panel.querySelector('[data-comparison-filter]').value=comparisonState.filter;
     comparisonView.panel.oninput=e=>{if(e.target.matches('[data-comparison-search]'))comparisonState.query=e.target.value;else if(e.target.matches('[data-comparison-filter]'))comparisonState.filter=e.target.value;else return;paintComparison();};
     comparisonView.panel.onchange=e=>{if(e.target.matches('[data-comparison-filter]')){comparisonState.filter=e.target.value;paintComparison();}};
@@ -300,7 +307,7 @@
         return `<div data-review-answer="${esc(a.id)}" tabindex="-1" class="review-check-answer${a.id===state.answerId?' review-answer-selected':''}">
           <strong>${esc(a.name)} · #${esc(a.participant_id)} · ${esc(a.result.toUpperCase())} · ANSWER #${esc(a.id)}</strong>
           <p class="customer-meta">${contributor?`${memberLabel(contributor)} · `:''}${esc(formatDate(a.updated_at))}</p>
-          <p class="review-answer-comment">${esc(a.comment) || 'NO COMMENT'}</p>${btn('refs:'+a.id,'FINDINGS / REFERENCES')}</div>`;
+          <p class="review-answer-comment">${esc(a.comment) || 'NO COMMENT'}</p>${findingReferences(a.id)}</div>`;
       }).join('') || '<p class="review-check-answer customer-meta">NO CONTRIBUTIONS</p>'}
       ${run.decision?'':member?.source==='staff'?`<form data-answer="${esc(point.id)}" class="review-answer-form">
         <label class="detail-edit-field"><span class="detail-edit-label">MY RESULT</span><select class="filter-select" name="result" required>
@@ -393,6 +400,7 @@
       action(async()=>{await request('answer',fields);recordView.drafts.delete(`${r.id}:${fields.point_id}`);await load();status('ANSWER SAVED');});
     };
     root.setAttribute('aria-busy','false');
+    loadFindingReferences(root);
     updateConnectionControls();
   }
   async function command(op, anchor) {
@@ -478,24 +486,44 @@
     recordView.point=null;recordView.access=false;status('');syncReference();
   }
   const link=(source,type,id)=>write(options=>window.NRCEdges.sendCreateEdge(0n,1,BigInt(source),type,BigInt(id),window.NRCEdges.RelationType.RelatedTo,options));
-  async function references(id,anchor) {
-    const root=comparisonView?.panel.querySelector('#reviewComparisonReferences') || document.getElementById('reviewReferences'); if(!root)return;
-    if (anchor && !comparisonView) (anchor.closest('.customer-actions') || anchor).after(root);
-    root.innerHTML='<p role="status">LOADING REFERENCES…</p>';
+  async function references(id,anchor,inlineRoot) {
+    const root=inlineRoot || document.getElementById('reviewReferences'); if(!root)return;
+    if (anchor && !inlineRoot && !comparisonView) (anchor.closest('.customer-actions') || anchor).after(root);
+    const finding=!!inlineRoot;
+    root.innerHTML=`${finding?'':`<header class="panel-header"><div><span>REFERENCES · ASSET #${esc(id)}</span></div></header><p>References remain editable after closure. Removing a link never deletes its endpoints.</p>`}<div class="customer-actions">${btn('picker','+ LINK TASK / TICKET')}${finding?btn('finding:'+id,'CREATE TASK FROM THIS FINDING'):''}</div><div data-reference-links><p role="status">LOADING REFERENCES…</p></div><nrc-link-picker></nrc-link-picker>`;
+    const links=root.querySelector('[data-reference-links]');
+    root.onclick=async e=> {
+      e.stopPropagation();
+      const b=e.target.closest('button');if(!b || state.busy || !connected())return;
+      const refresh=()=>root.isConnected?references(id,null,inlineRoot):null;
+      if(b.dataset.referenceId) {
+        comparisonView?.close();comparisonView=null;
+        return window.NRCLinksUI.navigateToTarget(0n,Number(b.dataset.referenceType),BigInt(b.dataset.referenceId));
+      }
+      if(b.dataset.unlink) action(async()=>{await write(options=>window.NRCEdges.sendDeleteEdge(0n,BigInt(b.dataset.unlink),options));status('LINK REMOVED · RECORDS RETAINED');if(comparisonView)await refresh();});
+      if(b.dataset.reviewOp==='picker') root.querySelector('nrc-link-picker').open({anchor:b,sourceType:1,sourceEntity:{assetId:BigInt(id),convId:0n},kinds:['task','ticket'],relation:{value:window.NRCEdges.RelationType.RelatedTo,label:'RELATED TO'},onSelect:item=>action(async()=>{await link(id,item.type==='task'?2:1,item.id);status('REFERENCE LINKED');if(comparisonView)await refresh();})});
+      if(b.dataset.reviewOp==='finding:'+id) action(async()=>{await createFindingTask(id);if(comparisonView)await refresh();});
+    };
     try {
-      const edges=[];let session;
-      do {const page=await window.NRCEdges.requestEdgePage(0n,1,BigInt(id),{session}); edges.push(...page.edges);session=page.session;if(!page.hasMore)break;}while(true);
+      await window.NRCLinksUI.loadLinks(0n,1,BigInt(id),()=>!root.isConnected);
+      if(!root.isConnected)return;
+      const edges=window.NRCEdges.getEdgesForEntity(0n,1,BigInt(id));
       const related=edges.filter(e=>e.relation===window.NRCEdges.RelationType.RelatedTo);
-      const finding=(state.comparison || []).concat(state.run || []).some(r=>r.answers?.some(a=>a.id===id));
-      root.innerHTML=`<header class="panel-header"><div><span>REFERENCES · ASSET #${esc(id)}</span></div></header><p>References remain editable after closure. Removing a link never deletes its endpoints.</p>${related.map(e=>{const outgoing=e.sourceType===1 && String(e.sourceId)===id;return `<p>${outgoing?e.targetType===2?'TASK':'ASSET':e.sourceType===2?'TASK':'ASSET'} #${outgoing?e.targetId:e.sourceId} <button class="btn" data-unlink="${e.edgeId}">REMOVE LINK</button></p>`;}).join('')}${btn('picker','+ LINK TASK / TICKET')}${finding?btn('task','CREATE TASK FROM THIS FINDING'):''}<nrc-link-picker id="reviewReferencePicker"></nrc-link-picker>`;
-      root.onclick=async e=> {
-        e.stopPropagation();
-        const b=e.target.closest('button');if(!b || state.busy)return;
-        if(b.dataset.unlink) action(async()=>{await write(options=>window.NRCEdges.sendDeleteEdge(0n,BigInt(b.dataset.unlink),options));status('LINK REMOVED · RECORDS RETAINED');});
-        if(b.dataset.reviewOp==='picker') root.querySelector('#reviewReferencePicker').open({anchor:b,sourceType:1,sourceEntity:{assetId:BigInt(id),convId:0n},kinds:['task','ticket'],relation:{value:window.NRCEdges.RelationType.RelatedTo,label:'RELATED TO'},onSelect:item=>action(async()=>{await link(id,item.type==='task'?2:1,item.id);status('REFERENCE LINKED');})});
-        if(b.dataset.reviewOp==='task') action(()=>createFindingTask(id));
-      };
-    }catch(e){root.textContent=e.message;}
+      links.innerHTML=related.map(e=>{
+        const outgoing=e.sourceType===1 && String(e.sourceId)===id;
+        const type=outgoing?e.targetType:e.sourceType, target=outgoing?e.targetId:e.sourceId;
+        const asset=type===1?window.NRCAssets.roomAssets?.get(0n)?.get(target):null;
+        const kind=window.NRCLinksUI.linkTargetKind(type,asset).label;
+        const title=window.NRCLinksUI.resolveTargetName(0n,type,target);
+        return `<div class="note-link-item" data-edge-id="${e.edgeId}">
+          <span class="note-link-direction" aria-label="${outgoing?'Outgoing link':'Incoming link'}">${outgoing?'→':'←'}</span>
+          <span class="note-link-kind" data-kind="${esc(kind.toLowerCase())}">${esc(kind)}</span>
+          <span class="note-link-relation" data-relation="${e.relation}">${esc(window.NRCEdges.RelationTypeNames?.[e.relation] || 'link')}</span>
+          <button type="button" class="note-link-target" data-reference-id="${target}" data-reference-type="${type}" title="${esc(title)}">${esc(title)}</button>
+          <button type="button" class="btn btn--row btn--danger note-link-delete" data-unlink="${e.edgeId}" title="Remove link" aria-label="Remove link to ${esc(title)}">×</button>
+        </div>`;
+      }).join('');
+    }catch(e){links.textContent=e.message;}
   }
   async function invite() {
     const config=await fetch('/api/features',{credentials:'same-origin',cache:'no-store'});
@@ -503,7 +531,7 @@
     const {review_portal_origin:origin}=await config.json();
     const url=URL.canParse(origin)?new URL(origin):null;
     if(!url || url.protocol!=='https:' || url.pathname!=='/' || url.search || url.hash || url.username || url.password)throw Error('The public review portal URL is not configured. Contact your NRC administrator.');
-    const expires=await window.NRCDialog.prompt('Expiry date and time, including timezone (ISO 8601)',{title:'GUEST LINK EXPIRY'});if(!expires)return;const ms=Date.parse(expires);if(!Number.isFinite(ms)||ms<=Date.now())throw Error('Expiry must be in the future');
+    const ms=await window.NRCDateTime.pick({title:'GUEST LINK EXPIRY',label:'Link valid for',submitLabel:'Continue',futureOnly:true});if(ms===null)return;if(!Number.isFinite(ms)||ms<=Date.now())throw Error('Expiry must be in the future');
     const can_close=await window.NRCDialog.confirm('Grant authority to CLOSE the entire run? Cancel creates a contribute-only link (recommended).',{title:'WARNING · GUEST CLOSE AUTHORITY'});
     const page=await request('invite',{run_id:state.run.id,expires_at:String(BigInt(ms)*1000000n),can_close});
     if(!/^[a-f0-9]{64}$/i.test(page.token))throw Error('Invalid invitation token returned');

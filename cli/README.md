@@ -35,6 +35,80 @@ Rooms and DMs are chat-only. All stored work belongs to the configured workspace
 Changing chat rooms does not change the tasks, notes or other records you see.
 Use `--room` only for chat commands, not for data or graph commands.
 
+## Review forms and runs
+
+`nrc review` manages [standalone reviews](../docs/REVIEWS.md) as authenticated
+staff in the configured workspace. A draft is a complete JSON form, for example:
+
+```json
+{
+  "version": 1,
+  "title": "Release check",
+  "build": "v2.4.0",
+  "environment": "staging",
+  "points": [
+    {"id": "1", "section": "Access", "question": "Can users sign in?", "instruction": "Use a test account.", "expected": "The dashboard opens."}
+  ]
+}
+```
+
+Keep point IDs as positive decimal strings and preserve them when reordering
+points. `update` replaces the entire draft; leave `released_at` empty and omit
+`archived` or set it to `false`. Use `--file -` to read the same JSON from stdin.
+
+```sh
+nrc review create --file form.json
+nrc review list --human
+nrc review get "$form_id" --pretty
+nrc review update "$form_id" --if-revision "$form_revision" --file form.json
+nrc review release "$form_id" --if-revision "$form_revision"
+```
+
+Use the revision from the form you inspected, not a revision fetched after
+editing. `withdraw-release`, `archive`, `restore` and `delete-draft` likewise
+require `--if-revision`. Withdrawal is possible only before the first run.
+`delete-draft` also requires `--yes` and removes the draft and its links.
+`copy` creates an independent draft. The form list includes archived forms and
+returns one page of `entries`; use `--cursor` with `next_cursor` if `has_more`.
+
+```sh
+nrc review run create "$form_id" --if-released-at "$released_at" --kind qa --label 'QA team'
+nrc review run list --form "$form_id"
+nrc review run get "$run_id"
+nrc review run assign staff "$run_id" --name 'Ada' --can-close
+nrc review run portal-accounts "$run_id"
+nrc review run assign portal "$run_id" --name 'Customer reviewer' --requester "$requester"
+nrc review run answer "$run_id" 1 --result yes --comment 'Checked on staging'
+nrc review run close-preview "$run_id" --human
+nrc review run close "$run_id" --if-revision "$run_revision" --decision completed
+```
+
+Pass the observed `form.released_at` verbatim to `--if-released-at`. Run and
+account lists return one page; pass the returned `cursor` to `--cursor` when
+`has_more` is true. Staff assignment defaults to the current authenticated
+subject unless `--identity` is supplied. Portal assignment uses the canonical
+`requester` from `portal-accounts`, not the login or name. Answer and close
+act as the authenticated staff member only. A close preview is read-only;
+inspect the counts and use its revision for close. QA uses `completed`;
+customer runs use `accepted`, `conditional` or `rejected`.
+
+To retest, copy the original form, set the new build and release the copy.
+`nrc review run retest "$previous_run_id" "$new_form_id" --if-released-at "$new_released_at"`
+inherits the closed predecessor's label and kind and starts with no participants
+or answers. It does not copy or release a form for you.
+
+Use `nrc review run invite "$run_id" --expires-at "$unix_nanoseconds"` to create
+a guest invitation and `nrc review run revoke "$run_id" "$invite_id"` to revoke
+it. The invite command prints a private token once. Keep it out of logs and use
+it only as the fragment in the configured portal URL `/abnahmen/einladung#TOKEN`.
+Guest invites are contribute-only unless you explicitly pass `--can-close`.
+
+IDs, revisions, release timestamps and invitation expiry are decimal strings.
+Review writes are not automatically retried. On `conflict` or
+`review_outcome_unconfirmed`, inspect the current record rather than replaying
+the command. An unconfirmed invite may have been created even if its token was
+not received.
+
 ## Victoria monitors and sources
 
 Use named flags instead of constructing asset preview and payload JSON. The same

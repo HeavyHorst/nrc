@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const browser = await chromium.launch();
 try {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2, serviceWorkers: "block" });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2, serviceWorkers: "block", timezoneId: "Europe/Berlin" });
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.routeWebSocket("**/*", socket => socket.onMessage(() => {}));
@@ -133,6 +133,52 @@ try {
   await page.locator(".toast").click();
 
   await fs.mkdir(".amp/in/artifacts", { recursive: true });
+  await page.clock.install({ time: new Date("2026-03-25T14:23:00+01:00") });
+  await page.evaluate(() => { NRCDateTime.pick({title:"GUEST LINK EXPIRY",label:"Link valid for",futureOnly:true}).then(value => window.pickedDate=value); });
+  assert.equal(await dialog.getByRole("radio", {name:"7 days",exact:true}).isChecked(),true);
+  assert.equal(await dialog.locator(".nrc-datetime-custom").isVisible(),false);
+  await dialog.getByRole("button", {name:"Apply",exact:true}).click();
+  assert.equal(await page.evaluate(() => pickedDate),Date.parse("2026-04-01T14:23:00+02:00"),"7 local calendar days preserve wall time across DST");
+  for (const [name,expected] of [["1 day","2026-03-26T14:23:00+01:00"],["30 days","2026-04-24T14:23:00+02:00"]]) {
+    await page.evaluate(() => { NRCDateTime.pick().then(value => window.pickedDate=value); });
+    await dialog.getByRole("radio",{name,exact:true}).check();
+    await dialog.getByRole("button",{name:"Apply",exact:true}).click();
+    assert.equal(await page.evaluate(() => pickedDate),Date.parse(expected));
+  }
+  await page.evaluate(() => { NRCDateTime.pick({initialValue:Date.parse("2026-03-28T14:23:00+01:00")}).then(value => window.pickedDate=value); });
+  await dialog.getByRole("button",{name:"2026-03-29",exact:true}).click();
+  await dialog.locator('input[type="time"]').fill("02:30");
+  assert.equal(await dialog.getByRole("button",{name:"Apply",exact:true}).isDisabled(),true,"nonexistent spring DST time is refused");
+  await dialog.locator('input[type="time"]').fill("18:45");
+  await dialog.getByRole("button",{name:"Next month",exact:true}).click();
+  await dialog.getByRole("button",{name:"2026-04-03",exact:true}).click();
+  await dialog.getByRole("button",{name:"Apply",exact:true}).click();
+  assert.equal(await page.evaluate(() => pickedDate),Date.parse("2026-04-03T18:45:00+02:00"));
+  await page.evaluate(() => { NRCDateTime.pick({futureOnly:true,initialValue:Date.parse("2026-03-24T12:00:00+01:00")}).then(value => window.pickedDate=value); });
+  assert.equal(await dialog.getByRole("button",{name:"Apply",exact:true}).isDisabled(),true);
+  await page.keyboard.press("Escape");
+  assert.equal(await page.evaluate(() => pickedDate),null);
+  await page.evaluate(() => { NRCDateTime.pick({optional:true}).then(value => window.pickedDate=value); });
+  await dialog.getByRole("button",{name:"No date",exact:true}).click();
+  assert.equal(await page.evaluate(() => pickedDate),0,"clearing is distinct from cancelling");
+  for (const theme of ["light","dark"]) {
+    for (const width of [1280,390]) {
+      await page.setViewportSize({width,height:800});
+      await page.evaluate(theme => {
+        document.documentElement.dataset.theme=theme;
+        void NRCDateTime.pick({title:"GUEST LINK EXPIRY",label:"Link valid for",futureOnly:true});
+      },theme);
+      for (const state of ["default","custom"]) {
+        if (state === "custom") await dialog.getByRole("radio",{name:"Custom date",exact:true}).check();
+        const bounds=await dialog.locator(".nrc-dialog").boundingBox();
+        assert.ok(bounds.x>=0 && bounds.x+bounds.width<=width,"date picker fits viewport");
+        assert.equal(await dialog.locator(".nrc-dialog").evaluate(el=>el.scrollWidth<=el.clientWidth),true,"no horizontal overflow");
+        await dialog.locator(".nrc-dialog").screenshot({path:`.amp/in/artifacts/datetime-${state}-${theme}-${width}.png`});
+      }
+      await page.keyboard.press("Escape");
+    }
+  }
+  await page.clock.resume();
   for (const theme of ["light", "dark"]) {
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: 800 });

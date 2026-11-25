@@ -151,12 +151,23 @@ sqlite_list_slices :: proc(store: ^db.Store, request: ^db.Request, output: ^db.C
 	if rc = sql.bind_int64(rows, 3, req.cursor_sort_at); rc != sql.OK do return rc
 	if rc = sql.bind_id(rows, 4, req.cursor_slice_id); rc != sql.OK do return rc
 	if rc = sql.bind_int64(rows, 5, i64(req.limit) + 1); rc != sql.OK do return rc
-	return sqlite_slice_page(rows, req, msg, output)
+	return sqlite_slice_page(store, request, rows, req, msg, output)
 }
 
-sqlite_slice_page :: proc(rows: ^sql.Statement, req: pr.ListTaskSlicesRequest, message: pr.TaskSliceList, output: ^db.Command_Output) -> c.int {
+sqlite_slice_page :: proc(store: ^db.Store, request: ^db.Request, rows: ^sql.Statement, req: pr.ListTaskSlicesRequest, message: pr.TaskSliceList, output: ^db.Command_Output) -> c.int {
 	msg := message
+	msg.include_reviews = req.include_reviews
 	rc: c.int
+	reviews: ^sql.Statement
+	defer if reviews != nil do sql.finalize(reviews)
+	if req.include_reviews {
+		rc = sql.prepare_v2(store.db, `SELECT count(*) FROM slice_members m
+ CROSS JOIN assets a ON a.workspace=m.workspace AND a.id=m.member_id
+ WHERE m.workspace=?1 AND m.slice_id=?2 AND m.member_type=1 AND a.asset_type=?3`, -1, &reviews, nil)
+		if rc != sql.OK do return rc
+		if rc = sql.bind_bytes(reviews, 1, transmute([]byte)request.workspace); rc != sql.OK do return rc
+		if rc = sql.bind_int64(reviews, 3, i64(pr.AssetType.ReviewForm)); rc != sql.OK do return rc
+	}
 	entries := make([dynamic]pr.TaskSlice, 0, int(req.limit))
 	defer {for entry in entries {delete(entry.name); delete(entry.owner)}; delete(entries)}
 	size := pr.getSizeTaskSliceList(msg)
@@ -174,9 +185,18 @@ sqlite_slice_page :: proc(rows: ^sql.Statement, req: pr.ListTaskSlicesRequest, m
 		if closed do entry.flags += pr.TaskSliceFlag_CLOSED
 		for dest, i in ([8]^u16{&entry.backlog, &entry.todo, &entry.in_progress, &entry.done, &entry.blocked, &entry.notes, &entry.files, &entry.tickets}) do dest^ = u16(sql.column_int64(rows, c.int(i + 5)))
 		entry.oldest_active_at = sql.column_int64(rows, 13); entry.last_moved_at = sql.column_int64(rows, 14)
-		if size + pr.getSizeTaskSlice(entry) > budget {if len(entries) == 0 do return sql.TOOBIG; msg.has_more = true; break}
+		entry_size := pr.getSizeTaskSlice(entry) + (req.include_reviews ? 4 : 0)
+		if size + entry_size > budget {if len(entries) == 0 do return sql.TOOBIG; msg.has_more = true; break}
+		if reviews != nil {
+			if rc = sql.bind_id(reviews, 2, entry.slice_id); rc != sql.OK do return rc
+			if rc = sql.step(reviews); rc != sql.ROW do return rc
+			count := sql.column_int64(reviews, 0)
+			if count > i64(max(u32)) do return sql.TOOBIG
+			entry.reviews = u32(count)
+			if rc = sql.reset(reviews); rc != sql.OK do return rc
+		}
 		entry.name = transmute([]byte)strings.clone(string(entry.name)); entry.owner = transmute([]byte)strings.clone(string(entry.owner))
-		append(&entries, entry); size += pr.getSizeTaskSlice(entry)
+		append(&entries, entry); size += entry_size
 		msg.next_cursor_closed = closed; msg.next_cursor_sort_at = sql.column_int64(rows, 4); msg.next_cursor_slice_id = entry.slice_id
 	}
 	msg.slices = entries[:]
@@ -295,5 +315,5 @@ sqlite_list_slices_indexed :: proc(store: ^db.Store, request: ^db.Request, outpu
 	if rc = sql.bind_int64(rows, 7, req.cursor_sort_at); rc != sql.OK do return rc
 	if rc = sql.bind_id(rows, 8, req.cursor_slice_id); rc != sql.OK do return rc
 	if rc = sql.bind_int64(rows, 9, i64(req.limit) + 1); rc != sql.OK do return rc
-	return sqlite_slice_page(rows, req, msg, output)
+	return sqlite_slice_page(store, request, rows, req, msg, output)
 }

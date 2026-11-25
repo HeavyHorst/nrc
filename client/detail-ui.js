@@ -144,6 +144,13 @@
     const actions = document.createElement("div");
     actions.className = "inline-field-actions";
     actions.append(save, cancel);
+    const choose = spec.pick ? document.createElement("button") : null;
+    if (choose) {
+      choose.type = "button";
+      choose.className = "btn";
+      choose.textContent = "CHOOSE DATE…";
+      actions.append(choose);
+    }
     const clear = spec.clearable ? document.createElement("button") : null;
     if (clear) {
       clear.type = "button";
@@ -195,6 +202,7 @@
     panel.append(state, actions);
     const session = {
       pending: false,
+      selecting: false,
       close() {
         if (picker) window.CustomPicker.destroy(picker);
         panel.remove();
@@ -205,8 +213,9 @@
       },
     };
     const dismiss = () => { if (!session.pending) { session.close(); restoreFocus(); } };
-    const outside = event => { if (!panel.contains(event.target) && !host.contains(event.target)) dismiss(); };
+    const outside = event => { if (!session.selecting && !panel.contains(event.target) && !host.contains(event.target)) dismiss(); };
     const keydown = event => {
+      if (session.selecting) return;
       if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); dismiss(); }
     };
     panel.addEventListener("click", event => event.stopPropagation());
@@ -223,6 +232,7 @@
       }
       session.pending = true;
       input.disabled = save.disabled = cancel.disabled = true;
+      if (choose) choose.disabled = true;
       if (picker) picker.dropdown.inert = true;
       if (clear) clear.disabled = true;
       state.textContent = "SAVING";
@@ -240,6 +250,7 @@
       } catch (error) {
         session.pending = false;
         input.disabled = save.disabled = cancel.disabled = false;
+        if (choose) choose.disabled = false;
         if (picker) picker.dropdown.inert = false;
         if (clear) clear.disabled = false;
         state.textContent = error?.message || "SAVE FAILED — RETRY OR CANCEL";
@@ -248,6 +259,19 @@
       }
     };
     panel.onsubmit = submit;
+    if (choose) choose.onclick = async () => {
+      if (session.pending || session.selecting) return;
+      session.selecting = true;
+      try {
+        const value = await spec.pick(input.value);
+        session.selecting = false;
+        if (value === null) { dismiss(); return; }
+        input.value = value;
+        await submit(null, value === "" && !!clear);
+      } catch (error) {
+        state.textContent = error?.message || "DATE SELECTION FAILED";
+      } finally { session.selecting = false; }
+    };
     if (clear) clear.onclick = () => { if (!session.pending) { input.value = ""; submit(null, true); } };
     activeInline = session;
     document.body.append(panel);
@@ -263,6 +287,7 @@
       input.focus();
       if (input.type === "text") input.select();
     }
+    if (choose) choose.click();
   }
 
   function attachmentControl(entity, save, current = () => entity) {

@@ -235,7 +235,7 @@ func DecodeReviewResponse(body []byte) (*ReviewResponse, error) {
 		}
 		deleteAck := r.Revision == "" && r.Form.Version == 0 && r.Form.Title == "" &&
 			r.Form.Build == "" && r.Form.Environment == "" && r.Form.ReleasedAt == "" &&
-			!r.Form.Archived && len(r.Form.Points) == 0 && r.Run.ID == "" && r.Runs == nil &&
+			!r.Form.Archived && len(r.Form.Points) == 0 && r.Run.ID == "" && len(r.Runs) == 0 &&
 			r.Token == "" && r.InviteID == "" && r.ParticipantID == "" && r.Cursor == "" && !r.HasMore
 		if !deleteAck {
 			revision, valid := chronicleDecimal(r.Revision)

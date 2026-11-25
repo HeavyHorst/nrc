@@ -949,6 +949,7 @@ type TaskSlice struct {
 	Notes          uint16
 	Files          uint16
 	Tickets        uint16
+	Reviews        uint32
 	OldestActiveAt int64
 	LastMovedAt    int64
 }
@@ -963,7 +964,7 @@ func (s TaskSlice) OpenCount() uint32 {
 // The sum is widened because the counters are independent.
 func (s TaskSlice) MemberCount() uint32 {
 	return uint32(s.Backlog) + uint32(s.Todo) + uint32(s.InProgress) +
-		uint32(s.Done) + uint32(s.Notes) + uint32(s.Files) + uint32(s.Tickets)
+		uint32(s.Done) + uint32(s.Notes) + uint32(s.Files) + uint32(s.Tickets) + s.Reviews
 }
 
 // TaskCount is the members that carry a task status.
@@ -987,14 +988,15 @@ type SliceCursor struct {
 // HasOwner set is the slices nobody owns; Name is matched as a case-insensitive
 // substring of the slice name.
 type SliceQuery struct {
-	IncludeClosed bool
-	HasOwner      bool
-	Owner         string
-	HasName       bool
-	Name          string
-	Project       string // Exact structured project of at least one direct member.
-	Limit         uint16
-	Cursor        *SliceCursor
+	IncludeClosed  bool
+	HasOwner       bool
+	Owner          string
+	HasName        bool
+	Name           string
+	Project        string // Exact structured project of at least one direct member.
+	IncludeReviews bool
+	Limit          uint16
+	Cursor         *SliceCursor
 }
 
 // EncodeListTaskSlices encodes C_ListTaskSlices. The request body carries no
@@ -1003,8 +1005,11 @@ func EncodeListTaskSlices(convID uint64, query SliceQuery, correlationID uint32)
 	owner := []byte(query.Owner)
 	name := []byte(query.Name)
 	size := 22 + len(owner) + len(name)
-	if query.Project != "" {
+	if query.Project != "" || query.IncludeReviews {
 		size += 2 + len(query.Project)
+	}
+	if query.IncludeReviews {
+		size++
 	}
 	if query.Cursor != nil {
 		size += 17
@@ -1047,9 +1052,12 @@ func EncodeListTaskSlices(convID uint64, query SliceQuery, correlationID uint32)
 	}
 	binary.BigEndian.PutUint32(payload[offset:], correlationID)
 	offset += 4
-	if query.Project != "" {
+	if query.Project != "" || query.IncludeReviews {
 		binary.BigEndian.PutUint16(payload[offset:], uint16(len(query.Project)))
 		copy(payload[offset+2:], query.Project)
+	}
+	if query.IncludeReviews {
+		payload[len(payload)-1] = 1
 	}
 	return payload
 }
@@ -1148,8 +1156,18 @@ func DecodeTaskSliceList(payload []byte) (*TaskSliceList, error) {
 		return nil, fmt.Errorf("slice list error: %w", err)
 	}
 	result.Error = message
-	if err := binary.Read(buf, binary.BigEndian, &result.CorrelationID); err != nil || buf.Len() != 0 {
+	if err := binary.Read(buf, binary.BigEndian, &result.CorrelationID); err != nil {
 		return nil, fmt.Errorf("invalid slice list tail")
+	}
+	if buf.Len() != 0 {
+		if buf.Len() != 4*len(result.Slices) {
+			return nil, fmt.Errorf("invalid slice list review counts")
+		}
+		for i := range result.Slices {
+			if err := binary.Read(buf, binary.BigEndian, &result.Slices[i].Reviews); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return result, nil
 }

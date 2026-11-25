@@ -25,6 +25,51 @@ try {
     socket.on('framereceived', ({payload}) => {if(Buffer.isBuffer(payload))received.push(payload)});
   });
   const screenshot = async name => page.screenshot({path:path.join(output,`${phase}-${name}.png`)});
+  const findingActions = async (contribution, name) => {
+    const actions=contribution.locator('[data-finding-references]');
+    assert.equal(await contribution.getByRole('button',{name:'FINDINGS / REFERENCES',exact:true}).count(),0);
+    assert.equal(await contribution.getByText('REFERENCES · ASSET',{exact:false}).count(),0);
+    const linkButton=actions.getByRole('button',{name:'+ LINK TASK / TICKET',exact:true});
+    await linkButton.click();
+    const picker=page.locator('.note-link-picker:visible');
+    await picker.getByRole('button',{name:'TICKET',exact:true}).click();
+    await picker.getByText('Review navigation ticket',{exact:true}).click();
+    const reference=actions.locator('.note-link-item').filter({has:page.locator(`[data-reference-id="${fixture.ticketId}"][data-reference-type="1"]`)});
+    await reference.waitFor();
+    assert.equal(await reference.locator('.note-link-kind').textContent(),'TICKET');
+    assert.equal(await reference.locator('.note-link-target').textContent(),'Review navigation ticket');
+    await reference.getByRole('button',{name:'Review navigation ticket',exact:true}).click();
+    await page.waitForFunction(id=>NRCInspector.current()?.type==='ticket' && String(NRCInspector.current().id)===id,fixture.ticketId);
+    assert.equal(await page.locator('.review-comparison-dialog').count(),0,'following a reference closes comparison');
+    await page.locator('#inspectorBack').click();
+    if(name==='comparison')await page.locator('#reviewEditor [data-review-op="compare"]').click();
+    await reference.waitFor();
+    // Cancel must not create a task or hide either direct action.
+    const start=sent.length;
+    await actions.getByRole('button',{name:'CREATE TASK FROM THIS FINDING',exact:true}).click();
+    await page.getByRole('dialog').last().getByRole('button',{name:'Cancel',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('#reviewEditor[aria-busy="true"]'));
+    assert.equal(sent.slice(start).filter(b=>b.readUInt16BE(0)===20).length,0);
+    for(const mobile of [false,true])for(const theme of ['white','dark']) {
+      await page.setViewportSize(mobile?{width:390,height:844}:{width:1440,height:1000});
+      await page.evaluate(theme=>setTheme(theme,false),theme);
+      if(mobile && name==='record' && !await actions.isVisible()) {
+        await page.locator(`#taskListBody [data-task-id="${fixture.taskId}"]`).focus();
+        await page.keyboard.press('Enter');
+        await follow(page.locator(`button[data-target-id="${fixture.answers.find(a=>a.point_id==='1').id}"]`));
+      }
+      await actions.scrollIntoViewIfNeeded();
+      const boxes=await actions.locator('.customer-actions > button').evaluateAll(buttons=>buttons.map(b=>{const r=b.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom};}));
+      assert.equal(boxes.length,2);
+      assert.ok(boxes[1].y>=boxes[0].bottom+3 || boxes[1].x>=boxes[0].right+3,'buttons have a visible horizontal or vertical gap');
+      const bounds=await actions.boundingBox(), viewport=page.viewportSize();
+      const x=Math.max(0,bounds.x-8), y=Math.max(0,bounds.y-8);
+      await page.screenshot({path:path.join(output,`finding-actions-${name}-${mobile?'mobile':'desktop'}-${theme}.png`),clip:{x,y,width:Math.min(viewport.width,bounds.x+bounds.width+8)-x,height:Math.min(viewport.height,bounds.y+bounds.height+8)-y}});
+    }
+    await page.setViewportSize({width:1440,height:1000});
+    await reference.getByRole('button',{name:'Remove link to Review navigation ticket',exact:true}).click();
+    await reference.waitFor({state:'detached'});
+  };
   const variants = async (name, focus) => {
     const cdp=await context.newCDPSession(page);
     for(const mobile of [false,true])for(const theme of ['light','dark']) {
@@ -86,6 +131,7 @@ try {
     await page.locator(`[data-cell-point="${point}"][data-cell-run="${fixture.runId}"]`).click();
     const contribution=page.locator('.review-comparison-answer').filter({has:page.locator(`[data-review-op="finding:${answer.id}"]`)});
     assert.ok((await contribution.textContent()).includes(answer.comment),'entire original shown in comparison');
+    if(!before && point==='3')await findingActions(contribution,'comparison');
     await contribution.getByRole('button',{name:'CREATE TASK FROM THIS FINDING',exact:true}).click();
     const prompt=page.getByRole('dialog').filter({has:page.locator('input')}).last();
     await prompt.locator('input').fill(`Finding point ${point}`);
@@ -160,6 +206,7 @@ try {
     assert.ok(!(await selected.textContent()).includes('WRONG SAME-NAME CONTRIBUTION'));
     assert.equal(await selected.evaluate(el=>el===document.activeElement || el.contains(document.activeElement)),true,'selected answer focused');
     assert.match(await page.locator('#reviewEditor').textContent(),/Customer Alpha/);
+    await findingActions(selected,'record');
     await variants('selected-contribution',selected.locator('strong'));
   } else await screenshot('task-answer-navigation-failure');
   await boot();

@@ -280,6 +280,46 @@ func TestSliceMembershipRealServerLifecycleAndPersistence(t *testing.T) {
 	}
 }
 
+func TestSliceReviewMembershipFollowsReviewLifecycle(t *testing.T) {
+	server := startServerInWorkDir(t, t.TempDir())
+	defer server.stop(t)
+	conn := workspaceDataClient(t, fmt.Sprintf("e2e-slice-review-%d", time.Now().UnixNano()), "alice", 31)
+	defer conn.Close()
+	a := createSliceAsset(t, conn, "Alpha", "alice", false)
+	b := createSliceAsset(t, conn, "Beta", "alice", false)
+	form := reviewCall(t, conn, protocol.ReviewRequest{Op: "create", Form: protocol.ReviewForm{
+		Version: 1, Title: "Acceptance", Build: "1.2", Environment: "Staging", Points: []protocol.ReviewPoint{{ID: "1", Question: "Can export?"}},
+	}}, "ok")
+	var id uint64
+	if _, err := fmt.Sscan(form.FormID, &id); err != nil || id == 0 {
+		t.Fatalf("invalid form ID %q: %v", form.FormID, err)
+	}
+	createSliceMemberEdge(t, conn, protocol.TargetTypeAsset, id, a.AssetID)
+	createSliceMemberEdge(t, conn, protocol.TargetTypeAsset, id, b.AssetID)
+	check := func(want uint32, extended bool) {
+		t.Helper()
+		page := listSlices(t, conn, protocol.SliceQuery{Limit: 10, IncludeReviews: extended}, 902)
+		for _, asset := range []protocol.Asset{a, b} {
+			slice := sliceByID(t, page, asset.AssetID)
+			if slice.Reviews != want || slice.MemberCount() != want || slice.TaskCount() != 0 {
+				t.Fatalf("slice %d: got %+v, expected %d review members and no tasks", asset.AssetID, slice, want)
+			}
+			if want != 0 && fmt.Sprint(slice.LastMovedAt) != form.Revision {
+				t.Fatalf("slice %d: last movement=%d, want review revision %s", asset.AssetID, slice.LastMovedAt, form.Revision)
+			}
+		}
+	}
+	check(0, false)
+	check(1, true)
+	form = reviewCall(t, conn, protocol.ReviewRequest{Op: "release", FormID: form.FormID, IfRevision: form.Revision}, "ok")
+	form = reviewCall(t, conn, protocol.ReviewRequest{Op: "archive", FormID: form.FormID, IfRevision: form.Revision}, "ok")
+	check(1, true)
+	form = reviewCall(t, conn, protocol.ReviewRequest{Op: "restore", FormID: form.FormID, IfRevision: form.Revision}, "ok")
+	form = reviewCall(t, conn, protocol.ReviewRequest{Op: "unrelease", FormID: form.FormID, IfRevision: form.Revision}, "ok")
+	reviewCall(t, conn, protocol.ReviewRequest{Op: "delete_draft", FormID: form.FormID, IfRevision: form.Revision}, "ok")
+	check(0, true)
+}
+
 func TestSliceRegisterDiscriminatesCustomerMembership(t *testing.T) {
 	workDir := t.TempDir()
 	workspace := fmt.Sprintf("e2e-slice-customers-%d", time.Now().UnixNano())

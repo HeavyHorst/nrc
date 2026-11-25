@@ -156,13 +156,13 @@ try {
       offset += nameLength;
       const limit = frame.getUint16(offset, false); offset += 2;
       const hasCursor = frame.getUint8(offset) === 1;
-      const correlationId = frame.getUint32(frame.byteLength - 4, false);
+      const correlationId = frame.getUint32(offset + 1 + (hasCursor ? 17 : 0), false);
       window.sentSliceReads.push({ hasOwner, owner, hasName, name, limit, hasCursor });
       const matching = window.sliceFixture.filter((slice) => (!hasOwner || slice.owner === owner) &&
         (!hasName || slice.name.toLowerCase().includes(name.toLowerCase())));
       const page = matching.slice(0, limit);
       let size = 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + 4;
-      for (const slice of page) size += 2 + slice.name.length + 8 + 2 + slice.owner.length + 1 + 14 + 16;
+      for (const slice of page) size += 2 + slice.name.length + 8 + 2 + slice.owner.length + 1 + 16 + 16;
       const bytes = new Uint8Array(size);
       const view = new DataView(bytes.buffer);
       let at = 0;
@@ -175,7 +175,7 @@ try {
         view.setBigUint64(at, slice.sliceId, false); at += 8;
         at = text(view, at, slice.owner);
         view.setUint8(at++, slice.flags);
-        for (const value of [slice.backlog, slice.todo, slice.inProgress, slice.done, slice.blocked, slice.notes, slice.files]) {
+        for (const value of [slice.backlog, slice.todo, slice.inProgress, slice.done, slice.blocked, slice.notes, slice.files, 0]) {
           view.setUint16(at, value, false); at += 2;
         }
         view.setBigInt64(at, 0n, false); at += 8;

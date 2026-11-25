@@ -33,6 +33,10 @@
     if (!Number.isFinite(ms) || ms <= 0) throw new Error('Choose a valid follow-up date after 1970.');
     return String(ms);
   }
+  async function pickFollowUp(value) {
+    const ms = await window.NRCDateTime.pick({ title: 'TICKET FOLLOW-UP', label: 'Follow up', initialValue: value ? new Date(value).getTime() : 0, optional: true });
+    return ms === null ? null : followUpInput(ms);
+  }
   function followUpLabel(value, due = Number(value) <= Date.now()) {
     if (!value) return '—';
     const date = new Date(Number(value));
@@ -533,7 +537,7 @@
       ${control('assignee', 'ASSIGNEE', { maxBytes: 64, person: true, suggestions: () => [...new Set([...(typeof userDirectory === 'function' ? userDirectory() : []), ...state.tickets.map(a => metadata(a).assignee)].filter(Boolean))] })}
       ${control('priority', 'PRIORITY', { display: m.priority.toUpperCase(), options: priorities.map(value => ({ value, label: value.toUpperCase() })) })}
       ${control('category', 'CATEGORY', { display: categories[m.category || ''] || m.category, options: Object.entries(categories).map(([value, label]) => ({ value, label })) })}
-      ${control('follow_up_at', 'FOLLOW-UP · LOCAL TIME', { type: 'datetime-local', clearable: !!m.follow_up_at, value: followUpInput(m.follow_up_at), display: followUpLabel(m.follow_up_at), save: value => saveMetadata(asset, { follow_up_at: followUpValue(value) }, identity) })}</div>
+      ${control('follow_up_at', 'FOLLOW-UP · LOCAL TIME', { type: 'datetime-local', clearable: !!m.follow_up_at, pick: pickFollowUp, value: followUpInput(m.follow_up_at), display: followUpLabel(m.follow_up_at), save: value => saveMetadata(asset, { follow_up_at: followUpValue(value) }, identity) })}</div>
       <details class="ticket-customer-details"${customerOpen ? ' open' : ''}><summary>CUSTOMER DETAILS <span>${esc(customerName(m.company_id) || m.requester_name || m.requester || 'NOT ASSIGNED')}</span></summary><div class="record-document"><div class="detail-read-register task-detail-read-register">
       ${customer('company_id', 'COMPANY')}${customer('contact_id', 'CONTACT')}
       ${control('requester', 'REQUESTER', { maxBytes: 320 })}${control('requester_name', 'REQUESTER NAME', { maxBytes: 256 })}</div></div></details>`;
@@ -569,7 +573,7 @@
           <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">STATUS</span><nrc-select><select name="status" class="filter-select" data-custom-select-portal data-custom-select-align="auto">${statuses.map(s => `<option value="${s}" ${d.status === s ? 'selected' : ''}>${statusLabels[s]}</option>`).join('')}</select></nrc-select></label>
           <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">PRIORITY</span><nrc-select><select name="priority" class="filter-select" data-custom-select-portal data-custom-select-align="auto">${priorities.map(value => `<option value="${value}" ${d.priority === value ? 'selected' : ''}>${value.toUpperCase()}</option>`).join('')}</select></nrc-select></label>
           <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">CATEGORY</span><nrc-select><select name="category" class="filter-select" data-custom-select-portal data-custom-select-align="auto">${Object.entries(categories).map(([value, label]) => `<option value="${value}" ${(d.category || '') === value ? 'selected' : ''}>${value ? label : 'AUTOMATIC'}</option>`).join('')}</select></nrc-select></label>
-          <label class="task-detail-row detail-edit-field"><span class="detail-edit-label">FOLLOW-UP · LOCAL TIME</span><input name="follow_up_at" type="datetime-local" class="task-detail-input" value="${esc(followUpInput(d.follow_up_at))}"></label>
+          <div class="task-detail-row detail-edit-field"><label class="detail-edit-label" for="ticketFollowUp">FOLLOW-UP · LOCAL TIME</label><input id="ticketFollowUp" name="follow_up_at" type="datetime-local" class="task-detail-input" value="${esc(followUpInput(d.follow_up_at))}"><button type="button" class="btn" data-ticket-follow-up>CHOOSE DATE…</button></div>
           <label class="detail-edit-field ticket-original-request"><span class="detail-edit-label">ORIGINAL REQUEST</span><textarea name="body" class="task-detail-textarea" rows="5" maxlength="32000">${esc(d.body)}</textarea></label>
           <button class="btn btn--primary" data-save>SAVE TICKET</button>
         </form>`}<div id="ticketConversation" class="ticket-conversation"></div>
@@ -685,6 +689,15 @@
       renderStatus();
     } };
     host.onchange = host.oninput;
+    const followUpButton = host.querySelector('[data-ticket-follow-up]');
+    if (followUpButton) followUpButton.onclick = async () => {
+      if (state.pending) return;
+      const input = host.querySelector('[name=follow_up_at]');
+      const value = await pickFollowUp(input.value);
+      if (value === null || !input.isConnected || state.pending) return;
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
     const fields = host.querySelector('#ticketFields'); if (fields) fields.onsubmit = e => { e.preventDefault(); save(); };
     const reply = host.querySelector('#ticketReply'); if (reply) reply.onsubmit = e => { e.preventDefault(); save(true); };
     const link = host.querySelector('#ticketLink');

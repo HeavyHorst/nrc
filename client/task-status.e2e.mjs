@@ -150,7 +150,7 @@ try {
       window.__lastSend = Date.now();
       const view = new DataView(buffer);
       if (view.getUint16(0, false) !== 56) return;
-      const correlationId = view.getUint32(view.byteLength - 4, false);
+      const correlationId = view.getUint32(view.byteLength - 7, false); // empty project + review opt-in
       window.NRCSlices.handleSliceList(sliceListFrame({
         correlationId,
         slices: [{ name: "Alpha", sliceId: 5n, owner: "tester",

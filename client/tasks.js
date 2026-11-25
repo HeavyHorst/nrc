@@ -700,10 +700,12 @@ function showReminderDetailPanel(reminder) {
         <div class="task-detail-row detail-edit-field">
           <label class="task-detail-label detail-edit-label" for="reminderDetailWindowStart">WINDOW START</label>
           <input type="datetime-local" class="task-detail-input" id="reminderDetailWindowStart" value="${formatDateTimeLocal(reminder.windowStartAt)}">
+          <button type="button" class="btn" data-reminder-date="reminderDetailWindowStart">CHOOSE DATE…</button>
         </div>
         <div class="task-detail-row detail-edit-field">
           <label class="task-detail-label detail-edit-label" for="reminderDetailDeadline">DUE</label>
           <input type="datetime-local" class="task-detail-input" id="reminderDetailDeadline" value="${formatDateTimeLocal(reminder.deadlineAt)}">
+          <button type="button" class="btn" data-reminder-date="reminderDetailDeadline">CHOOSE DATE…</button>
         </div>
       </div>
         <div class="task-detail-row detail-edit-field">
@@ -734,6 +736,17 @@ function showReminderDetailPanel(reminder) {
   };
   agendaContent.oninput = markReminderDirty;
   agendaContent.onchange = markReminderDirty;
+
+  agendaContent.querySelectorAll("[data-reminder-date]").forEach(button => {
+    button.onclick = async () => {
+      const input = document.getElementById(button.dataset.reminderDate);
+      const optional = input.id === "reminderDetailWindowStart";
+      const value = await window.NRCDateTime.pick({ title: optional ? "REMINDER WINDOW START" : "REMINDER DUE", label: optional ? "Window starts" : "Remind me", initialValue: input.value ? new Date(input.value).getTime() : 0, optional });
+      if (value === null || !input.isConnected) return;
+      input.value = value ? formatDateTimeLocal(BigInt(value)*1000000n) : "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+  });
 
   const closeBtn = document.getElementById("reminderDetailClose");
   if (closeBtn) {
@@ -1063,29 +1076,12 @@ async function createReminder() {
   });
   if (!title || !title.trim()) return;
 
-  const windowStartInput = await window.NRCDialog.prompt(
-    "Window start (YYYY-MM-DDTHH:MM, optional):",
-    { title: "CREATE REMINDER", placeholder: "2026-03-01T00:00" },
-  );
-
-  const deadlineInput = await window.NRCDialog.prompt(
-    "Deadline (YYYY-MM-DDTHH:MM, required):",
-    { title: "CREATE REMINDER", placeholder: "2026-03-15T23:59" },
-  );
-  if (!deadlineInput || !deadlineInput.trim()) {
-    window.NRCDialog.notify("DEADLINE IS REQUIRED FOR REMINDERS", { logType: "Error" });
-    return;
-  }
-
-  const deadlineAt = parseDateTimeLocal(deadlineInput.trim());
-  if (deadlineAt === 0n) {
-    window.NRCDialog.notify("INVALID DEADLINE FORMAT (USE YYYY-MM-DDTHH:MM)", { logType: "Error" });
-    return;
-  }
-
-  const windowStartAt = windowStartInput && windowStartInput.trim().length > 0
-    ? parseDateTimeLocal(windowStartInput.trim())
-    : 0n;
+  const windowStart = await window.NRCDateTime.pick({ title: "CREATE REMINDER · WINDOW START", label: "Window starts (optional)", optional: true });
+  if (windowStart === null) return;
+  const deadline = await window.NRCDateTime.pick({ title: "CREATE REMINDER · DUE", label: "Remind me" });
+  if (deadline === null) return;
+  const deadlineAt = BigInt(deadline)*1000000n;
+  const windowStartAt = BigInt(windowStart)*1000000n;
 
   if (windowStartAt !== 0n && windowStartAt > deadlineAt) {
     window.NRCDialog.notify("WINDOW START MUST BE BEFORE DEADLINE", { logType: "Error" });
@@ -1611,6 +1607,10 @@ function taskFieldSpec(task, field) {
       options: TaskStatusNames.slice(0, 4).map((label, value) => ({ value: String(value), label })),
       save(value) { const status = Number(value); if (!Number.isInteger(status) || status < 0 || status > 3) throw new Error("INVALID STATUS"); return { status, moveStatus: status !== task.status }; } },
     dueAt: { label: "DUE", value: formatDateTimeLocal(task.dueAt), display: task.dueAt && task.dueAt !== 0n ? formatDueDateShort(task.dueAt) : "—", type: "datetime-local",
+      async pick(value) {
+        const ms = await window.NRCDateTime.pick({ title: "TASK DUE", label: "Task due", initialValue: value ? new Date(value).getTime() : 0, optional: true });
+        return ms === null ? null : ms ? formatDateTimeLocal(BigInt(ms)*1000000n) : "";
+      },
       save(value) { if (!value) return { dueAt: task.dueAt && task.dueAt !== 0n ? -1n : 0n }; const dueAt = parseDateTimeLocal(value); if (!dueAt) throw new Error("INVALID DUE DATE"); return { dueAt: dueAt === task.dueAt ? 0n : dueAt }; } },
     blockedBy: { label: "BLOCKED BY", value: task.blockedBy && task.blockedBy !== 0n ? String(task.blockedBy) : "", display: task.blockedBy && task.blockedBy !== 0n ? `#${task.blockedBy}` : "—",
       save(value) { const clean = value.trim().replace(/^#/, ""); if (!clean) return { blockedBy: task.blockedBy && task.blockedBy !== 0n ? UPDATE_BLOCKED_BY_CLEAR : 0n }; let blockedBy; try { blockedBy = BigInt(clean); } catch { throw new Error("BLOCKER MUST BE A TASK ID"); } if (blockedBy <= 0n) throw new Error("BLOCKER MUST BE A TASK ID"); if (blockedBy === task.id) throw new Error("A TASK CANNOT BLOCK ITSELF"); return { blockedBy: blockedBy === task.blockedBy ? 0n : blockedBy }; } },

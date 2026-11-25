@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 
 const browser = await chromium.launch();
 try {
-  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2, serviceWorkers: "block" });
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2, serviceWorkers: "block", timezoneId: "Europe/Berlin" });
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.routeWebSocket("**/*", socket => socket.onMessage(() => {}));
@@ -50,6 +50,7 @@ try {
       for (const [field, i] of [["title", 2], ["description", 3], ["assignee", 5], ["externalRef", 8], ["project", 12]]) if (args[i]) next[field] = args[i] === "\x00" ? "" : args[i];
       if (args[6] !== 255) next.priority = args[6];
       if (args[7] !== 255) next.color = args[7];
+      if (args[9] !== 0n) next.dueAt = args[9] === -1n ? 0n : args[9];
       if (args[11] !== null) next.attachments = args[11];
       roomTasks.get(0n).set(next.id, next);
       args.at(-1).onSuccess({ task: next });
@@ -126,6 +127,32 @@ try {
   assert.equal(await field(row, "project").textContent(), "NRC");
   assert.equal(await page.evaluate(() => taskWrites.length), 2);
 
+  // The list and Inspector share the same due-date field and acknowledged write.
+  await page.clock.setFixedTime(new Date("2026-03-25T14:23:00+01:00"));
+  const dateDialog = page.locator("dialog.nrc-dialog-backdrop");
+  await field(row, "dueAt").click();
+  assert.equal(await dateDialog.getByRole("radio", { name: "7 days", exact: true }).isChecked(), true);
+  await page.keyboard.press("Escape");
+  await editor.waitFor({ state: "detached" });
+  assert.equal(await page.evaluate(() => taskWrites.length), 2, "cancelling sends no update");
+  await field(row, "dueAt").click();
+  await dateDialog.getByRole("button", { name: "Apply", exact: true }).click();
+  const expectedDue = String(BigInt(Date.parse("2026-04-01T14:23:00+02:00"))*1000000n);
+  assert.equal(await page.evaluate(() => String(taskWrites.at(-1)[9])), expectedDue);
+  await page.evaluate(() => ackTask("DUE UPDATE FAILED"));
+  assert.match(await editor.textContent(), /DUE UPDATE FAILED/);
+  assert.equal(await editor.locator("input").inputValue(), "2026-04-01T14:23");
+  await editor.getByRole("button", { name: "SAVE", exact: true }).click();
+  assert.equal(await page.evaluate(() => String(taskWrites.at(-1)[9])), expectedDue);
+  await page.evaluate(() => ackTask());
+  await editor.waitFor({ state: "detached" });
+  assert.notEqual(await field(row, "dueAt").textContent(), "—");
+  await field(row, "dueAt").click();
+  assert.equal(await dateDialog.getByRole("radio", { name: "Custom date", exact: true }).isChecked(), true);
+  await dateDialog.getByRole("button", { name: "Apply", exact: true }).click();
+  await editor.waitFor({ state: "detached" });
+  assert.equal(await page.evaluate(() => taskWrites.length), 4, "unchanged date sends no update");
+
   // Refreshing the virtual table must not take the text draft with it.
   await field(row, "assignee").click();
   await editor.locator("input").fill("mika");
@@ -158,6 +185,13 @@ try {
   await editor.locator("input").press("Enter");
   await page.evaluate(() => ackTask());
   await editor.waitFor({ state: "detached" });
+  assert.equal(await page.locator("#taskDetailDesc").inputValue(), "Unsaved description\nwith whitespace  ");
+  await field(".agenda-content", "dueAt").click();
+  await dateDialog.getByRole("button", { name: "No date", exact: true }).click();
+  assert.equal(await page.evaluate(() => String(taskWrites.at(-1)[9])), "-1", "clearing sends the protocol clear sentinel");
+  await page.evaluate(() => ackTask());
+  await editor.waitFor({ state: "detached" });
+  assert.equal(await field(".agenda-content", "dueAt").textContent(), "—");
   assert.equal(await page.locator("#taskDetailDesc").inputValue(), "Unsaved description\nwith whitespace  ");
   await page.locator("#taskDetailSave").click();
   assert.deepEqual(await page.evaluate(() => {
@@ -298,6 +332,21 @@ try {
     assert.ok(await editor.evaluate(element => { const r = element.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth; }), "the complete fixed-choice picker stays inside the narrow viewport");
     await page.screenshot({ path: `.amp/in/artifacts/inline-category-narrow-${theme}.png` });
     await page.keyboard.press("Escape");
+  }
+  for (const theme of ["light", "dark"]) {
+    for (const width of [1600, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      await page.evaluate(async () => { await NRCInspector.close(); await NRCInspector.openEntity({ roomId: 0n, type: "task", id: 41n }); });
+      await field(".agenda-content", "dueAt").click();
+      for (const state of ["default", "custom"]) {
+        if (state === "custom") await dateDialog.getByRole("radio", { name: "Custom date", exact: true }).check();
+        assert.ok(await dateDialog.locator(".nrc-dialog").evaluate(el => { const r=el.getBoundingClientRect(); return r.left>=0 && r.right<=innerWidth && r.bottom<=innerHeight; }));
+        await dateDialog.locator(".nrc-dialog").screenshot({ path: `.amp/in/artifacts/task-due-${state}-${theme}-${width}.png` });
+      }
+      await page.keyboard.press("Escape");
+      await editor.waitFor({ state: "detached" });
+    }
   }
   assert.deepEqual(errors, []);
   console.log("inline edit e2e: ok — ACK/error/retry, cancel, redraw, partial saves, draft preservation, resources, themes, narrow viewport");

@@ -159,6 +159,23 @@ func TestDecodeTaskSliceList(t *testing.T) {
 	}
 }
 
+func TestSliceReviewCountsOptIn(t *testing.T) {
+	request := EncodeListTaskSlices(0, SliceQuery{Limit: 10, IncludeReviews: true}, 42)
+	if !bytes.Equal(request[18:], []byte{0, 0, 0, 42, 0, 0, 1}) {
+		t.Fatalf("expected legacy correlation followed by empty project and opt-in: %x", request)
+	}
+	buf := bytes.NewBuffer(nil)
+	writeSliceFrame(buf, TaskSlice{Name: "Alpha", Todo: 2}, 0, SliceCursor{}, 1, 2, 0)
+	legacy, err := DecodeTaskSliceList(buf.Bytes())
+	if err != nil || legacy.Slices[0].MemberCount() != 2 {
+		t.Fatalf("legacy reply: %+v, %v", legacy, err)
+	}
+	withReviews, err := DecodeTaskSliceList(binary.BigEndian.AppendUint32(buf.Bytes(), 3))
+	if err != nil || withReviews.Slices[0].Reviews != 3 || withReviews.Slices[0].MemberCount() != 5 || withReviews.Slices[0].TaskCount() != 2 {
+		t.Fatalf("opted-in reply: %+v, %v", withReviews, err)
+	}
+}
+
 func TestDecodeTaskSliceListRejectsMalformedFrames(t *testing.T) {
 	valid := func() []byte {
 		buf := bytes.NewBuffer(nil)

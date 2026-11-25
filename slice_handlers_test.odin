@@ -181,6 +181,8 @@ worker_db_test_slices :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstring) 
 		slice_test_slice_asset(74, `{"version":1}`), // Invalid projections stay absent.
 		{asset_id = 1, asset_type = .Note, preview = slice_test_bytes(`{"project":"NRC"}`), updated_at = 60},
 		{asset_id = 2, asset_type = .File, updated_at = 55},
+		{asset_id = 3, asset_type = .ReviewForm, preview = slice_test_bytes(`{"title":"Review","archived":true}`)},
+		{asset_id = 4, asset_type = .ReviewAnswer, preview = slice_test_bytes(`{"title":"Review","run_id":"1"}`)},
 	}
 	for &asset in assets do testing.expect_value(t, sqlite_put_asset(&store, c.workspace_id, &asset), sql.OK)
 	testing.expect_value(t, sqlite_put_asset(&store, "foreign-slices", &assets[0]), sql.OK)
@@ -193,6 +195,9 @@ worker_db_test_slices :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstring) 
 		{source_type = .Asset, source_id = 1, target_type = .Asset, target_id = 71},
 		{source_type = .Asset, source_id = 71, target_type = .Asset, target_id = 2},
 		{source_type = .Task, source_id = 999, target_type = .Asset, target_id = 71},
+		{source_type = .Asset, source_id = 3, target_type = .Asset, target_id = 71},
+		{source_type = .Asset, source_id = 72, target_type = .Asset, target_id = 3},
+		{source_type = .Asset, source_id = 4, target_type = .Asset, target_id = 71},
 	}
 	for edge, i in edges {
 		key := pr.Asset {
@@ -255,6 +260,14 @@ worker_db_test_slices :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstring) 
 			unassigned_tasks = 1,
 		},
 	)
+	with_reviews := open; with_reviews.reviews = 1
+	worker_db_test_slice_expect(t, c, {limit = 10, include_reviews = true, correlation_id = 931}, {
+		success = true, include_reviews = true, slices = {with_reviews, empty}, total_count = 2,
+		next_cursor_sort_at = 60, next_cursor_slice_id = max(u64), assigned_tasks = 3, unassigned_tasks = 1,
+	})
+	worker_db_test_slice_expect(t, c, {limit = 10, include_reviews = true, has_name = true, name = slice_test_bytes("Änderung"), correlation_id = 932}, {
+		success = true, include_reviews = true, slices = {with_reviews}, total_count = 1, next_cursor_sort_at = 60, next_cursor_slice_id = 71,
+	})
 	req.has_cursor = true; req.cursor_sort_at = 60; req.cursor_slice_id = 71
 	worker_db_test_slice_expect(t, c, req, {success = true, slices = {empty}, total_count = 2, next_cursor_sort_at = 60, next_cursor_slice_id = max(u64)})
 	// Crossing the open/closed boundary must seek the next range rather than

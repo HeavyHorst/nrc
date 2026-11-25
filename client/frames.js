@@ -560,6 +560,14 @@ function decodeTaskSliceList(view) {
   offset = error.newOffset;
   const correlationId = u32(view, offset);
   offset += 4;
+  // Opted-in responses append one review count per slice after the legacy frame.
+  if (view.byteLength !== offset) {
+    if (view.byteLength - offset !== count * 4) throw new ProtocolError("invalid slice review counts");
+    for (const slice of slices) {
+      slice.reviews = u32(view, offset);
+      offset += 4;
+    }
+  }
   expectEnd(view, offset);
   return {
     roomId,

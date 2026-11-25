@@ -31,7 +31,7 @@ try {
     function sliceListFrame({ correlationId, slices }) {
       const names = slices.map((slice) => bytes(slice.name));
       const owners = slices.map((slice) => bytes(slice.owner));
-      let size = 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + 4;
+      let size = 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + 4 + slices.length * 4;
       slices.forEach((slice, index) => { size += 2 + names[index].length + 8 + 2 + owners[index].length + 1 + 16 + 16; });
       const buffer = new ArrayBuffer(size);
       const view = new DataView(buffer);
@@ -69,6 +69,7 @@ try {
       view.setUint32(offset, 0, false); offset += 4;
       view.setUint16(offset, 0, false); offset += 2;
       view.setUint32(offset, correlationId, false); offset += 4;
+      for (const slice of slices) { view.setUint32(offset, slice.reviews ?? 0); offset += 4; }
       if (offset !== size) throw new Error("the fixture frame does not fill its declared size");
       return new DataView(buffer);
     }
@@ -136,11 +137,11 @@ try {
     ws.send = (buffer) => {
       const view = new DataView(buffer);
       if (view.getUint16(0, false) !== 56) { send(buffer); return; }
-      const correlationId = view.getUint32(view.byteLength - 4, false);
+      const correlationId = view.getUint32(view.byteLength - 7, false); // empty project + review opt-in
       window.NRCSlices.handleSliceList(sliceListFrame({
         correlationId,
         slices: [
-          { name: window.listedSliceName ?? JSON.parse(assets.get(5n).preview).name, sliceId: 5n, owner: "tester", todo: 3, notes: 2, files: 2 },
+          { name: window.listedSliceName ?? JSON.parse(assets.get(5n).preview).name, sliceId: 5n, owner: "tester", todo: 3, notes: 2, files: 2, reviews: window.fixtureReviewCount?.() ?? 0 },
           { name: "Beta", sliceId: 6n, owner: "tester", todo: 2 },
         ].filter(slice => slice.name.includes(NRCSlices.getFilters().query)),
       }));
@@ -457,8 +458,97 @@ try {
   await page.waitForFunction(() => NRCSlices.getState().detailSliceId === 5n);
   assert.equal(await selectedSlice(), "5");
   assert.equal(await page.locator("#sliceRecord .slice-member").count(), 7);
+
+  await page.evaluate(async () => {
+    const cache = NRCAssets.roomAssets.get(0n);
+    const form = { version: 1, title: "Checkpoint acceptance", build: "build-87", released_at: "1", points: [], archived: true };
+    const draft = { ...form, title: "Assigned draft", build: "build-88", released_at: "", archived: false };
+    const reviewAsset = (id, metadata) => ({ assetId: id, convId: 0n, assetType: 18, preview: JSON.stringify(metadata) });
+    cache.set(88n, reviewAsset(88n, draft));
+    const edges = new Map([[88n, 188n]]);
+    window.fixtureReviewCount = () => edges.size;
+    const getEdges = NRCEdges.getEdgesForEntity;
+    let loaded = [];
+    NRCEdges.getEdgesForEntity = (room, type, id) => {
+      const original = getEdges(room, type, id);
+      return id === 5n ? original.concat(loaded) : original;
+    };
+    NRCEdges.requestEdgePage = async (room, type, id, { session }) => {
+      if (id !== 5n) return {};
+      if (!session) { loaded = []; return { hasMore: true, session: { first: true } }; }
+      if (!session.first) throw Error("Expected continuation session");
+      loaded = [...edges].map(([sourceId, edgeId]) => ({ edgeId, relation: 7, sourceType: 1, sourceId, targetType: 1, targetId: 5n }));
+      return { hasMore: false };
+    };
+    NRCAssets.requestAllAssets = async (room, type) => {
+      if (room !== 0n || type !== 18) throw Error("Expected ReviewForm listing");
+      const archived = reviewAsset(87n, form);
+      cache.set(87n, archived);
+      return { assets: [archived, cache.get(88n)] };
+    };
+    NRCEdges.sendCreateEdge = (room, sourceType, sourceId, targetType, targetId, relation, callbacks) => {
+      if (room !== 0n || sourceType !== 1 || sourceId !== 87n || targetType !== 1 || targetId !== 5n || relation !== 7) throw Error("Wrong membership edge");
+      edges.set(sourceId, 187n);
+      callbacks.onSuccess();
+      return 1;
+    };
+    NRCEdges.sendDeleteEdge = (room, edgeId, callbacks) => {
+      if (room !== 0n || edgeId !== 187n) throw Error("Wrong membership edge deletion");
+      edges.delete(87n);
+      callbacks.onSuccess();
+      return 1;
+    };
+    const send = ws.send.bind(ws);
+    ws.send = buffer => {
+      const view = new DataView(buffer);
+      if (view.getUint16(0) !== 77) return send(buffer);
+      const request = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 2, view.byteLength - 6)));
+      if (!["get", "run_list"].includes(request.op) || request.form_id !== "87") throw Error("Wrong review read");
+      const replyBody = request.op === "get" ? { status: "ok", form_id: "87", revision: "1", form } : { status: "ok", runs: [] };
+      const body = new TextEncoder().encode(JSON.stringify(replyBody));
+      const reply = new DataView(new ArrayBuffer(6 + body.length));
+      reply.setUint16(0, 182);
+      reply.setUint32(2, view.getUint32(view.byteLength - 4));
+      new Uint8Array(reply.buffer, 6).set(body);
+      NRCReviews.handlePage(reply);
+    };
+    await NRCSlices.requestList({ force: true });
+  });
+  await page.locator('[data-member-review="88"]').waitFor();
+  assert.equal(await page.locator('[data-slice-id="5"] .slice-row-count').textContent(), "8 MEM");
+  await page.locator('[data-slice-kind="review"]').click();
+  const picker = page.locator('.note-link-picker:visible');
+  await picker.getByText(/Checkpoint acceptance/).waitFor();
+  assert.equal(await picker.getByText(/Assigned draft/).count(), 0);
+  await picker.getByRole('textbox').fill('build-87');
+  await picker.getByText(/Checkpoint acceptance.*ARCHIVED/).click();
+  const review = page.locator('[data-member-review="87"]');
+  await review.waitFor();
+  assert.match(await review.textContent(), /#87.*Checkpoint acceptance.*ARCHIVED.*build-87/s);
+  await page.waitForFunction(() => NRCSlices.selectedSlice()?.reviews === 2);
+  assert.equal(await page.locator('[data-slice-id="5"] .slice-row-count').textContent(), "9 MEM");
+  assert.equal(await page.locator('#sliceRecord .slice-bar-count').first().textContent(), "3");
+  for (const theme of ["white", "matte-black"]) {
+    for (const width of [2000, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.evaluate(theme => { document.documentElement.dataset.theme = theme; document.querySelector('#sliceView').dataset.sliceMobileDetail = "true"; }, theme);
+      assert.equal(await review.getByText('ARCHIVED').isVisible(), true);
+      assert.equal(await review.evaluate(row => row.scrollWidth <= row.clientWidth), true);
+      if (process.env.NRC_SLICE_SCREENSHOTS) await review.locator('xpath=ancestor::section').screenshot({ path: `${process.env.NRC_SLICE_SCREENSHOTS}/reviews-${theme}-${width}.png` });
+    }
+  }
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.evaluate(() => NRCInspector.openEntity({ type: "slice", id: 5n }));
+  await page.locator('#inspectorEntityHost [data-member-open="review:87"]').click();
+  await page.waitForFunction(() => NRCInspector.current()?.type === "review" && NRCInspector.current().id === 87n);
+  await page.locator('#reviewEditor').getByRole('heading', { name: 'Checkpoint acceptance' }).waitFor();
+  await page.locator('#inspectorBack').click();
+  await page.locator('#inspectorEntityHost [data-member-review="87"] [data-slice-unassign]').click();
+  await review.waitFor({ state: "detached" });
+  await page.waitForFunction(() => NRCSlices.selectedSlice()?.reviews === 1);
+  assert.equal(await page.evaluate(() => NRCViewManager.getActiveView()), "kanban");
   assert.deepEqual(errors, []);
-  console.log("PASS: slice keyboard navigation, member selection, owner editing and peer renames preserve drafts in both themes at desktop/mobile widths");
+  console.log("PASS: slice keyboard navigation, review assignment and Inspector back, owner editing and peer renames in both themes at desktop/mobile widths");
 } finally {
   await browser.close();
 }

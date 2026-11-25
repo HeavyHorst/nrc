@@ -11,6 +11,23 @@ func reviewTestForm() ReviewForm {
 	return ReviewForm{Version: 1, Title: "Release", Build: "v2", ReleasedAt: "1790000000000000000", Points: []ReviewPoint{{ID: "9007199254740993", Question: "Works?", Instruction: "Try", Expected: "Yes"}}}
 }
 
+func TestReviewDeleteReceiptEmptyRuns(t *testing.T) {
+	for _, tc := range []struct {
+		body  string
+		valid bool
+	}{
+		{`{"status":"ok","form_id":"42","runs":[]}`, true},
+		{`{"status":"ok","form_id":"0","runs":[]}`, false},
+		{`{"status":"ok","form_id":"42","runs":[{}]}`, false},
+		{`{"status":"ok","form_id":"42","runs":[],"form":{"version":1,"title":"Not a deletion receipt"}}`, false},
+	} {
+		r, err := DecodeReviewResponse(append(binary.BigEndian.AppendUint32(nil, 1), tc.body...))
+		if (err == nil) != tc.valid || (tc.valid && (r.FormID != "42" || r.Revision != "")) {
+			t.Errorf("receipt %s: %+v, %v", tc.body, r, err)
+		}
+	}
+}
+
 func TestReviewRunRequestWire(t *testing.T) {
 	for _, q := range []ReviewRequest{
 		{Op: "run_list", Source: "portal", Identity: "anna@example.test", Name: "Anna", Cursor: "9007199254740993"},

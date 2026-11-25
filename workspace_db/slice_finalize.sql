@@ -50,7 +50,7 @@ INSERT INTO nrc_slice_new WITH endpoints AS (
  coalesce(t.status!=4,0) AS work,coalesce(t.status!=4 AND t.blocked_by!=zeroblob(8),0) AS blocked,
  CASE WHEN t.status NOT IN (3,4) THEN nullif(t.created_at,0) END AS active_at,
  CASE WHEN t.status!=4 THEN max(0,t.updated_at)
- WHEN a.asset_type IN (5,3,13) THEN max(0,coalesce(n.updated_at,a.updated_at)) ELSE 0 END AS moved,
+ WHEN a.asset_type IN (5,3,13,18) THEN max(0,coalesce(n.updated_at,a.updated_at)) ELSE 0 END AS moved,
  CASE WHEN t.status!=4 THEN t.project WHEN a.asset_type=5 THEN coalesce(n.project,x'') ELSE x'' END AS project
  FROM endpoints m
  LEFT JOIN tasks t ON t.workspace=m.workspace AND t.id=CASE WHEN m.member_type=2 THEN m.member_id END

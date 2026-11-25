@@ -70,6 +70,7 @@ class NRCLinkPicker extends HTMLElement {
     kinds = ["note", "task", "file"],
     relation = null,
     onSelect = null,
+    excludedIds = null,
   }) {
     if (!anchor || !sourceEntity || activeLinkPicker?.state.selecting) return;
     kinds = kinds.filter(kind => LINK_PICKER_KINDS[kind]);
@@ -80,6 +81,7 @@ class NRCLinkPicker extends HTMLElement {
     this.session++;
     this.anchor = anchor;
     this.onSelect = onSelect;
+    this.excludedIds = excludedIds;
     this.state.sourceType = sourceType;
     this.state.sourceEntity = sourceEntity;
     this.state.targetKind = kinds[0];
@@ -156,6 +158,23 @@ class NRCLinkPicker extends HTMLElement {
       linkPickerState.targetKind === kind;
     const cursorPrimary = linkPickerState.cursorPrimary;
     const cursorId = linkPickerState.cursorId;
+    if (kind === "review") {
+      // Review search includes archived forms and must reach beyond the first page.
+      linkPickerState.loading = true;
+      linkPickerState.loadError = "";
+      this.updateLinkPickerList();
+      window.NRCAssets.requestAllAssets(room, window.NRCAssets.AssetType.ReviewForm, {
+        isCancelled: () => !current(),
+      }).then(() => {
+        if (!current()) return;
+        linkPickerState.loading = false;
+        linkPickerState.hasMore = false;
+        this.updateLinkPickerList();
+      }).catch(error => {
+        if (current()) this.pickerLoadFailed(error.message || "PAGINATION FAILED");
+      });
+      return;
+    }
     if (kind === "task") {
       if (!window.NRCTasks?.sendListTasksPaged)
         return this.pickerLoadFailed("PAGINATION UNAVAILABLE");
@@ -284,6 +303,17 @@ class NRCLinkPicker extends HTMLElement {
           });
         }
       }
+    } else if (linkPickerState.targetKind === "review") {
+      for (const asset of window.NRCAssets.roomAssets.get(sourceEntity.convId)?.values() ?? []) {
+        if (asset.assetType !== window.NRCAssets.AssetType.ReviewForm || asset.assetId === sourceEntity.assetId) continue;
+        let metadata = {};
+        try { metadata = JSON.parse(asset.preview) || {}; } catch { /* retain ID fallback */ }
+        const label = `#${asset.assetId}`;
+        const status = metadata.archived ? "ARCHIVED" : metadata.released_at ? "RELEASED" : "DRAFT";
+        const title = [metadata.title || `Review ${label}`, metadata.build, status].filter(Boolean).join(" · ");
+        if (searchTerm && !`${label} ${title}`.toLowerCase().includes(searchTerm)) continue;
+        items.push({ id: asset.assetId, label, title, type: "review", asset });
+      }
     } else if (["file", "slice", "ticket"].includes(linkPickerState.targetKind)) {
       const assets = window.NRCAssets?.roomAssets?.get(sourceEntity.convId);
       if (assets) {
@@ -308,6 +338,7 @@ class NRCLinkPicker extends HTMLElement {
       }
     }
 
+    if (this.excludedIds) items = items.filter(item => !this.excludedIds.has(item.id));
     linkPickerState.filteredItems = items;
     list.innerHTML = "";
     const picker = list.closest(".note-link-picker");
@@ -494,6 +525,7 @@ const LINK_PICKER_KINDS = {
   file: { label: "FILE", targetType: 1 },
   slice: { label: "SLICE", targetType: 1 },
   ticket: { label: "TICKET", targetType: 1 },
+  review: { label: "REVIEW", targetType: 1 },
 };
 
 function renderLinkPickerContent() {
