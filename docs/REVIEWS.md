@@ -82,6 +82,15 @@ required. Do not log request bodies, fragment-exchange payloads or cookies.
 Set the same `TICKETS_ORIGIN` in the Tailscale proxy's environment (Compose `.env`)
 so the Inspector generates public invitation URLs without asking users for a host.
 
+**Guest Links** lists a run's invitations, including expired and revoked ones.
+Staff can copy active new links and revoke links even after the run closes.
+URLs created before this feature cannot be recovered from their stored hashes;
+issue a new link if the original is lost. Copying links again requires the same
+non-default `NRC_JWT_SECRET` that was in use when they were issued. Changing the
+secret does not invalidate URLs already shared: revoke them in the run if needed.
+Server builds predating recoverable invitations cannot validate these new URLs;
+old invitations still work on the new server.
+
 Invitation links default to participation only. Granting guest closure explicitly
 allows any link holder to decide under a self-declared name; the report labels
 that provenance. For a named person's approval assign their existing portal

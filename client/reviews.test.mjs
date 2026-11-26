@@ -105,15 +105,15 @@ test('guest invitation uses the configured origin without prompting for a hostna
   const c=client({prompts:['2099-01-01T00:00:00Z'],reply:()=>({status:'ok',invite_id:'73',token:'a'.repeat(64)})});
   c.context.window.NRCDateTime={pick:async options=>{assert.equal(options.futureOnly,true);return Date.parse('2099-01-01T00:00:00Z');}};
   c.context.URL=URL;c.context.fetch=async path=>{assert.equal(path,'/api/features');return {ok:true,json:async()=>({review_portal_origin:'https://tickets.example.test'})};};
-  c.state.run={id:'41'};await c.command('invite');
+  c.state.run={id:'41'};c.setCurrent(()=>true);await c.command('invite');
   assert.equal(c.messages.length,0);
   assert.match(c.state.notice,/https:\/\/tickets\.example\.test\/abnahmen\/einladung#/);
   assert.equal(packetBody(c.packets[0]).op,'invite');
   assert.equal(packetBody(c.packets[0]).expires_at,String(BigInt(Date.parse('2099-01-01T00:00:00Z'))*1000000n));
 });
 test('revoke remains a valid command for completed runs',async()=>{
-  const c=client({prompts:['73'],reply:true});c.state.run={id:'41',decision:'completed'};await c.command('revoke');
-  assert.deepEqual(packetBody(c.packets[0]),{op:'revoke',run_id:'41',invite_id:'73'});assert.equal(c.state.notice,'INVITE REVOKED');
+  const c=client({canClose:true,reply:true});c.state.run={id:'41',decision:'completed'};c.setCurrent(()=>true);await c.command('revoke:73');
+  assert.deepEqual(packetBody(c.packets[0]),{op:'revoke',run_id:'41',invite_id:'73'});assert.equal(c.state.notice,'GUEST LINK #73 REVOKED');
 });
 test('ticket draft copies editable bounded UTF-8 title and body without NULs',()=>{
   const c=client();const draft=c.ticketDraft({title:'😀'.repeat(300),body:'ü\0'.repeat(2000)});

@@ -215,6 +215,13 @@ func TestReviewTeamsPortalGuestsAndRestart(t *testing.T) {
 	reviewHTTP(t, portal, account, "", "GET", "/", nil, 303)
 	reviewHTTP(t, portal, account, "anna", "GET", "/", nil, 200)
 	invite := reviewCall(t, staff, p.ReviewRequest{Op: "invite", RunID: a, ExpiresAt: strconv.FormatInt(time.Now().Add(time.Hour).UnixNano(), 10)}, "ok")
+	listInvites := func(run string) []p.ReviewInvite {
+		return reviewCall(t, staff, p.ReviewRequest{Op: "invite_list", RunID: run}, "ok").Invites
+	}
+	listed := listInvites(a)
+	if len(listed) != 1 || listed[0].ID != invite.InviteID || listed[0].Token != invite.Token || len(listInvites(b)) != 0 {
+		t.Fatal("staff could not recover the original run-scoped invitation")
+	}
 	join := func(token string) (*http.Client, string) {
 		client := *portal.Client()
 		c := &client
@@ -226,7 +233,7 @@ func TestReviewTeamsPortalGuestsAndRestart(t *testing.T) {
 		reviewHTTP(t, portal, c, "", "POST", "/abnahmen/gast", url.Values{"name": {"Alex"}, "csrf": {csrf}}, 303)
 		return c, csrf
 	}
-	g1, csrf1 := join(invite.Token)
+	g1, csrf1 := join(listed[0].Token)
 	g2, csrf2 := join(invite.Token)
 	for i, item := range []struct {
 		c                     *http.Client
@@ -263,6 +270,9 @@ func TestReviewTeamsPortalGuestsAndRestart(t *testing.T) {
 	reviewHTTP(t, portal, g1, "", "POST", "/abnahmen/gast/answer", url.Values{"point_id": {"9"}, "result": {"no"}, "csrf": {csrf1}}, 400)
 	reviewCall(t, staff, p.ReviewRequest{Op: "revoke", RunID: a, InviteID: invite.InviteID}, "ok")
 	reviewHTTP(t, portal, g1, "", "GET", "/abnahmen/gast", nil, 404)
+	if rows := listInvites(a); len(rows) != 1 || rows[0].RevokedAt == "" || rows[0].Token != "" {
+		t.Fatal("revoked link should remain listed without its token")
+	}
 	// An explicitly privileged guest can close, but the report says guest.
 	selfRun := createRun("Gastentscheid")
 	selfInvite := reviewCall(t, staff, p.ReviewRequest{Op: "invite", RunID: selfRun, CanClose: true, ExpiresAt: strconv.FormatInt(time.Now().Add(time.Hour).UnixNano(), 10)}, "ok")
@@ -300,6 +310,9 @@ func TestReviewTeamsPortalGuestsAndRestart(t *testing.T) {
 	server = startServerInWorkDirWithEnv(t, dir, map[string]string{"NRC_THREAD_COUNT": "2"})
 	staff = workspaceDataClient(t, workspace, "alice", 31)
 	defer staff.Close()
+	if rows := listInvites(selfRun); len(rows) != 1 || rows[0].Token != selfInvite.Token || !rows[0].CanClose {
+		t.Fatal("active link and its permissions did not survive restart")
+	}
 	after, _ := json.Marshal(reviewCall(t, staff, p.ReviewRequest{Op: "run_get", RunID: a}, "ok"))
 	if !bytes.Equal(before, after) {
 		t.Fatal("closed report changed after edges/retest/restart")

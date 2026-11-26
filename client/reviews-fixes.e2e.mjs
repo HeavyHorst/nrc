@@ -107,14 +107,72 @@ try {
   };
   const reviews = async () => {
     await boot();
+    if(page.viewportSize().width<=768)await page.locator('#mobileMore').click();
     await page.locator('#reviewsBtn').click();
     await page.locator(`[data-review="${fixture.formId}"]`).click();
     await page.locator('[data-review-op="compare"]').waitFor({state:'visible'});
   };
   await reviews();
   if(!before) {
+    await page.clock.setFixedTime(new Date(Date.now()+20*60_000));
+    const links=page.getByRole('region',{name:'Guest links',exact:true});
+    await page.locator('#reviewRunSelect').selectOption(fixture.runId);
+    const active=links.getByRole('listitem').filter({hasText:`LINK #${fixture.activeInvite}`});
+    const revoked=links.getByRole('listitem').filter({hasText:`LINK #${fixture.revokedInvite}`});
+    const expired=links.getByRole('listitem').filter({hasText:`LINK #${fixture.expiredInvite}`});
+    const filter=status=>links.locator(`[data-review-op="invite-filter:${status}"]`);
+    await active.waitFor();
+    assert.equal(await filter('active').getAttribute('aria-pressed'),'true');
+    assert.equal(await filter('active').locator('.tab-count').textContent(),'2');
+    assert.deepEqual(await links.locator('li strong').allTextContents(),[`LINK #${fixture.activeInvite}`,`LINK #${fixture.otherActiveInvite}`]);
+    for(const mobile of [false,true]) {
+      await page.setViewportSize(mobile?{width:390,height:844}:{width:1440,height:1000});
+      if(mobile) {
+        await reviews();
+        await page.locator('#reviewRunSelect').selectOption(fixture.runId);
+      }
+      for(const theme of ['white','dark']) {
+        await page.evaluate(theme=>setTheme(theme,false),theme);
+        await links.scrollIntoViewIfNeeded();
+        assert.ok(await links.evaluate(el=>el.scrollWidth<=el.clientWidth),'guest links fit the inspector');
+        const columns=links.locator('.review-guest-columns');
+        assert.equal(await columns.isVisible(),!mobile);
+        await links.screenshot({path:path.join(output,`guest-links-compact-${mobile?'mobile':'desktop'}-${theme}.png`)});
+      }
+    }
+    await page.setViewportSize({width:1440,height:1000});
+    await reviews();
+    await page.locator('#reviewRunSelect').selectOption(fixture.runId);
+    await page.evaluate(()=>setTheme('white',false));
+    assert.match(await active.textContent(),/CONTRIBUTE ONLY.*EXPIRES/);
+    await filter('expired').click();
+    await expired.waitFor();
+    assert.equal(await expired.getByRole('button').count(),0);
+    await links.screenshot({path:path.join(output,'guest-links-compact-expired.png')});
+    await filter('revoked').click();
+    assert.match(await revoked.textContent(),/MAY CLOSE.*EXPIRES/);
+    assert.equal(await revoked.getByRole('button').count(),0);
+    await filter('active').click();
+    assert.ok(!(await links.textContent()).includes(fixture.guestLink),'bearer URL is not printed in the list');
+    await context.grantPermissions(['clipboard-read','clipboard-write']);
+    await active.getByRole('button',{name:`Copy guest link #${fixture.activeInvite}`,exact:true}).click();
+    await page.getByText(`GUEST LINK #${fixture.activeInvite} COPIED`,{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),fixture.guestLink,'the original full URL is copied');
+    await page.evaluate(()=>{navigator.clipboard.writeText=()=>Promise.reject(new DOMException('Denied','NotAllowedError'));});
+    await active.getByRole('button',{name:`Copy guest link #${fixture.activeInvite}`,exact:true}).click();
+    const manualCopy=page.getByRole('dialog').filter({hasText:'Clipboard access is unavailable'});
+    assert.equal(await manualCopy.locator('input').inputValue(),fixture.guestLink);
+    await manualCopy.getByRole('button',{name:'Done',exact:true}).click();
+    await active.getByRole('button',{name:`Revoke guest link #${fixture.activeInvite}`,exact:true}).click();
+    await page.getByRole('dialog').getByRole('button',{name:'Revoke link',exact:true}).click();
+    await active.waitFor({state:'detached'});
+    assert.equal(await filter('revoked').locator('.tab-count').textContent(),'2');
+    await filter('revoked').click();
+    await active.waitFor();
+    assert.equal(await active.getByRole('button').count(),0);
+    await links.screenshot({path:path.join(output,'guest-links-compact-revoked.png')});
     await page.getByRole('button',{name:'REFERENCES',exact:true}).click();
-    await page.getByRole('button',{name:'+ LINK TASK / TICKET',exact:true}).click();
+    await page.locator('#reviewReferences').getByRole('button',{name:'+ LINK TASK / TICKET',exact:true}).click();
     const picker=page.locator('.note-link-picker:visible');
     await picker.getByText('Review navigation task',{exact:true}).waitFor();
     await picker.getByRole('button',{name:'TICKET',exact:true}).click();
@@ -282,8 +340,10 @@ try {
     await editor.getByText('Only assigned staff can save answers here.',{exact:true}).waitFor();
     assert.equal(await selfAssign.count(),0);assert.equal(await editor.locator('[data-answer]').count(),0);
     assert.equal(await op('close').isDisabled(),true);
+    await editor.getByRole('region',{name:'Guest links'}).getByText('NO GUEST LINKS',{exact:true}).waitFor();
+    assert.equal(await op('invite').isVisible(),true);
     const access=editor.locator('#reviewAccessToggle');await access.click();
-    for(const verb of ['participant','portal-participant','invite','revoke'])assert.equal(await op(verb).isVisible(),true);
+    for(const verb of ['participant','portal-participant'])assert.equal(await op(verb).isVisible(),true);
     await page.route('**/api/users/identities',route=>route.fulfill({json:{alice:'Alex Example','sam@example.test':'Sam Example'}}));
     await op('participant').click();
     const accountPicker=page.getByRole('dialog').last();

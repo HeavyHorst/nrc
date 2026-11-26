@@ -93,6 +93,14 @@ type ReviewAccountChoice struct {
 	Name      string `json:"name"`
 	Login     string `json:"login"`
 }
+type ReviewInvite struct {
+	ID        string `json:"id"`
+	ExpiresAt string `json:"expires_at"`
+	RevokedAt string `json:"revoked_at"`
+	CanClose  bool   `json:"can_close"`
+	Expired   bool   `json:"expired"`
+	Token     string `json:"token,omitempty"`
+}
 
 type ReviewResponse struct {
 	CorrelationID uint32                `json:"-"`
@@ -103,6 +111,7 @@ type ReviewResponse struct {
 	Run           ReviewRun             `json:"run"`
 	Runs          []ReviewRun           `json:"runs"`
 	Accounts      []ReviewAccountChoice `json:"accounts,omitempty"`
+	Invites       []ReviewInvite        `json:"invites,omitempty"`
 	Token         string                `json:"token"`
 	InviteID      string                `json:"invite_id"`
 	ParticipantID string                `json:"participant_id"`
@@ -137,7 +146,7 @@ func ValidateReviewForm(f ReviewForm, released bool) error {
 // correlation ID, requests a trailing one, matching the Chronicle transport.
 func EncodeReviewRequest(q ReviewRequest, correlation uint32) ([]byte, error) {
 	switch q.Op {
-	case "create", "update", "release", "unrelease", "archive", "restore", "delete_draft", "copy", "get", "run_create", "run_list", "run_get", "participant_add", "participant_accounts", "invite", "revoke", "invitation_info", "guest_join", "answer", "close":
+	case "create", "update", "release", "unrelease", "archive", "restore", "delete_draft", "copy", "get", "run_create", "run_list", "run_get", "participant_add", "participant_accounts", "invite", "invite_list", "revoke", "invitation_info", "guest_join", "answer", "close":
 	default:
 		return nil, fmt.Errorf("review: unknown operation")
 	}
@@ -157,7 +166,7 @@ func EncodeReviewRequest(q ReviewRequest, correlation uint32) ([]byte, error) {
 			return nil, fmt.Errorf("review: invalid release token")
 		}
 	}
-	if q.Op == "run_get" || q.Op == "answer" || q.Op == "close" || q.Op == "participant_add" || q.Op == "participant_accounts" || q.Op == "invite" || q.Op == "revoke" {
+	if q.Op == "run_get" || q.Op == "answer" || q.Op == "close" || q.Op == "participant_add" || q.Op == "participant_accounts" || q.Op == "invite" || q.Op == "invite_list" || q.Op == "revoke" {
 		if n, ok := chronicleDecimal(q.RunID); !ok || n == 0 {
 			return nil, fmt.Errorf("review: invalid run ID")
 		}

@@ -59,6 +59,7 @@ sqlite_execute_review :: proc(store: ^db.Store, request: ^db.Request, output: ^d
 	   q.op == "answer" ||
 	   q.op == "close" ||
 	   q.op == "invite" ||
+	   q.op == "invite_list" ||
 	   q.op == "revoke" ||
 	   q.op == "invitation_info" ||
 	   q.op == "guest_join" {

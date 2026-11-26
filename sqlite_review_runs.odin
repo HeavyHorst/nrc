@@ -2,6 +2,8 @@ package main
 
 import "core:c"
 import "core:crypto"
+import "core:crypto/hmac"
+import "core:encoding/hex"
 import "core:encoding/json"
 import "core:fmt"
 import "core:mem"
@@ -115,6 +117,26 @@ sqlite_review_read_run :: proc(
 	return
 }
 
+// The public nonce prevents ID reuse after restoring a snapshot from recreating
+// a bearer. The indexed lookup key fits the existing 32-byte column: nonce +
+// truncated SHA-256. Legacy rows still use the full SHA-256 of a random token.
+sqlite_review_invite_token :: proc(workspace: string, run_id, id: u64, nonce: []byte) -> string {
+	if jwt_auth_secret == "" || jwt_auth_secret == "dev-insecure-nrc-jwt-secret" do return ""
+	key, token: [32]byte
+	domain: string : "nrc/review-invite/v1"
+	hmac.sum(.SHA256, key[:], transmute([]byte)domain, transmute([]byte)jwt_auth_secret)
+	input := fmt.aprintf("%s:%d:%d:%s", sqlite_chronicle_hex(nonce), run_id, id, workspace)
+	hmac.sum(.SHA256, token[:], transmute([]byte)input, key[:])
+	copy(token[16:], token[:16]); copy(token[:16], nonce)
+	return sqlite_chronicle_hex(token[:])
+}
+
+sqlite_review_invite_lookup :: proc(token: string, nonce: []byte) -> [32]byte {
+	lookup := sqlite_chronicle_hash(transmute([]byte)token)
+	copy(lookup[16:], lookup[:16]); copy(lookup[:16], nonce)
+	return lookup
+}
+
 // A gateway acts for a canonical portal requester or a cryptographically bound
 // guest session. A normal staff connection cannot forge either origin.
 sqlite_review_run_command :: proc(
@@ -148,6 +170,50 @@ sqlite_review_run_command :: proc(
 		if source == "portal" && identity == "" {r.status = "forbidden"; return sqlite_review_reply(output, correlation, r, backing)}
 	}
 	run_id, _ := pr.chronicle_decimal(q.run_id)
+	if q.op == "invite_list" {
+		_, _, found, rc := sqlite_review_read_run(store, request.workspace, run_id, false)
+		if rc != sql.OK do return rc
+		if !found {r.status = "not_found"; return sqlite_review_reply(output, correlation, r, backing)}
+		cursor, _ := pr.chronicle_decimal(q.cursor)
+		base :: `SELECT id,expires_at,revoked_at,can_close,token_hash FROM review_invites WHERE workspace=?1 AND run_id=?2`
+		order :: ` ORDER BY id DESC LIMIT 26`
+		s: ^sql.Statement
+		query_rc: c.int
+		if cursor == 0 {
+			s, query_rc = sqlite_chronicle_statement(store, base + order, request.workspace, {run_id})
+		} else {
+			s, query_rc = sqlite_chronicle_statement(store, base + ` AND id<?3` + order, request.workspace, {run_id, cursor})
+		}
+		if query_rc != sql.OK do return query_rc
+		defer sql.finalize(s)
+		invites: [dynamic]pr.Review_Invite
+		for {
+			query_rc = sql.step(s)
+			if query_rc == sql.DONE do break
+			if query_rc != sql.ROW do return query_rc
+			if len(invites) == 25 {r.has_more = true; break}
+			id, id_rc := sql.column_id(s, 0); if id_rc != sql.OK do return id_rc
+			expires, revoked := sql.column_int64(s, 1), sql.column_int64(s, 2)
+			entry := pr.Review_Invite {
+				id         = fmt.aprintf("%d", id),
+				expires_at = fmt.aprintf("%d", expires),
+				can_close  = sql.column_int64(s, 3) != 0,
+			}
+			entry.expired = expires <= request.timestamp
+			if revoked != 0 do entry.revoked_at = fmt.aprintf("%d", revoked)
+			if revoked == 0 && !entry.expired {
+				stored := sql.column_bytes_view(s, 4)
+				token := sqlite_review_invite_token(request.workspace, run_id, id, stored[:16])
+				if token != "" {
+					digest := sqlite_review_invite_lookup(token, stored[:16])
+					if string(digest[:]) == string(stored) do entry.token = token
+				}
+			}
+			append(&invites, entry); r.cursor = entry.id
+		}
+		r.status = "ok"; r.invites = invites[:]
+		return sqlite_review_reply(output, correlation, r, backing)
+	}
 	if q.op == "participant_accounts" {
 		if request.portal_account_bot {r.status = "forbidden"; return sqlite_review_reply(output, correlation, r, backing)}
 		run, _, found, rc := sqlite_review_read_run(store, request.workspace, run_id, false)
@@ -184,11 +250,15 @@ sqlite_review_run_command :: proc(
 						   len(q.guest_id) > 128 ||
 						   !pr.review_text_valid(q.name, 256, true))) {r.status = "forbidden"; return sqlite_review_reply(output, correlation, r, backing)}
 		hash := sqlite_chronicle_hash(transmute([]byte)q.token)
+		nonce: [16]byte
+		_, hex_ok := hex.decode_into_buffer(transmute([]byte)q.token[:32], nonce[:])
+		if !hex_ok {r.status = "forbidden"; return sqlite_review_reply(output, correlation, r, backing)}
+		lookup := sqlite_review_invite_lookup(q.token, nonce[:])
 		s, rc := sqlite_chronicle_statement(
 			store,
-			`SELECT run_id,id,can_close FROM review_invites WHERE workspace=?1 AND token_hash=?2 AND revoked_at=0 AND expires_at>?3`,
+			`SELECT run_id,id,can_close FROM review_invites WHERE workspace=?1 AND token_hash IN (?2,?4) AND revoked_at=0 AND expires_at>?3`,
 			request.workspace,
-			{string(hash[:]), request.timestamp},
+			{string(hash[:]), request.timestamp, string(lookup[:])},
 		)
 		if rc != sql.OK do return rc
 		defer sql.finalize(s)
@@ -407,15 +477,22 @@ sqlite_review_run_command :: proc(
 		if !staff {r.status = "forbidden"; return sqlite_review_reply(output, correlation, r, backing)}
 		expires, valid := pr.chronicle_decimal(q.expires_at)
 		if !valid || expires > u64(max(i64)) || i64(expires) <= request.timestamp do return sqlite_review_reply(output, correlation, r, backing)
-		random: [32]byte; crypto.rand_bytes(random[:])
-		r.token = sqlite_chronicle_hex(random[:]); hash := sqlite_chronicle_hash(transmute([]byte)r.token)
 		id, id_rc := db.next_id(store, .Asset); if id_rc != sql.OK do return id_rc
+		random: [32]byte; crypto.rand_bytes(random[:])
+		r.token = sqlite_review_invite_token(request.workspace, run_id, id, random[:16])
+		digest: [32]byte
+		if r.token == "" {
+			r.token = sqlite_chronicle_hex(random[:])
+			digest = sqlite_chronicle_hash(transmute([]byte)r.token)
+		} else {
+			digest = sqlite_review_invite_lookup(r.token, random[:16])
+		}
 		r.invite_id = fmt.aprintf("%d", id)
 		rc = sqlite_chronicle_execute(
 			store,
 			`INSERT INTO review_invites(workspace,run_id,id,token_hash,expires_at,can_close) VALUES(?1,?2,?3,?4,?5,?6)`,
 			request.workspace,
-			{run_id, id, string(hash[:]), i64(expires), i64(q.can_close)},
+			{run_id, id, string(digest[:]), i64(expires), i64(q.can_close)},
 		)
 		if rc != sql.OK do return rc
 	case "revoke":
@@ -424,7 +501,7 @@ sqlite_review_run_command :: proc(
 		if !valid || id == 0 do return sqlite_review_reply(output, correlation, r, backing)
 		rc = sqlite_chronicle_execute(
 			store,
-			`UPDATE review_invites SET revoked_at=?4 WHERE workspace=?1 AND run_id=?2 AND id=?3`,
+			`UPDATE review_invites SET revoked_at=?4 WHERE workspace=?1 AND run_id=?2 AND id=?3 AND revoked_at=0`,
 			request.workspace,
 			{run_id, id, request.timestamp},
 		)

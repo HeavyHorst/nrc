@@ -57,6 +57,12 @@ Review_Run :: struct {
 	answered_points:                                                     int,
 }
 Review_Account_Choice :: struct {requester, name, login: string}
+Review_Invite :: struct {
+	id, expires_at, revoked_at: string,
+	can_close:                  bool,
+	expired:                    bool,
+	token:                      string `json:"token,omitempty"`,
+}
 Review_Response :: struct {
 	status:                           string,
 	form_id:                          string,
@@ -65,6 +71,7 @@ Review_Response :: struct {
 	run:                              Review_Run,
 	runs:                             []Review_Run,
 	accounts:                         []Review_Account_Choice `json:"accounts,omitempty"`,
+	invites:                          []Review_Invite `json:"invites,omitempty"`,
 	token, invite_id, participant_id: string,
 	cursor:                           string,
 	has_more:                         bool,
@@ -148,6 +155,7 @@ parseReviewRequest :: proc(data: []byte, allocator := context.allocator) -> (q: 
 	     "answer",
 	     "close",
 	     "invite",
+	     "invite_list",
 	     "revoke",
 	     "invitation_info",
 	     "guest_join":
@@ -159,7 +167,7 @@ parseReviewRequest :: proc(data: []byte, allocator := context.allocator) -> (q: 
 	}
 	changes_form := q.op == "update" || q.op == "release" || q.op == "unrelease" || q.op == "archive" || q.op == "restore" || q.op == "delete_draft"
 	if (changes_form || q.op == "copy" || q.op == "get" || q.op == "run_create") && (q.form_id == "" || q.form_id == "0") do return {}, correlation, .InvalidValue
-	if (q.op == "run_get" || q.op == "participant_add" || q.op == "participant_accounts" || q.op == "answer" || q.op == "close" || q.op == "invite" || q.op == "revoke") && (q.run_id == "" || q.run_id == "0") do return {}, correlation, .InvalidValue
+	if (q.op == "run_get" || q.op == "participant_add" || q.op == "participant_accounts" || q.op == "answer" || q.op == "close" || q.op == "invite" || q.op == "invite_list" || q.op == "revoke") && (q.run_id == "" || q.run_id == "0") do return {}, correlation, .InvalidValue
 	for text in ([8]string{q.label, q.identity, q.name, q.token, q.guest_id, q.expires_at, q.kind, q.source}) {
 		if !review_text_valid(text, 512) do return {}, correlation, .InvalidValue
 	}

@@ -291,6 +291,39 @@ test_review_teams_guests_revision_fence_and_frozen_report :: proc(t: ^testing.T)
 	// Two guests named exactly alike still get distinct participants and answers.
 	invite, _ := sqlite_review_test_call(t, &store, {op = "invite", run_id = aid, expires_at = "1000"})
 	if !testing.expect_value(t, invite.status, "ok") do return
+	invite_list := pr.Review_Request {
+		op     = "invite_list",
+		run_id = aid,
+	}
+	r, _ = sqlite_review_test_call(t, &store, invite_list, at = 1000)
+	if !testing.expect_value(t, r.status, "ok") || !testing.expect_value(t, len(r.invites), 1) do return
+	testing.expect_value(t, r.invites[0].expires_at, "1000")
+	testing.expect_value(t, r.invites[0].expired, true)
+	testing.expect_value(t, r.invites[0].token, "")
+	invite_list.source = "portal"; invite_list.identity = "a@example.test"
+	r, _ = sqlite_review_test_call(t, &store, invite_list, portal = true)
+	testing.expect_value(t, r.status, "forbidden")
+	testing.expect_value(t, len(r.invites), 0)
+	ids: [26]string
+	ids[0] = invite.invite_id
+	for i in 1 ..< len(ids) {
+		row, _ := sqlite_review_test_call(t, &store, {op = "invite", run_id = aid, expires_at = "1000"})
+		if !testing.expect_value(t, row.status, "ok") do return
+		ids[i] = row.invite_id
+	}
+	listing := pr.Review_Request {
+		op     = "invite_list",
+		run_id = aid,
+	}
+	r, _ = sqlite_review_test_call(t, &store, listing)
+	if !testing.expect_value(t, len(r.invites), 25) do return
+	testing.expect_value(t, r.has_more, true)
+	for item, i in r.invites do testing.expect_value(t, item.id, ids[25 - i])
+	listing.cursor = r.cursor
+	r, _ = sqlite_review_test_call(t, &store, listing)
+	if !testing.expect_value(t, len(r.invites), 1) do return
+	testing.expect_value(t, r.invites[0].id, invite.invite_id)
+	testing.expect_value(t, r.has_more, false)
 	guest1 := pr.Review_Request {
 		op       = "guest_join",
 		source   = "guest",

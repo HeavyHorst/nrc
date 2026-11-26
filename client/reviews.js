@@ -9,7 +9,7 @@
   let inspectorRef = null;
   let comparisonView = null;
   const comparisonState = {query:'',filter:'all',point:'',run:''};
-  const recordView = {point:null,access:false,definitions:false,drafts:new Map()};
+  const recordView = {point:null,access:false,definitions:false,inviteFilter:'active',drafts:new Map()};
   const host = () => document.getElementById('reviewEditor');
   const connected = () => typeof serverReady !== 'undefined' && serverReady && ws?.readyState === WebSocket.OPEN;
   const write = send => new Promise((resolve,reject) => { if (!send({onSuccess:resolve,onError:e=>reject(Error(e?.message || 'Reference update failed'))})) reject(Error('Not connected')); });
@@ -94,6 +94,7 @@
             (focusKey.id && el.id === focusKey.id) || (focusKey.name && el.name === focusKey.name));
           const fallback = focusKey.op === 'join' ? host()?.querySelector('[data-answer] select') :
             focusKey.op === 'close' ? host()?.querySelector('[data-review-op="retest"]') :
+            /^(revoke:|more-invites$)/.test(focusKey.op || '') ? host()?.querySelector('.review-guest-links [aria-pressed="true"]') :
             focusKey.id === 'reviewReload' ? document.getElementById('reviewReload') : null;
           (target || fallback)?.focus({preventScroll:true});
         }
@@ -171,9 +172,24 @@
     if (!current() || state.id!==id) return;
     state.comparison=null;
     state.form=page.form; state.revision=page.revision; state.runs=runs; state.dirty=false;
-    if (runId) { const detail=await request('run_get',{run_id:runId}); if (!current() || state.id!==id) return; state.run=detail.run;state.participant=detail.participant_id; }
-    else {state.run=null;state.participant='';}
+    if (runId) {
+      const detail=await request('run_get',{run_id:runId});
+      if (!current() || state.id!==id) return;
+      state.run=detail.run;state.participant=detail.participant_id;
+      await loadInvites();
+    } else {state.run=null;state.participant='';}
     return true;
+  }
+  async function loadInvites(cursor='') {
+    const run=state.run, ref=inspectorRef;
+    if (!cursor) {run.invites=[];run.inviteCursor='';}
+    try {
+      const page=await request('invite_list',{run_id:run.id,cursor});
+      if (!current() || inspectorRef!==ref || state.run!==run) return;
+      run.invites.push(...(page.invites || []));
+      run.inviteCursor=page.has_more?page.cursor:'';
+      run.inviteError='';
+    } catch(e) {run.inviteError=e.message;}
   }
   const field = (name,label,value,type='input') => `<label class="task-detail-row detail-edit-field"><span class="detail-edit-label">${label}</span>${type==='textarea'?`<textarea class="task-detail-textarea" name="${name}">${esc(value)}</textarea>`:`<input class="task-detail-input" name="${name}" value="${esc(value)}">`}</label>`;
   const btn = (op,label,disabled=false) => `<button class="btn" type="button" data-review-op="${op}" ${disabled?'disabled':''}>${label}</button>`;
@@ -316,6 +332,25 @@
         '<p class="customer-meta review-check-answer">Only assigned staff can save answers here.</p>'}
       </section></div>`;
   }
+  function guestLinks(run) {
+    const invites=run.invites || [];
+    const groups={active:[],expired:[],revoked:[]};
+    for(const invite of invites) groups[invite.revoked_at?'revoked':inviteActive(invite)?'active':'expired'].push(invite);
+    const filter=recordView.inviteFilter, rows=groups[filter], active=filter==='active';
+    const partial=run.inviteCursor?'+':'';
+    return `<section class="review-guest-links" aria-label="Guest links">
+      <header class="panel-header"><div><span>GUEST LINKS${run.inviteError && !invites.length?'':` · ${invites.length}${partial}`}</span>${run.decision?'':btn('invite','+ GUEST LINK')}</div></header>
+      <div class="tab-group" role="group" aria-label="Guest link status">${Object.entries(groups).map(([key,items])=>
+        `<button type="button" data-review-op="invite-filter:${key}" class="btn nav-tab${key===filter?' active':''}" aria-pressed="${key===filter}"><span>${key.toUpperCase()}</span><span class="tab-count">${items.length}${partial}</span></button>`).join('')}</div>
+      ${run.inviteError?`<p class="review-check-answer customer-meta" role="status">COULD NOT LOAD GUEST LINKS · ${esc(run.inviteError)}</p>`:''}
+      ${rows.length?`<div class="review-guest-row review-guest-columns" aria-hidden="true"><span>LINK</span><span>PERMISSION</span><span>EXPIRES</span><span>ACTIONS</span></div>
+      <ul role="list">${rows.map(invite=>{
+        const id=esc(invite.id);
+        return `<li class="review-guest-row"><strong>LINK #${id}</strong><span class="review-guest-permission">${invite.can_close?'MAY CLOSE':'CONTRIBUTE ONLY'}</span><span class="review-guest-expiry"><span>EXPIRES </span>${esc(formatDate(invite.expires_at))}</span><div class="review-guest-actions">${active?`${invite.token?`<button type="button" class="btn btn--row" data-review-op="copy-invite:${id}" aria-label="Copy guest link #${id}">COPY</button>`:'<span>ORIGINAL URL NOT STORED</span>'}<button type="button" class="btn btn--row btn--danger" data-review-op="revoke:${id}" aria-label="Revoke guest link #${id}">REVOKE</button>`:''}</div></li>`;
+      }).join('')}</ul>`:run.inviteError?'':`<p class="review-check-answer customer-meta">${run.inviteCursor?`NO ${filter.toUpperCase()} LINKS LOADED`:invites.length?`NO ${filter.toUpperCase()} LINKS`:'NO GUEST LINKS'}</p>`}
+      ${run.inviteCursor?`<div class="review-check-answer">${btn('more-invites','LOAD OLDER LINKS')}</div>`:''}
+    </section>`;
+  }
   function runResults(run, member, p) {
     const focused=recordView.point ?? p.points.find(point=>point.answers.some(a=>a.id===state.answerId))?.id ?? p.points[0]?.id;
     return `<section class="review-run-results" aria-label="Run results">
@@ -332,8 +367,9 @@
       </div>
       <section id="reviewAccess" ${recordView.access?'':'hidden'} aria-label="Manage run access">
         <ul>${(run.participants || []).map(m=>`<li><strong>${esc(m.name)}</strong> · #${esc(m.id)} · ${memberLabel(m)}</li>`).join('') || '<li>NO PARTICIPANTS</li>'}</ul>
-        <div class="customer-actions">${run.decision?'':btn('participant','+ STAFF PARTICIPANT')+btn('portal-participant','+ PORTAL ACCOUNT')+btn('invite','GUEST INVITE')}${btn('revoke','REVOKE INVITE')}</div>
+        ${run.decision?'':`<div class="customer-actions">${btn('participant','+ STAFF PARTICIPANT')+btn('portal-participant','+ PORTAL ACCOUNT')}</div>`}
       </section>
+      ${guestLinks(run)}
       ${run.decision?`<p class="review-close-record">Closed by ${esc(run.closed_name)} (${esc(run.closed_source)}) · ${esc(formatDate(run.closed_at))}<br>${esc(run.comment)}</p>`:''}
       <table class="review-results-table" aria-label="Review checks"><thead><tr><th scope="col">#</th><th scope="col">CHECK</th><th scope="col">TEAM RESULT</th><th scope="col">ANSWERS</th></tr></thead><tbody>
         ${p.points.map((point,i)=>{
@@ -405,8 +441,16 @@
   }
   async function command(op, anchor) {
     if (state.busy) return;
-    if (!connected()) return status('OFFLINE · LOCAL DRAFT RETAINED · RECONNECT BEFORE SAVING');
     const [verb,id]=op.split(':');
+    if (verb==='invite-filter') {
+      recordView.inviteFilter=id;
+      const section=anchor.closest('.review-guest-links');
+      section.outerHTML=guestLinks(state.run);
+      updateConnectionControls();
+      host()?.querySelector('.review-guest-links [aria-pressed="true"]')?.focus({preventScroll:true});
+      return;
+    }
+    if (!connected()) return status('OFFLINE · LOCAL DRAFT RETAINED · RECONNECT BEFORE SAVING');
     if (['up','down','remove','add'].includes(verb)) {
       if(state.form.released_at)return;
       const points=state.form.points, i=points.findIndex(p=>p.id===id);
@@ -465,7 +509,7 @@
         if(!current() || inspectorRef!==ref)return;
         state.predecessor=null;selectRun(page);await load();
       }
-      if(verb==='run') selectRun(await request('run_get',{run_id:id}));
+      if(verb==='run') {selectRun(await request('run_get',{run_id:id}));await loadInvites();}
       if(['participant','portal-participant'].includes(verb)) {
         const source=verb==='portal-participant'?'portal':'staff';
         const run=state.run, ref=inspectorRef;
@@ -478,12 +522,33 @@
       }
       if(verb==='close') {const r=state.run,p=progress(state.form,r);const decision=r.kind==='qa'?'completed':await window.NRCDialog.prompt('Decision: accepted / conditional / rejected',{title:'CUSTOMER DECISION'});if(!['completed','accepted','conditional','rejected'].includes(decision))return;const comment=await window.NRCDialog.prompt('Closing comment',{title:'CLOSE PREVIEW'});if(comment===null)return;if(!await window.NRCDialog.confirm(`${p.answered}/${state.form.points.length} points answered; ${p.open} open; ${p.conflicts} conflicting; ${p.failed} not all yes. Decision: ${decision}. Closing freezes all answers.`,{title:'CONFIRM EXPLICIT CLOSE'}))return;await request('close',{run_id:r.id,if_revision:r.revision,decision,comment});await load();}
       if(verb==='invite') await invite();
-      if(verb==='revoke') {const invite_id=await window.NRCDialog.prompt('Invite ID to revoke',{title:'REVOKE GUEST LINK'});if(invite_id) {await request('revoke',{run_id:state.run.id,invite_id});status('INVITE REVOKED');}}
+      if(verb==='more-invites') await loadInvites(state.run.inviteCursor);
+      if(verb==='copy-invite') {
+        const invite=state.run.invites.find(item=>item.id===id);
+        if (!inviteActive(invite)) throw Error('This guest link has expired');
+        const link=inviteLink(await reviewPortalOrigin(),invite.token);
+        try {
+          await navigator.clipboard.writeText(link);
+          status(`GUEST LINK #${id} COPIED`);
+        } catch {
+          await window.NRCDialog.prompt('Clipboard access is unavailable. Select and copy the link below.',{title:`GUEST LINK #${id}`,initialValue:link,submitLabel:'Done'});
+        }
+      }
+      if(verb==='revoke') {
+        const run=state.run, ref=inspectorRef;
+        if(!await window.NRCDialog.confirm(`Revoke guest link #${id}? Anyone using this link will lose access.`,{title:'REVOKE GUEST LINK',confirmLabel:'Revoke link'}))return;
+        if(!current() || inspectorRef!==ref || state.run!==run)return;
+        await request('revoke',{run_id:run.id,invite_id:id});
+        if(!current() || inspectorRef!==ref || state.run!==run)return;
+        const row=run.invites?.find(item=>item.id===id);
+        if(row) {row.revoked_at='1';delete row.token;}
+        status(`GUEST LINK #${id} REVOKED`);
+      }
     });
   }
   function selectRun(page) {
     state.run=page.run;state.participant=page.participant_id;state.answerId='';
-    recordView.point=null;recordView.access=false;status('');syncReference();
+    recordView.point=null;recordView.access=false;recordView.inviteFilter='active';status('');syncReference();
   }
   const link=(source,type,id)=>write(options=>window.NRCEdges.sendCreateEdge(0n,1,BigInt(source),type,BigInt(id),window.NRCEdges.RelationType.RelatedTo,options));
   async function references(id,anchor,inlineRoot) {
@@ -525,21 +590,36 @@
       }).join('');
     }catch(e){links.textContent=e.message;}
   }
-  async function invite() {
+  const inviteActive = invite => !invite.revoked_at && !invite.expired;
+  async function reviewPortalOrigin() {
     const config=await fetch('/api/features',{credentials:'same-origin',cache:'no-store'});
     if(!config.ok)throw Error('Could not load the review portal configuration');
     const {review_portal_origin:origin}=await config.json();
     const url=URL.canParse(origin)?new URL(origin):null;
     if(!url || url.protocol!=='https:' || url.pathname!=='/' || url.search || url.hash || url.username || url.password)throw Error('The public review portal URL is not configured. Contact your NRC administrator.');
+    return url.origin;
+  }
+  function inviteLink(origin, token) {
+    if(!/^[a-f0-9]{64}$/i.test(token))throw Error('Invalid invitation token returned');
+    const link=new URL('/abnahmen/einladung',origin);link.hash=token;
+    return link.href;
+  }
+  async function invite() {
+    const run=state.run, ref=inspectorRef, origin=await reviewPortalOrigin();
     const ms=await window.NRCDateTime.pick({title:'GUEST LINK EXPIRY',label:'Link valid for',submitLabel:'Continue',futureOnly:true});if(ms===null)return;if(!Number.isFinite(ms)||ms<=Date.now())throw Error('Expiry must be in the future');
     const can_close=await window.NRCDialog.confirm('Grant authority to CLOSE the entire run? Cancel creates a contribute-only link (recommended).',{title:'WARNING · GUEST CLOSE AUTHORITY'});
-    const page=await request('invite',{run_id:state.run.id,expires_at:String(BigInt(ms)*1000000n),can_close});
-    if(!/^[a-f0-9]{64}$/i.test(page.token))throw Error('Invalid invitation token returned');
-    const link=new URL('/abnahmen/einladung',url.origin);link.hash=page.token;
-    status(`INVITE #${page.invite_id} · ${can_close?'MAY CLOSE':'CONTRIBUTE ONLY'} · SECRET LINK · ${link.href}`);
+    if(!current() || inspectorRef!==ref || state.run!==run)return;
+    const page=await request('invite',{run_id:run.id,expires_at:String(BigInt(ms)*1000000n),can_close});
+    if(!current() || inspectorRef!==ref || state.run!==run)return;
+    await loadInvites();
+    if(!current() || inspectorRef!==ref || state.run!==run)return;
+    recordView.inviteFilter='active';
+    status(run.invites.some(i=>i.id===page.invite_id && i.token)
+      ? `GUEST LINK #${page.invite_id} CREATED · USE COPY TO SHARE`
+      : `GUEST LINK #${page.invite_id} · COPY NOW · ${inviteLink(origin,page.token)}`);
   }
   async function showInspector(ref,stillCurrent) {
-    Object.assign(recordView,{point:null,access:false,definitions:false});recordView.drafts.clear();
+    Object.assign(recordView,{point:null,access:false,definitions:false,inviteFilter:'active'});recordView.drafts.clear();
     inspectorRef=ref;current=stillCurrent;state.id=ref.id && String(ref.id)!=='0'?String(ref.id):'';state.form=ref.seed?ticketDraft(ref.seed):blank();state.revision='';state.run=null;state.answerId=ref.answerId || '';state.runs=[];state.comparison=null;state.predecessor=ref.predecessor || null;state.ticket=ref.ticket || '';state.dirty=!!ref.seed;state.notice=ref.seed?'EDITABLE TICKET DRAFT · TITLE AND BODY COPIED WITH PROTOCOL BYTE LIMITS · CHECK ALL POINTS BEFORE RELEASE':'';
     state.noticeError=false;
     const root=document.createElement('article');root.id='reviewEditor';root.className='customer-record';document.getElementById('inspectorEntityHost').replaceChildren(root);render();
@@ -553,7 +633,7 @@
   function updateConnectionControls() {
     if (!current()) return;
     for (const root of [host(),document.getElementById('inspectorHeader')]) root?.querySelectorAll('button,input,textarea,select').forEach(el=>{
-      if (el.matches('#reviewClose, #reviewAccessToggle, [data-review-check]')) return;
+      if (el.matches('#reviewClose, #reviewAccessToggle, [data-review-check], [data-review-op^="invite-filter:"]')) return;
       if (!connected()) {
         if (!el.hasAttribute('data-review-offline')) el.setAttribute('data-review-offline',String(el.disabled));
         el.disabled=true;

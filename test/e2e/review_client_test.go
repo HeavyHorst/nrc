@@ -106,6 +106,19 @@ func TestReviewClientPublicUI(t *testing.T) {
 			mustReadUntilOpcode(t, staff, p.S_EdgeCreated, 128)
 		}
 		fixture := map[string]any{"formId": created.FormID, "runId": run.ID, "participantId": member, "answers": answers, "ticketId": fmt.Sprint(ticket), "taskId": fmt.Sprint(task.Task.ID), "noteId": fmt.Sprint(note), "workspace": workspace}
+		expires := strconv.FormatInt(time.Now().Add(time.Hour).UnixNano(), 10)
+		revoked := reviewCall(t, staff, p.ReviewRequest{Op: "invite", RunID: run.ID, ExpiresAt: expires, CanClose: true}, "ok")
+		reviewCall(t, staff, p.ReviewRequest{Op: "revoke", RunID: run.ID, InviteID: revoked.InviteID}, "ok")
+		shortExpiry := time.Now().Add(2 * time.Second)
+		short := reviewCall(t, staff, p.ReviewRequest{Op: "invite", RunID: run.ID, ExpiresAt: strconv.FormatInt(shortExpiry.UnixNano(), 10)}, "ok")
+		otherActive := reviewCall(t, staff, p.ReviewRequest{Op: "invite", RunID: run.ID, ExpiresAt: expires, CanClose: true}, "ok")
+		active := reviewCall(t, staff, p.ReviewRequest{Op: "invite", RunID: run.ID, ExpiresAt: expires}, "ok")
+		fixture["guestLink"] = "https://review.example.test/abnahmen/einladung#" + active.Token
+		fixture["activeInvite"] = active.InviteID
+		fixture["revokedInvite"] = revoked.InviteID
+		fixture["expiredInvite"] = short.InviteID
+		fixture["otherActiveInvite"] = otherActive.InviteID
+		time.Sleep(time.Until(shortExpiry))
 		target, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", serverPort))
 		proxy := httputil.NewSingleHostReverseProxy(target)
 		direct := proxy.Director
@@ -147,6 +160,11 @@ func TestReviewClientPublicUI(t *testing.T) {
 			if r.URL.Path == "/fixture.json" {
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(fixture)
+				return
+			}
+			if r.URL.Path == "/api/features" {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"review_portal_origin":"https://review.example.test"}`)
 				return
 			}
 			files.ServeHTTP(w, r)
