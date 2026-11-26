@@ -83,7 +83,7 @@
       cell.querySelectorAll(".monitor-history-bar").forEach((bar) => bar.setAttribute("aria-pressed", String(selected && bar === button)));
       const detail = cell.querySelector(".monitor-history-detail");
       detail.hidden = !selected;
-      detail.replaceChildren(button.querySelector(".monitor-history-fill").cloneNode(true), document.createTextNode(`${button.getAttribute("aria-label")} · INSTANCE TIME · TIME SHARES, NOT EVENT ORDER`));
+      detail.replaceChildren(button.querySelector("template").content.cloneNode(true));
     });
   });
 

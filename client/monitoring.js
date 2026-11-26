@@ -84,14 +84,22 @@ window.NRCMonitoring = (() => {
       bucket.paused += BigInt(row.paused_ns);
     }
     const capacity = BigInt(identities.size) * step;
+    const duration = ns => {
+      if (ns > 0n && ns < 1000000000n) return '<1 s';
+      const seconds = Math.round(Number(ns) / 1e9);
+      return [Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)} h` : '', Math.floor(seconds / 60) % 60 ? `${Math.floor(seconds / 60) % 60} min` : '', seconds % 60 ? `${seconds % 60} s` : ''].filter(Boolean).join(' ') || '0 s';
+    };
+    const time = date => date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
     let healthy = 0n, failing = 0n, paused = 0n;
     const bars = buckets.map((b, i) => {
       healthy += b.healthy; failing += b.failing; paused += b.paused;
       const known = b.healthy + b.failing;
       const unknown = capacity - known - b.paused;
       const state = b.failing > 0n ? 'failing' : capacity > 0n && b.paused === capacity ? 'paused' : known > 0n && unknown === 0n ? 'healthy' : known + b.paused > 0n ? 'partial' : 'unknown';
-      const duration = ns => `${(Number(ns) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 2 })} s`;
-      const label = `${new Date(range.from + i * width).toLocaleString()} – ${new Date(range.from + (i + 1) * width).toLocaleString()}: ${state.toUpperCase()} · uptime / satisfaction ${percent(b.healthy, known)} · coverage ${percent(known, capacity - b.paused)} · INSTANCE TIME: healthy ${duration(b.healthy)} · failing ${duration(b.failing)} · unknown ${capacity > 0n ? duration(unknown) : 'UNKNOWN'} · paused ${duration(b.paused)}`;
+      const from = new Date(range.from + i * width), to = new Date(range.from + (i + 1) * width);
+      const rawDuration = ns => `${(Number(ns) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 2 })} s`;
+      const label = `${from.toLocaleString()} – ${to.toLocaleString()}: ${b.failing > 0n ? 'CONDITION FAILED' : state.toUpperCase()} · conditions met ${percent(b.healthy, known)} · coverage ${percent(known, capacity - b.paused)} · INSTANCE TIME: healthy ${rawDuration(b.healthy)} · failing ${rawDuration(b.failing)} · unknown ${capacity > 0n ? rawDuration(unknown) : 'UNKNOWN'} · paused ${rawDuration(b.paused)}`;
+      const periodLabel = width === hour ? `${time(from)}–${time(to)}` : `${from.toLocaleDateString(undefined, { day: '2-digit', month: 'short' })} ${time(from)} – ${to.toLocaleDateString(undefined, { day: '2-digit', month: 'short' })} ${time(to)}`;
       // Fractions are durations, not an inferred event order. Keep subpixel gaps
       // proportional; the separate marker makes them discoverable at any width.
       const parts = ['healthy', 'failing', 'unknown', 'paused'].map(part => {
@@ -99,12 +107,19 @@ window.NRCMonitoring = (() => {
         const share = capacity > 0n ? Number(value) / Number(capacity) * 100 : part === 'unknown' ? 100 : 0;
         return `<span class="monitor-history-part monitor-history-${part}" style="width:${share}%"></span>`;
       }).join('');
-      return `<button type="button" class="monitor-history-bar" data-state="${state}" data-gap="${unknown > 0n || capacity === 0n}" aria-pressed="false" aria-label="${esc(label)}" title="${esc(label)}"><span class="monitor-history-fill" aria-hidden="true">${parts}</span></button>`;
+      const shares = [['healthy', 'Passed', b.healthy], ['failing', 'Failed', b.failing], ['unknown', 'No data', unknown], ['paused', 'Paused', b.paused]].filter(([part, , ns]) => capacity === 0n ? part === 'unknown' : ns > 0n);
+      const summary = `<div class="monitor-history-detail-summary"><strong title="${esc(`${from.toLocaleString()} – ${to.toLocaleString()}`)}">${esc(periodLabel)}</strong>${shares.map(([, name, ns]) => `<span>${name} <b>${esc(capacity > 0n ? duration(ns) : 'UNKNOWN')}</b></span>`).join('')}<span>Coverage <b>${percent(known, capacity - b.paused)}</b></span></div>`;
+      const percentages = `<div class="monitor-history-detail-percentages">${shares.map(([part, name, ns]) => `<span><i class="monitor-history-part monitor-history-${part}" aria-hidden="true"></i>${name} ${percent(ns, capacity)}</span>`).join('')}</div>`;
+      return `<button type="button" class="monitor-history-bar" data-state="${state}" data-gap="${unknown > 0n || capacity === 0n}" aria-pressed="false" aria-label="${esc(label)}" title="${esc(label)}"><span class="monitor-history-fill" aria-hidden="true">${parts}</span><template>${summary}<div class="monitor-history-fill" role="img" aria-label="${esc(label)}">${parts}</div>${percentages}</template></button>`;
+    }).join('');
+    const axis = buckets.map((_, i) => {
+      const date = new Date(range.from + i * width);
+      return `<span>${width === hour ? String(date.getHours()).padStart(2, '0') : String(date.getDate()).padStart(2, '0')}</span>`;
     }).join('');
     const pending = result.pending_rollup_hours_global !== '0';
     return {
-      trail: `<div class="monitor-history-bars" style="--monitor-bars:${count}" role="group" aria-label="${count} completed ${width === hour ? 'hours' : '24-hour periods'}, oldest first; select a period for instance-time durations">${bars}</div><span class="customer-meta">${esc(new Date(range.from).toLocaleString())} – ${esc(new Date(range.to).toLocaleString())}${pending ? ' · ROLLUPS PENDING (GLOBAL)' : ''}</span><p class="monitor-history-detail customer-meta" hidden></p>`,
-      metrics: `<strong>${percent(healthy, healthy + failing)}</strong><span class="customer-meta">COVERAGE ${percent(healthy + failing, BigInt(count) * capacity - paused)}</span><span class="customer-meta">${identities.size ? `${identities.size} observed identities` : 'NO HISTORY'} · current revision</span>`,
+      trail: `<div class="monitor-history-bars" style="--monitor-bars:${count}" role="group" aria-label="${count} completed ${width === hour ? 'hours' : '24-hour periods'}, oldest first; select a period for instance-time durations">${bars}</div><div class="monitor-history-axis" style="--monitor-bars:${count}" aria-hidden="true">${axis}</div><div class="monitor-history-detail" hidden></div><span class="customer-meta">${esc(new Date(range.from).toLocaleDateString())} – ${esc(new Date(range.to).toLocaleDateString())} · ${esc(time(new Date(range.from)))}–${esc(time(new Date(range.to)))}${pending ? ' · ROLLUPS PENDING (GLOBAL)' : ''}</span>`,
+      metrics: `<div class="monitor-history-metrics" title="${identities.size} observed identities · current revision · weighted by instance time"><strong>${percent(healthy, healthy + failing)}</strong><span>Coverage ${percent(healthy + failing, BigInt(count) * capacity - paused)}</span>${identities.size ? '' : '<span class="customer-meta">NO HISTORY</span>'}</div>`,
     };
   }
   async function loadRegisterHistory(token, scope, snapshot, controller) {
@@ -291,7 +306,7 @@ window.NRCMonitoring = (() => {
       return node;
     };
     el('monitorList').innerHTML = visible.length ? table(tab === 'status'
-      ? ['MONITOR / INSTANCES', 'CURRENT STATE', `HISTORY · ${period === 1 ? '24H' : `${period}D`}`, 'UPTIME / SATISFACTION']
+      ? ['MONITOR / INSTANCES', 'CURRENT STATE', `HISTORY · ${period === 1 ? '24H' : `${period}D`}`, 'CONDITIONS MET']
       : ['INCIDENT', 'STATE', 'ACKNOWLEDGED', 'ASSIGNEE'], '') :
       `<p class="customer-empty">${loading ? 'Reading NRC…' : tab === 'status' && page && (query || filter !== 'all') ? 'No matching monitors in this workspace.' : rows.length ? 'No matching loaded records.' : 'No records loaded.'}</p>`;
     const body = el('monitorList').querySelector('tbody');
@@ -734,7 +749,7 @@ window.NRCMonitoring = (() => {
               const value = pct(n, d);
               return `<div><dt>${label}</dt><dd>${value}<div class="monitor-meter" data-kind="${kind}" data-known="${d > 0n}" role="img" aria-label="${label}: ${value}" style="--fill:${d > 0n ? Math.max(0, Math.min(100, Number(n * 10000n / d) / 100)) : 0}%"><span></span></div></dd></div>`;
             };
-            el('monitorUptime').innerHTML = `<dl class="customer-facts monitor-metrics">${meter(`24H ${definition.kind.startsWith('victoria') ? 'CONDITION SATISFACTION' : 'UPTIME'} OF KNOWN TIME`, totals.healthy_ns, known, 'uptime')}${meter('24H COVERAGE', known, 86400000000000n - totals.paused_ns, 'coverage')}</dl>`;
+            el('monitorUptime').innerHTML = `<dl class="customer-facts monitor-metrics">${meter('24H CONDITIONS MET · KNOWN TIME', totals.healthy_ns, known, 'uptime')}${meter('24H COVERAGE', known, 86400000000000n - totals.paused_ns, 'coverage')}</dl>`;
           }
         };
         if (usable) renderHistory(cached.result, true);
@@ -823,7 +838,7 @@ window.NRCMonitoring = (() => {
         for (const bar of cell.querySelectorAll('.monitor-history-bar')) bar.setAttribute('aria-pressed', String(selected && bar === period));
         const detail = cell.querySelector('.monitor-history-detail');
         detail.hidden = !selected;
-        detail.replaceChildren(period.querySelector('.monitor-history-fill').cloneNode(true), document.createTextNode(`${period.getAttribute('aria-label')} · TIME SHARES, NOT EVENT ORDER`));
+        detail.replaceChildren(period.querySelector('template').content.cloneNode(true));
         return;
       }
       if (event.target.closest('button, input, select, textarea, a') && !event.target.closest('.task-row-open')) return;

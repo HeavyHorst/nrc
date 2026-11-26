@@ -34,10 +34,19 @@
 .monitor-table.task-table tbody tr > td { display: table-cell; width: auto !important; }
 .monitor-table th, .monitor-table tbody tr { cursor: default; }
 #monitorList .monitor-table tbody tr { cursor: pointer; }
+#monitorList .monitor-table:has(.monitor-history-cell) th:nth-child(1) { width: 24%; }
+#monitorList .monitor-table:has(.monitor-history-cell) th:nth-child(2) { width: 16%; }
+#monitorList .monitor-table:has(.monitor-history-cell) th:nth-child(3) { width: 44%; }
+#monitorList .monitor-table:has(.monitor-history-cell) th:nth-child(4) { width: 16%; }
 .monitor-table th, .monitor-table td { white-space: normal; overflow-wrap: anywhere; padding: 0.625rem; vertical-align: top; }
 .monitor-table .task-row-open { white-space: normal; overflow-wrap: anywhere; }
 .monitor-table .customer-meta { display: block; margin-top: 0.25rem; }
+.monitor-history-metrics { font: var(--font-sm)/1.5 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.monitor-history-metrics > strong { display: block; font-size: var(--font-lg); font-weight: 700; line-height: 1.25; }
+.monitor-history-metrics > span { display: block; margin-top: 0.25rem; }
 .monitor-history-bars { display: grid; grid-template-columns: repeat(var(--monitor-bars, 24), minmax(0, 1fr)); gap: 2px; min-width: 0; padding-bottom: 0.5rem; }
+.monitor-history-axis { display: grid; grid-template-columns: repeat(var(--monitor-bars, 24), minmax(0, 1fr)); gap: 2px; font: var(--font-xs)/1.5 var(--font-mono); text-align: center; color: var(--text-primary); }
+.monitor-history-axis > span { min-width: 0; white-space: nowrap; overflow-wrap: normal; }
 .monitor-history-bar { display: inline-block; height: 1.25rem; background: var(--text-dim); }
 .monitor-history-bar[data-state="healthy"], .monitor-history-healthy { background: var(--status-done); }
 .monitor-history-bar[data-state="failing"], .monitor-history-failing { background: var(--accent-danger); }
@@ -46,12 +55,16 @@
 button.monitor-history-bar { position: relative; min-width: 0; width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; cursor: pointer; }
 .monitor-history-fill { display: flex; width: 100%; height: 100%; overflow: hidden; }
 .monitor-history-part { display: block; height: 100%; flex-shrink: 0; }
-button.monitor-history-bar[data-state="failing"] { background: var(--accent-danger); }
-button.monitor-history-bar[data-state="failing"] > .monitor-history-fill { display: none; }
-.monitor-history-bar[data-gap="true"]::after { content: ''; position: absolute; bottom: -0.375rem; left: calc(50% - 2px); border-inline: 2px solid transparent; border-bottom: 3px solid var(--text-primary); }
-button.monitor-history-bar:is(:hover, :focus-visible, [aria-pressed="true"]) { outline: 1px solid var(--text-primary); outline-offset: -1px; }
-.monitor-history-detail { margin-bottom: 0; line-height: 1.6; }
-.monitor-history-detail .monitor-history-fill { height: 0.625rem; margin-block: 0.375rem; }
+button.monitor-history-bar[data-state="failing"]::before { content: ''; position: absolute; bottom: -0.375rem; left: 1px; width: 2px; height: 4px; background: var(--accent-danger); }
+.monitor-history-bar[data-gap="true"]::after { content: ''; position: absolute; bottom: -0.375rem; right: 0; border-inline: 2px solid transparent; border-bottom: 3px solid var(--text-primary); }
+button.monitor-history-bar:is(:hover, :focus-visible, [aria-pressed="true"]) { outline: 2px solid var(--text-primary); outline-offset: 1px; }
+.monitor-history-detail { margin-top: 0.5rem; padding: 0.5rem; border: var(--control-border); background: var(--surface-content); color: var(--text-primary); font: var(--font-xs)/1.5 var(--font-mono); }
+.monitor-history-detail-summary, .monitor-history-detail-percentages { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; }
+.monitor-history-detail-summary > * { white-space: nowrap; }
+.monitor-history-detail .monitor-history-fill { height: 0.75rem; margin-block: 0.375rem; }
+.monitor-history-detail-percentages { justify-content: space-between; }
+.monitor-history-detail-percentages > span { display: inline-flex; align-items: center; gap: 0.25rem; white-space: nowrap; }
+.monitor-history-detail-percentages .monitor-history-part { width: 0.5rem; height: 0.5rem; }
 .monitor-history-legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
 .monitor-history-legend > span { display: inline-flex; align-items: center; gap: 0.375rem; }
 .monitor-history-legend .monitor-history-bar { width: 0.75rem; height: 0.75rem; }
@@ -216,15 +229,18 @@ button.monitor-history-bar:is(:hover, :focus-visible, [aria-pressed="true"]) { o
     .monitor-record input, .monitor-filters input, .monitor-filters select { font-size: 16px; }
 }
 @container monitor-register (max-width: 700px) {
+    .monitor-history-axis > span:nth-child(even) { visibility: hidden; }
     #monitorList .monitor-table, #monitorList .monitor-table tbody { display: block; width: 100%; }
     #monitorList .monitor-table thead { display: none; }
-    #monitorList .monitor-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; padding: 0.75rem; }
+    #monitorList .monitor-table tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.5rem; padding: 0.75rem; }
     #monitorList .monitor-table td { display: block; width: auto; padding: 0; border: 0; font-size: var(--mobile-font-sm); }
     #monitorList .monitor-table td:first-child { grid-column: 1 / -1; font-size: var(--mobile-font-base); }
     #monitorList .monitor-history-cell { grid-column: 1 / -1; grid-row: 3; }
     #monitorList [data-history-part="metrics"] { text-align: right; }
+    .monitor-history-metrics { font-size: var(--mobile-font-sm); }
+    .monitor-history-metrics > strong { font-size: var(--mobile-font-lg); }
     #monitorList .monitor-table td:nth-child(2)::before { content: 'STATE'; display: block; color: var(--text-dim); }
-    #monitorList .monitor-table td[data-history-part="metrics"]::before { content: 'UPTIME / SATISFACTION'; display: block; color: var(--text-dim); }
+    #monitorList .monitor-table td[data-history-part="metrics"]::before { content: 'CONDITIONS MET'; display: block; color: var(--text-dim); }
     #monitorList .monitor-table td:nth-child(3):not(.monitor-history-cell)::before { content: 'ACKNOWLEDGED'; display: block; color: var(--text-dim); }
     #monitorList .monitor-table td:nth-child(4):not([data-history-part])::before { content: 'ASSIGNEE'; display: block; color: var(--text-dim); }
 }

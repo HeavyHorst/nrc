@@ -68,8 +68,10 @@ try {
   const metrics = page.locator('[data-history-monitor="12"][data-history-part="metrics"]');
   await page.waitForSelector('[data-history-monitor="12"] .monitor-history-bar');
   // 41.25 healthy instance-hours / 41.5 known; coverage 41.5 / (48 - 2 paused).
-  assert.match(await metrics.textContent(), /99.39%.*COVERAGE 90.21%.*2 observed identities/);
+  assert.equal(await metrics.textContent(), '99.39%Coverage 90.21%');
+  assert.match(await metrics.locator('.monitor-history-metrics').getAttribute('title'), /2 observed identities.*current revision/);
   assert.equal(await trail.locator('.monitor-history-bar').count(), 24);
+  assert.equal(await trail.locator('.monitor-history-axis > span').count(), 24, 'Each completed hour has a local-time axis label');
   assert.equal(await trail.locator('[data-state="healthy"]').count(), 19);
   assert.equal(await trail.locator('[data-state="unknown"]').count(), 2);
   assert.equal(await trail.locator('[data-state="partial"]').count(), 1);
@@ -85,48 +87,64 @@ try {
     return colors;
   });
   for (const color of healthyColors) assert.ok(['rgb(0, 166, 81)', 'rgb(64, 200, 112)'].includes(color), `Healthy must stay green: ${color}`);
-  // A failure colors the entire hour, but gaps stay marked and the detail
-  // keeps the actual proportions of healthy, failing, unknown and paused time.
+  // Failed time stays proportional, including subpixel failures. Separate
+  // markers keep brief failures and gaps discoverable without inflating them.
   await page.evaluate(() => { monitorFixture.registerRows = [
     { hour: 0, identity: 'a', healthy: 3558, unknown: 42 },
     { hour: 1, identity: 'a', healthy: 900, failing: 1800, unknown: 450, paused: 450 },
     { hour: 2, identity: 'a', paused: 3600 },
+    { hour: 4, identity: 'a', healthy: 3599, failing: 1 },
+    { hour: 5, identity: 'a', failing: 3600 },
   ]; });
   await page.click('#monitorRefresh');
   await page.waitForSelector('[data-history-monitor="12"] button[aria-label*="unknown 42 s"]');
   for (const width of [1600, 390]) {
     await page.setViewportSize({ width, height: 1000 });
-    for (const [index, shares] of [[0, [98.833333, 0, 1.166667, 0]], [2, [0, 0, 0, 100]], [3, [0, 0, 100, 0]]]) {
+    for (const [index, shares] of [[0, [98.833333, 0, 1.166667, 0]], [1, [25, 50, 12.5, 12.5]], [2, [0, 0, 0, 100]], [3, [0, 0, 100, 0]], [4, [99.972222, 0.027778, 0, 0]], [5, [0, 100, 0, 0]]]) {
       const bar = trail.locator('.monitor-history-bar').nth(index);
       const rendered = await bar.evaluate(b => [...b.querySelectorAll('.monitor-history-part')].map(p => p.getBoundingClientRect().width / b.getBoundingClientRect().width * 100));
       rendered.forEach((value, i) => assert.ok(Math.abs(value - shares[i]) < 0.3, `Rendered share ${value} matches ${shares[i]} at width ${width}`));
-      assert.equal(await bar.getAttribute('data-gap'), String(index !== 2));
+      assert.equal(await bar.getAttribute('data-gap'), String([0, 1, 3].includes(index)));
     }
     const failing = trail.locator('.monitor-history-bar').nth(1);
     for (const theme of await page.evaluate(() => THEMES)) {
       await page.evaluate(theme => setTheme(theme, false), theme);
       const paint = await failing.evaluate(button => ({
-        color: getComputedStyle(button).backgroundColor,
+        color: getComputedStyle(button.querySelector('.monitor-history-failing')).backgroundColor,
         legend: getComputedStyle(document.querySelector('#monitorHistoryLegend [data-state="failing"]')).backgroundColor,
+        marker: getComputedStyle(button, '::before').backgroundColor,
         gap: getComputedStyle(button, '::after').borderBottomWidth,
       }));
-      assert.equal(paint.color, paint.legend, 'The entire hour uses the failing color');
-      assert.equal(await failing.locator('.monitor-history-fill').isVisible(), false, 'Time shares do not cover the red bar');
+      assert.equal(paint.color, paint.legend, 'Only failed time uses the failing color');
+      assert.equal(paint.marker, paint.legend, 'The failure marker matches failed time');
+      assert.equal(await failing.locator('.monitor-history-fill').isVisible(), true, 'Time shares stay visible in failed periods');
       assert.equal(paint.gap, '3px', 'Failure does not hide the gap marker');
+      const brief = trail.locator('.monitor-history-bar').nth(4);
+      const marker = await brief.evaluate(button => ({
+        width: getComputedStyle(button, '::before').width,
+        height: getComputedStyle(button, '::before').height,
+        color: getComputedStyle(button, '::before').backgroundColor,
+      }));
+      assert.deepEqual(marker, { width: '2px', height: '4px', color: paint.legend }, 'A one-second failure retains a visible marker at both widths');
     }
     await page.evaluate(() => setTheme('lupine', false));
     const bar = trail.locator('.monitor-history-bar').first();
     await bar.press('Enter');
     assert.equal(await bar.getAttribute('aria-pressed'), 'true');
-    assert.match(await trail.locator('.monitor-history-detail').textContent(), /coverage 98.83%.*unknown 42 s.*TIME SHARES, NOT EVENT ORDER/);
+    assert.match(await trail.locator('.monitor-history-detail-summary').textContent(), /Passed 59 min 18 sNo data 42 sCoverage 98.83%/);
+    assert.match(await trail.locator('.monitor-history-detail-percentages').textContent(), /Passed 98.83%No data 1.16%/);
     assert.equal(await page.locator('#monitorDetailRefresh').isVisible(), false, 'Period activation does not open the monitor Inspector');
     await failing.click();
     assert.equal(await bar.getAttribute('aria-pressed'), 'false');
-    assert.match(await trail.locator('.monitor-history-detail').textContent(), /coverage 85.71%.*failing 1[,.]800 s.*unknown 450 s.*paused 450 s/);
-    assert.deepEqual(await trail.locator('.monitor-history-detail .monitor-history-part').evaluateAll(parts => parts.map(part => part.style.width)), ['25%', '50%', '12.5%', '12.5%']);
+    assert.match(await trail.locator('.monitor-history-detail-summary').textContent(), /Passed 15 minFailed 30 minNo data 7 min 30 sPaused 7 min 30 sCoverage 85.71%/);
+    assert.deepEqual(await trail.locator('.monitor-history-detail .monitor-history-fill > .monitor-history-part').evaluateAll(parts => parts.map(part => part.style.width)), ['25%', '50%', '12.5%', '12.5%']);
+    assert.match(await trail.locator('.monitor-history-detail-percentages').textContent(), /Passed 25%Failed 50%No data 12.5%Paused 12.5%/);
     assert.equal(await trail.locator('.monitor-history-detail .monitor-history-fill').isVisible(), true);
     await failing.press('Space');
     assert.equal(await trail.locator('.monitor-history-detail').isVisible(), false);
+    await trail.locator('.monitor-history-bar').nth(4).click();
+    assert.match(await trail.locator('.monitor-history-detail-summary').textContent(), /Passed 59 min 59 sFailed 1 sCoverage 100%/);
+    await trail.locator('.monitor-history-bar').nth(4).click();
     assert.equal(await page.locator('#monitorRegisterScroll').evaluate(e => e.scrollWidth <= e.clientWidth), true);
   }
   await page.setViewportSize({ width: 1600, height: 1000 });
@@ -142,7 +160,8 @@ try {
   });
   await page.click('#monitorRefresh');
   await page.waitForSelector('[data-history-monitor="12"] .monitor-history-bar');
-  assert.match(await metrics.textContent(), /83.33%.*COVERAGE 6.25%.*1 observed identities/);
+  assert.equal(await metrics.textContent(), '83.33%Coverage 6.25%');
+  assert.match(await metrics.locator('.monitor-history-metrics').getAttribute('title'), /1 observed identities/);
   assert.match(await trail.locator('.monitor-history-bar').nth(12).getAttribute('aria-label'), /50%.*coverage 50%/);
   for (const [data, coverage] of [
     [[{ hour: 0, identity: 'early', healthy: 3600 }, { hour: 23, identity: 'late', healthy: 1800, paused: 1800 }], '3.15%'],
@@ -152,8 +171,8 @@ try {
     await page.click('#monitorRefresh');
     await page.waitForFunction(() => !document.getElementById('monitorList').textContent.includes('HISTORY UPDATING'));
     await page.waitForSelector('[data-history-monitor="12"] .monitor-history-bar');
-    assert.match(await metrics.textContent(), /100%.*2 observed identities/);
-    assert.ok((await metrics.textContent()).includes(`COVERAGE ${coverage}`));
+    assert.equal(await metrics.textContent(), `100%Coverage ${coverage}`);
+    assert.match(await metrics.locator('.monitor-history-metrics').getAttribute('title'), /2 observed identities/);
   }
   assert.equal(await trail.locator('.monitor-history-bar').first().getAttribute('data-state'), 'healthy');
   assert.match(await trail.locator('.monitor-history-bar').first().getAttribute('aria-label'), /coverage 100%/);
@@ -165,10 +184,10 @@ try {
   assert.match(await metrics.textContent(), /NO HISTORY/);
   await page.click('#monitorRefresh');
   await page.waitForSelector('[data-history-monitor="12"] [data-state="healthy"]');
-  assert.match(await metrics.textContent(), /100%.*COVERAGE 4.16%/);
+  assert.match(await metrics.textContent(), /100%.*Coverage 4.16%/);
   assert.doesNotMatch(await trail.textContent(), /ROLLUPS PENDING/);
   await page.evaluate(() => { delete monitorFixture.registerRows; delete monitorFixture.pendingRollups; });
-  for (const [mode, expected] of [['empty', /UNKNOWN.*COVERAGE UNKNOWN.*NO HISTORY/], ['paused', /UNKNOWN.*COVERAGE UNKNOWN.*2 observed identities/], ['limit', /UNKNOWN.*COVERAGE UNKNOWN.*2 observed identities/]]) {
+  for (const [mode, expected] of [['empty', /UNKNOWN.*Coverage UNKNOWN.*NO HISTORY/], ['paused', /UNKNOWN.*Coverage UNKNOWN/], ['limit', /UNKNOWN.*Coverage UNKNOWN/]]) {
     await page.evaluate(mode => { monitorFixture.registerMode = mode; }, mode);
     await page.click('#monitorRefresh');
     await page.waitForFunction(() => !/Reading history|HISTORY UPDATING/.test(document.querySelector('[data-history-part="trail"]').textContent));
@@ -234,7 +253,7 @@ try {
     await page.click(`[data-monitor-days="${days}"]`);
     await page.waitForFunction(days => document.querySelectorAll('[data-history-monitor="12"] .monitor-history-bar').length === days, days);
     assert.match(await metrics.textContent(), /71.42%/);
-    assert.ok((await metrics.textContent()).includes(`COVERAGE ${coverage}`));
+    assert.ok((await metrics.textContent()).includes(`Coverage ${coverage}`));
     assert.equal(await trail.locator('.monitor-history-bar').nth(0).getAttribute('data-state'), 'partial');
     assert.equal(await trail.locator('.monitor-history-bar').nth(1).getAttribute('data-state'), 'failing');
     assert.equal(await trail.locator('.monitor-history-bar').nth(2).getAttribute('data-state'), 'partial');
