@@ -291,11 +291,10 @@ window.NRCMonitoring = (() => {
       const m = metadata(row);
       return `${m.title} #${row.assetId} #${m.monitor_id}`.toLowerCase().includes(query);
     });
-    el('monitorFilterScope').textContent = tab === 'status' ? 'SEARCH & STATE: ALL WORKSPACE MONITORS · COUNTS: LOADED MATCHES · PROBLEMS FIRST · RULES VIA CLI' : 'SEARCH & COUNTS: LOADED INCIDENTS · RULES VIA CLI';
+    el('monitorFilterScope').textContent = tab === 'status' ? 'ALL WORKSPACE MONITORS · COUNTS: LOADED MATCHES · PROBLEMS FIRST' : 'SEARCH & COUNTS: LOADED INCIDENTS';
     const counts = tab === 'status' ? visible.reduce((s, row) => s.map((n, i) => n + row.counts[i]), Array(9).fill(0)) : null;
-    el('monitorSummary').textContent = tab === 'status'
-      ? `SHOWN: ${visible.length} / ${rows.length} LOADED MONITORS · ${counts.reduce((a, b) => a + b, 0)} INSTANCES · ${counts[0]} FIRING · ${counts[1]} PENDING${page?.has_more ? ' · MORE MONITORS AVAILABLE' : ''}`
-      : `SHOWN: ${visible.length} / ${rows.length} LOADED INCIDENTS · ${visible.filter(a => metadata(a).status === 'firing').length} FIRING`;
+    const firing = tab === 'status' ? counts[0] : visible.filter(a => metadata(a).status === 'firing').length;
+    el('monitorSummary').innerHTML = `<span class="monitor-summary-counts"><span>${visible.length} / ${rows.length} LOADED ${tab === 'status' ? 'MONITORS' : 'INCIDENTS'}</span>${tab === 'status' ? `<span>· ${counts.reduce((a, b) => a + b, 0)} INSTANCES</span>` : ''}<span class="monitor-state"${firing ? ' data-state="firing"' : ''}>· ${firing} FIRING</span>${tab === 'status' ? `<span>· ${counts[1]} PENDING</span>` : ''}</span>${tab === 'status' && page?.has_more ? '<span class="monitor-summary-more">MORE MONITORS AVAILABLE →</span>' : ''}`;
     const renderRow = row => {
       const node = document.createElement('tr');
       if (tab === 'status') node.innerHTML = `<td><button class="task-row-open" data-monitor="${esc(row.id)}">${esc(row.name)}</button><span class="customer-meta">#${esc(row.id)} · ${row.counts.reduce((a, b) => a + b, 0)} instances · ${row.counts[0]} firing</span></td><td>${badge(row.status)}<span class="customer-meta">${esc(stamp(row.evaluated_at))}</span></td><td class="monitor-history-cell" data-history-monitor="${esc(row.id)}" data-history-part="trail">${historyDisplay(row, 'trail')}</td><td data-history-monitor="${esc(row.id)}" data-history-part="metrics">${historyDisplay(row, 'metrics')}</td>`;

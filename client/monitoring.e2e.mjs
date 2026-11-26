@@ -62,6 +62,14 @@ try {
   await page.waitForSelector('[data-monitor="12"]');
   await page.waitForSelector('[data-monitor="13"]');
   assert.match(await page.locator('#monitorSummary').textContent(), /2 \/ 2 LOADED MONITORS.*3 INSTANCES.*1 FIRING/);
+  const historyHelp = page.locator('.monitor-history-help');
+  assert.equal(await historyHelp.locator('p').isVisible(), false, 'History explanation starts collapsed');
+  await historyHelp.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await historyHelp.locator('p').isVisible(), true, 'Keyboard opens interpretation details');
+  assert.match(await historyHelp.locator('p').textContent(), /A failed condition does not necessarily mean the service was unreachable/);
+  await page.keyboard.press('Space');
+  assert.equal(await historyHelp.locator('p').isVisible(), false, 'Keyboard closes interpretation details');
   assert.equal(await page.locator('#monitorMore').count(), 0);
   assert.equal(await page.locator('#monitorIncidentsTab').evaluate(e => e.getBoundingClientRect().right <= e.parentElement.getBoundingClientRect().right), true, 'Both tabs fit their group');
   const trail = page.locator('[data-history-monitor="12"][data-history-part="trail"]');

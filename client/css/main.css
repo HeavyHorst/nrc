@@ -24,7 +24,25 @@
 .monitor-filters .header-filter-cell { min-width: 0; }
 #monitoringPanel .header-filter-cell:has(> .tab-group), .monitor-filters .header-filter-cell:has(> .tab-group) { min-width: max-content; flex: 0 0 auto; }
 .monitor-filters input { width: 12rem; max-width: 100%; }
-#monitorSummary { font-weight: 600; }
+.monitor-register-header, .monitor-register-legend { padding-inline: 0.625rem; color: var(--text-dim); font-size: var(--font-xs); line-height: 1.4; }
+#monitorSummary, .monitor-register-scope { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.25rem 1rem; padding-block: 0.25rem; border-bottom: var(--content-border); }
+#monitorSummary { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.monitor-summary-counts { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; }
+.monitor-summary-more { margin-left: auto; font-weight: 400; color: var(--text-dim); }
+.monitor-register-legend { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem 1rem; padding-block: 0.25rem; border-bottom: var(--content-border); }
+.monitor-register-legend .monitor-history-legend { padding-right: 5.5rem; }
+.monitor-history-scale { margin-left: auto; margin-right: 5.5rem; }
+.monitor-history-help { flex-basis: 100%; }
+.monitor-history-help:not([open]) { height: 0; margin-top: -0.375rem; }
+.monitor-history-help summary { position: absolute; right: 0.625rem; top: 0.25rem; cursor: pointer; border: var(--content-border); padding: 0 0.375rem; color: var(--text-primary); }
+.monitor-history-help summary:focus-visible { outline: 2px solid var(--focus-interactive); outline-offset: 2px; }
+.monitor-history-help p { margin: 0; line-height: 1.6; }
+@container monitor-register (max-width: 600px) {
+    .monitor-register-legend { font-size: var(--mobile-font-sm); }
+    .monitor-history-scale { margin-left: 0; margin-right: 0; }
+    .monitor-history-help summary { min-height: 2.75rem; display: flex; align-items: center; }
+    .monitor-register-legend .monitor-history-legend { min-height: 2.75rem; }
+}
 #monitorList { overflow: visible; }
 #monitorList > .customer-empty { padding-inline: 0.625rem; }
 .monitor-table.task-table { display: table; min-width: 0; width: 100%; table-layout: fixed; }

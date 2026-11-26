@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20261013fold1">
     <link rel="icon" type="image/png" href="favicon.png?v=20261013fold1">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=20261013fold1">
-    <link rel="stylesheet" href="css/main.css?v=20261126monitormetrics1">
+    <link rel="stylesheet" href="css/main.css?v=20261126monitorheader1">
     <link rel="stylesheet" href="css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="css/voice.css?v=20261105voice12">
     <link rel="stylesheet" href="css/reviews.css?v=20261126guestlinks2">
@@ -131,12 +131,15 @@
                                     <div class="header-filter-cell"><span class="filter-label">HISTORY</span><div id="monitorPeriods" class="tab-group" role="group" aria-label="History period"><button class="btn nav-tab active" data-monitor-days="1" aria-pressed="true">24H</button><button class="btn nav-tab" data-monitor-days="7" aria-pressed="false">7D</button><button class="btn nav-tab" data-monitor-days="30" aria-pressed="false">30D</button></div></div>
                                 </div>
                             </div>
-                            <p id="monitorSummary" class="overview-note" role="status"></p>
-                            <p id="monitorFilterScope" class="overview-note">SEARCH & STATE: ALL WORKSPACE MONITORS · COUNTS: LOADED MATCHES · PROBLEMS FIRST · RULES VIA CLI</p>
+                            <div class="monitor-register-header">
+                                <div id="monitorSummary" role="status"></div>
+                                <div class="monitor-register-scope"><span id="monitorFilterScope">ALL WORKSPACE MONITORS · COUNTS: LOADED MATCHES · PROBLEMS FIRST</span><span>RULES VIA CLI</span></div>
+                            </div>
                             <div id="monitorRegisterScroll" tabindex="0" aria-label="Monitor register">
-                                <div id="monitorHistoryLegend" class="overview-note">
-                                    <div class="monitor-history-legend"><span><i class="monitor-history-bar" data-state="healthy" aria-hidden="true"></i>PASSED TIME</span><span><i class="monitor-history-bar" data-state="failing" aria-hidden="true"></i>CONDITION FAILED</span><span><i class="monitor-history-bar" data-state="unknown" aria-hidden="true"></i>NO DATA</span><span><i class="monitor-history-bar" data-state="paused" aria-hidden="true"></i>PAUSED</span><span class="monitor-state" data-state="failing">│ FAILURE PRESENT</span><span>▲ GAP PRESENT</span></div>
-                                    <p><span id="monitorBucketSize">1 BAR = 1 COMPLETED HOUR</span> · LOCAL TIME · CURRENT REVISION ONLY<br>Colors show time shares, not event order. Red ticks mark failures even when brief; ▲ marks gaps. Select a bar for durations. A failed condition does not necessarily mean the service was unreachable.<br>Conditions met is weighted by observed instance time. Coverage includes missing hours; paused time is excluded. Unobserved identities are not counted.</p>
+                                <div id="monitorHistoryLegend" class="monitor-register-legend">
+                                    <div class="monitor-history-legend"><span><i class="monitor-history-bar" data-state="healthy" aria-hidden="true"></i>PASSED</span><span><i class="monitor-history-bar" data-state="failing" aria-hidden="true"></i>FAILED</span><span><i class="monitor-history-bar" data-state="unknown" aria-hidden="true"></i>NO DATA</span><span><i class="monitor-history-bar" data-state="paused" aria-hidden="true"></i>PAUSED</span><span class="monitor-state" data-state="failing">│ FAILURE</span><span>▲ GAP</span></div>
+                                    <span class="monitor-history-scale"><span id="monitorBucketSize">1 BAR = 1 COMPLETED HOUR</span> · LOCAL TIME · CURRENT REVISION</span>
+                                    <details class="monitor-history-help"><summary>DETAILS</summary><p>Colors show time shares, not event order. Red ticks mark failures even when brief; ▲ marks gaps. Select a bar for durations. A failed condition does not necessarily mean the service was unreachable.<br>Conditions met is weighted by observed instance time. Coverage includes missing hours; paused time is excluded. Unobserved identities are not counted.</p></details>
                                 </div>
                                 <div id="monitorList" class="task-list-view"></div>
                             </div>
@@ -767,7 +770,7 @@
     <script src="voice.js?v=20261108memory8"></script>
     <script src="retained-messages.js?v=20261023protocol2"></script>
     <script src="chat.js?v=20261020composer1"></script>
-    <script src="monitoring.js?v=20261126monitormetrics1"></script>
+    <script src="monitoring.js?v=20261126monitorheader1"></script>
     <script src="app.js?v=20261124personlabels1"></script>
     <section id="callPanel" class="call-panel" aria-label="Video call" hidden>
         <header class="panel-header"><div><span id="callPeer">VIDEO INVITATION</span><button id="callDismiss" class="btn btn--danger task-detail-close" type="button" aria-label="Hide panel" title="Hide · reopen from Conferences">×</button></div></header>
