@@ -3,13 +3,98 @@ package e2e
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/gorilla/websocket"
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
+
+func TestCreateTaskCrashAtCommitBoundary(t *testing.T) {
+	lib := buildCommitFault(t)
+	for _, phase := range []string{"before", "after"} {
+		t.Run(phase, func(t *testing.T) {
+			const workspace, title = "task-crash", "commit candidate"
+			dir := t.TempDir()
+			path := filepath.Join(dir, "data", "sharded-00000000000000000001", fmt.Sprintf("shard_%03d", xxhash.Sum64String(workspace)%256), "workspace.sqlite3")
+			arm, reached := filepath.Join(dir, "arm"), filepath.Join(dir, "reached")
+			server := startServerInWorkDirWithEnv(t, dir, map[string]string{
+				"NRC_THREAD_COUNT": "1", "LD_PRELOAD": lib, "NRC_TEST_COMMIT_KIND": "task",
+				"NRC_TEST_COMMIT_DB": path, "NRC_TEST_COMMIT_ARM": arm, "NRC_TEST_COMMIT_REACHED": reached,
+			})
+			t.Cleanup(func() { server.killAndWait(t) })
+			connect := func() *websocket.Conn {
+				t.Helper()
+				c, _, err := websocket.DefaultDialer.Dial(wsURLForWorkspace(workspace), mustAuthHeader(t, "writer"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { c.Close() })
+				mustSetReadDeadline(t, c, 15*time.Second)
+				mustExpectServerReady(t, c)
+				return c
+			}
+			c := connect()
+			attachment := protocol.Attachment{FileId: "file-73", Filename: "notes.txt", Size: 327, MimeType: "text/plain", UploadedAt: 173}
+			if err := os.WriteFile(arm, []byte(phase), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := sendProtocolMessage(c, protocol.C_CreateTask, protocol.EncodeTaskCreateFullWithCorrelation(protocol.WorkspaceDataConvID, title, "", 1, "", []protocol.Attachment{attachment}, 73)); err != nil {
+				t.Fatal(err)
+			}
+			waitForCommitBoundary(t, reached, phase)
+			server.killAndWait(t)
+			// Drain bytes already delivered to the client, including any premature reply.
+			for {
+				msg, err := readFaultCampaignMessage(c)
+				if websocket.IsCloseError(err, websocket.CloseAbnormalClosure) {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if msg.Opcode == protocol.S_TaskCreated || msg.Opcode == protocol.S_TaskListResponse {
+					t.Fatalf("unexpected reply at %s COMMIT: %+v", phase, msg)
+				}
+			}
+			server = startServerInWorkDirWithEnv(t, dir, map[string]string{"NRC_THREAD_COUNT": "1"})
+			tasks, err := listFaultCampaignTasks(connect())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var id uint64
+			if phase == "after" {
+				if len(tasks) != 1 || tasks[0].Title != title || tasks[0].ID == 0 || len(tasks[0].Attachments) != 1 || tasks[0].Attachments[0] != attachment {
+					t.Fatalf("recovered tasks: %+v", tasks)
+				}
+				id = tasks[0].ID
+			} else if len(tasks) != 0 {
+				t.Fatalf("uncommitted tasks: %+v", tasks)
+			}
+			// A public task read cannot expose orphan attachments or stray history.
+			check := exec.Command("python3", "-c", `
+import json, sqlite3, sys
+path, workspace, title, identity = sys.argv[1:]
+with sqlite3.connect(path) as db:
+    n = int(int(identity) != 0)
+    for table in ('tasks', 'task_attachments', 'history'):
+        count = db.execute('SELECT count(*) FROM ' + table).fetchone()[0]
+        assert count == n, (table, count, n)
+    if n:
+        scope, kind, entity, body = db.execute('SELECT workspace, entity_kind, entity_id, body FROM history').fetchone()
+        event = json.loads(body)
+        assert (scope, kind, int.from_bytes(entity, 'big')) == (workspace.encode(), 1, int(identity))
+        assert (event['entityType'], event['entityId'], event['action'], event['entityLabel']) == ('task', identity, 'created', title), event
+`, path, workspace, title, fmt.Sprint(id))
+			if out, err := check.CombinedOutput(); err != nil {
+				t.Fatalf("recovered rows: %v\n%s", err, out)
+			}
+		})
+	}
+}
 
 func TestTaskPersistenceAcrossRestart(t *testing.T) {
 	serverWorkDir := t.TempDir()

@@ -31,6 +31,10 @@ int sqlite3_exec(sqlite3 *db, const char *sql,
             sqlite3_stmt *s = NULL;
             const char *check = kind && strcmp(kind, "capture") == 0
                 ? "SELECT count(*)=2 FROM assets"
+                : kind && strcmp(kind, "task") == 0
+                ? "SELECT EXISTS(SELECT 1 FROM tasks WHERE title=CAST('commit candidate' AS BLOB))"
+                : kind && strcmp(kind, "asset-delete") == 0
+                ? "SELECT NOT EXISTS(SELECT 1 FROM assets WHERE preview=CAST('cascade-root' AS BLOB))"
                 : "SELECT count(*)=1 FROM chronicle_jobs WHERE state=1";
             int matches = sqlite3_prepare_v2(db, check, -1, &s, NULL) == SQLITE_OK &&
                 sqlite3_step(s) == SQLITE_ROW && sqlite3_column_int(s, 0) == 1;

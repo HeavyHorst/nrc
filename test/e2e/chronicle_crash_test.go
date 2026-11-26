@@ -14,16 +14,37 @@ import (
 	protocol "github.com/heavyhorst/nrc/protocol-go"
 )
 
-// Kill at an observed real SQLite boundary, not at an estimated delay. The
-// interposer pauses before COMMIT or after it returns but before network reply.
-// These are process-crash tests, not power-loss or physical-erasure tests.
-func TestChronicleCrashAtCommitBoundary(t *testing.T) {
+func buildCommitFault(t *testing.T) string {
+	t.Helper()
 	lib := filepath.Join(t.TempDir(), "commit-fault.so")
 	build := exec.Command("cc", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o", lib,
 		filepath.Join(repoRootFromThisFile(t), "test/e2e/fixtures/chronicle_commit_fault.c"), "-ldl", "-lsqlite3")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build test-only COMMIT interposer: %v\n%s", err, out)
 	}
+	return lib
+}
+
+func waitForCommitBoundary(t *testing.T, reached, phase string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		b, err := os.ReadFile(reached)
+		if err == nil && string(b) == phase+":0" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("COMMIT boundary not reached: %q %v", b, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Kill at an observed real SQLite boundary, not at an estimated delay. The
+// interposer pauses before COMMIT or after it returns but before network reply.
+// These are process-crash tests, not power-loss or physical-erasure tests.
+func TestChronicleCrashAtCommitBoundary(t *testing.T) {
+	lib := buildCommitFault(t)
 	for _, operation := range []string{"capture", "result"} {
 		for _, phase := range []string{"before", "after"} {
 			t.Run(operation+"/"+phase, func(t *testing.T) {
@@ -82,17 +103,7 @@ func TestChronicleCrashAtCommitBoundary(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				deadline := time.Now().Add(10 * time.Second)
-				for {
-					b, err := os.ReadFile(reached)
-					if err == nil && string(b) == phase+":0" {
-						break
-					}
-					if time.Now().After(deadline) {
-						t.Fatalf("COMMIT boundary not reached: %q %v", b, err)
-					}
-					time.Sleep(10 * time.Millisecond)
-				}
+				waitForCommitBoundary(t, reached, phase)
 				server.killAndWait(t)
 				// Observe recovered SQLite state before startup epoch changes.
 				check := exec.Command("python3", "-c", `
