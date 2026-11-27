@@ -406,6 +406,10 @@ try {
         const expand = page.locator('[data-mobile-filters][aria-controls="taskFilters"]');
         if (await expand.getAttribute("aria-expanded") !== "true") await expand.click();
       }
+      const groupButton = await page.locator('.slice-register-head [data-slice-action="new-group"]').boundingBox();
+      const sliceButton = await page.locator("#sliceCreateBtn").boundingBox();
+      const actionGap = sliceButton.x - groupButton.x - groupButton.width;
+      assert.ok(actionGap >= 0 && actionGap <= 10, `creation actions stay adjacent: ${actionGap}px gap`);
       assert.equal(await page.locator("#sliceGroupToggle-789").count(), 0, "closed-only groups are hidden by default");
       if (process.env.NRC_EMPTY_GROUP_SCREENSHOTS) await page.locator("#sliceView .slice-register").screenshot({ path: `${process.env.NRC_EMPTY_GROUP_SCREENSHOTS}/groups-open-${theme}-${width}.png` });
       await page.locator("#sliceClosedCell label").click();

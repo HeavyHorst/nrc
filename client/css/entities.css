@@ -4791,6 +4791,10 @@ nrc-link-picker {
     border-bottom: var(--content-border);
 }
 
+.slice-register-head > .header-operation.header-create-action {
+    margin-left: 0;
+}
+
 .slice-register-title {
     margin-inline-end: auto;
     color: var(--text-dim);
