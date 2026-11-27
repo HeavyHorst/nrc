@@ -124,14 +124,13 @@ send_shared_to_subscriber_entries :: proc(
 	defer shared_fanout_end()
 	sort_subscribers_by_handle_index_if_dirty(conv)
 	stack_handles: [MAX_ROOM_USERS]Connection_Handle
-	handles := stack_handles[:0]
-	oversized: [dynamic]Connection_Handle
-	oversized_room := len(conv.subscriber_entries) > MAX_ROOM_USERS
-	if oversized_room {
-		oversized = make([dynamic]Connection_Handle, 0, len(conv.subscriber_entries))
-		handles = oversized[:]
-		defer delete(oversized)
+	handles := stack_handles[:]
+	heap_snapshot := len(conv.subscriber_entries) > len(stack_handles)
+	if heap_snapshot {
+		handles = make([]Connection_Handle, len(conv.subscriber_entries))
 	}
+	defer if heap_snapshot do delete(handles)
+	count := 0
 	for entry in conv.subscriber_entries {
 		if excluded_handle != {} {
 			if entry.handle == excluded_handle do continue
@@ -139,18 +138,13 @@ send_shared_to_subscriber_entries :: proc(
 		conn := connection_get_by_handle(entry.handle)
 		if conn == nil || conn.sock != entry.sock || conn.state >= .Will_Close do continue
 		if personal_owner != "" && get_connection_nickname(conn) != personal_owner do continue
-		if oversized_room {
-			append(&oversized, entry.handle)
-			handles = oversized[:]
-		} else {
-			handles = stack_handles[:len(handles) + 1]
-			handles[len(handles) - 1] = entry.handle
-		}
+		handles[count] = entry.handle
+		count += 1
 	}
 
 	sent_count := 0
-	for handle, i in handles {
-		if i + 1 < len(handles) {
+	for handle, i in handles[:count] {
+		if i + 1 < count {
 			if next_conn := connection_get_by_handle(handles[i + 1]); next_conn != nil {
 				intrinsics.prefetch_read_data(next_conn, 3)
 			}
