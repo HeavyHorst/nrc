@@ -1743,7 +1743,7 @@
     const reveal = !!queryText() || !!state.filters.group;
     const sections = sortedGroups().map(([id, name]) => {
       const rows = buckets.get(id) ?? [];
-      if ((filterActive() && !rows.length && state.filters.group !== id) || (state.filters.group && state.filters.group !== id)) return "";
+      if (!rows.length || (state.filters.group && state.filters.group !== id)) return "";
       const expanded = reveal || !collapsedGroups.has(id);
       return `<section class="slice-group">
         <div class="slice-group-head">

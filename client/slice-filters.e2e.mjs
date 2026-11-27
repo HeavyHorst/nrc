@@ -129,7 +129,7 @@ try {
     const requestAllAssets = NRCAssets.requestAllAssets;
     NRCAssets.requestAllAssets = (room, type, opts) => type === 20 ? Promise.resolve({ assets: groups }) : requestAllAssets(room, type, opts);
     window.__fixtureGroups = () => {
-      groups = [{ assetId: 321n, assetType: 20, convId: 0n, preview: "Core Server" }, { assetId: 654n, assetType: 20, convId: 0n, preview: "Marketplace" }];
+      groups = [{ assetId: 321n, assetType: 20, convId: 0n, preview: "Core Server" }, { assetId: 654n, assetType: 20, convId: 0n, preview: "Marketplace" }, { assetId: 789n, assetType: 20, convId: 0n, preview: "Entwicklerplattform" }];
       slices[0].name = "Sharded Persistence";
       slices[1].name = "WebSocket Send Path";
       slices[2].name = "Customer Records";
@@ -138,6 +138,7 @@ try {
       slices[1].inProgress = 3;
       slices[2].done = 5;
       slices.splice(3);
+      slices.push({ name: "Amp runner migration", sliceId: 4000n, groupId: 789n, owner: "tester", closed: true, movedAt: 6000n, done: 4, projects: ["NRC"] });
       window.__fixtureSliceWrites = [];
       NRCAssets.requestAsset = (room, id, options) => {
         const slice = slices.find(row => row.sliceId === id);
@@ -396,6 +397,27 @@ try {
   await page.evaluate(() => window.__fixtureGroups());
   await page.locator('#sliceGroupFilter option[value="321"]').waitFor({ state: "attached" });
   await page.locator("#sliceGroupRows-321 .slice-row").first().waitFor();
+  assert.equal(await page.locator("#sliceGroupToggle-654").count(), 0, "empty groups have no register header");
+  for (const theme of ["white", "matte-black"]) {
+    for (const width of [1600, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+      if (width === 390) {
+        const expand = page.locator('[data-mobile-filters][aria-controls="taskFilters"]');
+        if (await expand.getAttribute("aria-expanded") !== "true") await expand.click();
+      }
+      assert.equal(await page.locator("#sliceGroupToggle-789").count(), 0, "closed-only groups are hidden by default");
+      if (process.env.NRC_EMPTY_GROUP_SCREENSHOTS) await page.locator("#sliceView .slice-register").screenshot({ path: `${process.env.NRC_EMPTY_GROUP_SCREENSHOTS}/groups-open-${theme}-${width}.png` });
+      await page.locator("#sliceClosedCell label").click();
+      await page.locator("#sliceGroupRows-789 .slice-row").waitFor();
+      assert.equal(await page.locator("#sliceGroupToggle-654").count(), 0, "truly empty groups stay hidden with closed slices included");
+      assert.deepEqual(await rowNames(), ["Sharded Persistence", "WebSocket Send Path", "Amp runner migration", "Customer Records"]);
+      if (process.env.NRC_EMPTY_GROUP_SCREENSHOTS) await page.locator("#sliceView .slice-register").screenshot({ path: `${process.env.NRC_EMPTY_GROUP_SCREENSHOTS}/groups-closed-${theme}-${width}.png` });
+      await page.locator("#sliceClosedCell label").click();
+      await page.waitForFunction(() => !document.querySelector("#sliceGroupToggle-789"));
+    }
+  }
+  await page.setViewportSize({ width: 1600, height: 1000 });
   const groupToggle = page.locator("#sliceGroupToggle-321");
   await groupToggle.click();
   assert.equal(await groupToggle.getAttribute("aria-expanded"), "false");
@@ -443,7 +465,7 @@ try {
     if (page.screencast) {
       await page.screencast.start({ path: `${dir}/slice-groups-interaction.webm`, size: { width: 1440, height: 760 } });
       const decorations = await page.screencast.showActions({ duration: 500 });
-      for (const control of [groupToggle, menu, page.locator("#sliceGroupMenu-654"), menu]) {
+      for (const control of [groupToggle, menu, groupToggle, menu]) {
         const { x, y, width, height } = await control.boundingBox();
         await page.mouse.move(x + width / 2, y + height / 2, { steps: 15 });
         await page.waitForTimeout(380);
