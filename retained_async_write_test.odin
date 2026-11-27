@@ -74,6 +74,7 @@ when NRC_SIMULATION {
 			content        = transmute([]byte)string("immutable batch"),
 		}
 		req.client_message_id[0] = byte(id)
+		req.client_message_id[1] = byte(id >> 8)
 		process_send_message_v2(conn, req)
 	}
 
@@ -300,6 +301,86 @@ when NRC_SIMULATION {
 				}
 			}
 		}
+	}
+
+	@(test)
+	test_retained_deferred_append_queue_capacity :: proc(t: ^testing.T) {
+		capacity :: 256
+		client_count :: capacity / MAX_RETAINED_IO_PER_CONNECTION + 1
+		ctx: Sim_Test_Context
+		simulation_test_begin(&ctx, 215)
+		defer simulation_test_end(&ctx)
+		ctx.sim.storage_job_event_submission = true
+		server: NRC_Server
+		td.server = &server
+		defer td.server = nil
+		if !testing.expect_value(t, nbio.init(&td.io), linux.Errno.NONE) do return
+		defer nbio.destroy(&td.io)
+		workspace :: "deferred-capacity"
+		storage := sim_world_storage_context(&ctx.sim.world)
+		dir :: "/deferred-capacity"
+		if !testing.expect(t, storage_io.make_directory(storage, dir) == nil) do return
+		if !testing.expect(t, storage_io.sync_directory(storage, "/") == nil) do return
+		shard := int(shard_for_workspace(transmute([]byte)string(workspace)))
+		for &index in td.message_stores.store_index do index = -1
+		append(&td.message_stores.stores, Message_Store{})
+		store := &td.message_stores.stores[0]
+		if !testing.expect(t, init_message_store_with_storage(store, storage, dir, shard, time.Hour, 0)) do return
+		td.message_stores.enabled = true
+		td.message_stores.store_index[shard] = 0
+		defer shutdown_message_store_registry(&td.message_stores)
+		conns: [client_count]^NRC_Connection
+		defer {for conn in conns do simulation_test_uninstall_client(conn)}
+		for &conn, i in conns {
+			conn = simulation_test_install_client(&ctx.sim, i, workspace, "alice", true)
+			if !testing.expect(t, conn != nil) do return
+		}
+
+		// A history read pins the current generation across the rotation boundary.
+		reader := conns[client_count - 1]
+		subscribe_to_conversation(reader, 42)
+		async_test_send(reader, 1)
+		if !testing.expect(t, simulation_test_commit_messages(&ctx.sim)) do return
+		nrc_sim_clear_inboxes(&ctx.sim)
+		process_message_history(reader, {conv_id = 42, limit = 10}, true)
+		if !testing.expect_value(t, store.async_readers, u32(1)) do return
+		store.active_started_day -= 1
+
+		for i in 0 ..< capacity do async_test_send(conns[i / MAX_RETAINED_IO_PER_CONNECTION], u32(i + 2))
+		if !testing.expect(t, store.rotation_pending) do return
+		testing.expect_value(t, store.retained_send_count, capacity)
+		retry_id := u32(capacity + 2)
+		async_test_send(reader, retry_id)
+		nrc_sim_run_all_send_completions(&ctx.sim)
+		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, reader.sock, .S_ErrorResponse), 1)
+		payload, valid := nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&ctx.sim, reader.sock, 0))
+		rejection, rejection_err := pr.parseErrorResponseMessage(payload)
+		testing.expect(t, valid && rejection_err == nil && rejection.origin_opcode == .C_SendMessageV2 && rejection.correlation_id == retry_id)
+		testing.expect_value(t, string(rejection.error_msg), "retained_send_overloaded")
+
+		for nrc_sim_run_next_file_read(&ctx.sim) {}
+		if !testing.expect(t, simulation_test_flush_message_writes(&ctx.sim)) do return
+		if !testing.expect(t, simulation_test_complete_message_lifecycle(&ctx.sim, .Message_Roll)) do return
+		if !testing.expect(t, simulation_test_commit_messages(&ctx.sim)) do return
+		for conn, i in conns[:client_count - 1] {
+			testing.expect_value(t, nrc_sim_client_frame_count(&ctx.sim, conn.sock), MAX_RETAINED_IO_PER_CONNECTION)
+			for j in 0 ..< MAX_RETAINED_IO_PER_CONNECTION {
+				expected := u32(i * MAX_RETAINED_IO_PER_CONNECTION + j + 2)
+				frame, frame_ok := nrc_sim_frame_protocol_payload(nrc_sim_client_frame(&ctx.sim, conn.sock, j))
+				ack, ack_err := pr.parseAckSendMessageMessage(frame)
+				testing.expect(t, frame_ok && ack_err == nil && ack.client_req_id == expected && ack.assigned_seq == u64(expected))
+			}
+		}
+		testing.expect_value(t, store.high_water, u64(retry_id - 1))
+		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, reader.sock, .S_AckSendMessage), 0)
+
+		nrc_sim_clear_inboxes(&ctx.sim)
+		async_test_send(reader, retry_id)
+		for nrc_sim_run_next_file_read(&ctx.sim) {}
+		if !testing.expect(t, simulation_test_commit_messages(&ctx.sim)) do return
+		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, reader.sock, .S_AckSendMessage), 1)
+		testing.expect_value(t, nrc_sim_client_opcode_count(&ctx.sim, reader.sock, .S_ErrorResponse), 0)
+		testing.expect_value(t, store.high_water, u64(retry_id))
 	}
 
 	@(test)
