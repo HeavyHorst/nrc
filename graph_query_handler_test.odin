@@ -257,6 +257,13 @@ worker_db_test_graph_reads :: proc(t: ^testing.T, c: ^NRC_Connection, path: cstr
 		}
 		worker_db_test_graph_response(t, c, request_buffer[:n], expected_buffer[:written])
 	}
+	// The same parallel-edge fixture fits the node limit but exceeds scan work.
+	n = pr.serializeGraphQueryRequest({start_type = .Asset, start_id = 1, max_depth = 1, correlation_id = 943}, request_buffer[:])
+	written := pr.serializeErrorResponse(
+		{origin_opcode = .C_GraphQuery, error_msg = transmute([]byte)string("Graph query exceeds edge scan limit; narrow the query"), correlation_id = 943},
+		expected_buffer[:],
+	)
+	worker_db_test_graph_response(t, c, request_buffer[:n], expected_buffer[:written])
 }
 
 @(test)
@@ -323,6 +330,91 @@ test_sqlite_graph_visit_limits :: proc(t: ^testing.T) {
 				testing.expect(t, parse_err == nil)
 				testing.expect_value(t, msg.found, mode != 3)
 				if mode != 3 {testing.expect_value(t, msg.path_length, u8(1)); testing.expect_value(t, msg.edges[0].edge_id, u64(1998 + mode - 1))}
+			}
+		}
+	}
+}
+
+@(test)
+test_sqlite_graph_edge_scan_limit :: proc(t: ^testing.T) {
+	dir, err := os.make_directory_temp("", "nrc-graph-scan-limit-*", context.allocator)
+	if !testing.expect(t, err == nil) do return
+	defer {os.remove_all(dir); delete(dir)}
+	name := fmt.aprintf("%s/shard.sqlite3", dir); defer delete(name)
+	path := strings.clone_to_cstring(name); defer delete(path)
+	store, rc := db.open(path, create = true); if !testing.expect_value(t, rc, sql.OK) do return
+	defer db.close(&store)
+	limit :: SQLITE_GRAPH_EDGE_SCAN_LIMIT
+	mask :: u16(1) << (u16(pr.RelationType.References) - 1)
+	counts := [5]int{limit / 2, limit / 2 + 1, limit - 1, limit, limit + 1}
+	inserted := 0
+	for count, scenario in counts {
+		if !testing.expect_value(t, db.begin(&store), sql.OK) do return
+		for i in inserted ..< count {
+			key := pr.Asset {
+				asset_id = u64(i + 1),
+			}
+			// One visible edge keeps output small. All remaining rows must still count.
+			relation := i == 0 ? pr.RelationType.References : .RelatedTo
+			rc = sqlite_projection_write(
+				&store,
+				"INSERT INTO edges VALUES(?1,?2,?3,?4,?5,?6,?7,0,x'')",
+				"limits",
+				&key,
+				{i64(pr.TargetType.Asset), u64(1), i64(pr.TargetType.Task), u64(2), i64(relation)},
+			)
+			if !testing.expect_value(t, rc, sql.OK) do return
+		}
+		inserted = count
+		if !testing.expect_value(t, db.commit(&store), sql.OK) do return
+		for opcode in ([3]pr.Opcode{.C_GraphRank, .C_GraphQuery, .C_GraphShortestPath}) {
+			if scenario < 2 && opcode != .C_GraphRank do continue
+			buffer: [128]byte
+			n: int
+			scan_rows := count
+			#partial switch opcode {
+			case .C_GraphRank:
+				rank := pr.GraphRankRequest {
+					anchor_count  = 1,
+					max_depth     = 1,
+					top_n         = 2,
+					relation_mask = mask,
+					direction     = .Both,
+				}
+				rank.anchors[0] = {.Asset, 1}
+				if scenario < 2 {
+					// Both anchors see the same rows, each below the limit on its own.
+					rank.anchor_count = 2; rank.anchors[1] = {.Task, 2}; scan_rows *= 2
+				}
+				n = pr.serializeGraphRankRequest(rank, buffer[:])
+			case .C_GraphQuery:
+				n = pr.serializeGraphQueryRequest({start_type = .Asset, start_id = 1, max_depth = 1, relation_mask = mask}, buffer[:])
+			case .C_GraphShortestPath:
+				n = pr.serializeGraphShortestPathRequest(
+					{from_type = .Asset, from_id = 1, to_type = .Task, to_id = 3, max_depth = 1, relation_mask = mask},
+					buffer[:],
+				)
+			case:
+				unreachable()
+			}
+			request := db.Request {
+				workspace = "limits",
+				opcode    = opcode,
+				body      = buffer[2:n],
+			}
+			output := db.Command_Output {
+				limit = 4096,
+			}; defer db.destroy_command_output(&output)
+			if !testing.expect_value(t, db.begin(&store), sql.OK) do return
+			over_limit := scan_rows > limit
+			testing.expect_value(t, sqlite_execute_task_command(&store, &request, &output), over_limit ? sql.INTERRUPT : sql.OK)
+			sqlite_projection_test_assert(t, &store, "SELECT count(*)=0 FROM sqlite_temp_master WHERE name IN ('nrc_graph_edges','nrc_rank_arcs')")
+			if !testing.expect_value(t, db.rollback(&store), sql.OK) do return
+			if !testing.expect_value(t, output.count, over_limit ? 0 : 1) || over_limit do continue
+			if opcode == .C_GraphQuery {
+				nodes: [2]pr.GraphQueryNode; edges: [1]pr.Edge
+				msg, parse_err := pr.parseGraphQueryResult(output.frames[0].payload, nodes[:], edges[:])
+				testing.expect(t, parse_err == nil && !msg.truncated && len(msg.nodes) == 2 && len(msg.edges) == 1 && msg.edges[0].edge_id == 1)
 			}
 		}
 	}

@@ -15,8 +15,10 @@ SQLite_Graph_Visit :: struct {
 	edge:   pr.EdgeID,
 }
 
-// Only the protocol-bounded frontier lives in Odin. Even parallel edges between
-// two visited nodes can be arbitrarily numerous, so selected edge IDs stay on disk.
+// Count adjacency rows, not new nodes or distinct edges. GraphRank shares the
+// budget between anchors, so the arc table is bounded even with repeated scans.
+SQLITE_GRAPH_EDGE_SCAN_LIMIT :: 4096
+
 sqlite_graph_walk :: proc(
 	store: ^db.Store,
 	workspace: string,
@@ -25,6 +27,7 @@ sqlite_graph_walk :: proc(
 	mask: u16,
 	depth: u8,
 	limit: int,
+	edge_rows_left: ^int,
 	stop: Edge_Entity_Key = {},
 ) -> (
 	visits: [dynamic]SQLite_Graph_Visit,
@@ -36,13 +39,14 @@ sqlite_graph_walk :: proc(
 	append(&visits, SQLite_Graph_Visit{key = start, parent = -1}); seen[start] = 0
 	if start == stop do return visits, false, sql.OK
 	s: ^sql.Statement
+	// Project the filter instead of putting it in WHERE: step must yield even
+	// rejected adjacency rows so the caller can charge them to the budget.
 	rc = sql.prepare_v2(
 		store.db,
-		`SELECT id,target_type,target_id FROM edges INDEXED BY edges_source_page
- WHERE workspace=?1 AND source_type=?2 AND source_id=?3 AND ?4!=2 AND (?5=0 OR (?5 & (1 << (relation-1)))!=0)
- UNION ALL SELECT id,source_type,source_id FROM edges INDEXED BY edges_target_page
- WHERE workspace=?1 AND target_type=?2 AND target_id=?3 AND ?4!=1 AND (?5=0 OR (?5 & (1 << (relation-1)))!=0)
- AND NOT(source_type=?2 AND source_id=?3) ORDER BY id`,
+		`SELECT id,target_type,target_id,(?5=0 OR (?5 & (1 << (relation-1)))!=0) FROM edges INDEXED BY edges_source_page
+ WHERE workspace=?1 AND source_type=?2 AND source_id=?3 AND ?4!=2
+ UNION ALL SELECT id,source_type,source_id,(?5=0 OR (?5 & (1 << (relation-1)))!=0) AND NOT(source_type=?2 AND source_id=?3)
+ FROM edges INDEXED BY edges_target_page WHERE workspace=?1 AND target_type=?2 AND target_id=?3 AND ?4!=1 ORDER BY id`,
 		-1,
 		&s,
 		nil,
@@ -64,6 +68,10 @@ sqlite_graph_walk :: proc(
 		for {
 			rc = sql.step(s); if rc == sql.DONE do break
 			if rc != sql.ROW do return
+			// Only reject on an extra row; an exact fit can still reach DONE.
+			if edge_rows_left^ == 0 do return visits, false, sql.INTERRUPT
+			edge_rows_left^ -= 1
+			if sql.column_int64(s, 3) == 0 do continue
 			edge: u64; id: u64
 			edge, rc = sql.column_id(s, 0); if rc != sql.OK do return
 			id, rc = sql.column_id(s, 2); if rc != sql.OK do return
@@ -134,6 +142,7 @@ sqlite_graph_traverse :: proc(store: ^db.Store, request: ^db.Request, output: ^d
 	}
 	visits: [dynamic]SQLite_Graph_Visit; truncated := false
 	if depth >= 1 && depth <= 4 && u8(direction) <= 2 {
+		edge_rows_left := SQLITE_GRAPH_EDGE_SCAN_LIMIT
 		visits, truncated, rc = sqlite_graph_walk(
 			store,
 			request.workspace,
@@ -142,6 +151,7 @@ sqlite_graph_traverse :: proc(store: ^db.Store, request: ^db.Request, output: ^d
 			mask,
 			depth,
 			shortest ? MAX_SHORTESTPATH_VISITED : MAX_RESULT_NODES,
+			&edge_rows_left,
 			stop,
 		)
 		if rc != sql.OK do return rc

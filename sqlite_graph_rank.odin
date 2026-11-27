@@ -27,6 +27,7 @@ sqlite_graph_rank :: proc(store: ^db.Store, request: ^db.Request, output: ^db.Co
 	paths := make(map[Edge_Entity_Key]Graph_Rank_Path_List, MAX_GRAPH_RANK_UNION_NODES)
 	keys := make([dynamic]Edge_Entity_Key, 0, MAX_GRAPH_RANK_UNION_NODES)
 	indices := make(map[Edge_Entity_Key]int, MAX_GRAPH_RANK_UNION_NODES)
+	edge_rows_left := SQLITE_GRAPH_EDGE_SCAN_LIMIT
 	for anchor in 0 ..< int(req.anchor_count) {
 		visits, truncated, rc := sqlite_graph_walk(
 			store,
@@ -36,6 +37,7 @@ sqlite_graph_rank :: proc(store: ^db.Store, request: ^db.Request, output: ^db.Co
 			req.relation_mask,
 			req.max_depth,
 			MAX_RESULT_NODES,
+			&edge_rows_left,
 		)
 		if rc != sql.OK do return rc
 		msg.truncated = msg.truncated || truncated

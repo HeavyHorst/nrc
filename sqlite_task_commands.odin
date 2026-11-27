@@ -382,6 +382,7 @@ worker_db_complete_command :: proc(c: ^NRC_Connection, correlation: u32, job: ^d
 			case .C_GraphQuery, .C_GraphShortestPath, .C_GraphRank, .C_GraphDegree, .C_GraphCommonNeighbors:
 				text = "Failed to query graph"
 				if job.result.status == sql.TOOBIG do text = "Graph result exceeds response limit; narrow the query"
+				if job.result.status == sql.INTERRUPT do text = "Graph query exceeds edge scan limit; narrow the query"
 			case .C_QueryTasks:
 				text = "Failed to query tasks"
 			case .C_QueryCalendar:

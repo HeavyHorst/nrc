@@ -1085,7 +1085,10 @@ at most 2,000, matching the existing protocol limits. These bounded frontiers
 stay in Odin; selected edge IDs and ranking arcs stay in SQLite temporary tables.
 Adjacency scans merge the two endpoint/ID indexes in unsigned edge-ID order.
 This makes equal-length path choices deterministic instead of depending on legacy
-adjacency insertion order. Ranking streams the selected arcs for each of its
+adjacency insertion order. Each request can process up to 4,096 adjacency rows,
+including rows rejected by the relation filter and rows revisited by another
+ranking anchor. If the scan needs another row, the request returns a correlated
+error without a partial result. Ranking streams the selected arcs for each of its
 existing score iterations, retaining at most 2,500 node scores. It preserves
 anchor weights, requested-candidate order, explanation paths and zero scores
 outside the selected graph. Results exceeding the response budget fail atomically.
