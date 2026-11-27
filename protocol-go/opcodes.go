@@ -237,6 +237,7 @@ const (
 	AssetTypeMonitorSource uint16 = 17
 	AssetTypeReviewForm    uint16 = 18
 	AssetTypeReviewAnswer  uint16 = 19
+	AssetTypeSliceGroup    uint16 = 20
 )
 
 // WorkspaceDataConvID is the reserved scope for all durable tasks, assets,

@@ -62,6 +62,7 @@ sqlite_execute_edges :: proc(store: ^db.Store, request: ^db.Request, output: ^db
 					a: pr.Asset
 					a, found, rc = sqlite_read_asset(store, request.workspace, request.actor, endpoint.id, false)
 					if found && reminder_is_personal(&a) do personal = true
+					if found && a.asset_type == .SliceGroup {error_text = "Slice groups cannot have edges"; break}
 				}
 				if rc != sql.OK do return rc
 				if !found {error_text = i == 0 ? "Edge source entity not found" : "Edge target entity not found"; break}

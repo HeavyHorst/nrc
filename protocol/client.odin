@@ -1840,8 +1840,9 @@ serializeListTaskProjectsRequest :: proc(conv_id: ConversationID, correlation_id
 getSizeListTaskSlicesRequest :: proc(req: ListTaskSlicesRequest) -> int {
 	size := 2 + 8 + 1 + 1 + 2 + len(req.owner) + 1 + 2 + len(req.name) + 2 + 1 + 4
 	if req.has_cursor do size += 17
-	if len(req.project) > 0 || req.include_reviews do size += 2 + len(req.project)
-	if req.include_reviews do size += 1
+	if len(req.project) > 0 || req.include_reviews || req.include_groups || req.has_group do size += 2 + len(req.project)
+	if req.include_reviews || req.include_groups || req.has_group do size += 1
+	if req.has_group do size += 8
 	return size
 }
 
@@ -1869,11 +1870,14 @@ serializeListTaskSlicesRequest :: proc(req: ListTaskSlicesRequest, buf: []byte) 
 	}
 	endian.put_u32(buf[offset:], .Big, req.correlation_id)
 	offset += 4
-	if len(req.project) > 0 || req.include_reviews {
+	if len(req.project) > 0 || req.include_reviews || req.include_groups || req.has_group {
 		endian.put_u16(buf[offset:], .Big, u16(len(req.project))); offset += 2
-		copy(buf[offset:], req.project)
+		copy(buf[offset:], req.project); offset += len(req.project)
 	}
-	if req.include_reviews do buf[total_size - 1] = 1
+	if req.include_reviews || req.include_groups || req.has_group {
+		buf[offset] = (req.include_reviews ? 1 : 0) | (req.include_groups || req.has_group ? 2 : 0) | (req.has_group ? 4 : 0)
+		if req.has_group do endian.put_u64(buf[offset + 1:], .Big, req.group_id)
+	}
 	return total_size
 }
 

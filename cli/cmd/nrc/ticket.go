@@ -113,7 +113,7 @@ func printTicketRecord(r ticketResource) {
 	fmt.Printf("updated_at: %d\n\n%s\n\n", r.UpdatedAt, r.Body)
 	printNoteAttachments(r.Attachments, "")
 }
-func ticketAssets(s *conn.Session, kind uint16) ([]p.Asset, error) {
+func fetchAssetsOfType(s *conn.Session, kind uint16) ([]p.Asset, error) {
 	out := make([]p.Asset, 0)
 	var at int64
 	var id uint64
@@ -276,7 +276,7 @@ func ticketCommand(action string) *cobra.Command {
 			if e != nil {
 				return e
 			}
-			assets, e := ticketAssets(s, p.AssetTypeTicketEntry)
+			assets, e := fetchAssetsOfType(s, p.AssetTypeTicketEntry)
 			if e != nil {
 				return e
 			}
@@ -316,7 +316,7 @@ func ticketCommand(action string) *cobra.Command {
 					}
 				}
 			}
-			assets, e := ticketAssets(s, p.AssetTypeTicket)
+			assets, e := fetchAssetsOfType(s, p.AssetTypeTicket)
 			if e != nil {
 				return e
 			}

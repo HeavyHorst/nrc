@@ -14,6 +14,7 @@
 (function () {
   const LIST_TASK_SLICES = 56;
   const SLICE_ASSET_TYPE = 11;
+  const SLICE_GROUP_ASSET_TYPE = 20;
   const NOTE_ASSET_TYPE = 5;
   const FILE_ASSET_TYPE = 3;
   const TICKET_ASSET_TYPE = 13;
@@ -70,7 +71,7 @@
     includeClosed: false,
     // The filters the register asks the server with. They survive no reload, like
     // the other registers' filters.
-    filters: { owner: null, query: "", project: "" },
+    filters: { owner: null, query: "", project: "", group: "" },
     selected: null,
     // The slice the detail on screen belongs to. A refresh of the same slice
     // keeps what is already shown instead of blanking it.
@@ -89,6 +90,12 @@
   };
 
   let pendingList = null;
+  let groups = new Map();
+  let groupLoad = null;
+  let groupError = "";
+  let groupPending = false;
+  let groupMenu = "";
+  const collapsedGroups = new Set();
   let listRefreshTimer = null;
   // What the last listing carried. A derived view that asks for the list is
   // answered with the same list, so the announcement below has to be about a
@@ -303,7 +310,7 @@
   }
 
   function filterActive() {
-    return state.filters.owner !== null || queryText() !== "" || !!state.filters.project;
+    return state.filters.owner !== null || queryText() !== "" || !!state.filters.project || !!state.filters.group;
   }
 
   // The owner a filter names: MY SLICES is the reader's own name, UNASSIGNED is the
@@ -371,6 +378,15 @@
   function syncFilterControls() {
     syncOwnerFilter();
     syncProjectFilter();
+    const group = document.getElementById("sliceGroupFilter");
+    if (group) {
+      const options = '<option value="">ALL</option>' + groupOptions();
+      if (group.dataset.options !== options) {
+        group.dataset.options = options;
+        group.innerHTML = options;
+      }
+      group.value = state.filters.group || "";
+    }
     const query = document.getElementById("sliceQuery");
     if (query && query.value !== state.filters.query) query.value = state.filters.query;
   }
@@ -398,7 +414,7 @@
   function resetFilters() {
     if (!filterActive()) return Promise.resolve(false);
     explicitSelection = false;
-    state.filters = { owner: null, query: "", project: "" };
+    state.filters = { owner: null, query: "", project: "", group: "" };
     syncFilterControls();
     return requestList({ force: true });
   }
@@ -427,7 +443,8 @@
     // opcode, conv id, the two flags, the owner and its length, the name flag and
     // its length, the page bound, the cursor flag, the correlation id, the
     // project and its length, and the review counts opt-in.
-    const buffer = new ArrayBuffer(27 + ownerBytes.length + nameBytes.length + (cursor ? 17 : 0) + projectBytes.length);
+    const group = filters.group || "";
+    const buffer = new ArrayBuffer(27 + ownerBytes.length + nameBytes.length + (cursor ? 17 : 0) + projectBytes.length + (group ? 8 : 0));
     const view = new DataView(buffer);
     view.setUint16(0, LIST_TASK_SLICES, false);
     view.setBigUint64(2, state.roomId, false);
@@ -460,7 +477,9 @@
     view.setUint16(offset, projectBytes.length, false);
     offset += 2;
     new Uint8Array(buffer, offset, projectBytes.length).set(projectBytes);
-    view.setUint8(offset + projectBytes.length, 1);
+    offset += projectBytes.length;
+    view.setUint8(offset++, group ? 7 : 3);
+    if (group) view.setBigUint64(offset, BigInt(group), false);
     return buffer;
   }
 
@@ -507,6 +526,7 @@
   }
 
   function requestList({ force = false } = {}) {
+    loadGroups();
     const scope = ++ownerGeneration;
     window.NRCTaskQuery?.requestProjects?.();
     window.NRCAssets.sendListNoteProjects?.(0n, {
@@ -534,6 +554,62 @@
       state.loadingMore = false;
     }
     return requestPage(null);
+  }
+
+  function loadGroups() {
+    if (groupLoad || !connected() || !document.getElementById("sliceGroupFilter")) return;
+    const request = Promise.resolve().then(() => window.NRCAssets.requestAllAssets(0n, SLICE_GROUP_ASSET_TYPE, { isCancelled: () => groupLoad !== request }));
+    groupLoad = request;
+    request.then(({ assets }) => {
+      if (groupLoad !== request) return;
+      groups = new Map(assets.map(asset => [String(asset.assetId), asset.preview]));
+      groupError = "";
+      if (state.filters.group && state.filters.group !== "0" && !groups.has(state.filters.group)) {
+        state.filters.group = "";
+        invalidate({ debounce: false });
+      }
+      render();
+    }).catch(error => {
+      if (groupLoad !== request || !connected()) return;
+      groupError = `GROUP LIST FAILED · ${error.message}`;
+      render();
+    }).finally(() => { if (groupLoad === request) groupLoad = null; });
+  }
+
+  function sortedGroups() {
+    return [...groups].sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]));
+  }
+
+  function groupOptions(selected = "0") {
+    return '<option value="0">UNGROUPED</option>' + sortedGroups().map(([id, name]) =>
+      `<option value="${id}" ${id === selected ? "selected" : ""}>${escape(name)}</option>`).join("");
+  }
+
+  async function mutateGroup(action, id) {
+    if (groupPending) return;
+    if (!connected()) { groupError = "OFFLINE — reconnect before changing a group."; render(); return; }
+    const current = groups.get(id);
+    let name;
+    if (action !== "dissolve-group") {
+      const entered = await window.NRCDialog.prompt("Group name:", { title: current ? "RENAME GROUP" : "NEW GROUP", initialValue: current ?? "" });
+      if (entered == null) return;
+      name = entered.trim();
+      if (!name || encoder.encode(name).length > MAX_PROJECT_LENGTH) {
+        groupError = `Group name must be 1–${MAX_PROJECT_LENGTH} bytes.`; render(); return;
+      }
+    } else if (!await window.NRCDialog.confirm(`Dissolve ${current}? Its slices and all their members are kept.`, { title: "DISSOLVE GROUP", confirmLabel: "Dissolve group" })) return;
+    groupMenu = "";
+    groupError = "";
+    groupPending = true;
+    const options = {
+      onSuccess: () => { groupPending = false; render(); },
+      onError: detail => { groupPending = false; groupError = detail?.message || "Group update failed"; render(); },
+    };
+    const sent = action === "new-group" ? window.NRCAssets.sendCreateAsset(0n, SLICE_GROUP_ASSET_TYPE, 0, 0n, name, "", 0, options)
+      : action === "rename-group" ? window.NRCAssets.sendUpdateAsset(0n, BigInt(id), name, "", SLICE_GROUP_ASSET_TYPE, 0, options)
+      : window.NRCAssets.sendDeleteAsset(0n, BigInt(id), options);
+    if (sent == null) options.onError({ message: "Group update was not sent." });
+    render();
   }
 
   // loadMore asks for the next page. A page is only asked for when the server said
@@ -817,7 +893,8 @@
     const fields = recordFields(slice);
     const owner = document.getElementById("sliceOwner")?.value ?? fields.owner;
     const outcome = document.getElementById("sliceOutcome")?.value ?? fields.outcome;
-    return owner !== fields.owner || outcome !== fields.outcome;
+    const group = document.getElementById("sliceGroup")?.value || fields.group;
+    return owner !== fields.owner || outcome !== fields.outcome || group !== fields.group;
   }
 
   async function confirmDiscardRecordEdits() {
@@ -875,6 +952,19 @@
     if (!asset?.preview) return null;
     try {
       const parsed = JSON.parse(asset.preview);
+      if (typeof parsed?.closed_at === "number" && !Number.isSafeInteger(parsed.closed_at)) {
+        // JSON.parse rounds large integers. Recover only the top-level field
+        // from the original JSON, skipping nested objects and quoted text.
+        let depth = 0;
+        for (const { 0: token, index } of asset.preview.matchAll(/"(?:\\.|[^"\\])*"|[{}\[\]]/gs)) {
+          if (token === "{" || token === "[") depth++;
+          else if (token === "}" || token === "]") depth--;
+          else if (depth === 1 && JSON.parse(token) === "closed_at") {
+            const integer = /^\s*:\s*(-?\d+)\s*(?=[,}])/.exec(asset.preview.slice(index + token.length));
+            if (integer) parsed.closed_at = BigInt(integer[1]);
+          }
+        }
+      }
       return parsed && typeof parsed === "object" ? parsed : null;
     } catch {
       return null;
@@ -887,10 +977,12 @@
   // one of them to name the owner.
   function recordFields(slice) {
     const record = sliceRecordData(slice) ?? {};
+    const group = String((record.version === 2 ? record.group_id : undefined) ?? slice.groupId ?? 0);
     return {
       sliceId: slice.sliceId,
       owner: record.owner ?? slice.owner ?? "",
       outcome: record.outcome ?? "",
+      group: groups.has(group) ? group : "0",
     };
   }
 
@@ -937,6 +1029,7 @@
     const record = new Promise((resolve, reject) => {
       window.NRCAssets.requestAsset(0n, slice.sliceId, {
         force: recordRefreshRequired,
+        storedPreview: true,
         onSuccess: (detail) => {
           if (generation === detailGeneration) {
             recordRefreshRequired = false;
@@ -1127,16 +1220,19 @@
   // Writes
   // ---------------------------------------------------------------------------
 
-  function slicePreview(name, { owner = "", outcome = "", closed = false, closedAt = 0, closedBy = "" } = {}) {
-    return JSON.stringify({
-      version: 1,
+  function slicePreview(name, { owner = "", outcome = "", closed = false, closedAt = 0, closedBy = "", groupId } = {}) {
+    const preview = JSON.stringify({
+      version: groupId === undefined ? 1 : 2,
       name,
       owner,
       outcome,
       closed,
-      closed_at: Number(closedAt),
       closed_by: closedBy,
+      group_id: groupId,
     });
+    // BigInt interpolation supplies digits, never quoted or user-provided JSON.
+    const timestamp = typeof closedAt === "bigint" ? String(closedAt) : JSON.stringify(Number(closedAt));
+    return `${preview.slice(0, -1)},"closed_at":${timestamp}}`;
   }
 
   // createSlice materializes a work stream. Everything after this is assignment:
@@ -1174,7 +1270,7 @@
         state.createOpen = false;
         // A slice is created without an owner, so a filter that would hide it is
         // dropped: the register has to show the slice that was just made.
-        state.filters = { owner: null, query: "", project: "" };
+        state.filters = { owner: null, query: "", project: "", group: "" };
         invalidate({ debounce: false });
         select(detail.asset.assetId);
         render();
@@ -1205,12 +1301,15 @@
     const record = sliceRecordData(slice) ?? {};
     const owner = document.getElementById("sliceOwner")?.value ?? record.owner ?? "";
     const outcome = document.getElementById("sliceOutcome")?.value ?? record.outcome ?? "";
+    const currentGroup = recordFields(slice).group;
+    const group = document.getElementById("sliceGroup")?.value || currentGroup;
     const next = {
       owner,
       outcome,
       closed: isClosed(slice),
       closedAt: record.closed_at ?? 0,
       closedBy: record.closed_by ?? "",
+      groupId: group === currentGroup ? undefined : group,
     };
     if (owner.length > MAX_OWNER_LENGTH || outcome.length > MAX_OUTCOME_LENGTH) {
       state.writeError = "Owner or outcome exceeds the record limit.";
@@ -1346,6 +1445,12 @@
   // on screen as a record that no longer exists.
   function onAssetDeleted(convId, assetId) {
     if (convId !== state.roomId) return;
+    if (groups.delete(String(assetId))) {
+      for (const slice of state.slices) if (slice.groupId === assetId) slice.groupId = 0n;
+      collapsedGroups.delete(String(assetId));
+      if (state.filters.group === String(assetId)) state.filters.group = "";
+      if (groupMenu === String(assetId)) groupMenu = "";
+    }
     window.NRCInspector?.entityDeleted?.({ roomId: convId, type: "slice", id: assetId });
     if (selectedSlice()?.sliceId === assetId) {
       retainedSlice = null;
@@ -1374,6 +1479,11 @@
   // and ticket mutations also affect other slices and their project choices.
   function onAssetChanged(asset, reason, correlationId) {
     if (reason !== "mutation" || asset?.convId !== state.roomId) return;
+    if (asset.assetType === SLICE_GROUP_ASSET_TYPE) {
+      groups.set(String(asset.assetId), asset.preview);
+      render();
+      return;
+    }
     if (asset.assetType === REVIEW_FORM_ASSET_TYPE) {
       invalidate();
       const index = state.reviews.assets.findIndex(review => review.assetId === asset.assetId);
@@ -1504,12 +1614,14 @@
     if (!painted || !slice || painted.sliceId !== slice.sliceId) return null;
     const owner = document.getElementById("sliceOwner");
     const outcome = document.getElementById("sliceOutcome");
+    const group = document.getElementById("sliceGroup");
     if (!owner && !outcome) return null;
     const draft = {
       owner: owner && owner.value !== painted.owner ? owner.value : null,
       outcome: outcome && outcome.value !== painted.outcome ? outcome.value : null,
+      group: group?.value && group.value !== painted.group ? group.value : null,
     };
-    if (draft.owner === null && draft.outcome === null) return null;
+    if (draft.owner === null && draft.outcome === null && draft.group === null) return null;
     // Where the caret sits is part of what the reader is doing, so the text goes
     // back where it was typed instead of to the end of the field.
     const focused = document.activeElement;
@@ -1534,6 +1646,8 @@
     if (owner && draft.owner !== null) putFieldValue(owner, draft.owner, draft.caret);
     const outcome = document.getElementById("sliceOutcome");
     if (outcome && draft.outcome !== null) putFieldValue(outcome, draft.outcome, draft.caret);
+    const group = document.getElementById("sliceGroup");
+    if (group && (draft.group === "0" || groups.has(draft.group))) group.value = draft.group;
   }
 
   function render() {
@@ -1581,7 +1695,9 @@
     const slice = selectedSlice();
     const fields = slice ? recordFields(slice) : null;
     const draft = liveDraft(paintedFields);
-    updateHtml(list, state.slices.map(renderRow).join(""));
+    updateHtml(list, renderGroups());
+    const groupStatus = document.getElementById("sliceGroupError");
+    if (groupStatus) { groupStatus.hidden = !groupError; groupStatus.textContent = groupError; }
     const detailReady = !slice ||
       (state.detail.mode === "ready" && state.detailSliceId === slice.sliceId);
     if (record) {
@@ -1613,6 +1729,33 @@
     // The filter controls are painted from the state on every render, so a
     // listing that arrived with new owners offers them without a second path.
     syncFilterControls();
+  }
+
+  function renderGroups() {
+    const buckets = new Map();
+    for (const slice of state.slices) {
+      const id = String(slice.groupId ?? 0);
+      const key = groups.has(id) ? id : "0";
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(slice);
+    }
+    const ungrouped = buckets.get("0") ?? [];
+    const reveal = !!queryText() || !!state.filters.group;
+    const sections = sortedGroups().map(([id, name]) => {
+      const rows = buckets.get(id) ?? [];
+      if ((filterActive() && !rows.length && state.filters.group !== id) || (state.filters.group && state.filters.group !== id)) return "";
+      const expanded = reveal || !collapsedGroups.has(id);
+      return `<section class="slice-group">
+        <div class="slice-group-head">
+          <button id="sliceGroupToggle-${id}" class="btn btn--ghost" type="button" data-slice-action="toggle-group" data-group-id="${id}" aria-expanded="${expanded}" aria-controls="sliceGroupRows-${id}">${expanded ? "▾" : "▸"} ${escape(name)}</button>
+          <button id="sliceGroupMenu-${id}" class="btn btn--ghost" type="button" data-slice-action="group-menu" data-group-id="${id}" aria-expanded="${groupMenu === id}" aria-label="Actions for ${escape(name)}">⋯</button>
+        </div>
+        ${groupMenu === id ? `<div class="slice-group-actions"><button class="btn" type="button" data-slice-action="rename-group" data-group-id="${id}">RENAME</button><button class="btn btn--danger" type="button" data-slice-action="dissolve-group" data-group-id="${id}">DISSOLVE</button></div>` : ""}
+        <div class="slice-group-rows" id="sliceGroupRows-${id}" ${expanded ? "" : "hidden"}>${expanded ? rows.map(renderRow).join("") : ""}</div>
+      </section>`;
+    });
+    if (ungrouped.length && (!state.filters.group || state.filters.group === "0")) sections.push(`<section class="slice-group" aria-label="Ungrouped slices"><div class="slice-group-head slice-group-label">UNGROUPED</div><div class="slice-group-rows">${ungrouped.map(renderRow).join("")}</div></section>`);
+    return sections.join("");
   }
 
   function renderRow(slice) {
@@ -1669,6 +1812,10 @@
         <div class="slice-field slice-field--owner">
           <span class="slice-note">OWNER</span>
           <div><input id="sliceOwner" type="hidden" maxlength="${MAX_OWNER_LENGTH}" value="${escape(owner)}"></div>
+        </div>
+        <div class="slice-field">
+          <label class="slice-note" for="sliceGroup">GROUP</label>
+          <select class="filter-select" id="sliceGroup" ${locked ? "disabled" : ""}>${groupOptions(fields.group)}</select>
         </div>
       </div>
       ${inspectorRecord ? "" : `<div class="slice-identity-actions">
@@ -1995,6 +2142,22 @@
       if (action) {
         const slice = selectedSlice();
         switch (action.dataset.sliceAction) {
+          case "toggle-group": {
+            if (queryText() || state.filters.group) return;
+            const id = action.dataset.groupId;
+            if (!collapsedGroups.delete(id)) collapsedGroups.add(id);
+            render();
+            return;
+          }
+          case "group-menu":
+            groupMenu = groupMenu === action.dataset.groupId ? "" : action.dataset.groupId;
+            render();
+            return;
+          case "new-group":
+          case "rename-group":
+          case "dissolve-group":
+            mutateGroup(action.dataset.sliceAction, action.dataset.groupId);
+            return;
           case "load-more-tasks":
             loadMoreTasks();
             return;
@@ -2091,6 +2254,12 @@
     projectFilter?.addEventListener("change", () => {
       setProjectFilter(projectFilter.value);
     });
+    const groupFilter = document.getElementById("sliceGroupFilter");
+    groupFilter?.addEventListener("change", () => {
+      explicitSelection = false;
+      state.filters.group = groupFilter.value;
+      requestList({ force: true });
+    });
     const queryFilter = document.getElementById("sliceQuery");
     queryFilter?.addEventListener("input", () => {
       setQuery(queryFilter.value);
@@ -2159,6 +2328,8 @@
   }
 
   function disconnect() {
+    groupLoad = null;
+    groupPending = false;
     ++ownerGeneration;
     ++selectionGeneration;
     ++detailGeneration;

@@ -39,7 +39,8 @@ old public receipt IDs and seeding a separate publication floor. This is a local
 development feature, not a production deployment.
 `reviews.sql` adds schema-11 review runs and private participant/invitation metadata.
 `portal_accounts.sql` adds empty portal account and audit tables in schema 12.
-The import fingerprints all twelve schema files. Keep them in the migration
+`slice_groups.sql` adds the Slice group projection key and listing index in schema 13.
+The import fingerprints all thirteen schema files. Keep them in the migration
 bundle. The real Odin projection builder populates the
 derived membership, summary, project and workspace counters before activation.
 

@@ -120,14 +120,14 @@ func TestSliceCommandSurface(t *testing.T) {
 	if _, err := parseSlicePreview(`{"version":1,"name":""}`); err == nil {
 		t.Error("a slice preview without a name must not decode")
 	}
-	if _, err := parseSlicePreview(`{"version":2,"name":"Alpha"}`); err == nil {
+	if _, err := parseSlicePreview(`{"version":3,"name":"Alpha"}`); err == nil {
 		t.Error("a slice preview with an unknown version must not decode")
 	}
-	slice, err := parseSlicePreview(`{"version":1,"name":"Alpha","owner":"rene","outcome":"Ship it.","closed":true,"closed_at":7,"closed_by":"rene"}`)
+	slice, err := parseSlicePreview(`{"version":1,"name":"Alpha","owner":"rene","outcome":"Ship it.","closed":true,"closed_at":7,"closed_by":"rene","group_id":42}`)
 	if err != nil {
 		t.Fatalf("valid slice preview rejected: %v", err)
 	}
-	if slice.Name != "Alpha" || slice.Owner != "rene" || slice.Outcome != "Ship it." || !slice.Closed || slice.ClosedBy != "rene" {
+	if slice.Name != "Alpha" || slice.Owner != "rene" || slice.Outcome != "Ship it." || !slice.Closed || slice.ClosedBy != "rene" || slice.GroupID != nil {
 		t.Fatalf("unexpected decoded slice: %+v", slice)
 	}
 	if protocol.AssetTypeSlice != 11 {

@@ -4,6 +4,7 @@ import "core:c"
 import "core:fmt"
 import "core:mem"
 import "core:mem/virtual"
+import "core:strconv"
 import pr "protocol"
 import sql "sqlite"
 import db "workspace_db"
@@ -201,6 +202,7 @@ sqlite_mutate_asset :: proc(store: ^db.Store, request: ^db.Request, allocator: m
 			parent, found, rc := sqlite_read_asset(store, request.workspace, request.actor, create.parent_id, false)
 			if rc != sql.OK {result.rc = rc; return}
 			if !found {result.error = "Asset parent not found"; return}
+			if parent.asset_type == .SliceGroup {result.error = "Slice groups cannot contain assets"; return}
 			if create.asset_type == .TicketEntry && parent.asset_type != .Ticket {result.error = "Ticket parent not found"; return}
 			if reminder_is_personal(&parent) {result.error = "Personal reminders cannot have shared children"; return}
 			// Floyd's cycle check rejects legacy cyclic ancestor chains without
@@ -261,9 +263,7 @@ sqlite_mutate_asset :: proc(store: ^db.Store, request: ^db.Request, allocator: m
 		a.preview,
 		a.payload,
 	) {result.error = "Invalid appointment record"; return}
-	if a.asset_type == .Slice {
-		if _, valid := slice_preview_name(a.preview, context.allocator); !valid {result.error = "Slice record must carry a version and a name"; return}
-	}
+	if result.error, result.rc = sqlite_validate_slice_asset(store, request, &old, &a); result.error != "" || result.rc != sql.OK do return
 	if !validate_reminder_asset(&a) || (!creating && reminder_is_personal(&a) != reminder_is_personal(&old)) {
 		result.error = creating ? "Invalid reminder visibility or personal reminder links/attachments" : "Reminder visibility is fixed at creation"
 		return
@@ -283,6 +283,59 @@ sqlite_mutate_asset :: proc(store: ^db.Store, request: ^db.Request, allocator: m
 	result.asset.attachments = make([]pr.Attachment, len(a.attachments)); copy(result.asset.attachments, a.attachments)
 	result.created = creating
 	return
+}
+
+sqlite_validate_slice_asset :: proc(store: ^db.Store, request: ^db.Request, old, a: ^pr.Asset, batch := false) -> (string, c.int) {
+	if a.asset_type == .SliceGroup && !valid_slice_group(a) do return "A slice group needs only a name and cannot contain records", sql.OK
+	if a.asset_type != .Slice do return "", sql.OK
+	m, group, valid := slice_preview(a, context.allocator)
+	if !valid do return "Invalid slice preview", sql.OK
+	if group == "0" do return "", sql.OK
+	previous: u64
+	if old.asset_id != 0 {
+		// The indexed row is authoritative, even after a full-size legacy write
+		// or dissolution. Neither case can be inferred from the asset preview.
+		s: ^sql.Statement
+		rc := sql.prepare_v2(store.db, "SELECT group_id FROM slice_metadata WHERE workspace=?1 AND asset_id=?2", -1, &s, nil)
+		if rc != sql.OK do return "", rc
+		defer sql.finalize(s)
+		if rc = sql.bind_bytes(s, 1, transmute([]byte)request.workspace); rc != sql.OK do return "", rc
+		if rc = sql.bind_id(s, 2, old.asset_id); rc != sql.OK do return "", rc
+		rc = sql.step(s)
+		if rc == sql.ROW {
+			previous, rc = sql.column_id(s, 0)
+			if rc != sql.OK do return "", rc
+		} else if rc != sql.DONE do return "", rc
+	}
+	id, _ := strconv.parse_u64(group, 10)
+	if group == "" {
+		if previous == 0 do return "", sql.OK
+		if batch {
+			deleted, rc := sqlite_transaction_deleted(store, .Asset, previous)
+			if rc != sql.OK || deleted do return "", rc
+		}
+		if !strict_slice_json(a.preview) {
+			normalized := normalize_slice_preview(m)
+			// Keep accepted legacy bytes when strict JSON itself cannot fit. The
+			// metadata upsert preserves membership even without an embedded group.
+			if len(normalized) > pr.MAX_PREVIEW_LENGTH do return "", sql.OK
+			a.preview = normalized
+		}
+		buf: [20]byte
+		preview := rewrite_slice_preview(a.preview, strconv.write_uint(buf[:], previous, 10))
+		// If the group does not fit on the wire, the metadata row retains it.
+		if len(preview) <= pr.MAX_PREVIEW_LENGTH do a.preview = preview
+	} else if id != previous {
+		if batch {
+			deleted, rc := sqlite_transaction_deleted(store, .Asset, id)
+			if rc != sql.OK do return "", rc
+			if deleted do return "Slice group is being dissolved", sql.OK
+		}
+		group, found, rc := sqlite_read_asset(store, request.workspace, request.actor, id, false)
+		if rc != sql.OK do return "", rc
+		if !found || group.asset_type != .SliceGroup do return "Slice group not found", sql.OK
+	}
+	return "", sql.OK
 }
 
 sqlite_execute_asset_write :: proc(store: ^db.Store, request: ^db.Request, output: ^db.Command_Output) -> c.int {

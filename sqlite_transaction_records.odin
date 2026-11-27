@@ -175,6 +175,7 @@ sqlite_transaction_assets :: proc(
 		if op.op_type != .AssetCreate && op.op_type != .AssetPatch do continue
 		virtual.arena_free_all(&arena); failed^ = u16(i)
 		creating := op.op_type == .AssetCreate
+		writes_preview := creating
 		a, old: pr.Asset
 		if creating {
 			r, e := pr.parseTransactionAssetCreate(op.body)
@@ -207,14 +208,19 @@ sqlite_transaction_assets :: proc(
 			if !found do return sql.CONSTRAINT
 			if old.updated_at == max(i64) do return sql.FULL
 			a = old; a.updated_at = max(request.timestamp, old.updated_at + 1)
-			if r.present & pr.TRANSACTION_ASSET_PATCH_PREVIEW != 0 do a.preview = r.preview
+			writes_preview = r.present & pr.TRANSACTION_ASSET_PATCH_PREVIEW != 0
+			if writes_preview do a.preview = r.preview
 			if r.present & pr.TRANSACTION_ASSET_PATCH_PAYLOAD !=
 			   0 {a.payload = r.payload; a.payload_encoding = r.payload_encoding; a.payload_raw_len = r.payload_raw_len}
 			if !appointment_mutation_allowed(&old, a.preview, request.actor) || reminder_is_personal(&a) != reminder_is_personal(&old) do return sql.CONSTRAINT
 		}
 		if a.payload_encoding < min(pr.PayloadEncoding) || a.payload_encoding > max(pr.PayloadEncoding) || a.payload_encoding == .Plain && a.payload_raw_len != u32(len(a.payload)) do return sql.CONSTRAINT
 		if !validate_appointment_asset(a.asset_type, a.payload_encoding, a.payload_raw_len, a.preview, a.payload) || !validate_ticket_asset(a.asset_type, a.parent_type, a.parent_id, a.payload_encoding, a.payload_raw_len, a.preview, a.payload) || !validate_reminder_asset(&a) do return sql.CONSTRAINT
-		if a.asset_type == .Slice {if _, valid := slice_preview_name(a.preview, context.allocator); !valid do return sql.CONSTRAINT}
+		// An untouched Slice preview may still name a dissolved group. Only a
+		// preview write can set membership; SliceGroup still validates the payload.
+		if writes_preview || a.asset_type != .Slice {
+			if message, rc := sqlite_validate_slice_asset(store, request, &old, &a, batch = true); rc != sql.OK || message != "" do return rc != sql.OK ? rc : sql.CONSTRAINT
+		}
 		if !monitoring_asset_mutation_valid(&a, context.allocator) do return sql.CONSTRAINT
 		if !creating && (monitoring_is_webhook_route(&old) || monitoring_is_webhook_route(&a)) do return sql.CONSTRAINT
 		// Parent checks follow after all post-images exist, allowing forward refs.
@@ -257,7 +263,7 @@ sqlite_transaction_assets :: proc(
 		} else {
 			parent, parent_found, parent_rc := sqlite_read_asset(store, request.workspace, request.actor, a.parent_id, false)
 			if parent_rc != sql.OK do return parent_rc
-			if !parent_found || reminder_is_personal(&parent) || a.asset_type == .TicketEntry && parent.asset_type != .Ticket do return sql.CONSTRAINT
+			if !parent_found || parent.asset_type == .SliceGroup || reminder_is_personal(&parent) || a.asset_type == .TicketEntry && parent.asset_type != .Ticket do return sql.CONSTRAINT
 			slow, fast := a.asset_id, a.asset_id
 			for {
 				slow, rc = sqlite_asset_parent(store, request.workspace, slow); if rc != sql.OK do return rc

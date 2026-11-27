@@ -33,7 +33,7 @@ try {
     function sliceListFrame({ correlationId, slices, total, hasMore, nextCursor }) {
       const names = slices.map((slice) => bytes(slice.name));
       const owners = slices.map((slice) => bytes(slice.owner));
-      let size = 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + 4;
+      let size = 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + 4 + 8 * slices.length;
       slices.forEach((slice, index) => { size += 2 + names[index].length + 8 + 2 + owners[index].length + 1 + 16 + 16; });
       const buffer = new ArrayBuffer(size);
       const view = new DataView(buffer);
@@ -69,6 +69,7 @@ try {
       view.setUint32(offset, 0, false); offset += 4;
       view.setUint16(offset, 0, false); offset += 2;
       view.setUint32(offset, correlationId, false); offset += 4;
+      for (const slice of slices) { view.setBigUint64(offset, slice.groupId ?? 0n, false); offset += 8; }
       if (offset !== size) throw new Error("the fixture frame does not fill its declared size");
       return new DataView(buffer);
     }
@@ -94,11 +95,13 @@ try {
         cursor = { closed: view.getUint8(offset) === 1, sortAt: view.getBigInt64(offset + 1, false), sliceId: view.getBigUint64(offset + 9, false) };
         offset += 17;
       }
+      const flagsAt = offset + 6 + view.getUint16(offset + 4, false);
       return {
         includeClosed: view.getUint8(10) === 1,
         hasOwner: view.getUint8(11) === 1,
         owner, hasName, name, limit, cursor,
         correlationId: view.getUint32(offset, false),
+        group: view.getUint8(flagsAt) & 4 ? view.getBigUint64(flagsAt + 1, false) : null,
         project: view.byteLength > offset + 4 ? decoder.decode(new Uint8Array(view.buffer, view.byteOffset + offset + 6, view.getUint16(offset + 4, false))) : "",
       };
     }
@@ -122,6 +125,39 @@ try {
       slices.push({ name: `Unowned work ${String(i + 1).padStart(3, "0")}`, sliceId: BigInt(3000 + i), owner: "", closed: false, movedAt: BigInt(7000 - i) });
     }
     window.__fixtureRequests = [];
+    let groups = [];
+    const requestAllAssets = NRCAssets.requestAllAssets;
+    NRCAssets.requestAllAssets = (room, type, opts) => type === 20 ? Promise.resolve({ assets: groups }) : requestAllAssets(room, type, opts);
+    window.__fixtureGroups = () => {
+      groups = [{ assetId: 321n, assetType: 20, convId: 0n, preview: "Core Server" }, { assetId: 654n, assetType: 20, convId: 0n, preview: "Marketplace" }];
+      slices[0].name = "Sharded Persistence";
+      slices[1].name = "WebSocket Send Path";
+      slices[2].name = "Customer Records";
+      slices[0].groupId = slices[1].groupId = 321n;
+      slices[0].todo = 0;
+      slices[1].inProgress = 3;
+      slices[2].done = 5;
+      slices.splice(3);
+      window.__fixtureSliceWrites = [];
+      NRCAssets.requestAsset = (room, id, options) => {
+        const slice = slices.find(row => row.sliceId === id);
+        const grouped = options.storedPreview && slice.groupId != null;
+        const asset = { assetId: id, assetType: 11, preview: JSON.stringify({ version: grouped ? 2 : 1, name: slice.name, owner: slice.owner, group_id: String(grouped ? slice.groupId : 321n), outcome: "Keep workspace storage restart-safe." }) };
+        if (slice === slices[0]) {
+          asset.preview = `${asset.preview.slice(0, -1)},"closed_\\u0061t":9223372036854775807,"extra":{"closed_at":9007199254740993}}`;
+        }
+        NRCAssets.roomAssets.get(room).set(id, asset);
+        options.onSuccess({ asset });
+      };
+      NRCAssets.sendUpdateAsset = (_room, id, preview, _payload, _type, _correlation, options) => {
+        window.__fixtureSliceWrites.push(preview);
+        const record = JSON.parse(preview);
+        if (record.version === 2 && record.group_id !== undefined) slices.find(row => row.sliceId === id).groupId = BigInt(record.group_id);
+        options.onSuccess();
+        return 1;
+      };
+      NRCSlices.requestList({ force: true });
+    };
 
     currentRoomId = 7n;
     currentWorkspaceId = "slice-filters";
@@ -154,6 +190,7 @@ try {
       window.__fixtureRequests.push(request);
       let matching = slices.slice()
         .filter((slice) => (request.includeClosed || !slice.closed) &&
+          (request.group === null || request.group === (slice.groupId ?? 0n)) &&
           (!request.hasOwner || slice.owner === request.owner) &&
           (!request.project || slice.projects.includes(request.project)) &&
           (!request.hasName || slice.name.toLowerCase().includes(request.name.toLowerCase())))
@@ -356,6 +393,78 @@ try {
     }
   }
 
+  await page.evaluate(() => window.__fixtureGroups());
+  await page.locator('#sliceGroupFilter option[value="321"]').waitFor({ state: "attached" });
+  await page.locator("#sliceGroupRows-321 .slice-row").first().waitFor();
+  const groupToggle = page.locator("#sliceGroupToggle-321");
+  await groupToggle.click();
+  assert.equal(await groupToggle.getAttribute("aria-expanded"), "false");
+  assert.deepEqual(await rowNames(), ["Customer Records"]);
+  await page.locator("#sliceQuery").fill("WebSocket");
+  await page.waitForFunction(() => document.querySelector("#sliceGroupToggle-321")?.getAttribute("aria-expanded") === "true");
+  assert.deepEqual(await rowNames(), ["WebSocket Send Path"]);
+  await page.locator("#sliceQuery").fill("");
+  await page.waitForFunction(() => document.querySelector("#sliceGroupToggle-321")?.getAttribute("aria-expanded") === "false");
+  await page.locator("#sliceGroupFilter").selectOption("321");
+  await page.waitForFunction(() => document.querySelectorAll("#sliceGroupRows-321 .slice-row").length === 2);
+  assert.deepEqual(await rowNames(), ["Sharded Persistence", "WebSocket Send Path"]);
+  await page.locator("#sliceQuery").fill("Customer");
+  await page.waitForFunction(() => NRCSlices.getState().total === 0);
+  assert.deepEqual(await rowNames(), [], "a name match outside the selected group is excluded");
+  await page.locator("#sliceQuery").fill("");
+  await page.waitForFunction(() => NRCSlices.getState().total === 2);
+  await page.locator("#sliceGroupFilter").selectOption("0");
+  await page.getByRole("region", { name: "Ungrouped slices" }).getByText("Customer Records").waitFor();
+  assert.deepEqual(await rowNames(), ["Customer Records"]);
+  await page.getByRole("button", { name: /Customer Records/ }).click();
+  await page.locator("#sliceGroup").waitFor();
+  assert.equal(await page.locator("#sliceGroup").inputValue(), "0", "v1 extras do not assign the slice to a group");
+  await page.locator("#sliceGroupFilter").selectOption("");
+  await groupToggle.click();
+  await page.waitForFunction(() => document.querySelectorAll("#sliceGroupRows-321 .slice-row").length === 2);
+  await page.getByRole("button", { name: /Sharded Persistence/ }).click();
+  await page.locator("#sliceGroup").waitFor();
+  assert.equal(await page.locator("#sliceGroup").inputValue(), "321");
+  await page.locator("#sliceGroup").selectOption("654");
+  await page.locator('#sliceRecord [data-slice-action="save"]').click();
+  await page.locator("#sliceGroupRows-654").getByText("Sharded Persistence").waitFor();
+  const movedPreview = await page.evaluate(() => window.__fixtureSliceWrites.at(-1));
+  assert.equal(JSON.parse(movedPreview).group_id, "654");
+  assert.match(movedPreview, /"closed_at":9223372036854775807(?=[,}])/);
+  await page.locator("#sliceGroup").selectOption("321");
+  await page.locator('#sliceRecord [data-slice-action="save"]').click();
+  await page.locator("#sliceGroupRows-321").getByText("Sharded Persistence").waitFor();
+  if (process.env.NRC_GROUP_SCREENSHOTS) {
+    const dir = process.env.NRC_GROUP_SCREENSHOTS;
+    await page.setViewportSize({ width: 1440, height: 760 });
+    await page.evaluate(() => document.documentElement.dataset.theme = "white");
+    await page.screenshot({ path: `${dir}/slice-groups-register.png` });
+    const menu = page.locator("#sliceGroupMenu-321");
+    if (page.screencast) {
+      await page.screencast.start({ path: `${dir}/slice-groups-interaction.webm`, size: { width: 1440, height: 760 } });
+      const decorations = await page.screencast.showActions({ duration: 500 });
+      for (const control of [groupToggle, menu, page.locator("#sliceGroupMenu-654"), menu]) {
+        const { x, y, width, height } = await control.boundingBox();
+        await page.mouse.move(x + width / 2, y + height / 2, { steps: 15 });
+        await page.waitForTimeout(380);
+      }
+      await menu.click();
+      await page.waitForTimeout(900);
+      await decorations[Symbol.asyncDispose]();
+      await page.screencast.stop();
+    } else {
+      await menu.click();
+    }
+    await page.locator('[data-slice-action="dissolve-group"]').waitFor();
+    await page.setViewportSize({ width: 390, height: 740 });
+    await page.evaluate(() => document.documentElement.dataset.theme = "matte-black");
+    const back = page.locator('[data-slice-action="back"]');
+    if (await back.isVisible()) await back.click();
+    const expand = page.locator('[data-mobile-filters][aria-controls="taskFilters"]');
+    if (await expand.getAttribute("aria-expanded") === "true") await expand.click();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.screenshot({ path: `${dir}/slice-groups-mobile-menu.png` });
+  }
   assert.deepEqual(errors, []);
   console.log("PASS: slice filters are asked of the server, pages fill as the register is walked, and the head and status report what is drawn");
 } finally {

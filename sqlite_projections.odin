@@ -5,6 +5,7 @@ import "core:encoding/json"
 import "core:fmt"
 import "core:mem/virtual"
 import "core:os"
+import "core:strconv"
 import "core:strings"
 import pr "protocol"
 import sql "sqlite"
@@ -100,17 +101,20 @@ sqlite_project_asset :: proc(store: ^db.Store, workspace: string, asset: ^pr.Ass
 			if rc = sqlite_projection_write(store, "INSERT INTO appointment_people VALUES(?1,?2,?3) ON CONFLICT DO NOTHING", workspace, asset, {person}); rc != sql.OK do return rc
 		}
 	case .Slice:
-		m, valid := slice_preview(asset, context.allocator)
+		m, group, valid := slice_preview(asset, context.allocator)
 		if !valid && inserted do return sql.OK
 		if !valid do return sqlite_projection_write(store, "DELETE FROM slice_metadata WHERE workspace=?1 AND asset_id=?2", workspace, asset, nil)
+		group_id, _ := strconv.parse_u64(group, 10)
 		return sqlite_projection_write(
 			store,
-			`INSERT INTO slice_metadata(workspace,asset_id,name,owner,outcome,closed,closed_at,closed_by) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+			`INSERT INTO slice_metadata(workspace,asset_id,name,owner,outcome,closed,closed_at,closed_by,group_id)
+ VALUES(?1,?2,?3,?4,?5,?6,?7,?8,coalesce((SELECT id FROM assets WHERE workspace=?1 AND id=?9 AND asset_type=20),zeroblob(8)))
  ON CONFLICT(workspace,asset_id) DO UPDATE SET name=excluded.name,owner=excluded.owner,
- outcome=excluded.outcome,closed=excluded.closed,closed_at=excluded.closed_at,closed_by=excluded.closed_by`,
+ outcome=excluded.outcome,closed=excluded.closed,closed_at=excluded.closed_at,closed_by=excluded.closed_by,
+ group_id=CASE WHEN ?10=0 THEN slice_metadata.group_id ELSE excluded.group_id END`,
 			workspace,
 			asset,
-			{m.name, m.owner, m.outcome, i64(m.closed ? 1 : 0), m.closed_at, m.closed_by},
+			{m.name, m.owner, m.outcome, i64(m.closed ? 1 : 0), m.closed_at, m.closed_by, group_id, i64(group != "" ? 1 : 0)},
 		)
 	case .CustomerCompany, .CustomerContact, .CustomerActivity:
 		m, valid := customer_preview(asset, context.allocator)
@@ -193,7 +197,7 @@ sqlite_project_asset :: proc(store: ^db.Store, workspace: string, asset: ^pr.Ass
 			asset,
 			{name, u64(make_room_mapping_conv_id(workspace, name))},
 		)
-	case .Comment, .Document, .File, .Agenda, .Monitor, .Incident, .MonitorSource:
+	case .Comment, .Document, .File, .Agenda, .Monitor, .Incident, .MonitorSource, .SliceGroup:
 	}
 	return sql.OK
 }

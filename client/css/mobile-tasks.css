@@ -112,7 +112,8 @@
     }
 
     /* The record's two fields share a row on a wide pane; a phone stacks them. */
-    .slice-record-fields {
+    .slice-record-fields,
+    .slice-record-fields:has(#sliceGroup) {
         grid-template-columns: minmax(0, 1fr);
     }
 
@@ -120,6 +121,8 @@
        touch target, and its fields read at the mobile input size so focus does
        not zoom the viewport. */
     .slice-register-head > .header-operation,
+    .slice-group-head > .btn,
+    .slice-group-actions > .btn,
     .slice-create-row > .btn {
         min-height: 44px;
         height: 44px;

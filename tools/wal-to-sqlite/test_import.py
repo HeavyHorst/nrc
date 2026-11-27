@@ -216,8 +216,8 @@ class ImportTests(unittest.TestCase):
         self.assertTrue((self.target / "IMPORT_COMPLETE.json").is_file())
         self.assertFalse((self.target / "storage-layout.manifest").exists())
         self.assertEqual(result["retained_message_generation"], 9)
-        self.assertEqual(result["schema_version"], 12)
-        self.assertEqual(json.loads((self.target / "IMPORT_COMPLETE.json").read_text())["schema_version"], 12)
+        self.assertEqual(result["schema_version"], 13)
+        self.assertEqual(json.loads((self.target / "IMPORT_COMPLETE.json").read_text())["schema_version"], 13)
         return result
 
     def connection(self):
@@ -301,7 +301,7 @@ class ImportTests(unittest.TestCase):
                     mutation(3, 1, edge(19, scope=43)), mutation(4, 1, dm(0))])
         self.run_import()
         db = self.connection()
-        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (12,))
+        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (13,))
         self.assertEqual(db.execute("SELECT count(*) FROM monitor_snapshots").fetchone(), (0,))
         for table in ("tasks", "assets", "edges", "task_attachments", "asset_attachments",
                       "room_mappings", "note_metadata", "note_tags", "reminder_metadata",
@@ -576,7 +576,7 @@ class ProjectionTests(unittest.TestCase):
             (5, b'{"project":" alpha ","tags":[" green ","green","blue"]}', b""),
             (6, b'{"visibility":"personal","title":"preview","deadline_at":"77"}', b'{"title":"payload","deadlineAt":19}'),
             (6, b'{"title":"not a fallback","deadline_at":"99"}', b'{}'),
-            (11, b'{"version":1,"name":"Work","owner":"bob","closed_at":27}', b""),
+            (11, b'{"version":1,"name":"Work","owner":"bob","closed_at":27,"group_id":{"legacy":1,"legacy":2},"group_id":"1"}', b""),
             (12, b'{"version":1,"title":"Meet","start_at":"100","end_at":"200","assignee":"carol"}', b""),
             (9, b'{"version":1,"title":"Contact","email":"c@example.test","archived":false}', b""),
             (13, b'{"version":1,"title":"Ticket","assignee":"dave","status":"open","priority":"high","company_id":"","contact_id":"","requester":"","requester_name":""}', b""),
@@ -598,7 +598,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(db.execute("SELECT project FROM note_metadata WHERE asset_id=?", (u(1),)).fetchone(), (b"alpha",))
         self.assertEqual(db.execute("SELECT tag FROM note_tags ORDER BY tag").fetchall(), [(b"blue",), (b"green",)])
         self.assertEqual(db.execute("SELECT personal,deadline,title FROM reminder_metadata ORDER BY asset_id").fetchall(), [(1, 19, b"payload"), (0, 0, b"")])
-        self.assertEqual(db.execute("SELECT owner,closed_at FROM slice_metadata").fetchone(), (b"bob", 27))
+        self.assertEqual(db.execute("SELECT owner,closed_at,group_id FROM slice_metadata").fetchone(), (b"bob", 27, u(0)))
         self.assertEqual(db.execute("SELECT backlog,notes,oldest,last_moved FROM slice_summaries").fetchone(), (1, 1, 0, 71))
         self.assertEqual(db.execute("SELECT project,refs FROM slice_projects").fetchall(), [(b"alpha", 1)])
         self.assertEqual(db.execute("SELECT total,covered FROM workspace_task_counts WHERE status=0").fetchone(), (1, 1))

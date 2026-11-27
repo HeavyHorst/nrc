@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NRC Design System / UI-Katalog</title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../css/main.css?v=20261126monitorheader1">
+    <link rel="stylesheet" href="../css/main.css?v=20261127slicegroups2">
     <link rel="stylesheet" href="../css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="../css/voice.css?v=20261105voice12">
     <link rel="stylesheet" href="../css/reviews.css?v=20261126guestlinks2">
@@ -1268,6 +1268,7 @@ status      ← Service Worker</code></pre>
                     <aside class="slice-register" aria-label="Slice register example">
                         <div class="slice-register-head">
                             <span class="slice-register-title">SLICES</span>
+                            <button class="btn header-operation" type="button">+ GROUP</button>
                             <button class="btn btn--primary header-operation header-create-action" type="button" aria-expanded="true" aria-controls="catalogSliceCreateRow">+ SLICE</button>
                         </div>
                         <div class="slice-create-row" id="catalogSliceCreateRow">
@@ -1276,6 +1277,8 @@ status      ← Service Worker</code></pre>
                             <button class="btn btn--ghost" type="button">CANCEL</button>
                         </div>
                         <div class="slice-register-list">
+                            <div class="slice-group-head"><button class="btn btn--ghost" type="button" aria-expanded="true">▾ CORE SERVER</button><button class="btn btn--ghost" type="button" aria-label="Actions for Core Server">⋯</button></div>
+                            <div class="slice-group-rows">
                             <button type="button" class="slice-row" aria-pressed="true">
                                 <span class="slice-row-copy">
                                     <span class="slice-row-head"><strong class="slice-row-title">SHARDED PERSISTENCE</strong><span class="slice-row-count">15 MEM</span></span>
@@ -1290,6 +1293,8 @@ status      ← Service Worker</code></pre>
                                     <span class="slice-row-meta">ANKE · <span class="slice-cold">MOVED 26D</span></span>
                                 </span>
                             </button>
+                            </div>
+                            <div class="slice-group-head slice-group-label">UNGROUPED</div>
                             <button type="button" class="slice-row" aria-pressed="false">
                                 <span class="slice-row-copy">
                                     <span class="slice-row-head"><strong class="slice-row-title">CUSTOMER RECORDS</strong><span class="slice-row-count">5 MEM</span></span>
@@ -1763,6 +1768,7 @@ Danach informiert das Projektteam alle Beteiligten.</blockquote>
                             <tr><td>TASK DETAIL</td><td>Stable read/edit document: operational status/assignee/due/blocker group before quieter priority/category/project/reference fields, description and resources. Due fields in list and Inspector open the shared date/time picker: 7-day default, 1/30-day alternatives, custom calendar/time, clear, cancellation without writes and acknowledged save with retry. Shared INFO disclosure holds labelled author, timestamps, source and completion. Identity, HISTORY and confirmed state remain visible.</td><td><code>.record-document</code>, <code>.task-detail-*</code>, <code>.inspector-info</code>, <code>NRCDateTime.pick</code></td><td>tasks.js / detail-ui.js / dialog.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>ENTITY REFERENCES</td><td>Typed tokens and legacy task IDs render current titles with type icons, exact-ID navigation, asynchronous resolution and ID fallback; shared title/ID picker, search status, preview card</td><td><code>.task-reference*</code>, <code>.autocomplete-status</code></td><td>chat.js / app.js / ai.js / task-references.js</td><td><b>FEATURE</b></td></tr>
                             <tr><td>WORK SLICES</td><td>Explicit work streams linked by <code>member-of</code>. Notes, files, tickets and review forms count toward MEM, not task progress. Review rows show ID, title, status and build; narrow panes keep status visible. The shared assignment picker searches archived forms and omits existing members. Review rows open the typed Inspector with back navigation. Task-status segments show proportional shares and accessible counts; blocked remains separate. Owner/outcome fields, owner-acted closure, server-side owner/name/project filters and paged listing.</td><td><code>.slice-*</code>, <code>NRCSlices</code>, <code>member-of</code>, <code>nrc-link-picker</code></td><td>slices.js / links-ui.js / edges.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
+                            <tr><td>SLICE GROUPS</td><td>Flat, collapsible sections in the slice register. Group headers do not select a record. Search reveals matching rows without changing the saved collapse state. Filter by a group or Ungrouped; change membership on the slice record. Rename or dissolve from the group header; dissolving keeps the slices and their members.</td><td><code>.slice-group-*</code>, <code>#sliceGroupFilter</code>, <code>#sliceGroup</code></td><td>slices.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>ATTENTION REGISTER</td><td>Workspace firing incidents come first, including unassigned and other operators' incidents. Acknowledgement changes the chip, not urgency; recovery/removal clears the row. The sidebar count stays red while any incident is open. An independent paged snapshot, live mutations and 30-second refresh keep counts current outside Monitoring; read failures retain the snapshot and show a stale warning. Own work follows by primary reason: overdue, overdue/waiting follow-up, due ticket follow-ups, unblocks, assigned, due reminders, mentions and unread. Due ticket follow-ups belong to me or the unassigned inbox, take precedence over reply debt without duplicating the ticket, and clear only on reschedule/removal. Ordinary blocked tasks and slices are excluded. Inline dependency controls underline and use accent color on hover/focus, with a keyboard-focus outline. Dependency disclosures link directly to affected tasks across assignees; partial reads are labelled. Tasks appear once; section counts follow kind filters. Shared openers and keyboard navigation cross headings.</td><td><code>.attention-*</code>, <code>--attention-columns</code>, <code>data-incidents</code></td><td>index.html / attention.js / css/entities.css / css/main.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>CALENDAR</td><td>Workspace tasks, reminder deadlines and durable appointments by local date: agenda, spanning month intervals, selected-day list, shared person/project filters, appointment editor, shared inspector and live refresh</td><td><code>.calendar-*</code>, <code>.appointment-detail-panel</code></td><td>index.html / calendar.js / appointments.js / css/entities.css</td><td><b>FEATURE</b></td></tr>
                             <tr><td>REMINDERS</td><td>Shared entity row states, column header, ID, selection marker, keyboard title, detail-only delete; deadline filters (all / local today / upcoming / overdue), hide locked, desktop-notification permission token, editor</td><td><code>.reminder-*</code>, <code>#notificationStatus</code></td><td>index.html / tasks.js / task-state.js / reminder-notify.js</td><td><b>FEATURE</b></td></tr>

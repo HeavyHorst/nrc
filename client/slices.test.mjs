@@ -175,7 +175,7 @@ test("slice list request uses opcode 56 with the include_closed flag and correla
   assert.equal(view.getUint8(19), 0, "the first page carries no cursor");
   assert.equal(view.getUint32(20, false), 7);
   assert.equal(view.getUint16(24, false), 0, "the empty project occupies its length field");
-  assert.equal(view.getUint8(26), 1, "request review counts after the project");
+  assert.equal(view.getUint8(26), 3, "request review counts and group IDs after the project");
   assert.equal(view.byteLength, 27, "the request is the fields it carries");
 
   slices.setIncludeClosed(true);
@@ -188,7 +188,7 @@ test("review trailer uses per-row uint32 counts after correlation without alteri
   const slices = loadSlices();
   slices.requestList({ force: true });
   const rows = [{ name: "Alpha", sliceId: 5n, todo: 2 }, { name: "Beta", sliceId: 6n, done: 3 }];
-  assert.throws(() => slices.handleSliceList(encodeSliceList({ slices: rows, reviewCounts: [1] })), /invalid slice review counts/);
+  assert.throws(() => slices.handleSliceList(encodeSliceList({ slices: rows, reviewCounts: [1] })), /trailing bytes/);
   slices.handleSliceList(encodeSliceList({ slices: rows, reviewCounts: [65537, 7] }));
   const [alpha, beta] = slices.getState().slices;
   assert.deepEqual([alpha.reviews, beta.reviews], [65537, 7]);
@@ -1154,13 +1154,14 @@ test("a refresh keeps text the record's fields hold unsaved", async () => {
 test("closing a bound slice updates the asset with an owner-acted closure", () => {
   const updates = [];
   const slices = loadSlices({
+    Date: { now: () => 1_700_000_000_123 },
     myNickname: "rene",
     window: {
       NRCAssets: {
         generateCorrelationId: () => 7,
         roomAssets: new Map([[0n, new Map([[5n, { assetId: 5n, assetType: 11, preview: JSON.stringify({ version: 1, name: "Alpha", owner: "rene", outcome: "Ship it." }) }]])]]),
         sendUpdateAsset: (convId, assetId, preview, payload, type, correlationId, options) => {
-          updates.push({ convId, assetId, preview: JSON.parse(preview), payload, type });
+          updates.push({ convId, assetId, wirePreview: preview, preview: JSON.parse(preview), payload, type });
           options.onSuccess({});
           return 1;
         },
@@ -1178,7 +1179,7 @@ test("closing a bound slice updates the asset with an owner-acted closure", () =
   assert.equal(updates[0].type, 11);
   assert.equal(updates[0].preview.closed, true);
   assert.equal(updates[0].preview.closed_by, "rene");
-  assert.ok(updates[0].preview.closed_at > 0, "closure records when it happened");
+  assert.match(updates[0].wirePreview, /"closed_at":1700000000123000000(?=[,}])/, "closure sends the exact nanosecond timestamp as an integer");
   assert.equal(updates[0].preview.outcome, "Ship it.", "closure preserves the recorded outcome");
   assert.equal(updates[0].preview.owner, "rene");
 });
@@ -1611,7 +1612,7 @@ test("a filter change asks the server with the filter in the request", async () 
   slices.setProjectFilter("NRC");
   const project = sliceRequest(new DataView(slices.__sent[4]));
   assert.equal(project.project, "NRC");
-  assert.equal(new DataView(slices.__sent[4]).getUint8(project.length - 1), 1);
+  assert.equal(new DataView(slices.__sent[4]).getUint8(project.length - 1), 3);
   assert.equal(project.name, "shard");
   assert.equal(project.hasOwner, true);
 
@@ -1816,7 +1817,7 @@ test("a headless read walks every page without touching the register", async () 
   assert.deepEqual(Array.from(slices.getState().slices, (slice) => slice.name), ["Register row"],
     "the register's window is untouched");
   assert.equal(slices.getState().selected, 5n, "so is its selection");
-  assert.deepEqual({ ...slices.getFilters() }, { owner: null, query: "", project: "" }, "and its filter");
+  assert.deepEqual({ ...slices.getFilters() }, { owner: null, query: "", project: "", group: "" }, "and its filter");
 });
 
 test("a headless read ends when a page cannot advance the cursor", async () => {
@@ -1867,7 +1868,7 @@ test("creating a slice drops the filter that would hide it", async () => {
   slices.handleSliceList(encodeSliceList({ slices: [{ name: "Shard hardening", sliceId: 50n }] }));
   await settleMicrotasks();
   assert.equal(slices.filterActive(), false, "the filter goes so the new slice is visible");
-  assert.deepEqual({ ...slices.getFilters() }, { owner: null, query: "", project: "" });
+  assert.deepEqual({ ...slices.getFilters() }, { owner: null, query: "", project: "", group: "" });
   assert.equal(slices.getState().selected, 50n);
 });
 

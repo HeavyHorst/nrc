@@ -21,6 +21,7 @@ const AssetType = {
   TicketEntry: 14,
   ReviewForm: 18,
   ReviewAnswer: 19,
+  SliceGroup: 20,
 };
 
 // Asset limits (must match server protocol/assets.odin)
@@ -297,6 +298,8 @@ function getAssetTypeLabel(assetType) {
       return "REVIEW FORM";
     case AssetType.ReviewAnswer:
       return "REVIEW ANSWER";
+    case AssetType.SliceGroup:
+      return "SLICE GROUP";
     default:
       return assetType == null ? "ANY" : `TYPE ${assetType}`;
   }
@@ -683,6 +686,8 @@ function sendGetAsset(convId, assetId, requestOptions = null) {
 }
 
 const pendingAssetBatchReads = new Map();
+// Exact GET retains the legacy Slice preview; ID batches return stored previews.
+const legacySlicePreviews = new WeakSet();
 
 // Previews are sufficient for relationship lists; exact editors request full content.
 async function requestAssetsByIds(convId, ids, { fullContent = false, force = false } = {}) {
@@ -691,7 +696,7 @@ async function requestAssetsByIds(convId, ids, { fullContent = false, force = fa
   const missing = [];
   for (const id of unique) {
     const cached = roomAssets.get(0n)?.get(id);
-    if (!force && cached && (!fullContent || cached.payload != null)) {
+    if (!force && cached && !legacySlicePreviews.has(cached) && (!fullContent || cached.payload != null)) {
       reads.set(id, Promise.resolve(cached)); continue;
     }
     if (!ws || ws.readyState !== WebSocket.OPEN || !serverReady) {
@@ -701,11 +706,12 @@ async function requestAssetsByIds(convId, ids, { fullContent = false, force = fa
     const key = `${id}:${fullContent}`;
     const pending = pendingAssetBatchReads.get(`${id}:true`) || pendingAssetBatchReads.get(key);
     if (pending) { reads.set(id, pending); continue; }
-    if (pendingExactAssetRequests.has(`0:${id}`)) {
+    if (!legacySlicePreviews.has(cached) && pendingExactAssetRequests.has(`0:${id}`)) {
       reads.set(id, new Promise((resolve, reject) => requestAsset(0n, id, {
         force, onSuccess: detail => resolve(detail.asset),
         onError: error => error?.message === "Asset not found" ? resolve() : reject(error),
-      })));
+      })).then(async asset => legacySlicePreviews.has(asset)
+        ? (await requestAssetsByIds(0n, [id], { fullContent, force }))[0] : asset));
       continue;
     }
     let resolve, reject;
@@ -753,6 +759,14 @@ async function requestAssetsByIds(convId, ids, { fullContent = false, force = fa
 function requestAsset(convId, assetId, requestOptions = null) {
   const normalizedConvId = 0n;
   const normalizedAssetId = BigInt(assetId);
+  if (requestOptions?.storedPreview) {
+    const pending = { kind: "get", convId: normalizedConvId, assetId: normalizedAssetId };
+    return requestAssetsByIds(normalizedConvId, [normalizedAssetId], { fullContent: true, force: requestOptions.force })
+      .then(([asset]) => asset
+        ? requestOptions.onSuccess?.({ kind: "get", asset, correlationId: 0 }, pending)
+        : requestOptions.onError?.({ message: "Asset not found" }, pending),
+      error => requestOptions.onError?.(error, pending));
+  }
   const cached = roomAssets.get(normalizedConvId)?.get(normalizedAssetId);
   if (cached?.payload != null && !requestOptions?.force) {
     requestOptions?.onSuccess?.(
@@ -1600,7 +1614,13 @@ function handleAssetFull(dataView) {
   }
   // Success callbacks may synchronously request this entity again.
   const previousAsset = roomAssets.get(asset.convId)?.get(asset.assetId) || null;
-  storeAsset(asset);
+  if (asset.assetType === AssetType.Slice) legacySlicePreviews.add(asset);
+  if (!legacySlicePreviews.has(asset) || !previousAsset || legacySlicePreviews.has(previousAsset) || previousAsset.updatedAt < asset.updatedAt) {
+    storeAsset(asset);
+  } else if (previousAsset.updatedAt === asset.updatedAt && previousAsset.payload == null) {
+    // Same revision: fill in the payload without replacing the stored preview.
+    storeAsset({ ...previousAsset, payload: asset.payload });
+  }
   settlePendingAssetRpc(correlationId, true, {
     kind: "get",
     asset,

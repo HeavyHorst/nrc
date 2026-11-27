@@ -110,6 +110,12 @@ sqlite_execute_record_reads :: proc(store: ^db.Store, request: ^db.Request, outp
 		if err != nil || req.conv_id != 0 do return sql.CONSTRAINT
 		a, found, rc := sqlite_read_asset(store, request.workspace, request.actor, req.asset_id, true)
 		if rc != sql.OK do return rc
+		if found && a.asset_type == .Slice {
+			preview, _, valid := slice_preview(&a, context.allocator)
+			if valid && preview.version == 2 {
+				a.preview = rewrite_slice_preview(a.preview, "")
+			}
+		}
 		context.allocator = backing
 		if !found {
 			msg := pr.ErrorResponse {

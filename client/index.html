@@ -14,7 +14,7 @@
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20261013fold1">
     <link rel="icon" type="image/png" href="favicon.png?v=20261013fold1">
     <link rel="shortcut icon" type="image/x-icon" href="favicon.ico?v=20261013fold1">
-    <link rel="stylesheet" href="css/main.css?v=20261126monitorheader1">
+    <link rel="stylesheet" href="css/main.css?v=20261127slicegroups2">
     <link rel="stylesheet" href="css/custom-select.css?v=20261019compact1">
     <link rel="stylesheet" href="css/voice.css?v=20261105voice12">
     <link rel="stylesheet" href="css/reviews.css?v=20261126guestlinks2">
@@ -389,6 +389,10 @@
                                         <option value="">ALL</option>
                                     </select>
                                 </div>
+                                <div class="header-filter-cell" data-slice-filter hidden>
+                                    <label class="filter-label" for="sliceGroupFilter">SLICE GROUP</label>
+                                    <select id="sliceGroupFilter" class="filter-select"><option value="">ALL</option><option value="0">UNGROUPED</option></select>
+                                </div>
                                 <div id="sliceClosedCell" class="header-filter-cell header-filter-toggle" data-slice-filter hidden>
                                     <label class="filter-checkbox-label">
                                         <input type="checkbox" id="sliceIncludeClosed" class="filter-checkbox">
@@ -467,8 +471,10 @@
                             <aside class="slice-register" aria-label="Slice register">
                                 <div class="slice-register-head">
                                     <span class="slice-register-title">SLICES</span>
+                                    <button class="btn header-operation" type="button" data-slice-action="new-group">+ GROUP</button>
                                     <button id="sliceCreateBtn" class="btn btn--primary header-operation header-create-action" type="button" data-slice-action="new" aria-expanded="false" aria-controls="sliceCreateRow">+ SLICE</button>
                                 </div>
+                                <p id="sliceGroupError" class="slice-status-line" data-state="error" role="status" hidden></p>
                                 <div id="sliceCreateRow" class="slice-create-row" hidden>
                                     <input id="sliceCreateName" class="filter-input" type="text" maxlength="128" placeholder="SLICE NAME" aria-label="Slice name">
                                     <button class="btn btn--primary" type="button" data-slice-action="create">CREATE</button>
@@ -731,9 +737,9 @@
     <script src="https://cdn.jsdelivr.net/npm/@oneidentity/zstd-js@1.0.3/asm/index.umd.js"></script>
     <script src="attachments.js?v=20261008files1"></script>
     <script src="protocol.js?v=20261023protocol2"></script>
-    <script src="frames.js?v=20261125slicereviews1"></script>
+    <script src="frames.js?v=20261126slicegroups1"></script>
     <script src="db-retry.js?v=20261119incidentretry1"></script>
-    <script src="assets.js?v=20261122reviewfix1"></script>
+    <script src="assets.js?v=20261126slicegroups4"></script>
     <script src="transactions.js?v=20261114overload1"></script>
     <script src="edges.js?v=20261114overload1"></script>
     <script src="files.js?v=20261022cancel1"></script>
@@ -758,7 +764,7 @@
     <script src="appointment-notify.js?v=20261114overload1"></script>
     <script src="reminder-notify.js?v=20260923attention7"></script>
     <script src="task-query.js?v=20261120projects3"></script>
-    <script src="slices.js?v=20261125slicereviews1"></script>
+    <script src="slices.js?v=20261126slicegroups5"></script>
     <script src="overview.js?v=20261114overload1"></script>
     <script src="chronicle.js?v=20261118chronicle1"></script>
     <script src="history.js?v=20261117chronicle1"></script>

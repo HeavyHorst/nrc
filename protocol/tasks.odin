@@ -1347,6 +1347,7 @@ TaskSlice :: struct {
 	files:            u16, // File members.
 	tickets:          u16, // Ticket members, not TicketEntry records.
 	reviews:          u32, // ReviewForm members, only sent to opted-in readers.
+	group_id:         AssetID,
 	oldest_active_at: i64, // created_at of the oldest non-Done task member, 0 if none.
 	last_moved_at:    i64, // updated_at of the most recently changed member.
 }
@@ -1390,6 +1391,9 @@ ListTaskSlicesRequest :: struct {
 	// Optional trailing exact project filter; absent in older requests.
 	project:         []byte,
 	include_reviews: bool,
+	include_groups:  bool,
+	has_group:       bool,
+	group_id:        AssetID, // Zero with has_group selects ungrouped slices.
 }
 
 parseListTaskSlicesRequest :: proc(data: []byte) -> (result: ListTaskSlicesRequest, err: ProtocolParseError) {
@@ -1457,8 +1461,13 @@ parseListTaskSlicesRequest :: proc(data: []byte) -> (result: ListTaskSlicesReque
 		result.project = data[offset:end]
 		if !utf8.valid_string(string(result.project)) do return result, .InvalidValue
 		if end != len(data) {
-			if end + 1 != len(data) || data[end] != 1 do return result, .ContentLengthMismatch
-			result.include_reviews = true
+			flags := data[end]
+			if flags == 0 || flags > 7 || flags & 4 != 0 && flags & 2 == 0 do return result, .InvalidValue
+			result.include_reviews = flags & 1 != 0
+			result.include_groups = flags & 2 != 0
+			result.has_group = flags & 4 != 0
+			if len(data) != end + 1 + (result.has_group ? 8 : 0) do return result, .ContentLengthMismatch
+			if result.has_group do result.group_id, _ = endian.get_u64(data[end + 1:], .Big)
 		}
 	}
 	return result, nil
@@ -1484,6 +1493,7 @@ TaskSliceList :: struct {
 	error:                []byte,
 	correlation_id:       u32,
 	include_reviews:      bool,
+	include_groups:       bool,
 }
 
 getSizeTaskSlice :: proc(slice: TaskSlice) -> int {
@@ -1495,6 +1505,7 @@ getSizeTaskSliceList :: proc(msg: TaskSliceList) -> int {
 	size := 2 + 8 + 1 + 2 + 1 + 1 + 8 + 8 + 4 + 4 + 4 + 2 + len(msg.error) + 4
 	for slice in msg.slices do size += getSizeTaskSlice(slice)
 	if msg.include_reviews do size += 4 * len(msg.slices)
+	if msg.include_groups do size += 8 * len(msg.slices)
 	return size
 }
 
@@ -1540,6 +1551,9 @@ serializeTaskSliceList :: proc(msg: TaskSliceList, buf: []byte) -> int {
 	endian.put_u32(buf[offset:], .Big, msg.correlation_id); offset += 4
 	if msg.include_reviews {
 		for slice in msg.slices {endian.put_u32(buf[offset:], .Big, slice.reviews); offset += 4}
+	}
+	if msg.include_groups {
+		for slice in msg.slices {endian.put_u64(buf[offset:], .Big, slice.group_id); offset += 8}
 	}
 	return total
 }
@@ -1606,9 +1620,16 @@ parseTaskSliceList :: proc(data: []byte, allocator := context.allocator) -> (Tas
 	result.error = data[offset:offset + int(error_len)]; offset += int(error_len)
 	result.correlation_id, _ = endian.get_u32(data[offset:], .Big); offset += 4
 	if offset != len(data) {
-		if offset + 4 * int(count) != len(data) do return result, .ContentLengthMismatch
-		result.include_reviews = true
-		for &slice in result.slices {slice.reviews, _ = endian.get_u32(data[offset:], .Big); offset += 4}
+		remaining := len(data) - offset
+		if remaining == 4 * int(count) || remaining == 12 * int(count) {
+			result.include_reviews = true
+			for &slice in result.slices {slice.reviews, _ = endian.get_u32(data[offset:], .Big); offset += 4}
+		}
+		if offset != len(data) {
+			if len(data) - offset != 8 * int(count) do return result, .ContentLengthMismatch
+			result.include_groups = true
+			for &slice in result.slices {slice.group_id, _ = endian.get_u64(data[offset:], .Big); offset += 8}
+		}
 	}
 	return result, nil
 }
@@ -1624,7 +1645,16 @@ task_slice_open_count :: proc(slice: TaskSlice) -> u16 {
 // status, notes, files and tickets. It is widened because the counters are independent
 // and their sum is not bounded by any single one of them.
 task_slice_member_count :: proc(slice: TaskSlice) -> int {
-	return int(slice.backlog) + int(slice.todo) + int(slice.in_progress) + int(slice.done) + int(slice.notes) + int(slice.files) + int(slice.tickets) + int(slice.reviews)
+	return(
+		int(slice.backlog) +
+		int(slice.todo) +
+		int(slice.in_progress) +
+		int(slice.done) +
+		int(slice.notes) +
+		int(slice.files) +
+		int(slice.tickets) +
+		int(slice.reviews) \
+	)
 }
 
 getSizeTaskListPage :: proc(msg: TaskListPage) -> int {

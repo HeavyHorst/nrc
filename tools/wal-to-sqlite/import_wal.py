@@ -35,14 +35,16 @@ TICKET_TRIGRAM_SCHEMA = Path(__file__).with_name("ticket_trigram.sql")
 CHRONICLE_PARALLEL_SCHEMA = Path(__file__).with_name("chronicle_parallel.sql")
 REVIEW_SCHEMA = Path(__file__).with_name("reviews.sql")
 PORTAL_ACCOUNT_SCHEMA = Path(__file__).with_name("portal_accounts.sql")
-SCHEMA_VERSION = 12
+SLICE_GROUP_SCHEMA = Path(__file__).with_name("slice_groups.sql")
+SCHEMA_VERSION = 13
 
 
 def schema_text():
     return (SCHEMA.read_text() + SLICE_SCHEMA.read_text() + INCREMENTAL_SCHEMA.read_text()
             + PAGINATION_SCHEMA.read_text() + MONITORING_SCHEMA.read_text() + CHRONICLE_SCHEMA.read_text()
             + CHRONICLE_INPUT_BUDGET_SCHEMA.read_text() + MONITOR_SNAPSHOTS_SCHEMA.read_text() + TICKET_TRIGRAM_SCHEMA.read_text()
-            + CHRONICLE_PARALLEL_SCHEMA.read_text() + REVIEW_SCHEMA.read_text() + PORTAL_ACCOUNT_SCHEMA.read_text())
+            + CHRONICLE_PARALLEL_SCHEMA.read_text() + REVIEW_SCHEMA.read_text() + PORTAL_ACCOUNT_SCHEMA.read_text()
+            + SLICE_GROUP_SCHEMA.read_text())
 
 
 def schema_hash():

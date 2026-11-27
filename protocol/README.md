@@ -809,10 +809,18 @@ and is bounded by `MAX_SLICE_OUTCOME_LENGTH` (2048 bytes).
 A preview that does not decode, carries no version, or carries no name is skipped
 rather than repaired. Create and update still require a valid preview and version,
 a nonempty name and protocol byte-length validation.
+To set a group, send a version-2 preview with `group_id` as a canonical unsigned
+decimal string (for example, `"42"`). Use `"0"` to remove the assignment. An
+update without a group assignment preserves any existing assignment. Version-1
+previews ignore `group_id`, even if older records already carried that JSON key.
+Version-2 previews use strict JSON and encode a non-null `closed_at` as an integer.
+When a legacy edit has no room for `group_id` within the preview limit, the
+server keeps the assignment in slice metadata. Read the Slice list for the
+effective group, even when a stored preview does not contain one.
 Closure is an act by the owner: `closed_at`/`closed_by` are set deliberately and
-are not derived from member statuses. Membership is not stored in the record at
-all: it is the set of `MemberOf` edges pointing at the slice, which is what lets
-one task belong to several slices.
+are not derived from member statuses. The slice's task and asset members are
+stored as `MemberOf` edges pointing at the slice, which lets one task belong to
+several slices independently of grouping.
 
 ### Transactions
 
@@ -852,6 +860,9 @@ Each result is `[Type: 1 byte] [Reserved: 1 byte (0)] [EntityID: 8 bytes]`.
 ```
 [ConversationID: 8 bytes] [AssetID: 8 bytes] [CorrelationID: 4 bytes]
 ```
+`C_GetAsset` returns a version-2 Slice as a version-1 preview without its
+group ID, so legacy readers can still read and edit the record. Use
+`C_GetAssetsByIDs` with full content to read the stored preview.
 
 #### C_ListAssets (Client → Server)
 ```

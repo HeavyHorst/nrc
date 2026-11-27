@@ -31,13 +31,14 @@ import (
 // sliceRecord is the slice asset preview. It mirrors the payload the client
 // writes, so a record created here is readable there and the reverse.
 type sliceRecord struct {
-	Version  int    `json:"version"`
-	Name     string `json:"name"`
-	Owner    string `json:"owner"`
-	Outcome  string `json:"outcome"`
-	Closed   bool   `json:"closed"`
-	ClosedAt int64  `json:"closed_at"`
-	ClosedBy string `json:"closed_by"`
+	Version  int             `json:"version"`
+	Name     string          `json:"name"`
+	Owner    string          `json:"owner"`
+	Outcome  string          `json:"outcome"`
+	Closed   bool            `json:"closed"`
+	ClosedAt int64           `json:"closed_at"`
+	ClosedBy string          `json:"closed_by"`
+	GroupID  json.RawMessage `json:"group_id,omitempty"`
 }
 
 // parseSlicePreview decodes a slice record. A preview that does not decode,
@@ -52,8 +53,11 @@ func parseSlicePreview(preview string) (sliceRecord, error) {
 	if err := json.Unmarshal([]byte(preview), &record); err != nil {
 		return record, fmt.Errorf("slice preview is not valid JSON: %w", err)
 	}
-	if record.Version != 1 {
+	if record.Version != 1 && record.Version != 2 {
 		return record, fmt.Errorf("unsupported slice preview version %d", record.Version)
+	}
+	if record.Version == 1 {
+		record.GroupID = nil
 	}
 	if record.Name == "" {
 		return record, fmt.Errorf("slice preview carries no name")
@@ -62,8 +66,9 @@ func parseSlicePreview(preview string) (sliceRecord, error) {
 }
 
 func (r sliceRecord) encode() (string, error) {
-	if r.Version == 0 {
-		r.Version = 1
+	r.Version = 1
+	if len(r.GroupID) != 0 {
+		r.Version = 2
 	}
 	if len(r.Name) > protocol.MaxProjectLength {
 		return "", fmt.Errorf("slice name exceeds %d bytes", protocol.MaxProjectLength)
@@ -90,6 +95,7 @@ func (r sliceRecord) encode() (string, error) {
 type sliceEntry struct {
 	Name           string `json:"name"`
 	SliceID        uint64 `json:"slice_id"`
+	GroupID        uint64 `json:"group_id,omitempty"`
 	Closed         bool   `json:"closed"`
 	Owner          string `json:"owner,omitempty"`
 	Outcome        string `json:"outcome,omitempty"`
@@ -124,6 +130,7 @@ func toSliceEntry(slice protocol.TaskSlice, record *sliceRecord) sliceEntry {
 	entry := sliceEntry{
 		Name:           slice.Name,
 		SliceID:        slice.SliceID,
+		GroupID:        slice.GroupID,
 		Closed:         slice.IsClosed(),
 		Owner:          slice.Owner,
 		Members:        slice.MemberCount(),
@@ -173,8 +180,12 @@ func fetchTaskSlices(s *conn.Session, query protocol.SliceQuery) (sliceListing, 
 		})
 		if err != nil {
 			var reply *conn.ServerError
-			if query.IncludeReviews && errors.As(err, &reply) && reply.OriginOpcode == protocol.C_ListTaskSlices && reply.Message == "Failed to parse request" {
-				query.IncludeReviews = false
+			if query.GroupID == nil && (query.IncludeGroups || query.IncludeReviews) && errors.As(err, &reply) && reply.OriginOpcode == protocol.C_ListTaskSlices && reply.Message == "Failed to parse request" {
+				if query.IncludeGroups {
+					query.IncludeGroups = false
+				} else {
+					query.IncludeReviews = false
+				}
 				continue
 			}
 			return listing, err
@@ -238,7 +249,7 @@ func fetchSliceRecord(s *conn.Session, sliceID uint64) (*sliceRecord, error) {
 
 func findSlice(s *conn.Session, sliceID uint64) (protocol.TaskSlice, error) {
 	// Keep the server's folded counters, but match stable identity rather than label.
-	listing, err := fetchTaskSlices(s, protocol.SliceQuery{IncludeClosed: true, Limit: protocol.MaxTaskSliceCount})
+	listing, err := fetchTaskSlices(s, protocol.SliceQuery{IncludeClosed: true, IncludeGroups: true, Limit: protocol.MaxTaskSliceCount})
 	if err != nil {
 		return protocol.TaskSlice{}, err
 	}
@@ -396,7 +407,18 @@ var sliceListCmd = &cobra.Command{
 		}
 		defer s.Close()
 
-		listing, err := fetchTaskSlices(s, protocol.SliceQuery{IncludeClosed: includeClosed, Project: project, Limit: protocol.MaxTaskSliceCount})
+		query := protocol.SliceQuery{IncludeClosed: includeClosed, Project: project, IncludeGroups: true, Limit: protocol.MaxTaskSliceCount}
+		if cmd.Flags().Changed("group") {
+			value, _ := cmd.Flags().GetString("group")
+			id := sliceGroupFlag(value)
+			if id != 0 {
+				if _, err := customerAsset(s, id, protocol.AssetTypeSliceGroup); err != nil {
+					conn.FatalNotFound("%v", err)
+				}
+			}
+			query.GroupID = &id
+		}
+		listing, err := fetchTaskSlices(s, query)
 		if err != nil {
 			conn.Fatal("Error: %v", err)
 		}
@@ -421,7 +443,11 @@ var sliceListCmd = &cobra.Command{
 		}
 
 		if len(entries) == 0 {
-			output.PrintSuccess("No slices in this workspace.")
+			if query.GroupID != nil || project != "" {
+				output.PrintSuccess("No slices match the filter.")
+			} else {
+				output.PrintSuccess("No slices in this workspace.")
+			}
 			return
 		}
 		rows := make([][]string, 0, len(entries))
@@ -444,7 +470,9 @@ var sliceListCmd = &cobra.Command{
 			table.Append(row)
 		}
 		table.Render()
-		output.PrintSuccess("%d tasks in slices, %d without one.", listing.AssignedTasks, listing.UnassignedTasks)
+		if query.GroupID == nil && project == "" {
+			output.PrintSuccess("%d tasks in slices, %d without one.", listing.AssignedTasks, listing.UnassignedTasks)
+		}
 	},
 }
 
@@ -932,9 +960,10 @@ var sliceUpdateCmd = &cobra.Command{
 		owner, _ := cmd.Flags().GetString("owner")
 		outcome, _ := cmd.Flags().GetString("outcome")
 		newName, _ := cmd.Flags().GetString("name")
+		group, _ := cmd.Flags().GetString("group")
 
-		if !cmd.Flags().Changed("name") && !cmd.Flags().Changed("owner") && !cmd.Flags().Changed("outcome") {
-			conn.FatalInvalid("Pass --name, --owner or --outcome. Only the flags you pass are changed.")
+		if !cmd.Flags().Changed("name") && !cmd.Flags().Changed("owner") && !cmd.Flags().Changed("outcome") && !cmd.Flags().Changed("group") {
+			conn.FatalInvalid("Pass --name, --owner, --outcome or --group. Only the flags you pass are changed.")
 		}
 		if cmd.Flags().Changed("name") {
 			var err error
@@ -966,6 +995,10 @@ var sliceUpdateCmd = &cobra.Command{
 		}
 		if cmd.Flags().Changed("outcome") {
 			record.Outcome = outcome
+		}
+		record.GroupID = nil
+		if cmd.Flags().Changed("group") {
+			record.GroupID = json.RawMessage(strconv.Quote(strconv.FormatUint(sliceGroupFlag(group), 10)))
 		}
 		preview, err := record.encode()
 		if err != nil {
@@ -1126,6 +1159,7 @@ func setSliceClosed(cmd *cobra.Command, args []string, closed bool) {
 	}
 
 	verb := "closed"
+	record.GroupID = nil // Preserve the server's current grouping, even after dissolution.
 	if closed {
 		record.Closed = true
 		record.ClosedAt = time.Now().UnixNano()
@@ -1200,11 +1234,13 @@ func init() {
 	}
 	sliceListCmd.Flags().Bool("include-closed", false, "Include closed slices")
 	sliceListCmd.Flags().String("project", "", "Slices with a direct task or note member in this project (exact match)")
+	sliceListCmd.Flags().String("group", "", "Group ID, or none for ungrouped slices")
 	sliceCreateCmd.Flags().String("owner", "", "Owner of the slice")
 	sliceCreateCmd.Flags().String("outcome", "", "What the slice ends in")
 	sliceUpdateCmd.Flags().String("name", "", "New name of the slice (memberships are preserved)")
 	sliceUpdateCmd.Flags().String("owner", "", "Owner of the slice")
 	sliceUpdateCmd.Flags().String("outcome", "", "What the slice ends in")
+	sliceUpdateCmd.Flags().String("group", "", "Move to a group ID, or none to remove the grouping")
 	sliceCloseCmd.Flags().String("by", "", "Who is closing the slice")
 	sliceDeleteCmd.Flags().Bool("force", false, "Delete a slice that still carries members, an owner or an outcome")
 	sliceAssignCmd.Flags().StringSlice("task", nil, "Task IDs to assign")

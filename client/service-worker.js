@@ -1,4 +1,4 @@
-const CACHE_NAME = "nrc-terminal-20261126monitorheader1";
+const CACHE_NAME = "nrc-terminal-20261127slicegroups6";
 
 const APP_SHELL = [
   "./",
@@ -11,12 +11,12 @@ const APP_SHELL = [
   "./icons/apple-touch-icon.png",
   "./icons/apple-touch-icon.png?v=20261013fold1",
   "./manifest.webmanifest",
-  "./css/main.css?v=20261126monitorheader1",
+  "./css/main.css?v=20261127slicegroups2",
   "./css/foundation.css?v=20261124ticketstatus2",
   "./css/workspace.css?v=20261116monitor5",
-  "./css/entities.css?v=20261125slicereviews1",
+  "./css/entities.css?v=20261127slicegroups2",
   "./css/ledger.css?v=20261118reminderactions1",
-  "./css/mobile-tasks.css?v=20261019registers1",
+  "./css/mobile-tasks.css?v=20261126slicegroups1",
   "./css/mobile.css?v=20261102gap1",
   "./css/custom-select.css?v=20261019compact1",
   "./css/voice.css?v=20261105voice12",
@@ -27,9 +27,9 @@ const APP_SHELL = [
   "./custom-select.js?v=20261125pickerhover1",
   "./attachments.js?v=20261008files1",
   "./protocol.js?v=20261023protocol2",
-  "./frames.js?v=20261125slicereviews1",
+  "./frames.js?v=20261126slicegroups1",
   "./db-retry.js?v=20261119incidentretry1",
-  "./assets.js?v=20261122reviewfix1",
+  "./assets.js?v=20261126slicegroups4",
   "./transactions.js?v=20261114overload1",
   "./edges.js?v=20261114overload1",
   "./files.js?v=20261022cancel1",
@@ -54,7 +54,7 @@ const APP_SHELL = [
   "./appointment-notify.js?v=20261114overload1",
   "./reminder-notify.js?v=20260923attention7",
   "./task-query.js?v=20261120projects3",
-  "./slices.js?v=20261125slicereviews1",
+  "./slices.js?v=20261126slicegroups5",
   "./overview.js?v=20261114overload1",
   "./chronicle.js?v=20261118chronicle1",
   "./history.js?v=20261117chronicle1",

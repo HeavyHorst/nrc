@@ -561,12 +561,15 @@ function decodeTaskSliceList(view) {
   const correlationId = u32(view, offset);
   offset += 4;
   // Opted-in responses append one review count per slice after the legacy frame.
-  if (view.byteLength !== offset) {
-    if (view.byteLength - offset !== count * 4) throw new ProtocolError("invalid slice review counts");
+  const remaining = view.byteLength - offset;
+  if (remaining && (remaining === count * 4 || remaining === count * 12)) {
     for (const slice of slices) {
       slice.reviews = u32(view, offset);
       offset += 4;
     }
+  }
+  if (view.byteLength - offset === count * 8) {
+    for (const slice of slices) { slice.groupId = u64(view, offset); offset += 8; }
   }
   expectEnd(view, offset);
   return {

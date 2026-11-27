@@ -115,8 +115,8 @@ function assetPage(correlation, assets, { room = 0n, more = false, cursorTime = 
 function fullAsset(opcode, correlation, asset, deleted = false) {
   const w = writer(); w.u16(opcode);
   if (deleted) { w.u64(asset.room ?? 0n); w.u64(asset.id); w.u32(correlation); return w.done(); }
-  const preview = asset.preview ?? `asset-${asset.id}`;
-  w.bytes(assetBytes(asset, false)); w.u16(enc.encode(preview).length); w.bytes(enc.encode(preview)); w.u16(0); w.u32(correlation);
+  const payload = asset.payload ?? asset.preview ?? `asset-${asset.id}`;
+  w.bytes(assetBytes(asset, false)); w.text(payload); w.u16(0); w.u32(correlation);
   return w.done();
 }
 
@@ -180,6 +180,47 @@ test("a batch joining an exact read omits its missing target rather than failing
   f.api.handleAssetListPage(assetPage(new DataView(f.packets[1]).getUint32(10), [{ id: 43n }]));
   assert.equal(exactFailed, true, "the single read retains its not-found error");
   assert.equal((await batch).map(asset => asset.assetId).join(","), "43");
+});
+
+test("slice ID batches bypass legacy previews and a late legacy GET cannot replace the stored preview", async () => {
+  const f = load("assets.js");
+  const v1 = { type: 11, id: 42n, payload: "", preview: '{"version":1,"name":"One"}' };
+  const v2 = { ...v1, preview: '{"version":2,"name":"One","group_id":"7"}' };
+  const reply = (packet, asset) => {
+    const request = new DataView(packet);
+    if (request.getUint16(0) === 33) {
+      assert.equal(request.byteLength, 22, "pre-group servers require the original GET length");
+      f.api.handleAssetFull(fullAsset(143, request.getUint32(18), asset));
+    } else {
+      assert.equal(request.getUint16(0), 61);
+      assert.equal(request.getUint8(14), 1);
+      const w = writer(); w.u16(145); w.u64(0); w.u8(1); w.u8(0);
+      w.i64(0); w.u64(0); w.u32(1); w.u16(1); w.u32(request.getUint32(10));
+      w.bytes(new Uint8Array(fullAsset(143, 0, asset).buffer).slice(2, -4));
+      f.api.handleAssetListPage(w.done());
+    }
+  };
+  f.api.requestAsset(0n, 42n, { force: true });
+  const joining = f.api.requestAssetsByIds(0n, [42n], { fullContent: true });
+  reply(f.packets[0], v1);
+  const cached = f.api.requestAssetsByIds(0n, [42n], { fullContent: true });
+  f.api.requestAsset(0n, 42n, { force: true });
+  assert.equal(f.packets.length, 2, "the ID batch is shared despite the cached legacy preview");
+  await Promise.resolve();
+  reply(f.packets[1], v2);
+  assert.equal((await joining)[0].preview, v2.preview);
+  assert.equal((await cached)[0].preview, v2.preview);
+  f.api.sendGetAsset(0n, 42n);
+  reply(f.packets[2], v1);
+  assert.equal((await f.api.requestAssetsByIds(0n, [42n], { fullContent: true }))[0].preview, v2.preview);
+  assert.equal(f.packets.length, 3, "late legacy read did not invalidate the canonical cache");
+
+  f.context.ws = { readyState: 1 };
+  const rolledBack = new Promise((resolve, reject) => f.api.requestAsset(0n, 42n, {
+    storedPreview: true, force: true, onSuccess: ({ asset }) => resolve(asset), onError: reject,
+  }));
+  reply(f.packets[3], v1);
+  assert.equal((await rolledBack).preview, v1.preview, "the same batch request accepts a pre-group server response");
 });
 
 test("full ID batches reject undecodable bodies for bulk and exact readers, ignoring late chunks", async () => {

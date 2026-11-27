@@ -121,6 +121,27 @@ Use the [Compose deployment](../README.md#quickstart) for the complete web appli
 Production serves the complete generated `client/dist/`, not the source directory.
 After frontend changes, rebuild the Nginx image and reload open browser tabs.
 
+## SQLite schema 13
+
+Slice groups add an indexed group key to the existing Slice projection. Existing
+schema-12 slices start ungrouped. Stop all writers and follow the backup and
+disposable-copy rehearsal described below. For each schema-12 shard in the active
+generation, run `sqlite3 -bail "$SHARD"` from the repository root:
+
+```sql
+PRAGMA foreign_keys=ON;
+BEGIN IMMEDIATE;
+.read workspace_db/slice_groups.sql
+COMMIT;
+PRAGMA user_version;
+PRAGMA integrity_check;
+PRAGMA foreign_key_check;
+```
+
+Require version 13, `ok`, and no foreign-key violations before starting the new
+binary. Startup does not migrate existing files. Restore the stopped backup to
+roll back to schema 12.
+
 ## SQLite schema 12
 
 Portal account administration adds private account and audit tables. Upgrading
@@ -495,6 +516,8 @@ assume derived tables are current. Runtime Slice/overview readers reject pending
 offline writes rather than repairing them on their read-only connections. Offline
 writers must finalize explicitly before handing the database to the server. The projection builder
 rebuilds parsed metadata and then all Slice derivations from canonical records.
+Keep existing `slice_metadata` rows during a rebuild: a legacy Slice preview may
+fill the wire limit, leaving that row as the only copy of its group assignment.
 Finalization failures require rolling back the transaction. Its queue, temporary
 tables and derived writes participate in savepoint/transaction rollback; no ACK
 or event is published after a failed commit.

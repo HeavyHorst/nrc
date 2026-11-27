@@ -16,7 +16,7 @@ sqlite_list_slices :: proc(store: ^db.Store, request: ^db.Request, output: ^db.C
 		success        = true,
 		correlation_id = req.correlation_id,
 	}
-	with_counts := !req.has_cursor && !req.has_owner && !req.has_name && len(req.project) == 0
+	with_counts := !req.has_cursor && !req.has_owner && !req.has_name && !req.has_group && len(req.project) == 0
 	name := strings.to_lower(string(req.name)); defer delete(name)
 	// Sort derived rows on disk, not a workspace-sized array of member records.
 	defer sql.exec(store.db, "DELETE FROM temp.nrc_slices", nil, nil, nil)
@@ -31,31 +31,34 @@ sqlite_list_slices :: proc(store: ^db.Store, request: ^db.Request, output: ^db.C
 		nil,
 	)
 	if rc != sql.OK do return rc
-	s: ^sql.Statement
-	rc = sql.prepare_v2(
-		store.db,
-		`SELECT m.asset_id,m.name,m.owner,m.closed,
- CASE WHEN ?5 THEN 0 ELSE (SELECT a.created_at FROM assets a WHERE a.workspace=m.workspace AND a.id=m.asset_id) END
- FROM slice_metadata m
- WHERE m.workspace=?1 AND (NOT ?2 OR m.owner=?3) AND (?4 OR m.closed=0)`,
-		-1,
-		&s,
-		nil,
+	group := req.has_group ? " AND m.group_id=?6" : ""
+	index := req.has_group ? " INDEXED BY slice_group_page" : ""
+	closed_scope := " AND (?4 OR m.closed=0)"
+	if req.has_group && !req.include_closed do closed_scope = " AND m.closed=0"
+	query := fmt.aprintf(
+		`SELECT m.asset_id,m.name,m.owner,m.closed,m.sort_at FROM slice_metadata m%s
+ WHERE m.workspace=?1 AND (NOT ?2 OR m.owner=?3)%s%s`,
+		index,
+		closed_scope,
+		group,
 	)
+	defer delete(query)
+	c_query := strings.clone_to_cstring(query); defer delete(c_query)
+	s: ^sql.Statement
+	rc = sql.prepare_v2(store.db, c_query, -1, &s, nil)
 	if rc != sql.OK do return rc
 	defer sql.finalize(s)
 	if rc = sql.bind_bytes(s, 1, transmute([]byte)request.workspace); rc != sql.OK do return rc
 	if rc = sql.bind_int64(s, 2, req.has_owner ? 1 : 0); rc != sql.OK do return rc
 	if rc = sql.bind_bytes(s, 3, req.owner); rc != sql.OK do return rc
 	if rc = sql.bind_int64(s, 4, req.include_closed || with_counts ? 1 : 0); rc != sql.OK do return rc
-	if rc = sql.bind_int64(s, 5, req.has_name ? 1 : 0); rc != sql.OK do return rc
+	if req.has_group {if rc = sql.bind_id(s, 6, req.group_id); rc != sql.OK do return rc}
 	summary: ^sql.Statement
 	rc = sql.prepare_v2(
 		store.db,
 		`SELECT backlog,todo,in_progress,done,blocked,notes,files,tickets,oldest,last_moved,
  max(backlog,todo,in_progress,done,blocked,notes,files,tickets)>65535,
- EXISTS(SELECT 1 FROM slice_projects WHERE workspace=?1 AND slice_id=?2 AND project=?3),
- CASE WHEN ?4 THEN (SELECT created_at FROM assets WHERE workspace=?1 AND id=?2) ELSE 0 END
+ EXISTS(SELECT 1 FROM slice_projects WHERE workspace=?1 AND slice_id=?2 AND project=?3)
  FROM slice_summaries WHERE workspace=?1 AND slice_id=?2`,
 		-1,
 		&summary,
@@ -65,7 +68,6 @@ sqlite_list_slices :: proc(store: ^db.Store, request: ^db.Request, output: ^db.C
 	defer sql.finalize(summary)
 	if rc = sql.bind_bytes(summary, 1, transmute([]byte)request.workspace); rc != sql.OK do return rc
 	if rc = sql.bind_bytes(summary, 3, req.project); rc != sql.OK do return rc
-	if rc = sql.bind_int64(summary, 4, req.has_name ? 1 : 0); rc != sql.OK do return rc
 	insert: ^sql.Statement
 	rc = sql.prepare_v2(store.db, "INSERT INTO temp.nrc_slices VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)", -1, &insert, nil)
 	if rc != sql.OK do return rc
@@ -94,7 +96,6 @@ sqlite_list_slices :: proc(store: ^db.Store, request: ^db.Request, output: ^db.C
 		entry.oldest_active_at = sql.column_int64(summary, 8); entry.last_moved_at = sql.column_int64(summary, 9)
 		overflow := sql.column_int64(summary, 10) != 0
 		project_matches = project_matches || sql.column_int64(summary, 11) != 0
-		created := req.has_name ? sql.column_int64(summary, 12) : sql.column_int64(s, 4)
 		if rc = sql.reset(summary); rc != sql.OK do return rc
 		if !project_matches do continue
 		if overflow {
@@ -111,7 +112,7 @@ sqlite_list_slices :: proc(store: ^db.Store, request: ^db.Request, output: ^db.C
 		if rc = sql.bind_id(insert, 1, id); rc != sql.OK do return rc
 		if rc = sql.bind_bytes(insert, 2, entry.name); rc != sql.OK do return rc
 		if rc = sql.bind_bytes(insert, 3, entry.owner); rc != sql.OK do return rc
-		for value, i in ([12]i64{closed ? 1 : 0, max(created, entry.last_moved_at), i64(entry.backlog), i64(entry.todo), i64(entry.in_progress), i64(entry.done), i64(entry.blocked), i64(entry.notes), i64(entry.files), i64(entry.tickets), entry.oldest_active_at, entry.last_moved_at}) {
+		for value, i in ([12]i64{closed ? 1 : 0, sql.column_int64(s, 4), i64(entry.backlog), i64(entry.todo), i64(entry.in_progress), i64(entry.done), i64(entry.blocked), i64(entry.notes), i64(entry.files), i64(entry.tickets), entry.oldest_active_at, entry.last_moved_at}) {
 			if rc = sql.bind_int64(insert, c.int(i + 4), value); rc != sql.OK do return rc
 		}
 		if rc = sql.step(insert); rc != sql.DONE do return rc
@@ -154,16 +155,37 @@ sqlite_list_slices :: proc(store: ^db.Store, request: ^db.Request, output: ^db.C
 	return sqlite_slice_page(store, request, rows, req, msg, output)
 }
 
-sqlite_slice_page :: proc(store: ^db.Store, request: ^db.Request, rows: ^sql.Statement, req: pr.ListTaskSlicesRequest, message: pr.TaskSliceList, output: ^db.Command_Output) -> c.int {
+sqlite_slice_page :: proc(
+	store: ^db.Store,
+	request: ^db.Request,
+	rows: ^sql.Statement,
+	req: pr.ListTaskSlicesRequest,
+	message: pr.TaskSliceList,
+	output: ^db.Command_Output,
+) -> c.int {
 	msg := message
 	msg.include_reviews = req.include_reviews
+	msg.include_groups = req.include_groups
 	rc: c.int
+	groups: ^sql.Statement
+	defer if groups != nil do sql.finalize(groups)
+	if req.include_groups {
+		rc = sql.prepare_v2(store.db, "SELECT group_id FROM slice_metadata WHERE workspace=?1 AND asset_id=?2", -1, &groups, nil)
+		if rc != sql.OK do return rc
+		if rc = sql.bind_bytes(groups, 1, transmute([]byte)request.workspace); rc != sql.OK do return rc
+	}
 	reviews: ^sql.Statement
 	defer if reviews != nil do sql.finalize(reviews)
 	if req.include_reviews {
-		rc = sql.prepare_v2(store.db, `SELECT count(*) FROM slice_members m
+		rc = sql.prepare_v2(
+			store.db,
+			`SELECT count(*) FROM slice_members m
  CROSS JOIN assets a ON a.workspace=m.workspace AND a.id=m.member_id
- WHERE m.workspace=?1 AND m.slice_id=?2 AND m.member_type=1 AND a.asset_type=?3`, -1, &reviews, nil)
+ WHERE m.workspace=?1 AND m.slice_id=?2 AND m.member_type=1 AND a.asset_type=?3`,
+			-1,
+			&reviews,
+			nil,
+		)
 		if rc != sql.OK do return rc
 		if rc = sql.bind_bytes(reviews, 1, transmute([]byte)request.workspace); rc != sql.OK do return rc
 		if rc = sql.bind_int64(reviews, 3, i64(pr.AssetType.ReviewForm)); rc != sql.OK do return rc
@@ -185,8 +207,14 @@ sqlite_slice_page :: proc(store: ^db.Store, request: ^db.Request, rows: ^sql.Sta
 		if closed do entry.flags += pr.TaskSliceFlag_CLOSED
 		for dest, i in ([8]^u16{&entry.backlog, &entry.todo, &entry.in_progress, &entry.done, &entry.blocked, &entry.notes, &entry.files, &entry.tickets}) do dest^ = u16(sql.column_int64(rows, c.int(i + 5)))
 		entry.oldest_active_at = sql.column_int64(rows, 13); entry.last_moved_at = sql.column_int64(rows, 14)
-		entry_size := pr.getSizeTaskSlice(entry) + (req.include_reviews ? 4 : 0)
+		entry_size := pr.getSizeTaskSlice(entry) + (req.include_reviews ? 4 : 0) + (req.include_groups ? 8 : 0)
 		if size + entry_size > budget {if len(entries) == 0 do return sql.TOOBIG; msg.has_more = true; break}
+		if groups != nil {
+			if rc = sql.bind_id(groups, 2, entry.slice_id); rc != sql.OK do return rc
+			if rc = sql.step(groups); rc != sql.ROW do return rc
+			entry.group_id, rc = sql.column_id(groups, 0); if rc != sql.OK do return rc
+			if rc = sql.reset(groups); rc != sql.OK do return rc
+		}
 		if reviews != nil {
 			if rc = sql.bind_id(reviews, 2, entry.slice_id); rc != sql.OK do return rc
 			if rc = sql.step(reviews); rc != sql.ROW do return rc
@@ -207,30 +235,50 @@ sqlite_slice_page :: proc(store: ^db.Store, request: ^db.Request, rows: ^sql.Sta
 // Named substring searches retain the Unicode-aware path above. Ordinary
 // pages seek the durable ordering index before fetching record fields.
 sqlite_list_slices_indexed :: proc(store: ^db.Store, request: ^db.Request, output: ^db.Command_Output, req: pr.ListTaskSlicesRequest) -> c.int {
-	msg := pr.TaskSliceList{success = true, correlation_id = req.correlation_id}
-	with_counts := !req.has_cursor && !req.has_owner && len(req.project) == 0
+	msg := pr.TaskSliceList {
+		success        = true,
+		correlation_id = req.correlation_id,
+	}
+	with_counts := !req.has_cursor && !req.has_owner && !req.has_group && len(req.project) == 0
 	owner := req.has_owner ? " AND m.owner=?2" : ""
+	group := req.has_group ? " AND m.group_id=?10" : ""
+	group_index := req.has_group ? " INDEXED BY slice_group_page" : ""
+	count_scope := " AND (?5 OR m.closed=0)"
+	if req.has_group && !req.include_closed do count_scope = " AND m.closed=0"
 	project :: "(?3=x'' OR EXISTS(SELECT 1 FROM slice_projects p WHERE p.workspace=m.workspace AND p.slice_id=m.asset_id AND p.project=?3))"
 	project_from :: `FROM slice_projects p INDEXED BY slice_projects_filter
  CROSS JOIN slice_metadata m ON m.workspace=p.workspace AND m.asset_id=p.slice_id`
 	count_query: string
-	if len(req.project) > 0 {
+	if len(req.project) > 0 && !req.has_group {
 		// Missing summaries remain an error even outside the selected project.
 		// Count and overflow checks, however, only need that project's records.
-		count_query = fmt.aprintf(`SELECT
+		count_query = fmt.aprintf(
+			`SELECT
  coalesce(sum(?4 OR m.closed=0),0),
  coalesce(max(max(s.backlog,s.todo,s.in_progress,s.done,s.blocked,s.notes,s.files,s.tickets)>65535),0),
  EXISTS(SELECT 1 FROM slice_metadata m WHERE m.workspace=?1%s AND (?5 OR m.closed=0)
  AND NOT EXISTS(SELECT 1 FROM slice_summaries s WHERE s.workspace=m.workspace AND s.slice_id=m.asset_id))
  %s LEFT JOIN slice_summaries s ON s.workspace=m.workspace AND s.slice_id=m.asset_id
- WHERE p.workspace=?1 AND p.project=?3%s AND (?5 OR m.closed=0)`, owner, project_from, owner)
+ WHERE p.workspace=?1 AND p.project=?3%s AND (?5 OR m.closed=0)`,
+			owner,
+			project_from,
+			owner,
+		)
 	} else {
-		count_query = fmt.aprintf(`SELECT
+		count_query = fmt.aprintf(
+			`SELECT
  coalesce(sum(%s AND (?4 OR m.closed=0)),0),
  coalesce(max(%s AND max(s.backlog,s.todo,s.in_progress,s.done,s.blocked,s.notes,s.files,s.tickets)>65535),0),
  coalesce(max(s.slice_id IS NULL),0)
- FROM slice_metadata m LEFT JOIN slice_summaries s ON s.workspace=m.workspace AND s.slice_id=m.asset_id
- WHERE m.workspace=?1%s AND (?5 OR m.closed=0)`, project, project, owner)
+ FROM slice_metadata m%s LEFT JOIN slice_summaries s ON s.workspace=m.workspace AND s.slice_id=m.asset_id
+ WHERE m.workspace=?1%s%s%s`,
+			project,
+			project,
+			group_index,
+			owner,
+			group,
+			count_scope,
+		)
 	}
 	defer delete(count_query)
 	c_count := strings.clone_to_cstring(count_query); defer delete(c_count)
@@ -242,10 +290,14 @@ sqlite_list_slices_indexed :: proc(store: ^db.Store, request: ^db.Request, outpu
 	if rc = sql.bind_bytes(count, 3, req.project); rc != sql.OK do return rc
 	if rc = sql.bind_int64(count, 4, req.include_closed ? 1 : 0); rc != sql.OK do return rc
 	if rc = sql.bind_int64(count, 5, req.include_closed || with_counts ? 1 : 0); rc != sql.OK do return rc
+	if req.has_group {if rc = sql.bind_id(count, 10, req.group_id); rc != sql.OK do return rc}
 	if rc = sql.step(count); rc != sql.ROW do return rc
 	if sql.column_int64(count, 2) != 0 do return sql.CORRUPT
 	if sql.column_int64(count, 1) != 0 {
-		msg = {correlation_id = req.correlation_id, error = transmute([]byte)string("Slice listing representation limit exceeded: member category exceeds 65535")}
+		msg = {
+			correlation_id = req.correlation_id,
+			error          = transmute([]byte)string("Slice listing representation limit exceeded: member category exceeds 65535"),
+		}
 		buf, status := db.command_frame(output, pr.getSizeTaskSliceList(msg)); if status != sql.OK do return status
 		return pr.serializeTaskSliceList(msg, buf) == len(buf) ? sql.OK : sql.CONSTRAINT
 	}
@@ -254,7 +306,13 @@ sqlite_list_slices_indexed :: proc(store: ^db.Store, request: ^db.Request, outpu
 	msg.total_count = u32(total)
 	if with_counts {
 		counts: ^sql.Statement
-		rc = sql.prepare_v2(store.db, "SELECT coalesce(sum(total),0),coalesce(sum(covered),0) FROM workspace_task_counts WHERE workspace=?1 AND status!=?2", -1, &counts, nil)
+		rc = sql.prepare_v2(
+			store.db,
+			"SELECT coalesce(sum(total),0),coalesce(sum(covered),0) FROM workspace_task_counts WHERE workspace=?1 AND status!=?2",
+			-1,
+			&counts,
+			nil,
+		)
 		if rc != sql.OK do return rc
 		defer sql.finalize(counts)
 		if rc = sql.bind_bytes(counts, 1, transmute([]byte)request.workspace); rc != sql.OK do return rc
@@ -265,15 +323,23 @@ sqlite_list_slices_indexed :: proc(store: ^db.Store, request: ^db.Request, outpu
 		msg.assigned_tasks = u32(covered); msg.unassigned_tasks = u32(all - covered)
 	}
 	index := req.has_owner ? "slice_owner_page" : "slice_page"
+	if req.has_group do index = "slice_group_page"
 	closed := req.include_closed ? "" : " AND m.closed=0"
 	// A whole project fitting in one page has bounded sorting work. For larger
 	// projects, keep the ordering-index seek rather than sorting every match.
-	project_page := len(req.project) > 0 && total <= i64(req.limit) + 1
+	project_page := !req.has_group && len(req.project) > 0 && total <= i64(req.limit) + 1
 	base: string
 	if project_page {
 		base = fmt.aprintf("SELECT m.asset_id AS id,m.closed,m.sort_at %s WHERE p.workspace=?1 AND p.project=?3%s%s", project_from, owner, closed)
 	} else {
-		base = fmt.aprintf("SELECT m.asset_id AS id,m.closed,m.sort_at FROM slice_metadata m INDEXED BY %s WHERE m.workspace=?1%s%s AND %s", index, owner, closed, project)
+		base = fmt.aprintf(
+			"SELECT m.asset_id AS id,m.closed,m.sort_at FROM slice_metadata m INDEXED BY %s WHERE m.workspace=?1%s%s%s AND %s",
+			index,
+			owner,
+			closed,
+			group,
+			project,
+		)
 	}
 	defer delete(base)
 	keys: string
@@ -283,8 +349,11 @@ sqlite_list_slices_indexed :: proc(store: ^db.Store, request: ^db.Request, outpu
 		keys = fmt.aprintf("%s AND 0 LIMIT ?9", base)
 	} else if project_page {
 		// Visit project matches once, then sort narrow keys before loading fields.
-		keys = fmt.aprintf(`%s AND (m.closed>?6 OR (m.closed=?6 AND
- (m.sort_at<?7 OR (m.sort_at=?7 AND m.asset_id>?8)))) ORDER BY closed,sort_at DESC,id LIMIT ?9`, base)
+		keys = fmt.aprintf(
+			`%s AND (m.closed>?6 OR (m.closed=?6 AND
+ (m.sort_at<?7 OR (m.sort_at=?7 AND m.asset_id>?8)))) ORDER BY closed,sort_at DESC,id LIMIT ?9`,
+			base,
+		)
 	} else {
 		// Disjoint ranges preserve mixed ASC/DESC ordering without OFFSET.
 		// Each emits at most limit+1 keys; a project filter can examine more.
@@ -293,16 +362,24 @@ sqlite_list_slices_indexed :: proc(store: ^db.Store, request: ^db.Request, outpu
 			later = fmt.aprintf(" UNION ALL SELECT * FROM (%s AND m.closed>?6 ORDER BY closed,sort_at DESC,id LIMIT ?9)", base)
 		}
 		defer delete(later)
-		keys = fmt.aprintf(`SELECT * FROM (%s AND m.closed=?6 AND m.sort_at=?7 AND m.asset_id>?8 ORDER BY closed,sort_at DESC,id LIMIT ?9)
+		keys = fmt.aprintf(
+			`SELECT * FROM (%s AND m.closed=?6 AND m.sort_at=?7 AND m.asset_id>?8 ORDER BY closed,sort_at DESC,id LIMIT ?9)
  UNION ALL SELECT * FROM (%s AND m.closed=?6 AND m.sort_at<?7 ORDER BY closed,sort_at DESC,id LIMIT ?9)
- %s ORDER BY closed,sort_at DESC,id LIMIT ?9`, base, base, later)
+ %s ORDER BY closed,sort_at DESC,id LIMIT ?9`,
+			base,
+			base,
+			later,
+		)
 	}
 	defer delete(keys)
-	query := fmt.aprintf(`WITH page AS MATERIALIZED (%s)
+	query := fmt.aprintf(
+		`WITH page AS MATERIALIZED (%s)
  SELECT p.id,m.name,m.owner,p.closed,p.sort_at,s.backlog,s.todo,s.in_progress,s.done,s.blocked,s.notes,s.files,s.tickets,s.oldest,s.last_moved
  FROM page p CROSS JOIN slice_metadata m ON m.workspace=?1 AND m.asset_id=p.id
  CROSS JOIN slice_summaries s ON s.workspace=?1 AND s.slice_id=p.id
- ORDER BY p.closed,p.sort_at DESC,p.id`, keys)
+ ORDER BY p.closed,p.sort_at DESC,p.id`,
+		keys,
+	)
 	defer delete(query)
 	c_query := strings.clone_to_cstring(query); defer delete(c_query)
 	rows: ^sql.Statement
@@ -315,5 +392,6 @@ sqlite_list_slices_indexed :: proc(store: ^db.Store, request: ^db.Request, outpu
 	if rc = sql.bind_int64(rows, 7, req.cursor_sort_at); rc != sql.OK do return rc
 	if rc = sql.bind_id(rows, 8, req.cursor_slice_id); rc != sql.OK do return rc
 	if rc = sql.bind_int64(rows, 9, i64(req.limit) + 1); rc != sql.OK do return rc
+	if req.has_group {if rc = sql.bind_id(rows, 10, req.group_id); rc != sql.OK do return rc}
 	return sqlite_slice_page(store, request, rows, req, msg, output)
 }

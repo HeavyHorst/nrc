@@ -950,6 +950,7 @@ type TaskSlice struct {
 	Files          uint16
 	Tickets        uint16
 	Reviews        uint32
+	GroupID        uint64
 	OldestActiveAt int64
 	LastMovedAt    int64
 }
@@ -995,6 +996,8 @@ type SliceQuery struct {
 	Name           string
 	Project        string // Exact structured project of at least one direct member.
 	IncludeReviews bool
+	IncludeGroups  bool
+	GroupID        *uint64 // nil for all; zero selects ungrouped.
 	Limit          uint16
 	Cursor         *SliceCursor
 }
@@ -1005,10 +1008,21 @@ func EncodeListTaskSlices(convID uint64, query SliceQuery, correlationID uint32)
 	owner := []byte(query.Owner)
 	name := []byte(query.Name)
 	size := 22 + len(owner) + len(name)
-	if query.Project != "" || query.IncludeReviews {
+	var flags byte
+	if query.IncludeReviews {
+		flags |= 1
+	}
+	if query.IncludeGroups || query.GroupID != nil {
+		flags |= 2
+	}
+	if query.GroupID != nil {
+		flags |= 4
+		size += 8
+	}
+	if query.Project != "" || flags != 0 {
 		size += 2 + len(query.Project)
 	}
-	if query.IncludeReviews {
+	if flags != 0 {
 		size++
 	}
 	if query.Cursor != nil {
@@ -1052,12 +1066,16 @@ func EncodeListTaskSlices(convID uint64, query SliceQuery, correlationID uint32)
 	}
 	binary.BigEndian.PutUint32(payload[offset:], correlationID)
 	offset += 4
-	if query.Project != "" || query.IncludeReviews {
+	if query.Project != "" || flags != 0 {
 		binary.BigEndian.PutUint16(payload[offset:], uint16(len(query.Project)))
 		copy(payload[offset+2:], query.Project)
+		offset += 2 + len(query.Project)
 	}
-	if query.IncludeReviews {
-		payload[len(payload)-1] = 1
+	if flags != 0 {
+		payload[offset] = flags
+		if query.GroupID != nil {
+			binary.BigEndian.PutUint64(payload[offset+1:], *query.GroupID)
+		}
 	}
 	return payload
 }
@@ -1159,12 +1177,19 @@ func DecodeTaskSliceList(payload []byte) (*TaskSliceList, error) {
 	if err := binary.Read(buf, binary.BigEndian, &result.CorrelationID); err != nil {
 		return nil, fmt.Errorf("invalid slice list tail")
 	}
-	if buf.Len() != 0 {
-		if buf.Len() != 4*len(result.Slices) {
-			return nil, fmt.Errorf("invalid slice list review counts")
-		}
+	if n := 4 * len(result.Slices); n > 0 && (buf.Len() == n || buf.Len() == n*3) {
 		for i := range result.Slices {
 			if err := binary.Read(buf, binary.BigEndian, &result.Slices[i].Reviews); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if buf.Len() != 0 {
+		if buf.Len() != 8*len(result.Slices) {
+			return nil, fmt.Errorf("invalid slice list extension")
+		}
+		for i := range result.Slices {
+			if err := binary.Read(buf, binary.BigEndian, &result.Slices[i].GroupID); err != nil {
 				return nil, err
 			}
 		}

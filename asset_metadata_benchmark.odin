@@ -51,7 +51,7 @@ metadata_bench_read :: proc(s: ^Metadata_Bench_State, a: mem.Allocator, t: ^test
 		if !ok do return 0
 		return u64(len(m.kind) + len(m.author))
 	case .Slice:
-		m, ok := decode_slice_preview(s.data, a)
+		m, _, ok := decode_slice_preview(s.data, a)
 		if t != nil {
 			testing.expect(t, ok)
 			testing.expect_value(t, m.version, 1)
