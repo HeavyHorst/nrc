@@ -202,11 +202,6 @@ Subscriber_User_List_Scan_State :: struct {
 }
 
 subscriber_collect_user_list_entry :: proc(ctx: ^Subscriber_User_List_Scan_State, entry: Subscriber_Entry) -> bool {
-	if ctx.user_idx >= MAX_ROOM_USERS {
-		ctx.truncated = true
-		return false
-	}
-
 	conn := connection_get_by_handle(entry.handle)
 	if conn == nil || conn.sock != entry.sock || conn.workspace_id != ctx.workspace_id {
 		return true
@@ -217,6 +212,10 @@ subscriber_collect_user_list_entry :: proc(ctx: ^Subscriber_User_List_Scan_State
 
 	uname := get_connection_nickname(conn)
 	if uname != "" {
+		if ctx.user_idx >= MAX_ROOM_USERS {
+			ctx.truncated = true
+			return false
+		}
 		ctx.byte_users_buf[ctx.user_idx] = transmute([]byte)uname
 		ctx.auth_flags_buf[ctx.user_idx] = conn.authenticated
 		ctx.user_types_buf[ctx.user_idx] = conn.user_type

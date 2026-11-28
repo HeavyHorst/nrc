@@ -300,11 +300,15 @@ test_workspace_scoped_jwt_upgrade :: proc(t: ^testing.T) {
 	legacy_token, legacy_ok := build_test_jwt(`{"sub":"alice@example.com","username":"alice","exp":4102444800}`, jwt_auth_secret)
 	testing.expect(t, legacy_ok)
 	defer delete(legacy_token)
+	sub_only, built := build_test_jwt(`{"sub":"alice@example.com","workspace":"alice-private","exp":4102444800}`, jwt_auth_secret)
+	if !testing.expect(t, built) do return
+	defer delete(sub_only)
 	cases := []struct {
 		workspace, token: string,
 		enabled, allowed: bool,
 	} {
 		{"alice-private", token, true, true},
+		{"alice-private", sub_only, true, true},
 		{"bob-private", token, true, false},
 		{"workspace1", token, true, false},
 		{"alice-private", legacy_token, true, false},
@@ -321,6 +325,9 @@ test_workspace_scoped_jwt_upgrade :: proc(t: ^testing.T) {
 		decision := parse_http_upgrade_decision(request, "internal-service-secret", 1)
 		delete(request)
 		testing.expect_value(t, decision.kind == .Accept, test_case.allowed)
+		if test_case.allowed {
+			testing.expect_value(t, decision.verified_username, test_case.token == sub_only ? "alice@example.com" : "alice")
+		}
 		delete(decision.verified_subject)
 		if decision.verified_username_owned do delete(decision.verified_username)
 	}

@@ -589,6 +589,18 @@ test_user_list_collection_skips_closing_subscriber :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, subscriber_collect_user_list_entry(&scan_state, entry), "closing subscriber should not stop collection")
 	testing.expect_value(t, scan_state.user_idx, 0)
+	// Fill the last slot; only another visible user should signal truncation.
+	scan_state.user_idx = MAX_ROOM_USERS - 1
+	closing_conn.state = .Idle
+	closing_conn.verified_username = "visible"
+	defer closing_conn.verified_username = ""
+	testing.expect(t, subscriber_collect_user_list_entry(&scan_state, entry))
+	testing.expect_value(t, scan_state.user_idx, MAX_ROOM_USERS)
+	testing.expect_value(t, string(byte_users_buf[MAX_ROOM_USERS - 1]), "visible")
+	testing.expect(t, subscriber_collect_user_list_entry(&scan_state, {}))
+	testing.expect(t, !scan_state.truncated)
+	testing.expect(t, !subscriber_collect_user_list_entry(&scan_state, entry))
+	testing.expect(t, scan_state.truncated)
 }
 
 @(test)
@@ -705,6 +717,45 @@ test_send_shared_presence_to_subscribers_large_room_not_truncated :: proc(t: ^te
 		subscriber_test_uninstall_conn(created_connections[i])
 	}
 	free(shared)
+}
+
+@(test)
+test_sparse_fanout_at_snapshot_boundary :: proc(t: ^testing.T) {
+	worker_state_init_core(nil, 94)
+	defer worker_state_destroy_core_for_test()
+	defer discard_deferred_outbox_pumps()
+	conv := subscriber_test_make_conversation()
+	defer subscriber_test_destroy_conversation(&conv)
+	a := subscriber_test_set_conn_state(subscriber_test_sock_a, .Idle)
+	defer subscriber_test_uninstall_conn(a)
+	b := subscriber_test_set_conn_state(subscriber_test_sock_b, .Idle)
+	defer subscriber_test_uninstall_conn(b)
+	a.is_sending = true
+	b.is_sending = true
+	conversation_add_subscriber(&conv, a)
+	conversation_add_subscriber(&conv, b)
+	first, last := a, b
+	if a.handle.idx > b.handle.idx do first, last = b, a
+	stale := NRC_Connection {
+		handle = first.handle,
+	}
+	shared := Broadcast_Buffer {
+		ref_count = 10,
+	}
+	for i in 0 ..< 3 {
+		for subscriber_count(&conv) < MAX_ROOM_USERS - 1 + i {
+			// Distinct stale generations of the lower slot sort before the final live handle.
+			stale.handle.gen += 1
+			stale.sock = net.TCP_Socket(420_000 + subscriber_count(&conv))
+			conversation_add_subscriber(&conv, &stale)
+		}
+		sort_subscribers_by_handle_index_if_dirty(&conv)
+		testing.expect_value(t, conv.subscriber_entries[len(conv.subscriber_entries) - 1].handle, last.handle)
+		testing.expect_value(t, subscriber_count(&conv), MAX_ROOM_USERS - 1 + i)
+		testing.expect_value(t, send_shared_to_subscribers_except(&conv, 0, &shared), 2)
+		testing.expect_value(t, send_queue_len(a), i + 1)
+		testing.expect_value(t, send_queue_len(b), i + 1)
+	}
 }
 
 @(test)

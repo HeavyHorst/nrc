@@ -14,6 +14,7 @@ names+=,main.test_linux_connection_close_barrier_deferred_shutdown
 names+=,main.test_linux_connection_close_barrier_partial_send
 names+=,main.test_linux_connection_close_barrier_partial_writev
 names+=,main.test_send_shared_presence_to_subscribers_large_room_not_truncated
+names+=,main.test_sparse_fanout_at_snapshot_boundary
 
 for quarantine in false true; do
 	echo "ASan checks: TLSF_ASAN_QUARANTINE=$quarantine"
