@@ -54,6 +54,50 @@ if [[ "$(dpkg --print-architecture)" != "amd64" ]]; then
 	exit 1
 fi
 
+step "Installing SQLite 3.54.1 with FTS5 (same archive as docker/Dockerfile)"
+sqlite_pin=3.54.1
+sqlite_probe_sql="CREATE VIRTUAL TABLE f USING fts5(x, tokenize='trigram'); INSERT INTO f(f,rank) VALUES('secure-delete',1);"
+check_native_sqlite() (
+	tmp_dir="$(mktemp -d)" || return 1
+	trap 'rm -rf "$tmp_dir"' EXIT
+	cc -x c - -lsqlite3 -o "$tmp_dir/probe" <<'C' || return 1
+#include <sqlite3.h>
+#include <string.h>
+int main(int argc, char **argv) {
+    sqlite3 *db;
+    if (argc != 3 || strcmp(sqlite3_libversion(), argv[1]) || sqlite3_open(":memory:", &db) != SQLITE_OK) return 1;
+    int rc = sqlite3_exec(db, argv[2], NULL, NULL, NULL);
+    sqlite3_close(db);
+    return rc != SQLITE_OK;
+}
+C
+	"$tmp_dir/probe" "$sqlite_pin" "$sqlite_probe_sql" || return 1
+	[[ "$(/usr/local/bin/sqlite3 :memory: 'SELECT sqlite_version()')" == "$sqlite_pin" ]]
+)
+if ! check_native_sqlite 2>/dev/null; then
+	(
+		tmp_dir="$(mktemp -d)"
+		trap 'rm -rf "$tmp_dir"' EXIT
+		cd "$tmp_dir"
+		curl --retry 5 --retry-all-errors -fsSLo sqlite.tar.gz https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz
+		printf '%s\n' 'b6ced585c750916b1052667239a12c25a7ff34e7f06e1e6e01ecb0427657d9c4 *sqlite.tar.gz' | diff - <(openssl dgst -sha3-256 -r sqlite.tar.gz)
+		tar -xzf sqlite.tar.gz --strip-components=1
+		./configure --prefix=/usr/local --enable-fts5 --disable-static --disable-readline --disable-static-shell
+		make -j2
+		privileged=()
+		if [[ "$(id -u)" -ne 0 ]]; then privileged=(sudo); fi
+		"${privileged[@]}" make install
+		"${privileged[@]}" ldconfig
+	)
+	check_native_sqlite
+fi
+python3 - "$sqlite_pin" "$sqlite_probe_sql" <<'PY'
+import sqlite3, sys
+if sqlite3.sqlite_version != sys.argv[1]:
+    sys.exit(f"{sys.executable} loads SQLite {sqlite3.sqlite_version}; expected {sys.argv[1]}")
+sqlite3.connect(":memory:").executescript(sys.argv[2])
+PY
+
 step "Installing SOPS 3.13.3 (no key generation or decryption)"
 sops_sha256="e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b"
 if [[ ! -x "$local_bin/sops" ]] || [[ "$(sha256sum "$local_bin/sops" | cut -d ' ' -f 1)" != "$sops_sha256" ]]; then
